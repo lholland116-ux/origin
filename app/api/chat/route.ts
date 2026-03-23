@@ -58,7 +58,11 @@ function jsonResponse(body: Record<string, unknown>, status: number): Response {
   });
 }
 
-function textResponse(body: string, status = 200, extraHeaders?: HeadersInit): Response {
+function textResponse(
+  body: string,
+  status = 200,
+  extraHeaders?: HeadersInit
+): Response {
   return new Response(body, {
     status,
     headers: {
@@ -85,20 +89,28 @@ function safeLog(label: string, data: unknown): void {
   }
 }
 
-function isAssistantOrUserRole(role: DbMessageRow["role"]): role is AssistantOrUserRole {
+function isAssistantOrUserRole(
+  role: DbMessageRow["role"]
+): role is AssistantOrUserRole {
   return role === "user" || role === "assistant";
 }
 
 function redactInputItems(
   items: ResponseInputTextItem[],
   previewChars = 120
-): Array<{ role: AssistantOrUserRole; contentPreview: string; contentLength: number }> {
+): Array<{
+  role: AssistantOrUserRole;
+  contentPreview: string;
+  contentLength: number;
+}> {
   return items.map((item) => {
     const joined = item.content.map((c) => c.text).join("\n");
     return {
       role: item.role,
       contentPreview:
-        joined.length > previewChars ? `${joined.slice(0, previewChars)}…` : joined,
+        joined.length > previewChars
+          ? `${joined.slice(0, previewChars)}…`
+          : joined,
       contentLength: joined.length,
     };
   });
@@ -114,10 +126,13 @@ function buildSystemPrompt(): string {
   ].join(" ");
 }
 
-function mapHistoryToResponseInput(history: DbMessageRow[]): ResponseInputTextItem[] {
+function mapHistoryToResponseInput(
+  history: DbMessageRow[]
+): ResponseInputTextItem[] {
   return history
-    .filter((msg): msg is DbMessageRow & { role: AssistantOrUserRole } =>
-      isAssistantOrUserRole(msg.role)
+    .filter(
+      (msg): msg is DbMessageRow & { role: AssistantOrUserRole } =>
+        isAssistantOrUserRole(msg.role)
     )
     .slice(-MAX_HISTORY_MESSAGES)
     .map((msg) => ({
@@ -270,7 +285,8 @@ export async function POST(req: NextRequest): Promise<Response> {
         );
       }
 
-      oldAssistantIdToReplace = (lastAssistant as Pick<DbMessageRow, "id"> | null)?.id ?? null;
+      oldAssistantIdToReplace =
+        (lastAssistant as Pick<DbMessageRow, "id"> | null)?.id ?? null;
     } else {
       const userMessageInsert: DbMessageInsert = {
         conversation_id: conversationId,
@@ -312,8 +328,6 @@ export async function POST(req: NextRequest): Promise<Response> {
 
     let typedHistory = (history ?? []) as DbMessageRow[];
 
-    // On regenerate, remove the last assistant message from the context
-    // so the new response is based on the conversation up to the last user turn.
     if (regenerate) {
       const lastAssistantIndex = [...typedHistory]
         .reverse()
@@ -398,12 +412,16 @@ export async function POST(req: NextRequest): Promise<Response> {
     try {
       const openAiStartedAt = nowMs();
 
-      const response = await openai.responses.create({
-        model: CHAT_MODEL,
-        instructions: buildSystemPrompt(),
-        input: responseInput,
-        timeout: OPENAI_TIMEOUT_MS,
-      });
+      const response = await openai.responses.create(
+        {
+          model: CHAT_MODEL,
+          instructions: buildSystemPrompt(),
+          input: responseInput,
+        },
+        {
+          timeout: OPENAI_TIMEOUT_MS,
+        }
+      );
 
       openAiRequestId = response._request_id ?? undefined;
 
@@ -470,7 +488,8 @@ export async function POST(req: NextRequest): Promise<Response> {
           safeLog("[regenerate] old assistant delete error", {
             routeTraceId,
             oldAssistantIdToReplace,
-            newAssistantId: (insertedAssistant as Pick<DbMessageRow, "id"> | null)?.id,
+            newAssistantId:
+              (insertedAssistant as Pick<DbMessageRow, "id"> | null)?.id,
             deleteOldAssistantError,
           });
         }
@@ -500,23 +519,27 @@ export async function POST(req: NextRequest): Promise<Response> {
         try {
           const titleTraceId = makeTraceId("openai_title");
 
-          const titleResponse = await openai.responses.create({
-            model: TITLE_MODEL,
-            instructions:
-              "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
-            input: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "input_text",
-                    text: message,
-                  },
-                ],
-              },
-            ],
-            timeout: OPENAI_TIMEOUT_MS,
-          });
+          const titleResponse = await openai.responses.create(
+            {
+              model: TITLE_MODEL,
+              instructions:
+                "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+              input: [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: message,
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              timeout: OPENAI_TIMEOUT_MS,
+            }
+          );
 
           safeLog("[openai] title response complete", {
             routeTraceId,
