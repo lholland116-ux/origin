@@ -12,10 +12,11 @@ const DAILY_LIMIT = 20;
 const CHAT_MODEL = "gpt-4o-mini";
 const TITLE_MODEL = "gpt-4o-mini";
 const MAX_HISTORY_MESSAGES = 12;
+const OPENAI_TIMEOUT_MS = 30_000;
 
 const LOG_OPENAI_META = true;
 const LOG_OPENAI_PAYLOADS = process.env.LOG_OPENAI_PAYLOADS === "true";
-const OPENAI_TIMEOUT_MS = 30_000;
+const ENABLE_TITLE_GENERATION = true;
 
 type ChatRequestBody = {
   conversationId?: string;
@@ -37,29 +38,6 @@ type ResponseInputTextItem = {
   }>;
 };
 
-type ChatResponsesPayload = {
-  model: string;
-  stream: true;
-  instructions: string;
-  input: ResponseInputTextItem[];
-};
-
-type TitleResponsesPayload = {
-  model: string;
-  instructions: string;
-  input: [
-    {
-      role: "user";
-      content: [
-        {
-          type: "input_text";
-          text: string;
-        },
-      ];
-    },
-  ];
-};
-
 type ReserveDailyUsageResult = {
   allowed: boolean;
   messageCount: number;
@@ -76,6 +54,17 @@ function jsonResponse(body: Record<string, unknown>, status: number): Response {
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
+    },
+  });
+}
+
+function textResponse(body: string, status = 200, extraHeaders?: HeadersInit): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      ...extraHeaders,
     },
   });
 }
@@ -142,43 +131,10 @@ function mapHistoryToResponseInput(history: DbMessageRow[]): ResponseInputTextIt
     }));
 }
 
-function buildChatPayload(input: ResponseInputTextItem[]): ChatResponsesPayload {
-  return {
-    model: CHAT_MODEL,
-    stream: true,
-    instructions: buildSystemPrompt(),
-    input,
-  };
-}
-
-function buildTitlePayload(message: string): TitleResponsesPayload {
-  return {
-    model: TITLE_MODEL,
-    instructions:
-      "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
-    input: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: message,
-          },
-        ],
-      },
-    ],
-  };
-}
-
 function extractOutputText(response: { output_text?: string | null }): string {
   return response.output_text?.trim() ?? "";
 }
 
-/**
- * Handle SDK version differences safely:
- * - some docs/examples show request_id
- * - some installed typings expose requestID
- */
 function extractErrorRequestId(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
 
@@ -186,33 +142,6 @@ function extractErrorRequestId(error: unknown): string | undefined {
   if (typeof maybe.requestID === "string") return maybe.requestID;
   if (typeof maybe.request_id === "string") return maybe.request_id;
   return undefined;
-}
-
-function isOutputTextDeltaEvent(
-  event: unknown
-): event is { type: "response.output_text.delta"; delta: string } {
-  if (!event || typeof event !== "object") return false;
-
-  const maybe = event as Record<string, unknown>;
-  return maybe.type === "response.output_text.delta" && typeof maybe.delta === "string";
-}
-
-function isResponseCompletedEvent(
-  event: unknown
-): event is { type: "response.completed" } {
-  if (!event || typeof event !== "object") return false;
-
-  const maybe = event as Record<string, unknown>;
-  return maybe.type === "response.completed";
-}
-
-function isResponseFailedEvent(
-  event: unknown
-): event is { type: "response.failed"; response?: unknown } {
-  if (!event || typeof event !== "object") return false;
-
-  const maybe = event as Record<string, unknown>;
-  return maybe.type === "response.failed";
 }
 
 async function reserveDailyUsage(
@@ -299,7 +228,6 @@ export async function POST(req: NextRequest): Promise<Response> {
       model: CHAT_MODEL,
     });
 
-    const conversationReadStartedAt = nowMs();
     const { data: conversation, error: conversationError } = await supabase
       .from("conversations")
       .select("id, title, user_id")
@@ -313,7 +241,6 @@ export async function POST(req: NextRequest): Promise<Response> {
       safeLog("[conversation] not found", {
         routeTraceId,
         conversationId,
-        durationMs: nowMs() - conversationReadStartedAt,
         conversationError,
       });
       return jsonResponse({ error: "Conversation not found." }, 404);
@@ -322,8 +249,6 @@ export async function POST(req: NextRequest): Promise<Response> {
     let oldAssistantIdToReplace: string | null = null;
 
     if (regenerate) {
-      const regenLookupStartedAt = nowMs();
-
       const { data: lastAssistant, error: lastAssistantError } = await supabase
         .from("messages")
         .select("id")
@@ -334,12 +259,9 @@ export async function POST(req: NextRequest): Promise<Response> {
         .limit(1)
         .maybeSingle();
 
-      const typedLastAssistant = lastAssistant as Pick<DbMessageRow, "id"> | null;
-
       if (lastAssistantError) {
         safeLog("[regenerate] lookup error", {
           routeTraceId,
-          durationMs: nowMs() - regenLookupStartedAt,
           lastAssistantError,
         });
         return jsonResponse(
@@ -348,10 +270,8 @@ export async function POST(req: NextRequest): Promise<Response> {
         );
       }
 
-      oldAssistantIdToReplace = typedLastAssistant?.id ?? null;
+      oldAssistantIdToReplace = (lastAssistant as Pick<DbMessageRow, "id"> | null)?.id ?? null;
     } else {
-      const userInsertStartedAt = nowMs();
-
       const userMessageInsert: DbMessageInsert = {
         conversation_id: conversationId,
         user_id: user.id,
@@ -366,14 +286,12 @@ export async function POST(req: NextRequest): Promise<Response> {
       if (insertUserError) {
         safeLog("[messages] user insert error", {
           routeTraceId,
-          durationMs: nowMs() - userInsertStartedAt,
           insertUserError,
         });
         return jsonResponse({ error: "Failed to save user message." }, 500);
       }
     }
 
-    const historyLoadStartedAt = nowMs();
     const { data: history, error: historyError } = await supabase
       .from("messages")
       .select("id, role, content, created_at")
@@ -381,12 +299,9 @@ export async function POST(req: NextRequest): Promise<Response> {
       .eq("user_id", user.id)
       .order("created_at", { ascending: true });
 
-    const typedHistory = (history ?? []) as DbMessageRow[];
-
     if (historyError) {
       safeLog("[history] load error", {
         routeTraceId,
-        durationMs: nowMs() - historyLoadStartedAt,
         historyError,
       });
       return jsonResponse(
@@ -395,30 +310,47 @@ export async function POST(req: NextRequest): Promise<Response> {
       );
     }
 
+    let typedHistory = (history ?? []) as DbMessageRow[];
+
+    // On regenerate, remove the last assistant message from the context
+    // so the new response is based on the conversation up to the last user turn.
+    if (regenerate) {
+      const lastAssistantIndex = [...typedHistory]
+        .reverse()
+        .findIndex((msg) => msg.role === "assistant");
+
+      if (lastAssistantIndex !== -1) {
+        const realIndex = typedHistory.length - 1 - lastAssistantIndex;
+        typedHistory = typedHistory.filter((_, index) => index !== realIndex);
+      }
+    }
+
     const responseInput = mapHistoryToResponseInput(typedHistory);
-    const chatPayload = buildChatPayload(responseInput);
     const openAiTraceId = makeTraceId("openai_response");
 
     if (LOG_OPENAI_META) {
-      safeLog("[openai] responses request meta", {
+      safeLog("[openai] request meta", {
         routeTraceId,
         openAiTraceId,
         model: CHAT_MODEL,
-        inputCount: chatPayload.input.length,
-        input: redactInputItems(chatPayload.input),
+        inputCount: responseInput.length,
+        input: redactInputItems(responseInput),
       });
     }
 
     if (LOG_OPENAI_PAYLOADS) {
-      safeLog("[openai] exact responses payload", {
+      safeLog("[openai] exact request payload", {
         routeTraceId,
         openAiTraceId,
-        payload: chatPayload,
+        payload: {
+          model: CHAT_MODEL,
+          instructions: buildSystemPrompt(),
+          input: responseInput,
+        },
       });
     }
 
     let usageReserved = false;
-    const usageReserveStartedAt = nowMs();
 
     try {
       const usage = await reserveDailyUsage(
@@ -434,7 +366,6 @@ export async function POST(req: NextRequest): Promise<Response> {
           userId: user.id,
           messageCount: usage.messageCount,
           dailyLimit: DAILY_LIMIT,
-          durationMs: nowMs() - usageReserveStartedAt,
         });
 
         return jsonResponse(
@@ -453,7 +384,6 @@ export async function POST(req: NextRequest): Promise<Response> {
         userId: user.id,
         messageCount: usage.messageCount,
         dailyLimit: DAILY_LIMIT,
-        durationMs: nowMs() - usageReserveStartedAt,
       });
     } catch (usageError) {
       safeLog("[usage] reserve error", {
@@ -464,265 +394,186 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
 
     let openAiRequestId: string | undefined;
-    let fullReply = "";
-    let assistantPersisted = false;
 
     try {
       const openAiStartedAt = nowMs();
 
       const response = await openai.responses.create({
         model: CHAT_MODEL,
-        input: "Say hello",
+        instructions: buildSystemPrompt(),
+        input: responseInput,
+        timeout: OPENAI_TIMEOUT_MS,
       });
-
-console.log("OPENAI RESPONSE:", response);
 
       openAiRequestId = response._request_id ?? undefined;
 
-      safeLog("[openai] responses stream opened", {
+      const fullReply = extractOutputText(response);
+
+      safeLog("[openai] response complete", {
         routeTraceId,
         openAiTraceId,
         openAiRequestId,
         model: CHAT_MODEL,
         durationMs: nowMs() - openAiStartedAt,
+        responseLength: fullReply.length,
       });
 
-      const encoder = new TextEncoder();
+      if (!fullReply) {
+        if (usageReserved) {
+          await refundDailyUsage(supabase, user.id, today);
+        }
 
-      const readableStream = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          try {
-            for await (const event of stream as AsyncIterable<unknown>) {
-              if (isOutputTextDeltaEvent(event)) {
-                if (event.delta.length === 0) continue;
-                fullReply += event.delta;
-                controller.enqueue(encoder.encode(event.delta));
-                continue;
-              }
+        safeLog("[openai] empty response", {
+          routeTraceId,
+          openAiTraceId,
+          openAiRequestId,
+        });
 
-              if (isResponseFailedEvent(event)) {
-                throw new Error("OpenAI response stream reported failure.");
-              }
+        return jsonResponse({ error: "Empty response from model." }, 502);
+      }
 
-              if (isResponseCompletedEvent(event)) {
-                continue;
-              }
-            }
+      const assistantMessageInsert: DbMessageInsert = {
+        conversation_id: conversationId,
+        user_id: user.id,
+        role: "assistant",
+        content: fullReply,
+      };
 
-            safeLog("[openai] responses stream complete", {
-              routeTraceId,
-              openAiTraceId,
-              openAiRequestId,
-              responseLength: fullReply.length,
-            });
+      const { data: insertedAssistant, error: assistantInsertError } =
+        await supabase
+          .from("messages")
+          .insert(assistantMessageInsert)
+          .select("id")
+          .single();
 
-            if (fullReply.trim()) {
-              const assistantInsertStartedAt = nowMs();
+      if (assistantInsertError) {
+        safeLog("[messages] assistant insert error", {
+          routeTraceId,
+          assistantInsertError,
+        });
 
-              const assistantMessageInsert: DbMessageInsert = {
-                conversation_id: conversationId,
-                user_id: user.id,
-                role: "assistant",
-                content: fullReply,
-              };
+        if (usageReserved) {
+          await refundDailyUsage(supabase, user.id, today);
+        }
 
-              const { data: insertedAssistant, error: assistantInsertError } =
-                await supabase
-                  .from("messages")
-                  .insert(assistantMessageInsert)
-                  .select("id")
-                  .single();
+        return jsonResponse({ error: "Failed to save assistant message." }, 500);
+      }
 
-              const typedInsertedAssistant =
-                insertedAssistant as Pick<DbMessageRow, "id"> | null;
+      if (regenerate && oldAssistantIdToReplace) {
+        const { error: deleteOldAssistantError } = await supabase
+          .from("messages")
+          .delete()
+          .eq("id", oldAssistantIdToReplace)
+          .eq("user_id", user.id);
 
-              if (assistantInsertError) {
-                safeLog("[messages] assistant insert error", {
-                  routeTraceId,
-                  durationMs: nowMs() - assistantInsertStartedAt,
-                  assistantInsertError,
-                });
-              } else {
-                assistantPersisted = true;
+        if (deleteOldAssistantError) {
+          safeLog("[regenerate] old assistant delete error", {
+            routeTraceId,
+            oldAssistantIdToReplace,
+            newAssistantId: (insertedAssistant as Pick<DbMessageRow, "id"> | null)?.id,
+            deleteOldAssistantError,
+          });
+        }
+      }
 
-                if (regenerate && oldAssistantIdToReplace) {
-                  const deleteOldStartedAt = nowMs();
+      const { error: updateConversationError } = await supabase
+        .from("conversations")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", conversationId)
+        .eq("user_id", user.id);
 
-                  const { error: deleteOldAssistantError } = await supabase
-                    .from("messages")
-                    .delete()
-                    .eq("id", oldAssistantIdToReplace)
-                    .eq("user_id", user.id);
+      if (updateConversationError) {
+        safeLog("[conversation] update error", {
+          routeTraceId,
+          updateConversationError,
+        });
+      }
 
-                  if (deleteOldAssistantError) {
-                    safeLog("[regenerate] old assistant delete error", {
-                      routeTraceId,
-                      oldAssistantIdToReplace,
-                      newAssistantId: typedInsertedAssistant?.id,
-                      durationMs: nowMs() - deleteOldStartedAt,
-                      deleteOldAssistantError,
-                    });
-                  }
-                }
-              }
+      const shouldGenerateTitle =
+        ENABLE_TITLE_GENERATION &&
+        !regenerate &&
+        message &&
+        (typedConversation.title === "New Chat" ||
+          typedConversation.title === buildConversationTitle(message));
 
-              const updateConversationStartedAt = nowMs();
-              const { error: updateConversationError } = await supabase
-                .from("conversations")
-                .update({ updated_at: new Date().toISOString() })
-                .eq("id", conversationId)
-                .eq("user_id", user.id);
+      if (shouldGenerateTitle) {
+        try {
+          const titleTraceId = makeTraceId("openai_title");
 
-              if (updateConversationError) {
-                safeLog("[conversation] update error", {
-                  routeTraceId,
-                  durationMs: nowMs() - updateConversationStartedAt,
-                  updateConversationError,
-                });
-              }
-            }
-
-            const shouldGenerateTitle =
-              !regenerate &&
-              message &&
-              (typedConversation.title === "New Chat" ||
-                typedConversation.title === buildConversationTitle(message));
-
-            if (false) {
-              const titleTraceId = makeTraceId("openai_title");
-              const titlePayload = buildTitlePayload(message);
-
-              if (LOG_OPENAI_META) {
-                safeLog("[openai] title responses request meta", {
-                  routeTraceId,
-                  titleTraceId,
-                  model: TITLE_MODEL,
-                  input: redactInputItems(titlePayload.input),
-                });
-              }
-
-              if (LOG_OPENAI_PAYLOADS) {
-                safeLog("[openai] exact title responses payload", {
-                  routeTraceId,
-                  titleTraceId,
-                  payload: titlePayload,
-                });
-              }
-
-              try {
-                const titleStartedAt = nowMs();
-
-                const titleResponse = await openai.responses.create(titlePayload, {
-                  headers: {
-                    "X-Client-Request-Id": titleTraceId,
+          const titleResponse = await openai.responses.create({
+            model: TITLE_MODEL,
+            instructions:
+              "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+            input: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "input_text",
+                    text: message,
                   },
-                  timeout: OPENAI_TIMEOUT_MS,
-                });
+                ],
+              },
+            ],
+            timeout: OPENAI_TIMEOUT_MS,
+          });
 
-                safeLog("[openai] title responses result", {
-                  routeTraceId,
-                  titleTraceId,
-                  openAiRequestId: titleResponse._request_id,
-                  model: TITLE_MODEL,
-                  durationMs: nowMs() - titleStartedAt,
-                });
+          safeLog("[openai] title response complete", {
+            routeTraceId,
+            titleTraceId,
+            openAiRequestId: titleResponse._request_id ?? undefined,
+          });
 
-                const generatedTitle =
-                  extractOutputText(titleResponse) || buildConversationTitle(message);
+          const generatedTitle =
+            extractOutputText(titleResponse) || buildConversationTitle(message);
 
-                const cleanedTitle = generatedTitle.replace(/^"|"$/g, "");
+          const cleanedTitle = generatedTitle.replace(/^"|"$/g, "");
 
-                const titleUpdateStartedAt = nowMs();
-                const { error: titleUpdateError } = await supabase
-                  .from("conversations")
-                  .update({
-                    title: cleanedTitle,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq("id", conversationId)
-                  .eq("user_id", user.id);
+          const { error: titleUpdateError } = await supabase
+            .from("conversations")
+            .update({
+              title: cleanedTitle,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", conversationId)
+            .eq("user_id", user.id);
 
-                if (titleUpdateError) {
-                  safeLog("[conversation] title update error", {
-                    routeTraceId,
-                    durationMs: nowMs() - titleUpdateStartedAt,
-                    titleUpdateError,
-                  });
-                }
-              } catch (titleError) {
-                if (titleError instanceof OpenAI.APIError) {
-                  safeLog("[openai] title API error", {
-                    routeTraceId,
-                    status: titleError.status,
-                    name: titleError.name,
-                    message: titleError.message,
-                    type: titleError.type,
-                    code: titleError.code,
-                    requestId: extractErrorRequestId(titleError),
-                  });
-                } else {
-                  safeLog("[openai] title unknown error", {
-                    routeTraceId,
-                    titleError,
-                  });
-                }
-              }
-            }
-
-            controller.close();
-          } catch (streamError) {
-            if (usageReserved && !assistantPersisted && fullReply.length === 0) {
-              await refundDailyUsage(supabase, user.id, today);
-            }
-
-            if (streamError instanceof OpenAI.APIError) {
-              safeLog("[openai] responses stream API error", {
-                routeTraceId,
-                openAiTraceId,
-                openAiRequestId,
-                status: streamError.status,
-                name: streamError.name,
-                message: streamError.message,
-                type: streamError.type,
-                code: streamError.code,
-                requestId: extractErrorRequestId(streamError),
-              });
-            } else {
-              safeLog("[openai] responses stream unknown error", {
-                routeTraceId,
-                openAiTraceId,
-                openAiRequestId,
-                streamError,
-              });
-            }
-
-            try {
-              controller.enqueue(
-                encoder.encode("\n\n[STREAM_ERROR] Response interrupted.")
-              );
-            } catch {
-              // ignore enqueue failure during teardown
-            }
-
-            controller.error(streamError);
+          if (titleUpdateError) {
+            safeLog("[conversation] title update error", {
+              routeTraceId,
+              titleUpdateError,
+            });
           }
-        },
-      });
+        } catch (titleError) {
+          if (titleError instanceof OpenAI.APIError) {
+            safeLog("[openai] title API error", {
+              routeTraceId,
+              status: titleError.status,
+              name: titleError.name,
+              message: titleError.message,
+              type: titleError.type,
+              code: titleError.code,
+              requestId: extractErrorRequestId(titleError),
+            });
+          } else {
+            safeLog("[openai] title unknown error", {
+              routeTraceId,
+              titleError,
+            });
+          }
+        }
+      }
 
       safeLog("[route] response ready", {
         routeTraceId,
         openAiTraceId,
         openAiRequestId,
-        totalSetupDurationMs: nowMs() - routeStartedAt,
+        totalDurationMs: nowMs() - routeStartedAt,
       });
 
-      return new Response(readableStream, {
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
-          "X-App-Trace-Id": routeTraceId,
-          "X-OpenAI-Client-Trace-Id": openAiTraceId,
-        },
+      return textResponse(fullReply, 200, {
+        "X-App-Trace-Id": routeTraceId,
+        "X-OpenAI-Client-Trace-Id": openAiTraceId,
       });
     } catch (openAiError) {
       if (usageReserved) {
@@ -730,7 +581,7 @@ console.log("OPENAI RESPONSE:", response);
       }
 
       if (openAiError instanceof OpenAI.APIError) {
-        safeLog("[openai] responses setup API error", {
+        safeLog("[openai] API error", {
           routeTraceId,
           openAiTraceId,
           openAiRequestId,
@@ -742,7 +593,7 @@ console.log("OPENAI RESPONSE:", response);
           requestId: extractErrorRequestId(openAiError),
         });
       } else {
-        safeLog("[openai] responses setup unknown error", {
+        safeLog("[openai] unknown error", {
           routeTraceId,
           openAiTraceId,
           openAiError,
