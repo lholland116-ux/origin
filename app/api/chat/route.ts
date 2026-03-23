@@ -15,6 +15,7 @@ const MAX_HISTORY_MESSAGES = 12;
 
 const LOG_OPENAI_META = true;
 const LOG_OPENAI_PAYLOADS = process.env.LOG_OPENAI_PAYLOADS === "true";
+const OPENAI_TIMEOUT_MS = 30_000;
 
 type ChatRequestBody = {
   conversationId?: string;
@@ -72,7 +73,10 @@ type ReserveDailyUsageRpcRow = {
 function jsonResponse(body: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
   });
 }
 
@@ -168,6 +172,20 @@ function buildTitlePayload(message: string): TitleResponsesPayload {
 
 function extractOutputText(response: { output_text?: string | null }): string {
   return response.output_text?.trim() ?? "";
+}
+
+/**
+ * Handle SDK version differences safely:
+ * - some docs/examples show request_id
+ * - some installed typings expose requestID
+ */
+function extractErrorRequestId(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+
+  const maybe = error as Record<string, unknown>;
+  if (typeof maybe.requestID === "string") return maybe.requestID;
+  if (typeof maybe.request_id === "string") return maybe.request_id;
+  return undefined;
 }
 
 function isOutputTextDeltaEvent(
@@ -447,6 +465,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
     let openAiRequestId: string | undefined;
     let fullReply = "";
+    let assistantPersisted = false;
 
     try {
       const openAiStartedAt = nowMs();
@@ -456,6 +475,7 @@ export async function POST(req: NextRequest): Promise<Response> {
           headers: {
             "X-Client-Request-Id": openAiTraceId,
           },
+          timeout: OPENAI_TIMEOUT_MS,
         })
         .withResponse();
 
@@ -524,23 +544,27 @@ export async function POST(req: NextRequest): Promise<Response> {
                   durationMs: nowMs() - assistantInsertStartedAt,
                   assistantInsertError,
                 });
-              } else if (regenerate && oldAssistantIdToReplace) {
-                const deleteOldStartedAt = nowMs();
+              } else {
+                assistantPersisted = true;
 
-                const { error: deleteOldAssistantError } = await supabase
-                  .from("messages")
-                  .delete()
-                  .eq("id", oldAssistantIdToReplace)
-                  .eq("user_id", user.id);
+                if (regenerate && oldAssistantIdToReplace) {
+                  const deleteOldStartedAt = nowMs();
 
-                if (deleteOldAssistantError) {
-                  safeLog("[regenerate] old assistant delete error", {
-                    routeTraceId,
-                    oldAssistantIdToReplace,
-                    newAssistantId: typedInsertedAssistant?.id,
-                    durationMs: nowMs() - deleteOldStartedAt,
-                    deleteOldAssistantError,
-                  });
+                  const { error: deleteOldAssistantError } = await supabase
+                    .from("messages")
+                    .delete()
+                    .eq("id", oldAssistantIdToReplace)
+                    .eq("user_id", user.id);
+
+                  if (deleteOldAssistantError) {
+                    safeLog("[regenerate] old assistant delete error", {
+                      routeTraceId,
+                      oldAssistantIdToReplace,
+                      newAssistantId: typedInsertedAssistant?.id,
+                      durationMs: nowMs() - deleteOldStartedAt,
+                      deleteOldAssistantError,
+                    });
+                  }
                 }
               }
 
@@ -594,6 +618,7 @@ export async function POST(req: NextRequest): Promise<Response> {
                   headers: {
                     "X-Client-Request-Id": titleTraceId,
                   },
+                  timeout: OPENAI_TIMEOUT_MS,
                 });
 
                 safeLog("[openai] title responses result", {
@@ -635,7 +660,7 @@ export async function POST(req: NextRequest): Promise<Response> {
                     message: titleError.message,
                     type: titleError.type,
                     code: titleError.code,
-                    requestId: titleError.request_id,
+                    requestId: extractErrorRequestId(titleError),
                   });
                 } else {
                   safeLog("[openai] title unknown error", {
@@ -648,7 +673,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
             controller.close();
           } catch (streamError) {
-            if (usageReserved) {
+            if (usageReserved && !assistantPersisted && fullReply.length === 0) {
               await refundDailyUsage(supabase, user.id, today);
             }
 
@@ -662,7 +687,7 @@ export async function POST(req: NextRequest): Promise<Response> {
                 message: streamError.message,
                 type: streamError.type,
                 code: streamError.code,
-                requestId: streamError.request_id,
+                requestId: extractErrorRequestId(streamError),
               });
             } else {
               safeLog("[openai] responses stream unknown error", {
@@ -716,7 +741,7 @@ export async function POST(req: NextRequest): Promise<Response> {
           message: openAiError.message,
           type: openAiError.type,
           code: openAiError.code,
-          requestId: openAiError.request_id,
+          requestId: extractErrorRequestId(openAiError),
         });
       } else {
         safeLog("[openai] responses setup unknown error", {
@@ -737,7 +762,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         message: error.message,
         type: error.type,
         code: error.code,
-        requestId: error.request_id,
+        requestId: extractErrorRequestId(error),
       });
     } else {
       safeLog("[route] unknown error", {
