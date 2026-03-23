@@ -477,7 +477,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
 console.log("OPENAI RESPONSE:", response);
 
-      openAiRequestId = request_id ?? undefined;
+      openAiRequestId = response._request_id ?? undefined;
 
       safeLog("[openai] responses stream opened", {
         routeTraceId,
