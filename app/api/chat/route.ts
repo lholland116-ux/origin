@@ -470,14 +470,12 @@ export async function POST(req: NextRequest): Promise<Response> {
     try {
       const openAiStartedAt = nowMs();
 
-      const { data: stream, request_id } = await openai.responses
-        .create(chatPayload, {
-          headers: {
-            "X-Client-Request-Id": openAiTraceId,
-          },
-          timeout: OPENAI_TIMEOUT_MS,
-        })
-        .withResponse();
+      const response = await openai.responses.create({
+        model: CHAT_MODEL,
+        input: "Say hello",
+      });
+
+console.log("OPENAI RESPONSE:", response);
 
       openAiRequestId = request_id ?? undefined;
 
@@ -590,7 +588,7 @@ export async function POST(req: NextRequest): Promise<Response> {
               (typedConversation.title === "New Chat" ||
                 typedConversation.title === buildConversationTitle(message));
 
-            if (shouldGenerateTitle && message) {
+            if (false) {
               const titleTraceId = makeTraceId("openai_title");
               const titlePayload = buildTitlePayload(message);
 
