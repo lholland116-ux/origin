@@ -459,7 +459,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         })
         .withResponse();
 
-      openAiRequestId = request_id;
+      openAiRequestId = request_id ?? undefined;
 
       safeLog("[openai] responses stream opened", {
         routeTraceId,
