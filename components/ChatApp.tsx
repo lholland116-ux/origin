@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatTimestamp } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { PRODUCT_DESCRIPTION } from "@/lib/product-content";
 
 type Conversation = {
   id: string;
@@ -13,11 +14,19 @@ type Conversation = {
   updated_at: string;
 };
 
+type SourceItem = {
+  title: string;
+  url: string;
+  snippet?: string;
+};
+
 type Message = {
   id?: string;
   role: "user" | "assistant" | "system";
   content: string;
   created_at?: string;
+  sources?: SourceItem[];
+  imagePreview?: string;
 };
 
 type ChatAppProps = {
@@ -34,6 +43,13 @@ type UsageResponse = {
   limit?: number;
   remaining?: number;
   error?: string;
+};
+
+type ChatSuccessResponse = {
+  reply?: string;
+  sources?: SourceItem[];
+  error?: string;
+  code?: string;
 };
 
 export default function ChatApp({ userEmail }: ChatAppProps) {
@@ -59,8 +75,12 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     useState<Conversation | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [selectedImagePreview, setSelectedImagePreview] = useState<string | null>(null);
+
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   async function signOut() {
     try {
@@ -89,7 +109,10 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         throw new Error(data.error || "Failed to load conversations.");
       }
 
-      const nextConversations = data.conversations || [];
+      const nextConversations: Conversation[] = Array.isArray(data.conversations)
+        ? data.conversations
+        : [];
+
       setConversations(nextConversations);
 
       if (!conversationId && nextConversations.length > 0) {
@@ -216,6 +239,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       setMessages([]);
       setEditingConversationId(null);
       setEditingTitle("");
+      clearSelectedImage();
 
       setTimeout(() => inputRef.current?.focus(), 50);
     } catch (err) {
@@ -249,23 +273,93 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         throw new Error(data.error || "Failed to load messages.");
       }
 
-      setMessages(data.messages || []);
+      const nextMessages: Message[] = Array.isArray(data.messages)
+        ? data.messages
+        : [];
+
+      setMessages(nextMessages);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load messages.");
     }
   }
 
-  async function streamAssistantReply(
+  function clearSelectedImage() {
+    setSelectedImage(null);
+    setSelectedImagePreview((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
+    });
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+
+    if (!file) {
+      clearSelectedImage();
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setError("Please upload a supported image file.");
+      clearSelectedImage();
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Image must be 5 MB or smaller.");
+      clearSelectedImage();
+      return;
+    }
+
+    setError(null);
+    setSelectedImage(file);
+
+    const previewUrl = URL.createObjectURL(file);
+    setSelectedImagePreview((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return previewUrl;
+    });
+  }
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result !== "string") {
+          reject(new Error("Failed to read image file."));
+          return;
+        }
+        resolve(result);
+      };
+
+      reader.onerror = () => reject(new Error("Failed to read image file."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function requestAssistantReply(
     conversationId: string,
     message: string,
-    regenerate = false
+    regenerate = false,
+    imageBase64?: string
   ) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ conversationId, message, regenerate }),
+      body: JSON.stringify({
+        conversationId,
+        message,
+        regenerate,
+        imageBase64,
+      }),
     });
 
     if (!res.ok) {
@@ -280,7 +374,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         errorMessage = data.error || errorMessage;
         errorCode = data.code;
       } catch {
-        // Keep fallback message
+        // keep fallback
       }
 
       if (errorCode === "LIMIT_REACHED") {
@@ -294,54 +388,37 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       throw new Error(errorMessage);
     }
 
-    if (!res.body) {
-      throw new Error("No response stream returned.");
+    const data: ChatSuccessResponse = await res.json();
+
+    if (process.env.NODE_ENV === "development") {
+      console.log("chat success response:", JSON.stringify(data, null, 2));
     }
+
+    const assistantContent =
+      typeof data.reply === "string" && data.reply.trim().length > 0
+        ? data.reply.trim()
+        : "No response generated.";
+
+    const assistantSources = Array.isArray(data.sources) ? data.sources : [];
 
     setLimitReached(false);
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let done = false;
-    let fullText = "";
+    const assistantMessage: Message = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: assistantContent,
+      sources: assistantSources,
+      created_at: new Date().toISOString(),
+    };
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: "",
-        created_at: new Date().toISOString(),
-      },
-    ]);
-
-    while (!done) {
-      const result = await reader.read();
-      done = result.done;
-
-      if (result.value) {
-        const chunk = decoder.decode(result.value, { stream: true });
-        fullText += chunk;
-
-        setMessages((prev) => {
-          const next = [...prev];
-          const lastIndex = next.length - 1;
-
-          if (lastIndex >= 0 && next[lastIndex].role === "assistant") {
-            next[lastIndex] = {
-              ...next[lastIndex],
-              content: fullText,
-            };
-          }
-
-          return next;
-        });
-      }
-    }
+    setMessages((prev) => [...prev, assistantMessage]);
   }
 
   async function sendMessage() {
     const trimmed = input.trim();
-    if (!trimmed || !conversationId || loading) return;
+    const hasImage = Boolean(selectedImage);
+
+    if ((!trimmed && !hasImage) || !conversationId || loading) return;
 
     setError(null);
     setLoading(true);
@@ -350,17 +427,29 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     setUsageUsed((prev) => Math.min(prev + 1, usageLimit));
 
     const userMessage: Message = {
+      id: crypto.randomUUID(),
       role: "user",
-      content: trimmed,
+      content: trimmed || "",
       created_at: new Date().toISOString(),
+      imagePreview: selectedImagePreview ?? undefined,
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
     try {
-      await streamAssistantReply(conversationId, trimmed, false);
-      await loadMessages(conversationId);
+      const imageBase64 = selectedImage
+        ? await fileToBase64(selectedImage)
+        : undefined;
+
+      await requestAssistantReply(
+        conversationId,
+        trimmed,
+        false,
+        imageBase64
+      );
+
+      clearSelectedImage();
       await loadConversations();
       await loadUsage();
     } catch (err) {
@@ -375,7 +464,10 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         setMessages((prev) => {
           const next = [...prev];
           for (let i = next.length - 1; i >= 0; i--) {
-            if (next[i].role === "user" && next[i].content === trimmed) {
+            if (
+              next[i].role === "user" &&
+              next[i].content === (trimmed || "")
+            ) {
               next.splice(i, 1);
               break;
             }
@@ -393,6 +485,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       setMessages((prev) => [
         ...prev,
         {
+          id: crypto.randomUUID(),
           role: "assistant",
           content: "Sorry, something went wrong while generating a reply.",
           created_at: new Date().toISOString(),
@@ -434,8 +527,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     });
 
     try {
-      await streamAssistantReply(conversationId, "", true);
-      await loadMessages(conversationId);
+      await requestAssistantReply(conversationId, "", true);
       await loadConversations();
       await loadUsage();
     } catch (err) {
@@ -471,6 +563,11 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     }
   }
 
+  function handleStarterPrompt(prompt: string) {
+    setInput(prompt);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -490,16 +587,28 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }, [conversationId]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!endRef.current) return;
+
+    if (loading) {
+      endRef.current.scrollIntoView({ behavior: "auto" });
+      return;
+    }
+
+    endRef.current.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  useEffect(() => {
+    return () => {
+      if (selectedImagePreview) {
+        URL.revokeObjectURL(selectedImagePreview);
+      }
+    };
+  }, [selectedImagePreview]);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === conversationId) || null,
     [conversations, conversationId]
   );
-
-  const usagePercent =
-    usageLimit > 0 ? Math.min((usageUsed / usageLimit) * 100, 100) : 0;
 
   return (
     <main className="flex h-screen bg-zinc-950 text-zinc-100">
@@ -619,31 +728,15 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       </aside>
 
       <section className="flex flex-1 flex-col">
-        <header className="border-b border-zinc-800 bg-zinc-950/80 px-4 py-4 backdrop-blur">
+        <header className="border-b border-zinc-800 bg-zinc-950 px-4 py-2">
           <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4">
-            <div>
+            <div className="flex flex-col">
               <h1 className="text-sm font-semibold text-zinc-100">
                 {activeConversation?.title || "AI Chat"}
               </h1>
-
-              <div className="mt-1 space-y-2">
-                <p className="text-xs text-zinc-400">
-                  Signed in as {userEmail}
-                </p>
-
-                <div className="space-y-1">
-                  <p className="text-xs text-zinc-500">
-                    {usageUsed} / {usageLimit} messages used today
-                  </p>
-
-                  <div className="h-1 w-40 rounded-full bg-zinc-800">
-                    <div
-                      className="h-1 rounded-full bg-white transition-all"
-                      style={{ width: `${usagePercent}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
+              <p className="text-[11px] text-zinc-500">
+                {usageUsed}/{usageLimit} messages used
+              </p>
             </div>
 
             <div className="flex items-center gap-2">
@@ -665,7 +758,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         </header>
 
         <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-4 py-6">
+          <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-4 py-3">
             {limitReached && (
               <div className="mb-4 rounded-2xl border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
                 <div className="font-medium">Free plan limit reached</div>
@@ -694,14 +787,49 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
             {messages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center">
-                <div className="max-w-md rounded-3xl border border-zinc-800 bg-zinc-900/60 p-8 text-center shadow-2xl">
+                <div className="max-w-md rounded-3xl border border-zinc-800 bg-zinc-900/60 p-6 text-center shadow-2xl">
                   <h2 className="text-xl font-semibold text-white">
                     Start a conversation
                   </h2>
-                  <p className="mt-3 text-sm leading-6 text-zinc-400">
-                    Ask a question, brainstorm ideas, or build with your AI
-                    agent. Your conversation history will be saved automatically.
+
+                  <p className="mt-2 text-sm leading-6 text-zinc-400">
+                    {PRODUCT_DESCRIPTION}
                   </p>
+
+                  <div className="mt-3 space-y-1 text-sm text-zinc-400">
+                    <p className="font-medium text-zinc-300">Try asking:</p>
+                    <div className="space-y-1">
+                      <button
+                        onClick={() =>
+                          handleStarterPrompt("What time is it in Georgia right now?")
+                        }
+                        className="block w-full text-left hover:text-white"
+                      >
+                        • What time is it in Georgia right now?
+                      </button>
+                      <button
+                        onClick={() =>
+                          handleStarterPrompt("What’s the weather in Atlanta, GA?")
+                        }
+                        className="block w-full text-left hover:text-white"
+                      >
+                        • What’s the weather in Atlanta, GA?
+                      </button>
+                      <button
+                        onClick={() =>
+                          handleStarterPrompt("Explain EU MDR in simple terms")
+                        }
+                        className="block w-full text-left hover:text-white"
+                      >
+                        • Explain EU MDR in simple terms
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-sm leading-6 text-zinc-400">
+                    Ask a question, explore ideas, or get help quickly.
+                  </p>
+
                   <button
                     onClick={createConversation}
                     className="mt-6 rounded-2xl bg-white px-5 py-3 text-sm font-medium text-black transition hover:opacity-90"
@@ -711,7 +839,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                 </div>
               </div>
             ) : (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {messages.map((msg, index) => {
                   const isUser = msg.role === "user";
                   const isLastMessage = index === messages.length - 1;
@@ -719,7 +847,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
                   return (
                     <div
-                      key={`${msg.created_at || "msg"}-${index}`}
+                      key={msg.id ?? `${msg.created_at || "msg"}-${index}`}
                       className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                     >
                       <div
@@ -731,8 +859,20 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                       >
                         <div className="break-words text-sm leading-7">
                           {isUser ? (
-                            <div className="whitespace-pre-wrap">
-                              {msg.content || (loading ? "Thinking..." : "")}
+                            <div className="space-y-2">
+                              {msg.imagePreview && (
+                                <img
+                                  src={msg.imagePreview}
+                                  alt="Uploaded"
+                                  className="max-h-48 rounded-2xl border border-zinc-300"
+                                />
+                              )}
+
+                              {msg.content && (
+                                <div className="whitespace-pre-wrap">
+                                  {msg.content}
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div
@@ -758,6 +898,40 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                             </div>
                           )}
                         </div>
+
+                        {!isUser &&
+                          Array.isArray(msg.sources) &&
+                          msg.sources.length > 0 && (
+                            <div className="mt-4 space-y-2">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">
+                                Sources
+                              </p>
+
+                              {msg.sources.map((source, sourceIndex) => (
+                                <a
+                                  key={`${source.url}-${sourceIndex}`}
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block rounded-2xl border border-zinc-800 bg-zinc-950 px-3 py-3 transition hover:border-zinc-700"
+                                >
+                                  <div className="text-sm font-medium text-zinc-100">
+                                    {source.title}
+                                  </div>
+
+                                  <div className="mt-1 break-all text-xs text-zinc-500">
+                                    {source.url}
+                                  </div>
+
+                                  {source.snippet ? (
+                                    <div className="mt-2 text-sm leading-6 text-zinc-400">
+                                      {source.snippet}
+                                    </div>
+                                  ) : null}
+                                </a>
+                              ))}
+                            </div>
+                          )}
 
                         {msg.created_at && (
                           <div
@@ -794,6 +968,14 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   );
                 })}
 
+                {loading && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[85%] rounded-3xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-400 shadow-lg">
+                      Thinking...
+                    </div>
+                  </div>
+                )}
+
                 <div ref={endRef} />
               </div>
             )}
@@ -801,8 +983,46 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         </div>
 
         <div className="border-t border-zinc-800 bg-zinc-950">
-          <div className="mx-auto w-full max-w-4xl px-4 py-4">
-            <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-3 shadow-2xl">
+          <div className="mx-auto w-full max-w-4xl px-4 py-3">
+            <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-xl">
+              <div className="mb-2 flex items-center gap-2">
+                <label className="cursor-pointer rounded-xl border border-zinc-700 px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800">
+                  Attach image
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageChange}
+                    className="hidden"
+                  />
+                </label>
+
+                {selectedImage && (
+                  <>
+                    <div className="truncate text-xs text-zinc-400">
+                      {selectedImage.name}
+                    </div>
+                    <button
+                      onClick={clearSelectedImage}
+                      type="button"
+                      className="rounded-xl border border-zinc-700 px-3 py-1 text-xs text-zinc-300 transition hover:bg-zinc-800"
+                    >
+                      Remove
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {selectedImagePreview && (
+                <div className="mb-2">
+                  <img
+                    src={selectedImagePreview}
+                    alt="Selected preview"
+                    className="max-h-32 rounded-2xl border border-zinc-800"
+                  />
+                </div>
+              )}
+
               <textarea
                 ref={inputRef}
                 value={input}
@@ -822,11 +1042,11 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     : "Create a new chat to begin..."
                 }
                 disabled={!conversationId || loading || limitReached}
-                className="max-h-40 min-h-[52px] w-full resize-none bg-transparent px-2 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed"
+                className="max-h-32 min-h-[40px] w-full resize-none bg-transparent px-2 py-1.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed"
               />
 
-              <div className="mt-3 flex items-center justify-between">
-                <p className="text-xs text-zinc-500">
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-[11px] text-zinc-500">
                   {limitReached
                     ? "Free plan limit reached for today"
                     : "Press Enter to send, Shift+Enter for a new line"}
@@ -835,7 +1055,10 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                 <button
                   onClick={() => void sendMessage()}
                   disabled={
-                    !conversationId || !input.trim() || loading || limitReached
+                    !conversationId ||
+                    (!input.trim() && !selectedImage) ||
+                    loading ||
+                    limitReached
                   }
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >

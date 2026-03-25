@@ -1,71 +1,255 @@
 import { NextRequest } from "next/server";
-import { openai } from "@/lib/openai";
 import { createClient } from "@/lib/supabase/server";
+import { openai } from "@/lib/openai";
+import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
-const DAILY_LIMIT = 20;
+const DAILY_LIMIT = Number(process.env.DAILY_MESSAGE_LIMIT ?? 20);
+const MAX_MESSAGE_LENGTH = 4000;
+const MAX_HISTORY_MESSAGES = 12;
+const MAX_IMAGE_BASE64_LENGTH = 8_000_000;
+const IS_DEV = process.env.NODE_ENV === "development";
 
 type ChatRequestBody = {
   conversationId?: string;
   message?: string;
   regenerate?: boolean;
+  imageBase64?: string;
 };
 
-function jsonResponse(body: Record<string, unknown>, status: number) {
+type DbMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
+
+type SourceItem = {
+  title: string;
+  url: string;
+  snippet?: string;
+};
+
+type ResponsesTextInputMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type ResponsesVisionInputMessage = {
+  role: "user";
+  content: Array<
+    | {
+        type: "input_text";
+        text: string;
+      }
+    | {
+        type: "input_image";
+        image_url: string;
+      }
+  >;
+};
+
+function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
   });
 }
 
-export async function POST(req: NextRequest) {
-  try {
-    const supabase = await createClient();
+function normalizeMessage(input: unknown): string {
+  return typeof input === "string" ? input.trim() : "";
+}
 
+function normalizeImageBase64(input: unknown): string {
+  return typeof input === "string" ? input.trim() : "";
+}
+
+function sanitizeTitle(title: string, fallback: string): string {
+  const cleaned = title.replace(/^["']|["']$/g, "").trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 80) : fallback;
+}
+
+function extractSources(response: any): SourceItem[] {
+  const seen = new Set<string>();
+  const sources: SourceItem[] = [];
+
+  for (const item of response?.output ?? []) {
+    if (item?.type !== "web_search_call") continue;
+
+    for (const src of item?.action?.sources ?? []) {
+      const url = typeof src?.url === "string" ? src.url : "";
+      if (!url || seen.has(url)) continue;
+
+      seen.add(url);
+
+      sources.push({
+        title:
+          typeof src?.title === "string" && src.title.trim().length > 0
+            ? src.title.trim()
+            : url,
+        url,
+        snippet:
+          typeof src?.snippet === "string" && src.snippet.trim().length > 0
+            ? src.snippet.trim()
+            : undefined,
+      });
+    }
+  }
+
+  return sources;
+}
+
+function isLikelyDataUrlImage(value: string): boolean {
+  return /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value);
+}
+
+function buildModelInput(
+  recentMessages: ResponsesTextInputMessage[],
+  message: string,
+  imageBase64: string
+): Array<ResponsesTextInputMessage | ResponsesVisionInputMessage> {
+  const historyWithoutLatestUser = recentMessages.slice(0, -1);
+
+  if (!imageBase64) {
+    return recentMessages;
+  }
+
+  return [
+    ...historyWithoutLatestUser,
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: message || "Please analyze this image.",
+        },
+        {
+          type: "input_image",
+          image_url: imageBase64,
+        },
+      ],
+    },
+  ];
+}
+
+async function generateConversationTitle(message: string): Promise<string> {
+  try {
+    const titleResponse = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+        },
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+      max_tokens: 20,
+    });
+
+    return sanitizeTitle(
+      titleResponse.choices[0]?.message?.content ?? "",
+      buildConversationTitle(message)
+    );
+  } catch {
+    return buildConversationTitle(message);
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const supabase = await createClient();
+
+  try {
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+      return jsonResponse({ error: "Unauthorized." }, 401);
     }
 
     const body = (await req.json()) as ChatRequestBody;
-    const conversationId = body?.conversationId;
-    const message = body?.message?.trim() ?? "";
+
+    const conversationId =
+      typeof body?.conversationId === "string" ? body.conversationId : "";
+    const message = normalizeMessage(body?.message);
     const regenerate = Boolean(body?.regenerate);
+    const imageBase64 = normalizeImageBase64(body?.imageBase64);
 
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);
     }
 
-    if (!regenerate && !message) {
+    if (!regenerate && !message && !imageBase64) {
       return jsonResponse(
-        { error: "message is required unless regenerating." },
+        {
+          error:
+            "message or imageBase64 is required unless regenerate is true.",
+        },
         400
       );
     }
 
+    if (message.length > MAX_MESSAGE_LENGTH) {
+      return jsonResponse(
+        { error: `Message exceeds ${MAX_MESSAGE_LENGTH} characters.` },
+        400
+      );
+    }
+
+    if (imageBase64) {
+      if (!isLikelyDataUrlImage(imageBase64)) {
+        return jsonResponse(
+          { error: "imageBase64 must be a valid base64 image data URL." },
+          400
+        );
+      }
+
+      if (imageBase64.length > MAX_IMAGE_BASE64_LENGTH) {
+        return jsonResponse(
+          { error: "Attached image is too large." },
+          400
+        );
+      }
+    }
+
+    const { data: conversation, error: conversationError } = await supabase
+      .from("conversations")
+      .select("id, user_id, title")
+      .eq("id", conversationId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (conversationError || !conversation) {
+      return jsonResponse({ error: "Conversation not found." }, 404);
+    }
+
     const today = new Date().toISOString().slice(0, 10);
 
-    const { data: usageRow, error: usageReadError } = await supabase
+    const { data: usageRow, error: usageError } = await supabase
       .from("usage")
       .select("message_count")
       .eq("user_id", user.id)
       .eq("date", today)
       .maybeSingle();
 
-    if (usageReadError) {
-      console.error("Usage read error:", usageReadError);
+    if (usageError) {
+      console.error("Usage read error:", usageError);
       return jsonResponse({ error: "Failed to read usage." }, 500);
     }
 
     const currentCount = usageRow?.message_count ?? 0;
 
-    if (currentCount >= DAILY_LIMIT) {
+    if (!IS_DEV && currentCount >= DAILY_LIMIT) {
       return jsonResponse(
         {
           error: "Daily limit reached. Upgrade to continue.",
@@ -75,18 +259,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { data: conversation, error: conversationError } = await supabase
-      .from("conversations")
-      .select("id, title, user_id")
-      .eq("id", conversationId)
-      .eq("user_id", user.id)
-      .single();
-
-    if (conversationError || !conversation) {
-      return jsonResponse({ error: "Conversation not found." }, 404);
-    }
-
-    // Count every generation request, including regenerate, because both consume API usage.
     const { error: usageWriteError } = await supabase.from("usage").upsert(
       {
         user_id: user.id,
@@ -123,14 +295,14 @@ export async function POST(req: NextRequest) {
       }
 
       if (lastAssistant?.id) {
-        const { error: deleteAssistantError } = await supabase
+        const { error: deleteError } = await supabase
           .from("messages")
           .delete()
           .eq("id", lastAssistant.id)
           .eq("user_id", user.id);
 
-        if (deleteAssistantError) {
-          console.error("Assistant delete error:", deleteAssistantError);
+        if (deleteError) {
+          console.error("Assistant delete error:", deleteError);
           return jsonResponse(
             { error: "Failed to prepare regeneration." },
             500
@@ -138,14 +310,14 @@ export async function POST(req: NextRequest) {
         }
       }
     } else {
-      const { error: insertUserError } = await supabase
-        .from("messages")
-        .insert({
-          conversation_id: conversationId,
-          user_id: user.id,
-          role: "user",
-          content: message,
-        });
+      const storedUserContent = message || "[Image attached]";
+
+      const { error: insertUserError } = await supabase.from("messages").insert({
+        conversation_id: conversationId,
+        user_id: user.id,
+        role: "user",
+        content: storedUserContent,
+      });
 
       if (insertUserError) {
         console.error("User message insert error:", insertUserError);
@@ -168,126 +340,84 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const recentMessages = history.slice(-12).map((msg) => ({
-      role: msg.role as "system" | "user" | "assistant",
-      content: msg.content,
-    }));
+    const recentMessages: ResponsesTextInputMessage[] = (history as DbMessage[])
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      }));
 
-    const stream = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      stream: true,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a helpful AI assistant. Give clear, accurate, concise answers. Use a warm and professional tone.",
-        },
-        ...recentMessages,
-      ],
+    const modelInput = buildModelInput(recentMessages, message, imageBase64);
+
+    const response = await openai.responses.create({
+      model: "gpt-5",
+      instructions: SYSTEM_PROMPT,
+      input: modelInput,
+      tools: [{ type: "web_search" }],
+      include: ["web_search_call.action.sources"],
+      store: false,
     });
 
-    const encoder = new TextEncoder();
-    let fullReply = "";
+    const reply = response.output_text?.trim() || "";
 
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        try {
-          for await (const chunk of stream) {
-            const token = chunk.choices[0]?.delta?.content || "";
-            if (token) {
-              fullReply += token;
-              controller.enqueue(encoder.encode(token));
-            }
-          }
+    if (!reply) {
+      console.error("Empty model response:", {
+        output: response?.output,
+      });
 
-          if (fullReply.trim()) {
-            const { error: assistantInsertError } = await supabase
-              .from("messages")
-              .insert({
-                conversation_id: conversationId,
-                user_id: user.id,
-                role: "assistant",
-                content: fullReply,
-              });
+      return jsonResponse({
+        reply:
+          "I'm having trouble generating a response right now. Please try again.",
+        sources: [],
+      });
+    }
 
-            if (assistantInsertError) {
-              console.error("Assistant insert error:", assistantInsertError);
-            }
+    const sources = extractSources(response);
 
-            const { error: updateConversationError } = await supabase
-              .from("conversations")
-              .update({ updated_at: new Date().toISOString() })
-              .eq("id", conversationId)
-              .eq("user_id", user.id);
+    const { error: insertAssistantError } = await supabase
+      .from("messages")
+      .insert({
+        conversation_id: conversationId,
+        user_id: user.id,
+        role: "assistant",
+        content: reply,
+      });
 
-            if (updateConversationError) {
-              console.error(
-                "Conversation update error:",
-                updateConversationError
-              );
-            }
-          }
+    if (insertAssistantError) {
+      console.error("Assistant message insert error:", insertAssistantError);
+      return jsonResponse(
+        { error: "Failed to save assistant message." },
+        500
+      );
+    }
 
-          const shouldGenerateTitle =
-            !regenerate &&
-            message &&
-            (conversation.title === "New Chat" ||
-              conversation.title === buildConversationTitle(message));
+    const updates: Record<string, string> = {
+      updated_at: new Date().toISOString(),
+    };
 
-          if (shouldGenerateTitle && message) {
-            try {
-              const titleResponse = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [
-                  {
-                    role: "system",
-                    content:
-                      "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
-                  },
-                  {
-                    role: "user",
-                    content: message,
-                  },
-                ],
-                max_tokens: 20,
-              });
+    const shouldGenerateTitle =
+      !regenerate &&
+      message &&
+      (conversation.title === "New Chat" ||
+        conversation.title === buildConversationTitle(message));
 
-              const generatedTitle =
-                titleResponse.choices[0]?.message?.content?.trim() ||
-                buildConversationTitle(message);
+    if (shouldGenerateTitle) {
+      updates.title = await generateConversationTitle(message);
+    }
 
-              const cleanedTitle = generatedTitle.replace(/^"|"$/g, "");
+    const { error: updateConversationError } = await supabase
+      .from("conversations")
+      .update(updates)
+      .eq("id", conversationId)
+      .eq("user_id", user.id);
 
-              const { error: titleUpdateError } = await supabase
-                .from("conversations")
-                .update({
-                  title: cleanedTitle,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("id", conversationId)
-                .eq("user_id", user.id);
+    if (updateConversationError) {
+      console.error("Conversation update error:", updateConversationError);
+    }
 
-              if (titleUpdateError) {
-                console.error("Title update error:", titleUpdateError);
-              }
-            } catch (titleError) {
-              console.error("Title generation failed:", titleError);
-            }
-          }
-
-          controller.close();
-        } catch (streamError) {
-          console.error("Streaming error:", streamError);
-          controller.error(streamError);
-        }
-      },
-    });
-
-    return new Response(readableStream, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-      },
+    return jsonResponse({
+      reply,
+      sources,
     });
   } catch (error) {
     console.error("/api/chat error:", error);
