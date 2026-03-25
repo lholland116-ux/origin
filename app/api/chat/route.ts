@@ -32,13 +32,13 @@ type SourceItem = {
   snippet?: string;
 };
 
-type ResponsesTextInputMessage = {
+type SimpleHistoryMessage = {
   role: "user" | "assistant";
   content: string;
 };
 
-type ResponsesVisionInputMessage = {
-  role: "user";
+type ModelInputMessage = {
+  role: "user" | "assistant";
   content: Array<
     | {
         type: "input_text";
@@ -47,6 +47,7 @@ type ResponsesVisionInputMessage = {
     | {
         type: "input_image";
         image_url: string;
+        detail: "auto";
       }
   >;
 };
@@ -109,14 +110,30 @@ function isLikelyDataUrlImage(value: string): boolean {
 }
 
 function buildModelInput(
-  recentMessages: ResponsesTextInputMessage[],
+  recentMessages: SimpleHistoryMessage[],
   message: string,
   imageBase64: string
-): Array<ResponsesTextInputMessage | ResponsesVisionInputMessage> {
-  const historyWithoutLatestUser = recentMessages.slice(0, -1);
+): ModelInputMessage[] {
+  const historyWithoutLatestUser = recentMessages.slice(0, -1).map((msg) => ({
+    role: msg.role,
+    content: [
+      {
+        type: "input_text" as const,
+        text: msg.content,
+      },
+    ],
+  }));
 
   if (!imageBase64) {
-    return recentMessages;
+    return recentMessages.map((msg) => ({
+      role: msg.role,
+      content: [
+        {
+          type: "input_text" as const,
+          text: msg.content,
+        },
+      ],
+    }));
   }
 
   return [
@@ -125,12 +142,13 @@ function buildModelInput(
       role: "user",
       content: [
         {
-          type: "input_text",
+          type: "input_text" as const,
           text: message || "Please analyze this image.",
         },
         {
-          type: "input_image",
+          type: "input_image" as const,
           image_url: imageBase64,
+          detail: "auto" as const,
         },
       ],
     },
@@ -215,10 +233,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (imageBase64.length > MAX_IMAGE_BASE64_LENGTH) {
-        return jsonResponse(
-          { error: "Attached image is too large." },
-          400
-        );
+        return jsonResponse({ error: "Attached image is too large." }, 400);
       }
     }
 
@@ -340,7 +355,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const recentMessages: ResponsesTextInputMessage[] = (history as DbMessage[])
+    const recentMessages: SimpleHistoryMessage[] = (history as DbMessage[])
       .slice(-MAX_HISTORY_MESSAGES)
       .map((msg) => ({
         role: msg.role,
