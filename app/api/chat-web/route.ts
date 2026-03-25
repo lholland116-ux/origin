@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
-import { SYSTEM_PROMPT } from "@/lib/system-prompt";
+import { SYSTEM_PROMPT_WEB } from "@/lib/system-prompt-web";
 import { buildConversationTitle } from "@/lib/utils";
 
 export const runtime = "nodejs";
@@ -9,7 +9,6 @@ export const runtime = "nodejs";
 const DAILY_LIMIT = Number(process.env.DAILY_MESSAGE_LIMIT ?? 20);
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
-const MAX_IMAGE_BASE64_LENGTH = 8_000_000;
 const IS_DEV = process.env.NODE_ENV === "development";
 
 type ChatRequestBody = {
@@ -26,6 +25,17 @@ type DbMessage = {
   created_at: string;
 };
 
+type ModelInputMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type SourceItem = {
+  title: string;
+  url: string;
+  snippet?: string;
+};
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -40,17 +50,39 @@ function normalizeMessage(input: unknown): string {
   return typeof input === "string" ? input.trim() : "";
 }
 
-function normalizeImageBase64(input: unknown): string {
-  return typeof input === "string" ? input.trim() : "";
-}
-
 function sanitizeTitle(title: string, fallback: string): string {
   const cleaned = title.replace(/^["']|["']$/g, "").trim();
   return cleaned.length > 0 ? cleaned.slice(0, 80) : fallback;
 }
 
-function isLikelyDataUrlImage(value: string): boolean {
-  return /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value);
+function extractSources(response: any): SourceItem[] {
+  const seen = new Set<string>();
+  const sources: SourceItem[] = [];
+
+  for (const item of response?.output ?? []) {
+    if (item?.type !== "web_search_call") continue;
+
+    for (const src of item?.action?.sources ?? []) {
+      const url = typeof src?.url === "string" ? src.url : "";
+      if (!url || seen.has(url)) continue;
+
+      seen.add(url);
+
+      sources.push({
+        title:
+          typeof src?.title === "string" && src.title.trim().length > 0
+            ? src.title.trim()
+            : url,
+        url,
+        snippet:
+          typeof src?.snippet === "string" && src.snippet.trim().length > 0
+            ? src.snippet.trim()
+            : undefined,
+      });
+    }
+  }
+
+  return sources;
 }
 
 async function generateConversationTitle(message: string): Promise<string> {
@@ -94,19 +126,19 @@ export async function POST(req: NextRequest) {
     }
 
     const body = (await req.json()) as ChatRequestBody;
+
     const conversationId =
       typeof body?.conversationId === "string" ? body.conversationId : "";
     const message = normalizeMessage(body?.message);
     const regenerate = Boolean(body?.regenerate);
-    const imageBase64 = normalizeImageBase64(body?.imageBase64);
 
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);
     }
 
-    if (!regenerate && !message && !imageBase64) {
+    if (!regenerate && !message) {
       return jsonResponse(
-        { error: "message or imageBase64 is required unless regenerate is true." },
+        { error: "message is required unless regenerate is true." },
         400
       );
     }
@@ -116,19 +148,6 @@ export async function POST(req: NextRequest) {
         { error: `Message exceeds ${MAX_MESSAGE_LENGTH} characters.` },
         400
       );
-    }
-
-    if (imageBase64) {
-      if (!isLikelyDataUrlImage(imageBase64)) {
-        return jsonResponse(
-          { error: "imageBase64 must be a valid base64 image data URL." },
-          400
-        );
-      }
-
-      if (imageBase64.length > MAX_IMAGE_BASE64_LENGTH) {
-        return jsonResponse({ error: "Attached image is too large." }, 400);
-      }
     }
 
     const { data: conversation, error: conversationError } = await supabase
@@ -211,13 +230,11 @@ export async function POST(req: NextRequest) {
         }
       }
     } else {
-      const storedUserContent = message || "[Image attached]";
-
       const { error: insertUserError } = await supabase.from("messages").insert({
         conversation_id: conversationId,
         user_id: user.id,
         role: "user",
-        content: storedUserContent,
+        content: message,
       });
 
       if (insertUserError) {
@@ -238,52 +255,38 @@ export async function POST(req: NextRequest) {
       return jsonResponse({ error: "Failed to load conversation history." }, 500);
     }
 
-    const recentMessages = (history as DbMessage[])
+    const recentMessages: ModelInputMessage[] = (history as DbMessage[])
       .slice(-MAX_HISTORY_MESSAGES)
       .map((msg) => ({
         role: msg.role,
         content: msg.content,
       }));
 
-    const historyWithoutLatestUser = recentMessages.slice(0, -1);
+    if (IS_DEV) {
+      console.log("🌐 WEB ROUTE ACTIVE");
+      console.log("MODEL IN USE:", "gpt-4.1");
+    }
 
-    const latestUserMessage = imageBase64
-      ? {
-          role: "user" as const,
-          content: [
-            {
-              type: "text" as const,
-              text: message || "Please analyze this image.",
-            },
-            {
-              type: "image_url" as const,
-              image_url: { url: imageBase64 },
-            },
-          ],
-        }
-      : {
-          role: "user" as const,
-          content:
-            message || recentMessages[recentMessages.length - 1]?.content || "",
-        };
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...historyWithoutLatestUser,
-        latestUserMessage,
-      ],
+    const response = await openai.responses.create({
+      model: "gpt-4.1",
+      instructions: SYSTEM_PROMPT_WEB,
+      input: recentMessages,
+      tools: [{ type: "web_search_preview" }],
+      include: ["web_search_call.action.sources"],
+      store: false,
     });
 
-    const reply = completion.choices[0]?.message?.content?.trim() || "";
+    const reply = response.output_text?.trim() || "";
 
     if (!reply) {
       return jsonResponse({
-        reply: "I'm having trouble generating a response right now. Please try again.",
+        reply:
+          "I'm having trouble generating a response right now. Please try again.",
         sources: [],
       });
     }
+
+    const sources = extractSources(response);
 
     const { error: insertAssistantError } = await supabase
       .from("messages")
@@ -325,11 +328,11 @@ export async function POST(req: NextRequest) {
 
     return jsonResponse({
       reply,
-      sources: [],
-      multimodal: Boolean(imageBase64),
+      sources,
+      web: true,
     });
   } catch (error) {
-    console.error("/api/chat error:", error);
-    return jsonResponse({ error: "Something went wrong in /api/chat." }, 500);
+    console.error("/api/chat-web error:", error);
+    return jsonResponse({ error: "Something went wrong in /api/chat-web." }, 500);
   }
 }

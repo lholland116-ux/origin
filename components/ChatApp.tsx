@@ -343,13 +343,37 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     });
   }
 
+  function shouldUseWebRoute(message: string, hasImage: boolean): boolean {
+    if (hasImage) return false;
+
+    const text = message.toLowerCase();
+
+    return [
+      "current",
+      "latest",
+      "today",
+      "now",
+      "weather",
+      "news",
+      "price",
+      "stock",
+      "time",
+      "temperature",
+    ].some((keyword) => text.includes(keyword));
+  }
+
   async function requestAssistantReply(
     conversationId: string,
     message: string,
     regenerate = false,
     imageBase64?: string
   ) {
-    const res = await fetch("/api/chat", {
+    const hasImage = Boolean(imageBase64);
+    const route = shouldUseWebRoute(message, hasImage)
+      ? "/api/chat-web"
+      : "/api/chat";
+
+    const res = await fetch(route, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -374,7 +398,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         errorMessage = data.error || errorMessage;
         errorCode = data.code;
       } catch {
-        // keep fallback
+        // fallback message
       }
 
       if (errorCode === "LIMIT_REACHED") {
@@ -392,6 +416,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
     if (process.env.NODE_ENV === "development") {
       console.log("chat success response:", JSON.stringify(data, null, 2));
+      console.log("route used:", route);
     }
 
     const assistantContent =
