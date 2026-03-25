@@ -365,7 +365,7 @@ export async function POST(req: NextRequest) {
     const modelInput = buildModelInput(recentMessages, message, imageBase64);
 
     const response = await openai.responses.create({
-      model: "gpt-5",
+      model: "gpt-4o",
       instructions: SYSTEM_PROMPT,
       input: modelInput,
       tools: [{ type: "web_search" }],
