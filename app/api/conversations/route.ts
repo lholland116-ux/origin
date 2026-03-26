@@ -15,7 +15,7 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("conversations")
-      .select("*")
+      .select("id, title, updated_at")
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false });
 
@@ -34,7 +34,7 @@ export async function GET() {
   }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
     const supabase = await createClient();
     const {
@@ -47,15 +47,19 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const title = body?.title?.trim() || "New Chat";
+    const title =
+      typeof body?.title === "string" && body.title.trim()
+        ? body.title.trim()
+        : "New Chat";
 
     const { data, error } = await supabase
       .from("conversations")
       .insert({
         title,
         user_id: user.id,
+        updated_at: new Date().toISOString(),
       })
-      .select()
+      .select("id, title, updated_at")
       .single();
 
     if (error) {
@@ -73,7 +77,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export async function PATCH(req: Request) {
   try {
     const supabase = await createClient();
     const {
@@ -86,8 +90,9 @@ export async function PATCH(req: NextRequest) {
     }
 
     const body = await req.json();
-    const id = body?.id;
-    const title = body?.title?.trim();
+    const id = typeof body?.id === "string" ? body.id : "";
+    const title =
+      typeof body?.title === "string" ? body.title.trim() : "";
 
     if (!id || !title) {
       return NextResponse.json(
@@ -104,7 +109,7 @@ export async function PATCH(req: NextRequest) {
       })
       .eq("id", id)
       .eq("user_id", user.id)
-      .select()
+      .select("id, title, updated_at")
       .single();
 
     if (error) {

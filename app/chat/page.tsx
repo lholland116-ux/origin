@@ -8,6 +8,12 @@ type InitialMessage = {
   content: string;
 };
 
+type ConversationItem = {
+  id: string;
+  title: string | null;
+  updated_at: string;
+};
+
 export default async function ChatPage() {
   const supabase = await createClient();
 
@@ -20,22 +26,19 @@ export default async function ChatPage() {
     redirect("/login");
   }
 
-  const { data: existingConversation, error: conversationQueryError } =
-    await supabase
-      .from("conversations")
-      .select("id")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  const { data: conversations, error: conversationsError } = await supabase
+    .from("conversations")
+    .select("id, title, updated_at")
+    .eq("user_id", user.id)
+    .order("updated_at", { ascending: false });
 
-  if (conversationQueryError) {
-    throw new Error("Failed to load conversation.");
+  if (conversationsError) {
+    throw new Error("Failed to load conversations.");
   }
 
-  let conversationId = existingConversation?.id;
+  let conversationList: ConversationItem[] = conversations ?? [];
 
-  if (!conversationId) {
+  if (conversationList.length === 0) {
     const { data: newConversation, error: createConversationError } =
       await supabase
         .from("conversations")
@@ -43,20 +46,22 @@ export default async function ChatPage() {
           user_id: user.id,
           title: "New Chat",
         })
-        .select("id")
+        .select("id, title, updated_at")
         .single();
 
     if (createConversationError || !newConversation) {
       throw new Error("Failed to create conversation.");
     }
 
-    conversationId = newConversation.id;
+    conversationList = [newConversation];
   }
+
+  const activeConversationId = conversationList[0].id;
 
   const { data: rawMessages, error: messagesError } = await supabase
     .from("messages")
     .select("id, role, content")
-    .eq("conversation_id", conversationId)
+    .eq("conversation_id", activeConversationId)
     .eq("user_id", user.id)
     .order("created_at", { ascending: true });
 
@@ -77,8 +82,9 @@ export default async function ChatPage() {
   return (
     <ChatClient
       userEmail={user.email ?? ""}
-      conversationId={conversationId}
+      initialConversationId={activeConversationId}
       initialMessages={initialMessages}
+      initialConversations={conversationList}
     />
   );
 }

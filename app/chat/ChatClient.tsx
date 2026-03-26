@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 type SourceItem = {
   title: string;
@@ -15,10 +16,17 @@ type Message = {
   sources?: SourceItem[];
 };
 
+type ConversationItem = {
+  id: string;
+  title: string | null;
+  updated_at: string;
+};
+
 type ChatClientProps = {
   userEmail: string;
-  conversationId: string;
+  initialConversationId: string;
   initialMessages: Message[];
+  initialConversations: ConversationItem[];
 };
 
 type ChatWebResponse = {
@@ -105,9 +113,12 @@ async function fileToProcessedDataUrl(file: File): Promise<string> {
 
 export default function ChatClient({
   userEmail,
-  conversationId,
+  initialConversationId,
   initialMessages,
+  initialConversations,
 }: ChatClientProps) {
+  const supabase = createClient();
+
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -115,6 +126,11 @@ export default function ChatClient({
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imageName, setImageName] = useState("");
   const [uploadingImage, setUploadingImage] = useState(false);
+
+  const [conversationId, setConversationId] = useState(initialConversationId);
+  const [conversations, setConversations] =
+    useState<ConversationItem[]>(initialConversations);
+  const [sidebarLoading, setSidebarLoading] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -156,6 +172,191 @@ export default function ChatClient({
     );
   }
 
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  }
+
+  async function refreshConversations(preferredId?: string) {
+    const res = await fetch("/api/conversations", { cache: "no-store" });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    const rows = Array.isArray(data?.conversations) ? data.conversations : [];
+
+    setConversations(rows);
+
+    if (preferredId) {
+      const found = rows.find((c: ConversationItem) => c.id === preferredId);
+      if (found) {
+        setConversationId(preferredId);
+      }
+    }
+  }
+
+  async function loadConversation(nextConversationId: string) {
+    if (loading || nextConversationId === conversationId) return;
+
+    setSidebarLoading(true);
+    clearImage();
+    setInput("");
+
+    try {
+      const res = await fetch(
+        `/api/messages?conversationId=${encodeURIComponent(nextConversationId)}`,
+        { cache: "no-store" }
+      );
+
+      if (!res.ok) {
+        throw new Error("Failed to load messages.");
+      }
+
+      const data = await res.json();
+      const nextMessages = Array.isArray(data?.messages) ? data.messages : [];
+
+      setConversationId(nextConversationId);
+      setMessages(nextMessages);
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "Failed to load conversation."
+      );
+    } finally {
+      setSidebarLoading(false);
+    }
+  }
+
+  async function handleNewChat() {
+    if (loading) return;
+
+    setSidebarLoading(true);
+    clearImage();
+    setInput("");
+
+    try {
+      const res = await fetch("/api/conversations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title: "New Chat" }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to create conversation.");
+      }
+
+      const data = await res.json();
+      const newConversationId =
+        typeof data?.conversation?.id === "string"
+          ? data.conversation.id
+          : typeof data?.id === "string"
+            ? data.id
+            : "";
+
+      if (!newConversationId) {
+        throw new Error("Conversation ID missing.");
+      }
+
+      await refreshConversations(newConversationId);
+      setConversationId(newConversationId);
+      setMessages([]);
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "Failed to create conversation."
+      );
+    } finally {
+      setSidebarLoading(false);
+    }
+  }
+
+  async function handleRenameConversation(target: ConversationItem) {
+    if (loading || sidebarLoading) return;
+
+    const nextTitle = window.prompt(
+      "Rename conversation",
+      target.title?.trim() || "New Chat"
+    );
+
+    if (!nextTitle) return;
+
+    const trimmed = nextTitle.trim();
+    if (!trimmed) return;
+
+    setSidebarLoading(true);
+
+    try {
+      const res = await fetch("/api/conversations", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: target.id,
+          title: trimmed,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to rename conversation.");
+      }
+
+      await refreshConversations(target.id);
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "Failed to rename conversation."
+      );
+    } finally {
+      setSidebarLoading(false);
+    }
+  }
+
+  async function handleDeleteConversation(target: ConversationItem) {
+    if (loading || sidebarLoading) return;
+
+    const confirmed = window.confirm(
+      `Delete "${target.title?.trim() || "New Chat"}"?`
+    );
+
+    if (!confirmed) return;
+
+    setSidebarLoading(true);
+
+    try {
+      const res = await fetch(
+        `/api/conversations?id=${encodeURIComponent(target.id)}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to delete conversation.");
+      }
+
+      const remaining = conversations.filter((c) => c.id !== target.id);
+
+      if (target.id === conversationId) {
+        if (remaining.length > 0) {
+          const fallbackId = remaining[0].id;
+          await refreshConversations(fallbackId);
+          await loadConversation(fallbackId);
+        } else {
+          await handleNewChat();
+        }
+      } else {
+        await refreshConversations(conversationId);
+      }
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "Failed to delete conversation."
+      );
+    } finally {
+      setSidebarLoading(false);
+    }
+  }
+
   async function handleImageChange(
     e: React.ChangeEvent<HTMLInputElement>
   ) {
@@ -177,9 +378,7 @@ export default function ChatClient({
     } catch (error) {
       clearImage();
       window.alert(
-        error instanceof Error
-          ? error.message
-          : "Failed to process image."
+        error instanceof Error ? error.message : "Failed to process image."
       );
     } finally {
       setUploadingImage(false);
@@ -192,7 +391,7 @@ export default function ChatClient({
     const trimmed = input.trim();
     const hasImage = Boolean(imageBase64);
 
-    if ((loading || uploadingImage) || (!trimmed && !hasImage)) return;
+    if (loading || uploadingImage || (!trimmed && !hasImage)) return;
 
     if (!conversationId) {
       window.alert("Missing conversationId.");
@@ -281,36 +480,35 @@ export default function ChatClient({
           content: reply,
           sources,
         }));
+      } else {
+        if (!res.body) {
+          throw new Error("Streaming response body is missing.");
+        }
 
-        return;
-      }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = "";
 
-      if (!res.body) {
-        throw new Error("Streaming response body is missing.");
-      }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-
-      while (!done) {
-        const result = await reader.read();
-        done = result.done;
-
-        if (result.value) {
-          const chunk = decoder.decode(result.value, { stream: true });
+          const chunk = decoder.decode(value, { stream: true });
+          fullText += chunk;
 
           updateAssistantMessage(assistantId, (msg) => ({
             ...msg,
-            content: msg.content + chunk,
+            content: fullText,
           }));
         }
+
+        updateAssistantMessage(assistantId, (msg) => ({
+          ...msg,
+          content: msg.content.trim() || "No response generated.",
+        }));
       }
 
-      updateAssistantMessage(assistantId, (msg) => ({
-        ...msg,
-        content: msg.content.trim() || "No response generated.",
-      }));
+      await refreshConversations(conversationId);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         updateAssistantMessage(assistantId, (msg) => ({
@@ -351,194 +549,301 @@ export default function ChatClient({
 
   return (
     <main className="min-h-screen bg-black text-white">
-      <div className="mx-auto flex min-h-screen max-w-5xl flex-col px-4 py-6">
-        <div className="mb-4 rounded-3xl border border-neutral-800 bg-neutral-950 p-4">
-          <p className="text-xs text-neutral-400">Origin Sable</p>
-          <h1 className="text-2xl font-bold">AI Assistant</h1>
-          <p className="text-sm text-neutral-400">Logged in as {userEmail}</p>
+      <div className="flex min-h-screen">
+        <aside className="hidden w-80 shrink-0 border-r border-neutral-800 bg-neutral-950 md:flex md:flex-col">
+          <div className="border-b border-neutral-800 p-4">
+            <div className="text-sm font-semibold truncate">{userEmail}</div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => handleModeChange(false)}
-              disabled={loading}
-              className={`rounded-xl px-3 py-2 text-sm transition ${
-                !useWebSearch
-                  ? "bg-white text-black"
-                  : "border border-neutral-700 bg-neutral-900 text-white"
-              }`}
-            >
-              Standard
-            </button>
+            <div className="mt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleNewChat}
+                disabled={loading || sidebarLoading}
+                className="rounded-xl bg-white px-4 py-2 text-sm text-black disabled:opacity-50"
+              >
+                New Chat
+              </button>
 
-            <button
-              type="button"
-              onClick={() => handleModeChange(true)}
-              disabled={loading}
-              className={`rounded-xl px-3 py-2 text-sm transition ${
-                useWebSearch
-                  ? "bg-white text-black"
-                  : "border border-neutral-700 bg-neutral-900 text-white"
-              }`}
-            >
-              Web Search
-            </button>
-
-            <span className="text-xs text-neutral-400">{modeLabel}</span>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm text-white"
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
-        </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto">
-          {messages.map((m) => {
-            const sources = Array.isArray(m.sources) ? m.sources : [];
-            const isStreamingAssistant =
-              loading &&
-              m.role === "assistant" &&
-              m.id === messages[messages.length - 1]?.id;
+          <div className="flex-1 overflow-y-auto p-3">
+            <div className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+              Chat History
+            </div>
 
-            return (
-              <div key={m.id} className="space-y-2">
-                <div
-                  className={`max-w-3xl rounded-2xl p-3 whitespace-pre-wrap break-words ${
-                    m.role === "user"
-                      ? "ml-auto bg-white text-black"
-                      : "bg-neutral-900 text-white"
-                  }`}
-                >
-                  {m.content}
-                  {isStreamingAssistant ? (
-                    <span className="ml-1 inline-block animate-pulse">▍</span>
-                  ) : null}
+            <div className="space-y-2">
+              {conversations.map((conversation) => {
+                const isActive = conversation.id === conversationId;
+
+                return (
+                  <div
+                    key={conversation.id}
+                    className={`rounded-xl p-2 transition ${
+                      isActive
+                        ? "bg-white text-black"
+                        : "bg-neutral-900 text-white"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => loadConversation(conversation.id)}
+                      disabled={loading || sidebarLoading}
+                      className="w-full text-left"
+                    >
+                      <div className="truncate font-medium">
+                        {conversation.title?.trim() || "New Chat"}
+                      </div>
+                      <div
+                        className={`mt-1 text-xs ${
+                          isActive ? "text-neutral-700" : "text-neutral-400"
+                        }`}
+                      >
+                        {new Date(conversation.updated_at).toLocaleString()}
+                      </div>
+                    </button>
+
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRenameConversation(conversation)}
+                        disabled={loading || sidebarLoading}
+                        className={`rounded-lg px-2 py-1 text-xs ${
+                          isActive
+                            ? "bg-black/10 text-black hover:bg-black/20"
+                            : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                        }`}
+                      >
+                        Rename
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteConversation(conversation)}
+                        disabled={loading || sidebarLoading}
+                        className={`rounded-lg px-2 py-1 text-xs ${
+                          isActive
+                            ? "bg-red-600/15 text-red-700 hover:bg-red-600/25"
+                            : "border border-red-900/60 text-red-400 hover:border-red-700"
+                        }`}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </aside>
+
+        <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6">
+          <div className="mb-4 rounded-3xl border border-neutral-800 bg-neutral-950 p-4">
+            <p className="text-xs text-neutral-400">Origin Sable</p>
+            <h1 className="text-2xl font-bold">AI Assistant</h1>
+            <p className="text-sm text-neutral-400">Logged in as {userEmail}</p>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleNewChat}
+                disabled={loading || sidebarLoading}
+                className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
+              >
+                New Chat
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
+              >
+                Sign Out
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleModeChange(false)}
+                disabled={loading}
+                className={`rounded-xl px-3 py-2 text-sm transition ${
+                  !useWebSearch
+                    ? "bg-white text-black"
+                    : "border border-neutral-700 bg-neutral-900 text-white"
+                }`}
+              >
+                Standard
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleModeChange(true)}
+                disabled={loading}
+                className={`rounded-xl px-3 py-2 text-sm transition ${
+                  useWebSearch
+                    ? "bg-white text-black"
+                    : "border border-neutral-700 bg-neutral-900 text-white"
+                }`}
+              >
+                Web Search
+              </button>
+
+              <span className="text-xs text-neutral-400">{modeLabel}</span>
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-4 overflow-y-auto">
+            {messages.map((m) => {
+              const sources = Array.isArray(m.sources) ? m.sources : [];
+              const isStreamingAssistant =
+                loading &&
+                m.role === "assistant" &&
+                m.id === messages[messages.length - 1]?.id;
+
+              return (
+                <div key={m.id} className="space-y-2">
+                  <div
+                    className={`max-w-3xl rounded-2xl p-3 whitespace-pre-wrap break-words ${
+                      m.role === "user"
+                        ? "ml-auto bg-white text-black"
+                        : "bg-neutral-900 text-white"
+                    }`}
+                  >
+                    {m.content}
+                    {isStreamingAssistant ? (
+                      <span className="ml-1 inline-block animate-pulse">▍</span>
+                    ) : null}
+                  </div>
+
+                  {sources.length > 0 && (
+                    <div className="max-w-3xl space-y-2">
+                      {sources.map((s, j) => (
+                        <a
+                          key={`${s.url}-${j}`}
+                          href={s.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block rounded-xl border border-neutral-800 bg-neutral-950 p-3 transition hover:border-neutral-700"
+                        >
+                          <div className="text-xs text-blue-400 underline">
+                            {s.title}
+                          </div>
+                          {s.snippet ? (
+                            <div className="mt-1 text-xs text-neutral-400">
+                              {s.snippet}
+                            </div>
+                          ) : null}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {loading && messages.length > 0 && (
+              <div className="max-w-3xl text-xs text-neutral-500">
+                {useWebSearch
+                  ? "Using web search..."
+                  : imageBase64
+                    ? "Analyzing image..."
+                    : "Thinking..."}
+              </div>
+            )}
+
+            <div ref={endRef} />
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {!useWebSearch && (
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="inline-flex cursor-pointer items-center rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageChange}
+                      disabled={loading || uploadingImage}
+                      className="hidden"
+                    />
+                    {uploadingImage ? "Processing image..." : "Attach image"}
+                  </label>
+
+                  {imageName ? (
+                    <span className="text-xs text-neutral-400">{imageName}</span>
+                  ) : (
+                    <span className="text-xs text-neutral-500">
+                      JPG, PNG, WEBP supported
+                    </span>
+                  )}
+
+                  {imageBase64 && !loading && (
+                    <button
+                      type="button"
+                      onClick={clearImage}
+                      className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500"
+                    >
+                      Remove image
+                    </button>
+                  )}
                 </div>
 
-                {sources.length > 0 && (
-                  <div className="max-w-3xl space-y-2">
-                    {sources.map((s, j) => (
-                      <a
-                        key={`${s.url}-${j}`}
-                        href={s.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block rounded-xl border border-neutral-800 bg-neutral-950 p-3 transition hover:border-neutral-700"
-                      >
-                        <div className="text-xs text-blue-400 underline">
-                          {s.title}
-                        </div>
-                        {s.snippet ? (
-                          <div className="mt-1 text-xs text-neutral-400">
-                            {s.snippet}
-                          </div>
-                        ) : null}
-                      </a>
-                    ))}
+                {imageBase64 && (
+                  <div className="mt-3">
+                    <img
+                      src={imageBase64}
+                      alt="Selected upload preview"
+                      className="max-h-64 rounded-xl border border-neutral-800 object-contain"
+                    />
                   </div>
                 )}
               </div>
-            );
-          })}
-
-          {loading && messages.length > 0 && (
-            <div className="max-w-3xl text-xs text-neutral-500">
-              {useWebSearch
-                ? "Using web search..."
-                : "Thinking..."}
-            </div>
-          )}
-
-          <div ref={endRef} />
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {!useWebSearch && (
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="inline-flex cursor-pointer items-center rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageChange}
-                    disabled={loading || uploadingImage}
-                    className="hidden"
-                  />
-                  {uploadingImage ? "Processing image..." : "Attach image"}
-                </label>
-
-                {imageName ? (
-                  <span className="text-xs text-neutral-400">{imageName}</span>
-                ) : (
-                  <span className="text-xs text-neutral-500">
-                    JPG, PNG, WEBP supported
-                  </span>
-                )}
-
-                {imageBase64 && !loading && (
-                  <button
-                    type="button"
-                    onClick={clearImage}
-                    className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500"
-                  >
-                    Remove image
-                  </button>
-                )}
-              </div>
-
-              {imageBase64 && (
-                <div className="mt-3">
-                  <img
-                    src={imageBase64}
-                    alt="Selected upload preview"
-                    className="max-h-64 rounded-xl border border-neutral-800 object-contain"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="flex gap-2">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              className="flex-1 rounded-xl bg-neutral-900 p-3 outline-none"
-              placeholder={
-                useWebSearch
-                  ? "Ask something with web search..."
-                  : imageBase64
-                    ? "Add context for the image, or send without text..."
-                    : "Ask something..."
-              }
-              maxLength={MAX_INPUT_LENGTH}
-              disabled={loading || uploadingImage}
-            />
-
-            {loading ? (
-              <button
-                type="button"
-                onClick={handleStop}
-                className="rounded-xl border border-neutral-700 px-4 text-white"
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={
-                  uploadingImage ||
-                  (!imageBase64 && input.trim().length === 0)
-                }
-                className="rounded-xl bg-white px-4 text-black disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Send
-              </button>
             )}
-          </form>
 
-          <div className="text-xs text-neutral-500">
-            {uploadingImage
-              ? "Preparing image for analysis..."
-              : imageBase64
-                ? "Analyzing image will use Standard mode only."
-                : ""}
+            <form onSubmit={handleSubmit} className="flex gap-2">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                className="flex-1 rounded-xl bg-neutral-900 p-3 outline-none"
+                placeholder={
+                  useWebSearch
+                    ? "Ask something with web search..."
+                    : imageBase64
+                      ? "Add context for the image, or send without text..."
+                      : "Ask something..."
+                }
+                maxLength={MAX_INPUT_LENGTH}
+                disabled={loading || uploadingImage}
+              />
+
+              {loading ? (
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  className="rounded-xl border border-neutral-700 px-4 text-white"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={
+                    uploadingImage ||
+                    (!imageBase64 && input.trim().length === 0)
+                  }
+                  className="rounded-xl bg-white px-4 text-black disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Send
+                </button>
+              )}
+            </form>
           </div>
         </div>
       </div>

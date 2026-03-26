@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 export async function GET(req: NextRequest) {
   try {
     const supabase = await createClient();
+
     const {
       data: { user },
       error: authError,
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await supabase
       .from("messages")
-      .select("*")
+      .select("id, role, content, created_at")
       .eq("conversation_id", conversationId)
       .eq("user_id", user.id)
       .order("created_at", { ascending: true });
