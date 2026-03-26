@@ -454,7 +454,9 @@ export default function ChatClient({
     }
 
     const userVisibleContent =
-      trimmed || (hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "");
+      trimmed || (hasImage
+        ? `[Image attached${imageName ? `: ${imageName}` : ""}]`
+        : "");
 
     const userMessage: Message = {
       id: createId(),
@@ -712,209 +714,217 @@ export default function ChatClient({
           </div>
         </aside>
 
-        <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6">
-          <div className="mb-4 rounded-3xl border border-neutral-800 bg-neutral-950 p-4">
-            <p className="text-xs text-neutral-400">Origin Sable</p>
-            <h1 className="text-2xl font-bold">AI Assistant</h1>
-            <p className="text-sm text-neutral-400">Logged in as {userEmail}</p>
+        <section className="flex min-h-screen flex-1 flex-col bg-black">
+          <div className="sticky top-0 z-20 border-b border-neutral-800 bg-black/95 backdrop-blur">
+            <div className="mx-auto w-full max-w-4xl px-4 py-4">
+              <p className="text-xs text-neutral-400">Origin Sable</p>
+              <h1 className="text-2xl font-bold">AI Assistant</h1>
+              <p className="text-sm text-neutral-400">Logged in as {userEmail}</p>
 
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={handleNewChat}
-                disabled={loading || sidebarLoading}
-                className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
-              >
-                New Chat
-              </button>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleNewChat}
+                  disabled={loading || sidebarLoading}
+                  className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
+                >
+                  New Chat
+                </button>
 
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
-              >
-                Sign Out
-              </button>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
+                >
+                  Sign Out
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleModeChange(false)}
-                disabled={loading}
-                className={`rounded-xl px-3 py-2 text-sm transition ${
-                  !useWebSearch
-                    ? "bg-white text-black"
-                    : "border border-neutral-700 bg-neutral-900 text-white"
-                }`}
-              >
-                Standard
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleModeChange(false)}
+                  disabled={loading}
+                  className={`rounded-xl px-3 py-2 text-sm transition ${
+                    !useWebSearch
+                      ? "bg-white text-black"
+                      : "border border-neutral-700 bg-neutral-900 text-white"
+                  }`}
+                >
+                  Standard
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleModeChange(true)}
-                disabled={loading}
-                className={`rounded-xl px-3 py-2 text-sm transition ${
-                  useWebSearch
-                    ? "bg-white text-black"
-                    : "border border-neutral-700 bg-neutral-900 text-white"
-                }`}
-              >
-                Web Search
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleModeChange(true)}
+                  disabled={loading}
+                  className={`rounded-xl px-3 py-2 text-sm transition ${
+                    useWebSearch
+                      ? "bg-white text-black"
+                      : "border border-neutral-700 bg-neutral-900 text-white"
+                  }`}
+                >
+                  Web Search
+                </button>
 
-              <span className="text-xs text-neutral-400">{modeLabel}</span>
+                <span className="text-xs text-neutral-400">{modeLabel}</span>
+              </div>
             </div>
           </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto">
-            {messages.map((m) => {
-              const sources = Array.isArray(m.sources) ? m.sources : [];
-              const isStreamingAssistant =
-                loading &&
-                m.role === "assistant" &&
-                m.id === messages[messages.length - 1]?.id;
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-4xl px-4 py-6">
+              <div className="space-y-4">
+                {messages.map((m) => {
+                  const sources = Array.isArray(m.sources) ? m.sources : [];
+                  const isStreamingAssistant =
+                    loading &&
+                    m.role === "assistant" &&
+                    m.id === messages[messages.length - 1]?.id;
 
-              return (
-                <div key={m.id} className="space-y-2">
-                  <div
-                    className={`max-w-3xl rounded-2xl p-3 whitespace-pre-wrap break-words ${
-                      m.role === "user"
-                        ? "ml-auto bg-white text-black"
-                        : "bg-neutral-900 text-white"
-                    }`}
-                  >
-                    {m.content}
-                    {isStreamingAssistant ? (
-                      <span className="ml-1 inline-block animate-pulse">▍</span>
-                    ) : null}
+                  return (
+                    <div key={m.id} className="space-y-2">
+                      <div
+                        className={`w-full max-w-3xl rounded-2xl p-4 whitespace-pre-wrap break-words ${
+                          m.role === "user"
+                            ? "ml-auto bg-white text-black"
+                            : "mr-auto bg-neutral-900 text-white"
+                        }`}
+                      >
+                        {m.content}
+                        {isStreamingAssistant ? (
+                          <span className="ml-1 inline-block animate-pulse">▍</span>
+                        ) : null}
+                      </div>
+
+                      {sources.length > 0 && (
+                        <div className="mr-auto w-full max-w-3xl space-y-2">
+                          {sources.map((s, j) => (
+                            <a
+                              key={`${s.url}-${j}`}
+                              href={s.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block rounded-xl border border-neutral-800 bg-neutral-950 p-3 transition hover:border-neutral-700"
+                            >
+                              <div className="text-xs text-blue-400 underline">
+                                {s.title}
+                              </div>
+                              {s.snippet ? (
+                                <div className="mt-1 text-xs text-neutral-400">
+                                  {s.snippet}
+                                </div>
+                              ) : null}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {loading && messages.length > 0 && (
+                  <div className="mr-auto w-full max-w-3xl text-xs text-neutral-500">
+                    {useWebSearch
+                      ? "Using web search..."
+                      : imageBase64
+                        ? "Analyzing image..."
+                        : "Thinking..."}
+                  </div>
+                )}
+
+                <div ref={endRef} />
+              </div>
+            </div>
+          </div>
+
+          <div className="sticky bottom-0 z-20 border-t border-neutral-800 bg-black/95 backdrop-blur">
+            <div className="mx-auto w-full max-w-4xl px-4 py-4 space-y-3">
+              {!useWebSearch && (
+                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex cursor-pointer items-center rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageChange}
+                        disabled={loading || uploadingImage || isLimitReached}
+                        className="hidden"
+                      />
+                      {uploadingImage ? "Processing image..." : "Attach image"}
+                    </label>
+
+                    {imageName ? (
+                      <span className="text-xs text-neutral-400">{imageName}</span>
+                    ) : (
+                      <span className="text-xs text-neutral-500">
+                        JPG, PNG, WEBP supported
+                      </span>
+                    )}
+
+                    {imageBase64 && !loading && (
+                      <button
+                        type="button"
+                        onClick={clearImage}
+                        className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500"
+                      >
+                        Remove image
+                      </button>
+                    )}
                   </div>
 
-                  {sources.length > 0 && (
-                    <div className="max-w-3xl space-y-2">
-                      {sources.map((s, j) => (
-                        <a
-                          key={`${s.url}-${j}`}
-                          href={s.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block rounded-xl border border-neutral-800 bg-neutral-950 p-3 transition hover:border-neutral-700"
-                        >
-                          <div className="text-xs text-blue-400 underline">
-                            {s.title}
-                          </div>
-                          {s.snippet ? (
-                            <div className="mt-1 text-xs text-neutral-400">
-                              {s.snippet}
-                            </div>
-                          ) : null}
-                        </a>
-                      ))}
+                  {imageBase64 && (
+                    <div className="mt-3">
+                      <img
+                        src={imageBase64}
+                        alt="Selected upload preview"
+                        className="max-h-64 rounded-xl border border-neutral-800 object-contain"
+                      />
                     </div>
                   )}
                 </div>
-              );
-            })}
-
-            {loading && messages.length > 0 && (
-              <div className="max-w-3xl text-xs text-neutral-500">
-                {useWebSearch
-                  ? "Using web search..."
-                  : imageBase64
-                    ? "Analyzing image..."
-                    : "Thinking..."}
-              </div>
-            )}
-
-            <div ref={endRef} />
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {!useWebSearch && (
-              <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="inline-flex cursor-pointer items-center rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500">
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageChange}
-                      disabled={loading || uploadingImage || isLimitReached}
-                      className="hidden"
-                    />
-                    {uploadingImage ? "Processing image..." : "Attach image"}
-                  </label>
-
-                  {imageName ? (
-                    <span className="text-xs text-neutral-400">{imageName}</span>
-                  ) : (
-                    <span className="text-xs text-neutral-500">
-                      JPG, PNG, WEBP supported
-                    </span>
-                  )}
-
-                  {imageBase64 && !loading && (
-                    <button
-                      type="button"
-                      onClick={clearImage}
-                      className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500"
-                    >
-                      Remove image
-                    </button>
-                  )}
-                </div>
-
-                {imageBase64 && (
-                  <div className="mt-3">
-                    <img
-                      src={imageBase64}
-                      alt="Selected upload preview"
-                      className="max-h-64 rounded-xl border border-neutral-800 object-contain"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="flex gap-2">
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                className="flex-1 rounded-xl bg-neutral-900 p-3 outline-none"
-                placeholder={
-                  useWebSearch
-                    ? "Ask something with web search..."
-                    : imageBase64
-                      ? "Add context for the image, or send without text..."
-                      : "Ask something..."
-                }
-                maxLength={MAX_INPUT_LENGTH}
-                disabled={loading || uploadingImage || isLimitReached}
-              />
-
-              {loading ? (
-                <button
-                  type="button"
-                  onClick={handleStop}
-                  className="rounded-xl border border-neutral-700 px-4 text-white"
-                >
-                  Stop
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={
-                    uploadingImage ||
-                    isLimitReached ||
-                    (!imageBase64 && input.trim().length === 0)
-                  }
-                  className="rounded-xl bg-white px-4 text-black disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Send
-                </button>
               )}
-            </form>
+
+              <form onSubmit={handleSubmit} className="flex gap-2">
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  className="flex-1 rounded-2xl bg-neutral-900 p-4 outline-none"
+                  placeholder={
+                    useWebSearch
+                      ? "Ask something with web search..."
+                      : imageBase64
+                        ? "Add context for the image, or send without text..."
+                        : "Ask something..."
+                  }
+                  maxLength={MAX_INPUT_LENGTH}
+                  disabled={loading || uploadingImage || isLimitReached}
+                />
+
+                {loading ? (
+                  <button
+                    type="button"
+                    onClick={handleStop}
+                    className="rounded-2xl border border-neutral-700 px-5 text-white"
+                  >
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={
+                      uploadingImage ||
+                      isLimitReached ||
+                      (!imageBase64 && input.trim().length === 0)
+                    }
+                    className="rounded-2xl bg-white px-5 text-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Send
+                  </button>
+                )}
+              </form>
+            </div>
           </div>
-        </div>
+        </section>
       </div>
     </main>
   );
