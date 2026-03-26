@@ -88,14 +88,14 @@ async function generateConversationTitle(message: string): Promise<string> {
           role: "system",
           content: [
             {
-              type: "text",
+              type: "input_text",
               text: "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
             },
           ],
         },
         {
           role: "user",
-          content: [{ type: "text", text: message }],
+          content: [{ type: "input_text", text: message }],
         },
       ],
       store: false,
@@ -119,7 +119,7 @@ function buildResponsesInput(params: {
 
   const priorMessages = history.slice(0, -1).map((msg) => ({
     role: msg.role,
-    content: [{ type: "text" as const, text: msg.content }],
+    content: [{ type: "input_text" as const, text: msg.content }],
   }));
 
   const latestUserInput = imageBase64
@@ -127,7 +127,7 @@ function buildResponsesInput(params: {
         role: "user" as const,
         content: [
           {
-            type: "text" as const,
+            type: "input_text" as const,
             text: buildImageAnalysisInstruction(latestMessage),
           },
           {
@@ -141,7 +141,7 @@ function buildResponsesInput(params: {
         role: "user" as const,
         content: [
           {
-            type: "text" as const,
+            type: "input_text" as const,
             text: latestMessage || history[history.length - 1]?.content || "",
           },
         ],
@@ -150,7 +150,7 @@ function buildResponsesInput(params: {
   return [
     {
       role: "system" as const,
-      content: [{ type: "text" as const, text: SYSTEM_PROMPT }],
+      content: [{ type: "input_text" as const, text: SYSTEM_PROMPT }],
     },
     ...priorMessages,
     latestUserInput,
