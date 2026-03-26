@@ -35,6 +35,12 @@ type ChatWebResponse = {
   error?: string;
 };
 
+type UsageState = {
+  used: number;
+  limit: number;
+  remaining: number;
+};
+
 const MAX_INPUT_LENGTH = 2000;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
@@ -132,6 +138,9 @@ export default function ChatClient({
     useState<ConversationItem[]>(initialConversations);
   const [sidebarLoading, setSidebarLoading] = useState(false);
 
+  const [usage, setUsage] = useState<UsageState | null>(null);
+  const [usageError, setUsageError] = useState("");
+
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -141,6 +150,10 @@ export default function ChatClient({
     if (imageBase64) return "Image attached";
     return "Standard assistant";
   }, [useWebSearch, imageBase64]);
+
+  const isLimitReached = Boolean(
+    usage && usage.limit > 0 && usage.remaining <= 0
+  );
 
   useEffect(() => {
     endRef.current?.scrollIntoView({
@@ -153,6 +166,10 @@ export default function ChatClient({
     return () => {
       abortRef.current?.abort();
     };
+  }, []);
+
+  useEffect(() => {
+    fetchUsage();
   }, []);
 
   function clearImage() {
@@ -170,6 +187,29 @@ export default function ChatClient({
     setMessages((prev) =>
       prev.map((msg) => (msg.id === messageId ? updater(msg) : msg))
     );
+  }
+
+  async function fetchUsage() {
+    try {
+      setUsageError("");
+
+      const res = await fetch("/api/usage", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error("Failed to load usage.");
+      }
+
+      const data = await res.json();
+
+      setUsage({
+        used: typeof data?.used === "number" ? data.used : 0,
+        limit: typeof data?.limit === "number" ? data.limit : 0,
+        remaining: typeof data?.remaining === "number" ? data.remaining : 0,
+      });
+    } catch (error) {
+      setUsageError(
+        error instanceof Error ? error.message : "Failed to load usage."
+      );
+    }
   }
 
   async function handleSignOut() {
@@ -393,6 +433,11 @@ export default function ChatClient({
 
     if (loading || uploadingImage || (!trimmed && !hasImage)) return;
 
+    if (isLimitReached) {
+      window.alert("You’ve reached your daily message limit.");
+      return;
+    }
+
     if (!conversationId) {
       window.alert("Missing conversationId.");
       return;
@@ -509,6 +554,7 @@ export default function ChatClient({
       }
 
       await refreshConversations(conversationId);
+      await fetchUsage();
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         updateAssistantMessage(assistantId, (msg) => ({
@@ -553,6 +599,28 @@ export default function ChatClient({
         <aside className="hidden w-80 shrink-0 border-r border-neutral-800 bg-neutral-950 md:flex md:flex-col">
           <div className="border-b border-neutral-800 p-4">
             <div className="text-sm font-semibold truncate">{userEmail}</div>
+
+            {usage && (
+              <div className="mt-2 text-xs text-neutral-400">
+                {usage.used} / {usage.limit} messages used today
+              </div>
+            )}
+
+            {usage && usage.remaining > 0 && usage.remaining <= 5 && (
+              <div className="mt-1 text-xs text-yellow-400">
+                Only {usage.remaining} messages remaining today
+              </div>
+            )}
+
+            {isLimitReached && (
+              <div className="mt-2 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
+                Daily limit reached. Come back tomorrow or upgrade your plan.
+              </div>
+            )}
+
+            {usageError && (
+              <div className="mt-2 text-xs text-red-400">{usageError}</div>
+            )}
 
             <div className="mt-3 flex flex-col gap-2">
               <button
@@ -770,7 +838,7 @@ export default function ChatClient({
                       type="file"
                       accept="image/*"
                       onChange={handleImageChange}
-                      disabled={loading || uploadingImage}
+                      disabled={loading || uploadingImage || isLimitReached}
                       className="hidden"
                     />
                     {uploadingImage ? "Processing image..." : "Attach image"}
@@ -820,7 +888,7 @@ export default function ChatClient({
                       : "Ask something..."
                 }
                 maxLength={MAX_INPUT_LENGTH}
-                disabled={loading || uploadingImage}
+                disabled={loading || uploadingImage || isLimitReached}
               />
 
               {loading ? (
@@ -836,6 +904,7 @@ export default function ChatClient({
                   type="submit"
                   disabled={
                     uploadingImage ||
+                    isLimitReached ||
                     (!imageBase64 && input.trim().length === 0)
                   }
                   className="rounded-xl bg-white px-4 text-black disabled:cursor-not-allowed disabled:opacity-50"
