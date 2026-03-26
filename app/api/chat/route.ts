@@ -99,7 +99,7 @@ async function generateConversationTitle(message: string): Promise<string> {
         },
       ],
       store: false,
-    });
+    } as any);
 
     return sanitizeTitle(
       titleResponse.output_text?.trim() ?? "",
@@ -164,7 +164,7 @@ async function createRetryResponse(
     model: "gpt-4.1",
     input,
     store: false,
-  });
+  } as any);
 }
 
 export async function POST(req: Request) {
@@ -352,7 +352,7 @@ export async function POST(req: Request) {
       history: recentHistory,
       latestMessage: latestUserMessage,
       imageBase64,
-    });
+    }) as any;
 
     const encoder = new TextEncoder();
     let fullReply = "";
@@ -366,12 +366,12 @@ export async function POST(req: Request) {
             console.log("Latest user message:", latestUserMessage);
           }
 
-          const responseStream = await openai.responses.create({
+          const responseStream = (await openai.responses.create({
             model: "gpt-4.1",
             input,
-            stream: true,
+            stream: true as const,
             store: false,
-          });
+          } as any)) as unknown as AsyncIterable<any>;
 
           for await (const event of responseStream) {
             if (event.type === "response.output_text.delta") {
