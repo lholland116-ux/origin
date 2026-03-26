@@ -1,4 +1,3 @@
-import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT_WEB } from "@/lib/system-prompt-web";
@@ -15,7 +14,6 @@ type ChatRequestBody = {
   conversationId?: string;
   message?: string;
   regenerate?: boolean;
-  imageBase64?: string;
 };
 
 type DbMessage = {
@@ -23,6 +21,12 @@ type DbMessage = {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+};
+
+type ConversationRow = {
+  id: string;
+  user_id: string;
+  title: string;
 };
 
 type ModelInputMessage = {
@@ -87,24 +91,28 @@ function extractSources(response: any): SourceItem[] {
 
 async function generateConversationTitle(message: string): Promise<string> {
   try {
-    const titleResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
+    const titleResponse = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
         {
           role: "system",
-          content:
-            "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+          content: [
+            {
+              type: "input_text",
+              text: "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+            },
+          ],
         },
         {
           role: "user",
-          content: message,
+          content: [{ type: "input_text", text: message }],
         },
       ],
-      max_tokens: 20,
+      store: false,
     });
 
     return sanitizeTitle(
-      titleResponse.choices[0]?.message?.content ?? "",
+      titleResponse.output_text?.trim() ?? "",
       buildConversationTitle(message)
     );
   } catch {
@@ -112,7 +120,7 @@ async function generateConversationTitle(message: string): Promise<string> {
   }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   const supabase = await createClient();
 
   try {
@@ -125,7 +133,12 @@ export async function POST(req: NextRequest) {
       return jsonResponse({ error: "Unauthorized." }, 401);
     }
 
-    const body = (await req.json()) as ChatRequestBody;
+    let body: ChatRequestBody;
+    try {
+      body = (await req.json()) as ChatRequestBody;
+    } catch {
+      return jsonResponse({ error: "Invalid JSON body." }, 400);
+    }
 
     const conversationId =
       typeof body?.conversationId === "string" ? body.conversationId : "";
@@ -155,7 +168,7 @@ export async function POST(req: NextRequest) {
       .select("id, user_id, title")
       .eq("id", conversationId)
       .eq("user_id", user.id)
-      .single();
+      .single<ConversationRow>();
 
     if (conversationError || !conversation) {
       return jsonResponse({ error: "Conversation not found." }, 404);

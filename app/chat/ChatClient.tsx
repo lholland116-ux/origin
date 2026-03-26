@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type SourceItem = {
   title: string;
@@ -9,6 +9,7 @@ type SourceItem = {
 };
 
 type Message = {
+  id: string;
   role: "user" | "assistant";
   content: string;
   sources?: SourceItem[];
@@ -16,23 +17,114 @@ type Message = {
 
 type ChatClientProps = {
   userEmail: string;
+  conversationId: string;
+  initialMessages: Message[];
 };
 
-type ChatResponse = {
+type ChatWebResponse = {
   reply?: string;
   sources?: SourceItem[];
   error?: string;
 };
 
 const MAX_INPUT_LENGTH = 2000;
+const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION = 1024;
+const JPEG_QUALITY = 0.72;
 
-export default function ChatClient({ userEmail }: ChatClientProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+function createId() {
+  return crypto.randomUUID();
+}
+
+async function fileToProcessedDataUrl(file: File): Promise<string> {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Please choose a valid image file.");
+  }
+
+  if (file.size > MAX_IMAGE_FILE_BYTES) {
+    throw new Error("Image file is too large.");
+  }
+
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Failed to read image."));
+      }
+    };
+
+    reader.onerror = () => reject(new Error("Failed to read image."));
+    reader.readAsDataURL(file);
+  });
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Failed to load image."));
+    img.src = rawDataUrl;
+  });
+
+  let width = image.width;
+  let height = image.height;
+
+  if (width <= 0 || height <= 0) {
+    throw new Error("Invalid image dimensions.");
+  }
+
+  if (width > height && width > MAX_IMAGE_DIMENSION) {
+    height = Math.round((height * MAX_IMAGE_DIMENSION) / width);
+    width = MAX_IMAGE_DIMENSION;
+  } else if (height > MAX_IMAGE_DIMENSION) {
+    width = Math.round((width * MAX_IMAGE_DIMENSION) / height);
+    height = MAX_IMAGE_DIMENSION;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Failed to process image.");
+  }
+
+  ctx.drawImage(image, 0, 0, width, height);
+
+  const processedDataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
+
+  if (!processedDataUrl.startsWith("data:image/")) {
+    throw new Error("Processed image format is invalid.");
+  }
+
+  return processedDataUrl;
+}
+
+export default function ChatClient({
+  userEmail,
+  conversationId,
+  initialMessages,
+}: ChatClientProps) {
+  const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [useWebSearch, setUseWebSearch] = useState(false);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imageName, setImageName] = useState("");
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const modeLabel = useMemo(() => {
+    if (useWebSearch) return "Using web search";
+    if (imageBase64) return "Image attached";
+    return "Standard assistant";
+  }, [useWebSearch, imageBase64]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({
@@ -47,75 +139,214 @@ export default function ChatClient({ userEmail }: ChatClientProps) {
     };
   }, []);
 
+  function clearImage() {
+    setImageBase64(null);
+    setImageName("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  function updateAssistantMessage(
+    messageId: string,
+    updater: (msg: Message) => Message
+  ) {
+    setMessages((prev) =>
+      prev.map((msg) => (msg.id === messageId ? updater(msg) : msg))
+    );
+  }
+
+  async function handleImageChange(
+    e: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (useWebSearch) {
+      window.alert("Image upload is only available in Standard mode.");
+      clearImage();
+      return;
+    }
+
+    setUploadingImage(true);
+
+    try {
+      const processed = await fileToProcessedDataUrl(file);
+      setImageBase64(processed);
+      setImageName(file.name);
+    } catch (error) {
+      clearImage();
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Failed to process image."
+      );
+    } finally {
+      setUploadingImage(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
     const trimmed = input.trim();
-    if (!trimmed || loading) return;
+    const hasImage = Boolean(imageBase64);
+
+    if ((loading || uploadingImage) || (!trimmed && !hasImage)) return;
+
+    if (!conversationId) {
+      window.alert("Missing conversationId.");
+      return;
+    }
 
     if (trimmed.length > MAX_INPUT_LENGTH) {
       window.alert(`Message too long. Maximum ${MAX_INPUT_LENGTH} characters.`);
       return;
     }
 
-    const nextMessages: Message[] = [
-      ...messages,
-      { role: "user", content: trimmed },
-    ];
+    if (useWebSearch && hasImage) {
+      window.alert("Web Search mode does not support image upload.");
+      return;
+    }
 
-    setMessages(nextMessages);
+    const userVisibleContent =
+      trimmed || (hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "");
+
+    const userMessage: Message = {
+      id: createId(),
+      role: "user",
+      content: userVisibleContent,
+    };
+
+    const assistantId = createId();
+
+    const assistantPlaceholder: Message = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      sources: [],
+    };
+
+    const payloadImage = imageBase64;
+
+    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
+    clearImage();
     setLoading(true);
 
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat";
+
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch(endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          messages: nextMessages.map(({ role, content }) => ({ role, content })),
+          conversationId,
+          message: trimmed,
+          imageBase64: payloadImage,
         }),
       });
 
-      const data: ChatResponse = await res.json();
-
       if (!res.ok) {
-        throw new Error(data?.error || "Request failed.");
+        const contentType = res.headers.get("content-type") || "";
+
+        if (contentType.includes("application/json")) {
+          const errorData = (await res.json()) as { error?: string };
+          throw new Error(errorData?.error || "Request failed.");
+        }
+
+        const text = await res.text();
+        throw new Error(text || "Request failed.");
       }
 
-      const assistantMessage: Message = {
-        role: "assistant",
-        content:
+      if (useWebSearch) {
+        const data = (await res.json()) as ChatWebResponse;
+
+        const reply =
           typeof data.reply === "string" && data.reply.trim().length > 0
             ? data.reply.trim()
-            : "No response generated.",
-        sources: Array.isArray(data.sources) ? data.sources : [],
-      };
+            : "No response generated.";
 
-      setMessages([...nextMessages, assistantMessage]);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+        const sources = Array.isArray(data.sources) ? data.sources : [];
+
+        updateAssistantMessage(assistantId, (msg) => ({
+          ...msg,
+          content: reply,
+          sources,
+        }));
+
         return;
       }
 
-      const fallbackMessage: Message = {
+      if (!res.body) {
+        throw new Error("Streaming response body is missing.");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+
+      while (!done) {
+        const result = await reader.read();
+        done = result.done;
+
+        if (result.value) {
+          const chunk = decoder.decode(result.value, { stream: true });
+
+          updateAssistantMessage(assistantId, (msg) => ({
+            ...msg,
+            content: msg.content + chunk,
+          }));
+        }
+      }
+
+      updateAssistantMessage(assistantId, (msg) => ({
+        ...msg,
+        content: msg.content.trim() || "No response generated.",
+      }));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        updateAssistantMessage(assistantId, (msg) => ({
+          ...msg,
+          content: msg.content.trim() || "Generation stopped.",
+        }));
+        return;
+      }
+
+      updateAssistantMessage(assistantId, () => ({
+        id: assistantId,
         role: "assistant",
         content:
           error instanceof Error
             ? error.message
             : "Something went wrong. Please try again.",
-      };
-
-      setMessages([...nextMessages, fallbackMessage]);
+        sources: [],
+      }));
     } finally {
+      abortRef.current = null;
       setLoading(false);
     }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
+  }
+
+  function handleModeChange(nextUseWebSearch: boolean) {
+    if (loading) return;
+
+    if (nextUseWebSearch) {
+      clearImage();
+    }
+
+    setUseWebSearch(nextUseWebSearch);
   }
 
   return (
@@ -125,22 +356,59 @@ export default function ChatClient({ userEmail }: ChatClientProps) {
           <p className="text-xs text-neutral-400">Origin Sable</p>
           <h1 className="text-2xl font-bold">AI Assistant</h1>
           <p className="text-sm text-neutral-400">Logged in as {userEmail}</p>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => handleModeChange(false)}
+              disabled={loading}
+              className={`rounded-xl px-3 py-2 text-sm transition ${
+                !useWebSearch
+                  ? "bg-white text-black"
+                  : "border border-neutral-700 bg-neutral-900 text-white"
+              }`}
+            >
+              Standard
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleModeChange(true)}
+              disabled={loading}
+              className={`rounded-xl px-3 py-2 text-sm transition ${
+                useWebSearch
+                  ? "bg-white text-black"
+                  : "border border-neutral-700 bg-neutral-900 text-white"
+              }`}
+            >
+              Web Search
+            </button>
+
+            <span className="text-xs text-neutral-400">{modeLabel}</span>
+          </div>
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto">
-          {messages.map((m, i) => {
+          {messages.map((m) => {
             const sources = Array.isArray(m.sources) ? m.sources : [];
+            const isStreamingAssistant =
+              loading &&
+              m.role === "assistant" &&
+              m.id === messages[messages.length - 1]?.id;
 
             return (
-              <div key={`${m.role}-${i}`} className="space-y-2">
+              <div key={m.id} className="space-y-2">
                 <div
-                  className={`max-w-3xl rounded-2xl p-3 ${
+                  className={`max-w-3xl rounded-2xl p-3 whitespace-pre-wrap break-words ${
                     m.role === "user"
                       ? "ml-auto bg-white text-black"
                       : "bg-neutral-900 text-white"
                   }`}
                 >
                   {m.content}
+                  {isStreamingAssistant ? (
+                    <span className="ml-1 inline-block animate-pulse">▍</span>
+                  ) : null}
                 </div>
 
                 {sources.length > 0 && (
@@ -169,32 +437,110 @@ export default function ChatClient({ userEmail }: ChatClientProps) {
             );
           })}
 
-          {loading && (
-            <div className="max-w-3xl rounded-2xl bg-neutral-900 p-3 text-neutral-400">
-              Thinking...
+          {loading && messages.length > 0 && (
+            <div className="max-w-3xl text-xs text-neutral-500">
+              {useWebSearch
+                ? "Using web search..."
+                : "Thinking..."}
             </div>
           )}
 
           <div ref={endRef} />
         </div>
 
-        <form onSubmit={handleSubmit} className="mt-4 flex gap-2">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            className="flex-1 rounded-xl bg-neutral-900 p-3 outline-none"
-            placeholder="Ask something..."
-            maxLength={MAX_INPUT_LENGTH}
-            disabled={loading}
-          />
-          <button
-            type="submit"
-            disabled={loading || input.trim().length === 0}
-            className="rounded-xl bg-white px-4 text-black disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Send
-          </button>
-        </form>
+        <div className="mt-4 space-y-3">
+          {!useWebSearch && (
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex cursor-pointer items-center rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageChange}
+                    disabled={loading || uploadingImage}
+                    className="hidden"
+                  />
+                  {uploadingImage ? "Processing image..." : "Attach image"}
+                </label>
+
+                {imageName ? (
+                  <span className="text-xs text-neutral-400">{imageName}</span>
+                ) : (
+                  <span className="text-xs text-neutral-500">
+                    JPG, PNG, WEBP supported
+                  </span>
+                )}
+
+                {imageBase64 && !loading && (
+                  <button
+                    type="button"
+                    onClick={clearImage}
+                    className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500"
+                  >
+                    Remove image
+                  </button>
+                )}
+              </div>
+
+              {imageBase64 && (
+                <div className="mt-3">
+                  <img
+                    src={imageBase64}
+                    alt="Selected upload preview"
+                    className="max-h-64 rounded-xl border border-neutral-800 object-contain"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="flex gap-2">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              className="flex-1 rounded-xl bg-neutral-900 p-3 outline-none"
+              placeholder={
+                useWebSearch
+                  ? "Ask something with web search..."
+                  : imageBase64
+                    ? "Add context for the image, or send without text..."
+                    : "Ask something..."
+              }
+              maxLength={MAX_INPUT_LENGTH}
+              disabled={loading || uploadingImage}
+            />
+
+            {loading ? (
+              <button
+                type="button"
+                onClick={handleStop}
+                className="rounded-xl border border-neutral-700 px-4 text-white"
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={
+                  uploadingImage ||
+                  (!imageBase64 && input.trim().length === 0)
+                }
+                className="rounded-xl bg-white px-4 text-black disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Send
+              </button>
+            )}
+          </form>
+
+          <div className="text-xs text-neutral-500">
+            {uploadingImage
+              ? "Preparing image for analysis..."
+              : imageBase64
+                ? "Analyzing image will use Standard mode only."
+                : ""}
+          </div>
+        </div>
       </div>
     </main>
   );

@@ -1,4 +1,3 @@
-import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
@@ -10,6 +9,8 @@ const DAILY_LIMIT = Number(process.env.DAILY_MESSAGE_LIMIT ?? 20);
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_IMAGE_BASE64_LENGTH = 8_000_000;
+const MIN_IMAGE_BASE64_LENGTH = 1_000;
+const MIN_ACCEPTABLE_REPLY_LENGTH = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 
 type ChatRequestBody = {
@@ -24,6 +25,12 @@ type DbMessage = {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+};
+
+type ConversationRow = {
+  id: string;
+  user_id: string;
+  title: string;
 };
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
@@ -53,26 +60,49 @@ function isLikelyDataUrlImage(value: string): boolean {
   return /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value);
 }
 
+function buildStoredUserContent(message: string, hasImage: boolean): string {
+  if (message && hasImage) return `${message}\n\n[Image attached]`;
+  if (message) return message;
+  if (hasImage) return "[Image attached]";
+  return "";
+}
+
+function isWeakReply(reply: string): boolean {
+  return reply.trim().length < MIN_ACCEPTABLE_REPLY_LENGTH;
+}
+
+function buildImageAnalysisInstruction(latestMessage: string): string {
+  if (latestMessage.trim()) {
+    return latestMessage;
+  }
+
+  return "Carefully analyze this image. Describe everything you can see in detail. If there is text, extract it clearly. If the image is unclear, explain what might be happening and note any uncertainty.";
+}
+
 async function generateConversationTitle(message: string): Promise<string> {
   try {
-    const titleResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
+    const titleResponse = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
         {
           role: "system",
-          content:
-            "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+          content: [
+            {
+              type: "input_text",
+              text: "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+            },
+          ],
         },
         {
           role: "user",
-          content: message,
+          content: [{ type: "input_text", text: message }],
         },
       ],
-      max_tokens: 20,
+      store: false,
     });
 
     return sanitizeTitle(
-      titleResponse.choices[0]?.message?.content ?? "",
+      titleResponse.output_text?.trim() ?? "",
       buildConversationTitle(message)
     );
   } catch {
@@ -80,7 +110,64 @@ async function generateConversationTitle(message: string): Promise<string> {
   }
 }
 
-export async function POST(req: NextRequest) {
+function buildResponsesInput(params: {
+  history: DbMessage[];
+  latestMessage: string;
+  imageBase64: string;
+}) {
+  const { history, latestMessage, imageBase64 } = params;
+
+  const priorMessages = history.slice(0, -1).map((msg) => ({
+    role: msg.role,
+    content: [{ type: "input_text" as const, text: msg.content }],
+  }));
+
+  const latestUserInput = imageBase64
+    ? {
+        role: "user" as const,
+        content: [
+          {
+            type: "input_text" as const,
+            text: buildImageAnalysisInstruction(latestMessage),
+          },
+          {
+            type: "input_image" as const,
+            image_url: imageBase64,
+            detail: "auto" as const,
+          },
+        ],
+      }
+    : {
+        role: "user" as const,
+        content: [
+          {
+            type: "input_text" as const,
+            text: latestMessage || history[history.length - 1]?.content || "",
+          },
+        ],
+      };
+
+  return [
+    {
+      role: "system" as const,
+      content: [{ type: "input_text" as const, text: SYSTEM_PROMPT }],
+    },
+    ...priorMessages,
+    latestUserInput,
+  ];
+}
+
+async function createRetryResponse(
+  input: ReturnType<typeof buildResponsesInput>
+) {
+  return openai.responses.create({
+    model: "gpt-4.1",
+    input,
+    store: false,
+  });
+}
+
+export async function POST(req: Request) {
   const supabase = await createClient();
 
   try {
@@ -93,7 +180,13 @@ export async function POST(req: NextRequest) {
       return jsonResponse({ error: "Unauthorized." }, 401);
     }
 
-    const body = (await req.json()) as ChatRequestBody;
+    let body: ChatRequestBody;
+    try {
+      body = (await req.json()) as ChatRequestBody;
+    } catch {
+      return jsonResponse({ error: "Invalid JSON body." }, 400);
+    }
+
     const conversationId =
       typeof body?.conversationId === "string" ? body.conversationId : "";
     const message = normalizeMessage(body?.message);
@@ -126,6 +219,10 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      if (imageBase64.length < MIN_IMAGE_BASE64_LENGTH) {
+        return jsonResponse({ error: "Invalid or corrupted image." }, 400);
+      }
+
       if (imageBase64.length > MAX_IMAGE_BASE64_LENGTH) {
         return jsonResponse({ error: "Attached image is too large." }, 400);
       }
@@ -136,7 +233,7 @@ export async function POST(req: NextRequest) {
       .select("id, user_id, title")
       .eq("id", conversationId)
       .eq("user_id", user.id)
-      .single();
+      .single<ConversationRow>();
 
     if (conversationError || !conversation) {
       return jsonResponse({ error: "Conversation not found." }, 404);
@@ -211,7 +308,10 @@ export async function POST(req: NextRequest) {
         }
       }
     } else {
-      const storedUserContent = message || "[Image attached]";
+      const storedUserContent = buildStoredUserContent(
+        message,
+        Boolean(imageBase64)
+      );
 
       const { error: insertUserError } = await supabase.from("messages").insert({
         conversation_id: conversationId,
@@ -238,95 +338,173 @@ export async function POST(req: NextRequest) {
       return jsonResponse({ error: "Failed to load conversation history." }, 500);
     }
 
-    const recentMessages = (history as DbMessage[])
-      .slice(-MAX_HISTORY_MESSAGES)
-      .map((msg) => ({
-        role: msg.role,
-        content: msg.content,
-      }));
+    const recentHistory = (history as DbMessage[]).slice(-MAX_HISTORY_MESSAGES);
 
-    const historyWithoutLatestUser = recentMessages.slice(0, -1);
+    if (recentHistory.length === 0) {
+      return jsonResponse({ error: "Conversation history is empty." }, 400);
+    }
 
-    const latestUserMessage = imageBase64
-      ? {
-          role: "user" as const,
-          content: [
-            {
-              type: "text" as const,
-              text: message || "Please analyze this image.",
-            },
-            {
-              type: "image_url" as const,
-              image_url: { url: imageBase64 },
-            },
-          ],
-        }
-      : {
-          role: "user" as const,
-          content:
-            message || recentMessages[recentMessages.length - 1]?.content || "",
-        };
+    const latestUserMessage = regenerate
+      ? recentHistory[recentHistory.length - 1]?.content ?? ""
+      : message || recentHistory[recentHistory.length - 1]?.content || "";
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...historyWithoutLatestUser,
-        latestUserMessage,
-      ],
+    const input = buildResponsesInput({
+      history: recentHistory,
+      latestMessage: latestUserMessage,
+      imageBase64,
     });
 
-    const reply = completion.choices[0]?.message?.content?.trim() || "";
+    const encoder = new TextEncoder();
+    let fullReply = "";
 
-    if (!reply) {
-      return jsonResponse({
-        reply: "I'm having trouble generating a response right now. Please try again.",
-        sources: [],
-      });
-    }
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          if (IS_DEV) {
+            console.log("Image included:", Boolean(imageBase64));
+            console.log("Image length:", imageBase64 ? imageBase64.length : 0);
+            console.log("Latest user message:", latestUserMessage);
+          }
 
-    const { error: insertAssistantError } = await supabase
-      .from("messages")
-      .insert({
-        conversation_id: conversationId,
-        user_id: user.id,
-        role: "assistant",
-        content: reply,
-      });
+          const responseStream = await openai.responses.create({
+            model: "gpt-4.1",
+            input,
+            stream: true,
+            store: false,
+          });
 
-    if (insertAssistantError) {
-      console.error("Assistant message insert error:", insertAssistantError);
-      return jsonResponse({ error: "Failed to save assistant message." }, 500);
-    }
+          for await (const event of responseStream) {
+            if (event.type === "response.output_text.delta") {
+              const delta = event.delta ?? "";
+              if (delta) {
+                fullReply += delta;
+                controller.enqueue(encoder.encode(delta));
+              }
+            }
 
-    const updates: Record<string, string> = {
-      updated_at: new Date().toISOString(),
-    };
+            if (event.type === "response.completed") {
+              break;
+            }
+          }
 
-    const shouldGenerateTitle =
-      !regenerate &&
-      message &&
-      (conversation.title === "New Chat" ||
-        conversation.title === buildConversationTitle(message));
+          if (IS_DEV) {
+            console.log("Reply length:", fullReply.length);
+          }
 
-    if (shouldGenerateTitle) {
-      updates.title = await generateConversationTitle(message);
-    }
+          const streamedReply = fullReply.trim();
+          let finalReply = streamedReply;
 
-    const { error: updateConversationError } = await supabase
-      .from("conversations")
-      .update(updates)
-      .eq("id", conversationId)
-      .eq("user_id", user.id);
+          if (imageBase64 && isWeakReply(finalReply)) {
+            console.warn("Weak or empty image response detected. Retrying once.");
 
-    if (updateConversationError) {
-      console.error("Conversation update error:", updateConversationError);
-    }
+            try {
+              const retry = await createRetryResponse(input);
+              const retryText = retry.output_text?.trim() ?? "";
 
-    return jsonResponse({
-      reply,
-      sources: [],
-      multimodal: Boolean(imageBase64),
+              if (!isWeakReply(retryText)) {
+                finalReply = retryText;
+              }
+            } catch (retryError) {
+              console.error("Retry failed:", retryError);
+            }
+          }
+
+          const persistedReply =
+            finalReply ||
+            "I couldn’t fully analyze this image. Try uploading a clearer image or adding a short description of what you want to know.";
+
+          if (isWeakReply(streamedReply) && persistedReply !== streamedReply) {
+            controller.enqueue(encoder.encode(`\n\n${persistedReply}`));
+          }
+
+          const { error: insertAssistantError } = await supabase
+            .from("messages")
+            .insert({
+              conversation_id: conversationId,
+              user_id: user.id,
+              role: "assistant",
+              content: persistedReply,
+            });
+
+          if (insertAssistantError) {
+            console.error("Assistant message insert error:", insertAssistantError);
+          }
+
+          const updates: Record<string, string> = {
+            updated_at: new Date().toISOString(),
+          };
+
+          const shouldGenerateTitle =
+            !regenerate &&
+            message &&
+            (conversation.title === "New Chat" ||
+              conversation.title === buildConversationTitle(message));
+
+          if (shouldGenerateTitle) {
+            updates.title = await generateConversationTitle(message);
+          }
+
+          const { error: updateConversationError } = await supabase
+            .from("conversations")
+            .update(updates)
+            .eq("id", conversationId)
+            .eq("user_id", user.id);
+
+          if (updateConversationError) {
+            console.error("Conversation update error:", updateConversationError);
+          }
+
+          controller.close();
+        } catch (error) {
+          console.error("/api/chat streaming error:", error);
+
+          const fallback =
+            fullReply.trim() ||
+            "I'm sorry — something went wrong while generating the response.";
+
+          if (!fullReply.trim()) {
+            controller.enqueue(encoder.encode(fallback));
+          }
+
+          const { error: insertAssistantError } = await supabase
+            .from("messages")
+            .insert({
+              conversation_id: conversationId,
+              user_id: user.id,
+              role: "assistant",
+              content: fallback,
+            });
+
+          if (insertAssistantError) {
+            console.error("Assistant fallback insert error:", insertAssistantError);
+          }
+
+          const { error: updateConversationError } = await supabase
+            .from("conversations")
+            .update({ updated_at: new Date().toISOString() })
+            .eq("id", conversationId)
+            .eq("user_id", user.id);
+
+          if (updateConversationError) {
+            console.error("Conversation update error:", updateConversationError);
+          }
+
+          controller.close();
+        }
+      },
+
+      async cancel(reason) {
+        console.warn("/api/chat stream cancelled:", reason);
+      },
+    });
+
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
     });
   } catch (error) {
     console.error("/api/chat error:", error);
