@@ -83,21 +83,9 @@ async function generateConversationTitle(message: string): Promise<string> {
   try {
     const titleResponse = await openai.responses.create({
       model: "gpt-4.1-mini",
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [{ type: "input_text", text: message }],
-        },
-      ],
+      instructions:
+        "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+      input: message,
       store: false,
     } as any);
 
@@ -119,7 +107,7 @@ function buildResponsesInput(params: {
 
   const priorMessages = history.slice(0, -1).map((msg) => ({
     role: msg.role,
-    content: [{ type: "input_text" as const, text: msg.content }],
+    content: msg.content,
   }));
 
   const latestUserInput = imageBase64
@@ -139,22 +127,11 @@ function buildResponsesInput(params: {
       }
     : {
         role: "user" as const,
-        content: [
-          {
-            type: "input_text" as const,
-            text: latestMessage || history[history.length - 1]?.content || "",
-          },
-        ],
+        content:
+          latestMessage || history[history.length - 1]?.content || "",
       };
 
-  return [
-    {
-      role: "system" as const,
-      content: [{ type: "input_text" as const, text: SYSTEM_PROMPT }],
-    },
-    ...priorMessages,
-    latestUserInput,
-  ];
+  return [...priorMessages, latestUserInput];
 }
 
 async function createRetryResponse(
@@ -162,6 +139,7 @@ async function createRetryResponse(
 ) {
   return openai.responses.create({
     model: "gpt-4.1",
+    instructions: SYSTEM_PROMPT,
     input,
     store: false,
   } as any);
@@ -368,6 +346,7 @@ export async function POST(req: Request) {
 
           const responseStream = (await openai.responses.create({
             model: "gpt-4.1",
+            instructions: SYSTEM_PROMPT,
             input,
             stream: true as const,
             store: false,
