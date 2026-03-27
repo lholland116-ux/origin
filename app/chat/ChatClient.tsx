@@ -46,6 +46,20 @@ const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
 
+const PRODUCT_DESCRIPTION =
+  "A multimodal AI workspace for chat, image understanding, and web-assisted answers with saved conversation history.";
+
+const CONVERSATION_STARTERS = [
+  "Summarize this image for me",
+  "Help me brainstorm a SaaS feature",
+  "Write code for a small web feature",
+  "Explain something step by step",
+];
+
+const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4";
+const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl";
+const USER_BUBBLE_CLASS = "w-full max-w-2xl";
+
 function createId() {
   return crypto.randomUUID();
 }
@@ -137,6 +151,7 @@ export default function ChatClient({
   const [conversations, setConversations] =
     useState<ConversationItem[]>(initialConversations);
   const [sidebarLoading, setSidebarLoading] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [usageError, setUsageError] = useState("");
@@ -187,6 +202,16 @@ export default function ChatClient({
     setMessages((prev) =>
       prev.map((msg) => (msg.id === messageId ? updater(msg) : msg))
     );
+  }
+
+  function handleConversationStarterClick(starter: string) {
+    if (loading || isLimitReached) return;
+    setInput(starter);
+  }
+
+  function handleOpenFilePicker() {
+    if (loading || uploadingImage || isLimitReached || useWebSearch) return;
+    fileInputRef.current?.click();
   }
 
   async function fetchUsage() {
@@ -265,6 +290,11 @@ export default function ChatClient({
     }
   }
 
+  async function handleMobileConversationOpen(nextConversationId: string) {
+    await loadConversation(nextConversationId);
+    setMobileMenuOpen(false);
+  }
+
   async function handleNewChat() {
     if (loading) return;
 
@@ -300,6 +330,7 @@ export default function ChatClient({
       await refreshConversations(newConversationId);
       setConversationId(newConversationId);
       setMessages([]);
+      setMobileMenuOpen(false);
     } catch (error) {
       window.alert(
         error instanceof Error ? error.message : "Failed to create conversation."
@@ -595,11 +626,161 @@ export default function ChatClient({
     setUseWebSearch(nextUseWebSearch);
   }
 
+  function renderConversationCard(
+    conversation: ConversationItem,
+    isMobile = false
+  ) {
+    const isActive = conversation.id === conversationId;
+
+    return (
+      <div
+        key={conversation.id}
+        className={`rounded-xl p-2 transition ${
+          isActive ? "bg-white text-black" : "bg-neutral-900 text-white"
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() =>
+            isMobile
+              ? handleMobileConversationOpen(conversation.id)
+              : loadConversation(conversation.id)
+          }
+          disabled={loading || sidebarLoading}
+          className="w-full text-left"
+        >
+          <div className="truncate font-medium">
+            {conversation.title?.trim() || "New Chat"}
+          </div>
+          <div
+            className={`mt-1 text-xs ${
+              isActive ? "text-neutral-700" : "text-neutral-400"
+            }`}
+          >
+            {new Date(conversation.updated_at).toLocaleString()}
+          </div>
+        </button>
+
+        <div className="mt-2 flex gap-2">
+          <button
+            type="button"
+            onClick={() => handleRenameConversation(conversation)}
+            disabled={loading || sidebarLoading}
+            className={`rounded-lg px-2 py-1 text-xs ${
+              isActive
+                ? "bg-black/10 text-black hover:bg-black/20"
+                : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
+            }`}
+          >
+            Rename
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleDeleteConversation(conversation)}
+            disabled={loading || sidebarLoading}
+            className={`rounded-lg px-2 py-1 text-xs ${
+              isActive
+                ? "bg-red-600/15 text-red-700 hover:bg-red-600/25"
+                : "border border-red-900/60 text-red-400 hover:border-red-700"
+            }`}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <main className="min-h-screen bg-black text-white">
-      <div className="flex min-h-screen">
-        <aside className="hidden w-80 shrink-0 border-r border-neutral-800 bg-neutral-950 md:flex md:flex-col">
-          <div className="border-b border-neutral-800 p-4">
+    <main className="h-screen overflow-hidden bg-black text-white">
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden">
+          <button
+            type="button"
+            aria-label="Close menu overlay"
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+
+          <div className="relative z-10 flex h-full w-80 max-w-[85vw] flex-col border-r border-neutral-800 bg-neutral-950">
+            <div className="sticky top-0 border-b border-neutral-800 bg-neutral-950 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-neutral-500">Origin Sable</p>
+                  <div className="truncate text-sm font-semibold">{userEmail}</div>
+
+                  {usage && (
+                    <div className="mt-2 text-xs text-neutral-400">
+                      {usage.used} / {usage.limit} messages used today
+                    </div>
+                  )}
+
+                  {usage && usage.remaining > 0 && usage.remaining <= 5 && (
+                    <div className="mt-1 text-xs text-yellow-400">
+                      Only {usage.remaining} messages remaining today
+                    </div>
+                  )}
+
+                  {isLimitReached && (
+                    <div className="mt-2 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
+                      Daily limit reached. Come back tomorrow or upgrade your
+                      plan.
+                    </div>
+                  )}
+
+                  {usageError && (
+                    <div className="mt-2 text-xs text-red-400">{usageError}</div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="rounded-lg border border-neutral-700 px-2 py-1 text-sm text-white"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleNewChat}
+                  disabled={loading || sidebarLoading}
+                  className="rounded-xl bg-white px-4 py-2 text-sm text-black disabled:opacity-50"
+                >
+                  New Chat
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm text-white"
+                >
+                  Sign Out
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3">
+              <div className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+                Chat History
+              </div>
+
+              <div className="space-y-2">
+                {conversations.map((conversation) =>
+                  renderConversationCard(conversation, true)
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex h-screen overflow-hidden">
+        <aside className="hidden h-full w-80 shrink-0 border-r border-neutral-800 bg-neutral-950 md:flex md:flex-col">
+          <div className="sticky top-0 border-b border-neutral-800 bg-neutral-950 p-4">
             <div className="text-sm font-semibold truncate">{userEmail}</div>
 
             {usage && (
@@ -650,95 +831,42 @@ export default function ChatClient({
             </div>
 
             <div className="space-y-2">
-              {conversations.map((conversation) => {
-                const isActive = conversation.id === conversationId;
-
-                return (
-                  <div
-                    key={conversation.id}
-                    className={`rounded-xl p-2 transition ${
-                      isActive
-                        ? "bg-white text-black"
-                        : "bg-neutral-900 text-white"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => loadConversation(conversation.id)}
-                      disabled={loading || sidebarLoading}
-                      className="w-full text-left"
-                    >
-                      <div className="truncate font-medium">
-                        {conversation.title?.trim() || "New Chat"}
-                      </div>
-                      <div
-                        className={`mt-1 text-xs ${
-                          isActive ? "text-neutral-700" : "text-neutral-400"
-                        }`}
-                      >
-                        {new Date(conversation.updated_at).toLocaleString()}
-                      </div>
-                    </button>
-
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleRenameConversation(conversation)}
-                        disabled={loading || sidebarLoading}
-                        className={`rounded-lg px-2 py-1 text-xs ${
-                          isActive
-                            ? "bg-black/10 text-black hover:bg-black/20"
-                            : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
-                        }`}
-                      >
-                        Rename
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteConversation(conversation)}
-                        disabled={loading || sidebarLoading}
-                        className={`rounded-lg px-2 py-1 text-xs ${
-                          isActive
-                            ? "bg-red-600/15 text-red-700 hover:bg-red-600/25"
-                            : "border border-red-900/60 text-red-400 hover:border-red-700"
-                        }`}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {conversations.map((conversation) =>
+                renderConversationCard(conversation)
+              )}
             </div>
           </div>
         </aside>
 
-        <section className="flex min-h-screen flex-1 flex-col bg-black">
+        <section className="flex h-full flex-1 flex-col bg-black">
           <div className="sticky top-0 z-20 border-b border-neutral-800 bg-black/95 backdrop-blur">
-            <div className="mx-auto w-full max-w-4xl px-4 py-4">
-              <p className="text-xs text-neutral-400">Origin Sable</p>
-              <h1 className="text-2xl font-bold">AI Assistant</h1>
-              <p className="text-sm text-neutral-400">Logged in as {userEmail}</p>
+            <div className={`${CONTENT_RAIL_CLASS} py-3`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 items-start gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setMobileMenuOpen(true)}
+                    className="mt-0.5 rounded-lg border border-neutral-700 px-2 py-1 text-sm text-white md:hidden"
+                    aria-label="Open menu"
+                  >
+                    ☰
+                  </button>
 
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleNewChat}
-                  disabled={loading || sidebarLoading}
-                  className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
-                >
-                  New Chat
-                </button>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-neutral-500">Origin Sable</p>
+                    <h1 className="text-lg font-semibold">AI Assistant</h1>
+                    <p className="mt-1 line-clamp-2 max-w-2xl text-sm text-neutral-400">
+                      {PRODUCT_DESCRIPTION}
+                    </p>
+                  </div>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white md:hidden"
-                >
-                  Sign Out
-                </button>
+                <div className="hidden text-right text-xs text-neutral-500 md:block">
+                  {modeLabel}
+                </div>
+              </div>
 
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleModeChange(false)}
@@ -765,13 +893,37 @@ export default function ChatClient({
                   Web Search
                 </button>
 
-                <span className="text-xs text-neutral-400">{modeLabel}</span>
+                <span className="text-xs text-neutral-500 md:hidden">
+                  {modeLabel}
+                </span>
               </div>
+
+              {messages.length === 0 && (
+                <div className="mt-3">
+                  <div className="mb-2 text-[11px] uppercase tracking-wide text-neutral-500">
+                    Conversation starters
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {CONVERSATION_STARTERS.map((starter) => (
+                      <button
+                        key={starter}
+                        type="button"
+                        onClick={() => handleConversationStarterClick(starter)}
+                        disabled={loading || isLimitReached}
+                        className="rounded-full border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white transition hover:border-neutral-500 disabled:opacity-50"
+                      >
+                        {starter}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-4xl px-4 py-6">
+            <div className={`${CONTENT_RAIL_CLASS} py-5`}>
               <div className="space-y-4">
                 {messages.map((m) => {
                   const sources = Array.isArray(m.sources) ? m.sources : [];
@@ -780,13 +932,16 @@ export default function ChatClient({
                     m.role === "assistant" &&
                     m.id === messages[messages.length - 1]?.id;
 
+                  const bubbleWidthClass =
+                    m.role === "user" ? USER_BUBBLE_CLASS : ASSISTANT_BUBBLE_CLASS;
+
                   return (
                     <div key={m.id} className="space-y-2">
                       <div
-                        className={`w-full max-w-3xl rounded-2xl p-4 whitespace-pre-wrap break-words ${
+                        className={`${bubbleWidthClass} mx-auto rounded-2xl p-4 whitespace-pre-wrap break-words ${
                           m.role === "user"
-                            ? "ml-auto bg-white text-black"
-                            : "mr-auto bg-neutral-900 text-white"
+                            ? "bg-white text-black"
+                            : "bg-neutral-900 text-white"
                         }`}
                       >
                         {m.content}
@@ -796,7 +951,7 @@ export default function ChatClient({
                       </div>
 
                       {sources.length > 0 && (
-                        <div className="mr-auto w-full max-w-3xl space-y-2">
+                        <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto space-y-2`}>
                           {sources.map((s, j) => (
                             <a
                               key={`${s.url}-${j}`}
@@ -822,7 +977,7 @@ export default function ChatClient({
                 })}
 
                 {loading && messages.length > 0 && (
-                  <div className="mr-auto w-full max-w-3xl text-xs text-neutral-500">
+                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs text-neutral-500`}>
                     {useWebSearch
                       ? "Using web search..."
                       : imageBase64
@@ -837,58 +992,62 @@ export default function ChatClient({
           </div>
 
           <div className="sticky bottom-0 z-20 border-t border-neutral-800 bg-black/95 backdrop-blur">
-            <div className="mx-auto w-full max-w-4xl px-4 py-4 space-y-3">
-              {!useWebSearch && (
-                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="inline-flex cursor-pointer items-center rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageChange}
-                        disabled={loading || uploadingImage || isLimitReached}
-                        className="hidden"
-                      />
-                      {uploadingImage ? "Processing image..." : "Attach image"}
-                    </label>
+            <div className={`${CONTENT_RAIL_CLASS} space-y-1.5 py-2.5`}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleImageChange}
+                disabled={loading || uploadingImage || isLimitReached || useWebSearch}
+                className="hidden"
+              />
 
-                    {imageName ? (
-                      <span className="text-xs text-neutral-400">{imageName}</span>
-                    ) : (
-                      <span className="text-xs text-neutral-500">
-                        JPG, PNG, WEBP supported
-                      </span>
-                    )}
+              {!useWebSearch && imageBase64 && (
+                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="rounded-full border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300">
+                      {imageName || "Image attached"}
+                    </div>
 
-                    {imageBase64 && !loading && (
+                    {!loading && (
                       <button
                         type="button"
                         onClick={clearImage}
-                        className="rounded-xl border border-neutral-700 px-3 py-2 text-sm text-white transition hover:border-neutral-500"
+                        className="rounded-full border border-neutral-700 px-2.5 py-1 text-xs text-white transition hover:border-neutral-500"
                       >
-                        Remove image
+                        Remove
                       </button>
                     )}
                   </div>
 
-                  {imageBase64 && (
-                    <div className="mt-3">
-                      <img
-                        src={imageBase64}
-                        alt="Selected upload preview"
-                        className="max-h-64 rounded-xl border border-neutral-800 object-contain"
-                      />
-                    </div>
-                  )}
+                  <div className="mt-2">
+                    <img
+                      src={imageBase64}
+                      alt="Selected upload preview"
+                      className="max-h-24 rounded-xl border border-neutral-800 object-contain"
+                    />
+                  </div>
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="flex gap-2">
+              <form onSubmit={handleSubmit} className="flex items-end gap-2">
+                {!useWebSearch && (
+                  <button
+                    type="button"
+                    onClick={handleOpenFilePicker}
+                    disabled={loading || uploadingImage || isLimitReached}
+                    className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-neutral-700 bg-neutral-900 text-xl text-white transition hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="Attach image"
+                    title="Attach image"
+                  >
+                    +
+                  </button>
+                )}
+
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  className="flex-1 rounded-2xl bg-neutral-900 p-4 outline-none"
+                  className="flex-1 rounded-2xl bg-neutral-900 px-4 py-3.5 outline-none"
                   placeholder={
                     useWebSearch
                       ? "Ask something with web search..."
@@ -904,7 +1063,7 @@ export default function ChatClient({
                   <button
                     type="button"
                     onClick={handleStop}
-                    className="rounded-2xl border border-neutral-700 px-5 text-white"
+                    className="rounded-2xl border border-neutral-700 px-5 py-3.5 text-white"
                   >
                     Stop
                   </button>
@@ -916,7 +1075,7 @@ export default function ChatClient({
                       isLimitReached ||
                       (!imageBase64 && input.trim().length === 0)
                     }
-                    className="rounded-2xl bg-white px-5 text-black disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-2xl bg-white px-5 py-3.5 text-black disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Send
                   </button>
