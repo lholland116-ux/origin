@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT_WEB } from "@/lib/system-prompt-web";
 import { buildConversationTitle } from "@/lib/utils";
@@ -59,14 +59,21 @@ function sanitizeTitle(title: string, fallback: string): string {
   return cleaned.length > 0 ? cleaned.slice(0, 80) : fallback;
 }
 
-function extractSources(response: any): SourceItem[] {
+function extractSources(response: unknown): SourceItem[] {
   const seen = new Set<string>();
   const sources: SourceItem[] = [];
 
-  for (const item of response?.output ?? []) {
-    if (item?.type !== "web_search_call") continue;
+  const output = (response as { output?: unknown[] } | null)?.output ?? [];
 
-    for (const src of item?.action?.sources ?? []) {
+  for (const item of output) {
+    const typedItem = item as {
+      type?: string;
+      action?: { sources?: Array<{ title?: string; url?: string; snippet?: string }> };
+    };
+
+    if (typedItem?.type !== "web_search_call") continue;
+
+    for (const src of typedItem?.action?.sources ?? []) {
       const url = typeof src?.url === "string" ? src.url : "";
       if (!url || seen.has(url)) continue;
 
@@ -121,7 +128,7 @@ async function generateConversationTitle(message: string): Promise<string> {
 }
 
 export async function POST(req: Request) {
-  const supabase = await createClient();
+  const supabase = await createServerSupabaseClient();
 
   try {
     const {
@@ -141,9 +148,9 @@ export async function POST(req: Request) {
     }
 
     const conversationId =
-      typeof body?.conversationId === "string" ? body.conversationId : "";
-    const message = normalizeMessage(body?.message);
-    const regenerate = Boolean(body?.regenerate);
+      typeof body.conversationId === "string" ? body.conversationId : "";
+    const message = normalizeMessage(body.message);
+    const regenerate = Boolean(body.regenerate);
 
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);

@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
@@ -11,6 +11,8 @@ const MAX_HISTORY_MESSAGES = 12;
 const MAX_IMAGE_BASE64_LENGTH = 8_000_000;
 const MIN_IMAGE_BASE64_LENGTH = 1_000;
 const MIN_ACCEPTABLE_REPLY_LENGTH = 10;
+const MAX_IMAGE_PATH_LENGTH = 500;
+const MAX_IMAGE_NAME_LENGTH = 255;
 const IS_DEV = process.env.NODE_ENV === "development";
 
 type ChatRequestBody = {
@@ -18,6 +20,8 @@ type ChatRequestBody = {
   message?: string;
   regenerate?: boolean;
   imageBase64?: string;
+  imagePath?: string;
+  imageName?: string;
 };
 
 type DbMessage = {
@@ -51,6 +55,14 @@ function normalizeImageBase64(input: unknown): string {
   return typeof input === "string" ? input.trim() : "";
 }
 
+function normalizeImagePath(input: unknown): string {
+  return typeof input === "string" ? input.trim() : "";
+}
+
+function normalizeImageName(input: unknown): string {
+  return typeof input === "string" ? input.trim() : "";
+}
+
 function sanitizeTitle(title: string, fallback: string): string {
   const cleaned = title.replace(/^["']|["']$/g, "").trim();
   return cleaned.length > 0 ? cleaned.slice(0, 80) : fallback;
@@ -58,6 +70,10 @@ function sanitizeTitle(title: string, fallback: string): string {
 
 function isLikelyDataUrlImage(value: string): boolean {
   return /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value);
+}
+
+function isLikelyStoragePath(value: string): boolean {
+  return value.length > 0 && !value.startsWith("/") && !value.includes("..");
 }
 
 function buildStoredUserContent(message: string, hasImage: boolean): string {
@@ -87,7 +103,7 @@ async function generateConversationTitle(message: string): Promise<string> {
         "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
       input: message,
       store: false,
-    } as any);
+    } as never);
 
     return sanitizeTitle(
       titleResponse.output_text?.trim() ?? "",
@@ -127,8 +143,7 @@ function buildResponsesInput(params: {
       }
     : {
         role: "user" as const,
-        content:
-          latestMessage || history[history.length - 1]?.content || "",
+        content: latestMessage || history[history.length - 1]?.content || "",
       };
 
   return [...priorMessages, latestUserInput];
@@ -142,11 +157,11 @@ async function createRetryResponse(
     instructions: SYSTEM_PROMPT,
     input,
     store: false,
-  } as any);
+  } as never);
 }
 
 export async function POST(req: Request) {
-  const supabase = await createClient();
+  const supabase = await createServerSupabaseClient();
 
   try {
     const {
@@ -166,10 +181,12 @@ export async function POST(req: Request) {
     }
 
     const conversationId =
-      typeof body?.conversationId === "string" ? body.conversationId : "";
-    const message = normalizeMessage(body?.message);
-    const regenerate = Boolean(body?.regenerate);
-    const imageBase64 = normalizeImageBase64(body?.imageBase64);
+      typeof body.conversationId === "string" ? body.conversationId : "";
+    const message = normalizeMessage(body.message);
+    const regenerate = Boolean(body.regenerate);
+    const imageBase64 = normalizeImageBase64(body.imageBase64);
+    const imagePath = normalizeImagePath(body.imagePath);
+    const imageName = normalizeImageName(body.imageName);
 
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);
@@ -177,7 +194,9 @@ export async function POST(req: Request) {
 
     if (!regenerate && !message && !imageBase64) {
       return jsonResponse(
-        { error: "message or imageBase64 is required unless regenerate is true." },
+        {
+          error: "message or imageBase64 is required unless regenerate is true.",
+        },
         400
       );
     }
@@ -204,6 +223,20 @@ export async function POST(req: Request) {
       if (imageBase64.length > MAX_IMAGE_BASE64_LENGTH) {
         return jsonResponse({ error: "Attached image is too large." }, 400);
       }
+    }
+
+    if (imagePath) {
+      if (!isLikelyStoragePath(imagePath)) {
+        return jsonResponse({ error: "Invalid imagePath." }, 400);
+      }
+
+      if (imagePath.length > MAX_IMAGE_PATH_LENGTH) {
+        return jsonResponse({ error: "imagePath is too long." }, 400);
+      }
+    }
+
+    if (imageName && imageName.length > MAX_IMAGE_NAME_LENGTH) {
+      return jsonResponse({ error: "imageName is too long." }, 400);
     }
 
     const { data: conversation, error: conversationError } = await supabase
@@ -291,12 +324,16 @@ export async function POST(req: Request) {
         Boolean(imageBase64)
       );
 
-      const { error: insertUserError } = await supabase.from("messages").insert({
-        conversation_id: conversationId,
-        user_id: user.id,
-        role: "user",
-        content: storedUserContent,
-      });
+      const { error: insertUserError } = await supabase
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          user_id: user.id,
+          role: "user",
+          content: storedUserContent,
+          image_path: imagePath || null,
+          image_name: imageName || null,
+        });
 
       if (insertUserError) {
         console.error("User message insert error:", insertUserError);
@@ -313,7 +350,10 @@ export async function POST(req: Request) {
 
     if (historyError || !history) {
       console.error("History load error:", historyError);
-      return jsonResponse({ error: "Failed to load conversation history." }, 500);
+      return jsonResponse(
+        { error: "Failed to load conversation history." },
+        500
+      );
     }
 
     const recentHistory = (history as DbMessage[]).slice(-MAX_HISTORY_MESSAGES);
@@ -330,7 +370,7 @@ export async function POST(req: Request) {
       history: recentHistory,
       latestMessage: latestUserMessage,
       imageBase64,
-    }) as any;
+    }) as never;
 
     const encoder = new TextEncoder();
     let fullReply = "";
@@ -341,6 +381,7 @@ export async function POST(req: Request) {
           if (IS_DEV) {
             console.log("Image included:", Boolean(imageBase64));
             console.log("Image length:", imageBase64 ? imageBase64.length : 0);
+            console.log("Image path included:", Boolean(imagePath));
             console.log("Latest user message:", latestUserMessage);
           }
 
@@ -348,9 +389,12 @@ export async function POST(req: Request) {
             model: "gpt-4.1",
             instructions: SYSTEM_PROMPT,
             input,
-            stream: true as const,
+            stream: true,
             store: false,
-          } as any)) as unknown as AsyncIterable<any>;
+          } as never)) as unknown as AsyncIterable<{
+            type: string;
+            delta?: string;
+          }>;
 
           for await (const event of responseStream) {
             if (event.type === "response.output_text.delta") {
@@ -406,7 +450,10 @@ export async function POST(req: Request) {
             });
 
           if (insertAssistantError) {
-            console.error("Assistant message insert error:", insertAssistantError);
+            console.error(
+              "Assistant message insert error:",
+              insertAssistantError
+            );
           }
 
           const updates: Record<string, string> = {
@@ -455,7 +502,10 @@ export async function POST(req: Request) {
             });
 
           if (insertAssistantError) {
-            console.error("Assistant fallback insert error:", insertAssistantError);
+            console.error(
+              "Assistant fallback insert error:",
+              insertAssistantError
+            );
           }
 
           const { error: updateConversationError } = await supabase

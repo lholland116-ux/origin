@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 import ChatClient from "./ChatClient";
 
 type InitialMessage = {
@@ -15,7 +15,7 @@ type ConversationItem = {
 };
 
 export default async function ChatPage() {
-  const supabase = await createClient();
+  const supabase = await createServerSupabaseClient();
 
   const {
     data: { user },
@@ -33,6 +33,7 @@ export default async function ChatPage() {
     .order("updated_at", { ascending: false });
 
   if (conversationsError) {
+    console.error("Failed to load conversations:", conversationsError);
     throw new Error("Failed to load conversations.");
   }
 
@@ -50,13 +51,21 @@ export default async function ChatPage() {
         .single();
 
     if (createConversationError || !newConversation) {
+      console.error(
+        "Failed to create initial conversation:",
+        createConversationError
+      );
       throw new Error("Failed to create conversation.");
     }
 
     conversationList = [newConversation];
   }
 
-  const activeConversationId = conversationList[0].id;
+  const activeConversationId = conversationList[0]?.id;
+
+  if (!activeConversationId) {
+    throw new Error("No active conversation found.");
+  }
 
   const { data: rawMessages, error: messagesError } = await supabase
     .from("messages")
@@ -66,6 +75,7 @@ export default async function ChatPage() {
     .order("created_at", { ascending: true });
 
   if (messagesError) {
+    console.error("Failed to load messages:", messagesError);
     throw new Error("Failed to load messages.");
   }
 

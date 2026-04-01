@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatTimestamp } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
+import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { PRODUCT_DESCRIPTION } from "@/lib/product-content";
 
 type Conversation = {
@@ -52,9 +52,12 @@ type ChatSuccessResponse = {
   code?: string;
 };
 
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_INPUT_LENGTH = 2000;
+
 export default function ChatApp({ userEmail }: ChatAppProps) {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = createBrowserSupabaseClient();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -82,13 +85,20 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const activeConversation = useMemo(
+    () => conversations.find((c) => c.id === conversationId) || null,
+    [conversations, conversationId]
+  );
+
   async function signOut() {
     try {
       setError(null);
       setLimitReached(false);
 
       const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      if (error) {
+        throw error;
+      }
 
       router.replace("/login");
       router.refresh();
@@ -185,7 +195,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       setError(null);
       setDeletingId(id);
 
-      const res = await fetch(`/api/conversations?id=${id}`, {
+      const res = await fetch(`/api/conversations?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
 
@@ -219,6 +229,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }
 
   async function createConversation() {
+    if (loading) return;
+
     try {
       setError(null);
 
@@ -241,7 +253,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       setEditingTitle("");
       clearSelectedImage();
 
-      setTimeout(() => inputRef.current?.focus(), 50);
+      window.setTimeout(() => inputRef.current?.focus(), 50);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to create conversation."
@@ -253,7 +265,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     try {
       await navigator.clipboard.writeText(content);
       setCopiedIndex(index);
-      setTimeout(() => setCopiedIndex(null), 1500);
+      window.setTimeout(() => setCopiedIndex(null), 1500);
     } catch {
       setError("Failed to copy message.");
     }
@@ -263,7 +275,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     try {
       setError(null);
 
-      const res = await fetch(`/api/messages?conversationId=${id}`, {
+      const res = await fetch(`/api/messages?conversationId=${encodeURIComponent(id)}`, {
         cache: "no-store",
       });
 
@@ -295,8 +307,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     }
   }
 
-  function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
+  function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
 
     if (!file) {
       clearSelectedImage();
@@ -309,7 +321,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
+    if (file.size > MAX_IMAGE_BYTES) {
       setError("Image must be 5 MB or smaller.");
       clearSelectedImage();
       return;
@@ -363,7 +375,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }
 
   async function requestAssistantReply(
-    conversationId: string,
+    targetConversationId: string,
     message: string,
     regenerate = false,
     imageBase64?: string
@@ -379,7 +391,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        conversationId,
+        conversationId: targetConversationId,
         message,
         regenerate,
         imageBase64,
@@ -398,7 +410,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         errorMessage = data.error || errorMessage;
         errorCode = data.code;
       } catch {
-        // fallback message
+        // ignore parse error
       }
 
       if (errorCode === "LIMIT_REACHED") {
@@ -445,6 +457,11 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
     if ((!trimmed && !hasImage) || !conversationId || loading) return;
 
+    if (trimmed.length > MAX_INPUT_LENGTH) {
+      setError(`Message must be ${MAX_INPUT_LENGTH} characters or fewer.`);
+      return;
+    }
+
     setError(null);
     setLoading(true);
 
@@ -467,12 +484,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         ? await fileToBase64(selectedImage)
         : undefined;
 
-      await requestAssistantReply(
-        conversationId,
-        trimmed,
-        false,
-        imageBase64
-      );
+      await requestAssistantReply(conversationId, trimmed, false, imageBase64);
 
       clearSelectedImage();
       await loadConversations();
@@ -524,7 +536,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       );
     } finally {
       setLoading(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      window.setTimeout(() => inputRef.current?.focus(), 50);
     }
   }
 
@@ -538,7 +550,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     setUsageUsed((prev) => Math.min(prev + 1, usageLimit));
 
     const removedAssistantMessage =
-      [...messages].reverse().find((m) => m.role === "assistant") ?? null;
+      [...messages].reverse().find((message) => message.role === "assistant") ??
+      null;
 
     setMessages((prev) => {
       const next = [...prev];
@@ -590,12 +603,12 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
   function handleStarterPrompt(prompt: string) {
     setInput(prompt);
-    setTimeout(() => inputRef.current?.focus(), 0);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       void sendMessage();
     }
   }
@@ -630,16 +643,12 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     };
   }, [selectedImagePreview]);
 
-  const activeConversation = useMemo(
-    () => conversations.find((c) => c.id === conversationId) || null,
-    [conversations, conversationId]
-  );
-
   return (
     <main className="flex h-screen bg-zinc-950 text-zinc-100">
       <aside className="hidden w-80 border-r border-zinc-800 bg-zinc-950 md:flex md:flex-col">
         <div className="border-b border-zinc-800 p-4">
           <button
+            type="button"
             onClick={createConversation}
             className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-medium text-black transition hover:opacity-90"
           >
@@ -660,13 +669,13 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
             </div>
           ) : (
             <div className="space-y-2">
-              {conversations.map((conv) => {
-                const active = conv.id === conversationId;
-                const isEditing = editingConversationId === conv.id;
+              {conversations.map((conversation) => {
+                const active = conversation.id === conversationId;
+                const isEditing = editingConversationId === conversation.id;
 
                 return (
                   <div
-                    key={conv.id}
+                    key={conversation.id}
                     className={`rounded-2xl border px-3 py-3 transition ${
                       active
                         ? "border-zinc-700 bg-zinc-800"
@@ -677,12 +686,15 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                       <div className="space-y-2">
                         <input
                           value={editingTitle}
-                          onChange={(e) => setEditingTitle(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              void renameConversation(conv.id, editingTitle);
+                          onChange={(event) => setEditingTitle(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              void renameConversation(
+                                conversation.id,
+                                editingTitle
+                              );
                             }
-                            if (e.key === "Escape") {
+                            if (event.key === "Escape") {
                               setEditingConversationId(null);
                               setEditingTitle("");
                             }
@@ -692,14 +704,19 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                         />
                         <div className="flex gap-2">
                           <button
+                            type="button"
                             onClick={() =>
-                              void renameConversation(conv.id, editingTitle)
+                              void renameConversation(
+                                conversation.id,
+                                editingTitle
+                              )
                             }
                             className="rounded-xl bg-white px-3 py-1.5 text-xs font-medium text-black"
                           >
                             Save
                           </button>
                           <button
+                            type="button"
                             onClick={() => {
                               setEditingConversationId(null);
                               setEditingTitle("");
@@ -713,21 +730,26 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     ) : (
                       <>
                         <button
-                          onClick={() => setConversationId(conv.id)}
+                          type="button"
+                          onClick={() => setConversationId(conversation.id)}
                           className="w-full text-left"
                         >
                           <div className="truncate text-sm font-medium">
-                            {conv.title}
+                            {conversation.title}
                           </div>
                           <div className="mt-1 text-xs text-zinc-400">
-                            {new Date(conv.updated_at).toLocaleDateString()}
+                            {new Date(conversation.updated_at).toLocaleDateString()}
                           </div>
                         </button>
 
                         <div className="mt-3 flex gap-2">
                           <button
+                            type="button"
                             onClick={() =>
-                              startRenamingConversation(conv.id, conv.title)
+                              startRenamingConversation(
+                                conversation.id,
+                                conversation.title
+                              )
                             }
                             className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-950"
                           >
@@ -735,11 +757,12 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                           </button>
 
                           <button
-                            onClick={() => setConfirmDeleteConversation(conv)}
-                            disabled={deletingId === conv.id}
+                            type="button"
+                            onClick={() => setConfirmDeleteConversation(conversation)}
+                            disabled={deletingId === conversation.id}
                             className="rounded-xl border border-red-900/50 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-950/30 disabled:opacity-50"
                           >
-                            {deletingId === conv.id ? "Deleting..." : "Delete"}
+                            {deletingId === conversation.id ? "Deleting..." : "Delete"}
                           </button>
                         </div>
                       </>
@@ -766,6 +789,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={createConversation}
                 className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-900 md:hidden"
               >
@@ -773,6 +797,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
               </button>
 
               <button
+                type="button"
                 onClick={signOut}
                 className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-900"
               >
@@ -793,6 +818,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                 </div>
                 <div className="mt-3">
                   <button
+                    type="button"
                     className="rounded-xl bg-white px-3 py-2 text-xs font-medium text-black transition hover:opacity-90"
                     onClick={() => {
                       setError("Upgrade flow not connected yet.");
@@ -825,6 +851,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     <p className="font-medium text-zinc-300">Try asking:</p>
                     <div className="space-y-1">
                       <button
+                        type="button"
                         onClick={() =>
                           handleStarterPrompt("What time is it in Georgia right now?")
                         }
@@ -833,6 +860,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                         • What time is it in Georgia right now?
                       </button>
                       <button
+                        type="button"
                         onClick={() =>
                           handleStarterPrompt("What’s the weather in Atlanta, GA?")
                         }
@@ -841,6 +869,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                         • What’s the weather in Atlanta, GA?
                       </button>
                       <button
+                        type="button"
                         onClick={() =>
                           handleStarterPrompt("Explain EU MDR in simple terms")
                         }
@@ -856,6 +885,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   </p>
 
                   <button
+                    type="button"
                     onClick={createConversation}
                     className="mt-6 rounded-2xl bg-white px-5 py-3 text-sm font-medium text-black transition hover:opacity-90"
                   >
@@ -865,14 +895,14 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
               </div>
             ) : (
               <div className="space-y-4">
-                {messages.map((msg, index) => {
-                  const isUser = msg.role === "user";
+                {messages.map((message, index) => {
+                  const isUser = message.role === "user";
                   const isLastMessage = index === messages.length - 1;
                   const canRegenerate = !isUser && isLastMessage && !loading;
 
                   return (
                     <div
-                      key={msg.id ?? `${msg.created_at || "msg"}-${index}`}
+                      key={message.id ?? `${message.created_at || "msg"}-${index}`}
                       className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                     >
                       <div
@@ -885,17 +915,17 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                         <div className="break-words text-sm leading-7">
                           {isUser ? (
                             <div className="space-y-2">
-                              {msg.imagePreview && (
+                              {message.imagePreview && (
                                 <img
-                                  src={msg.imagePreview}
+                                  src={message.imagePreview}
                                   alt="Uploaded"
                                   className="max-h-48 rounded-2xl border border-zinc-300"
                                 />
                               )}
 
-                              {msg.content && (
+                              {message.content && (
                                 <div className="whitespace-pre-wrap">
-                                  {msg.content}
+                                  {message.content}
                                 </div>
                               )}
                             </div>
@@ -918,21 +948,21 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                                 prose-li:text-zinc-100"
                             >
                               <ReactMarkdown>
-                                {msg.content || (loading ? "Thinking..." : "")}
+                                {message.content || (loading ? "Thinking..." : "")}
                               </ReactMarkdown>
                             </div>
                           )}
                         </div>
 
                         {!isUser &&
-                          Array.isArray(msg.sources) &&
-                          msg.sources.length > 0 && (
+                          Array.isArray(message.sources) &&
+                          message.sources.length > 0 && (
                             <div className="mt-4 space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">
                                 Sources
                               </p>
 
-                              {msg.sources.map((source, sourceIndex) => (
+                              {message.sources.map((source, sourceIndex) => (
                                 <a
                                   key={`${source.url}-${sourceIndex}`}
                                   href={source.url}
@@ -958,20 +988,21 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                             </div>
                           )}
 
-                        {msg.created_at && (
+                        {message.created_at && (
                           <div
                             className={`mt-2 text-[11px] ${
                               isUser ? "text-zinc-700" : "text-zinc-500"
                             }`}
                           >
-                            {formatTimestamp(msg.created_at)}
+                            {formatTimestamp(message.created_at)}
                           </div>
                         )}
 
-                        {!isUser && msg.content && (
+                        {!isUser && message.content && (
                           <div className="mt-3 flex justify-end gap-2">
                             {canRegenerate && (
                               <button
+                                type="button"
                                 onClick={() => void regenerateResponse()}
                                 disabled={loading || limitReached}
                                 className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
@@ -981,7 +1012,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                             )}
 
                             <button
-                              onClick={() => void copyMessage(msg.content, index)}
+                              type="button"
+                              onClick={() => void copyMessage(message.content, index)}
                               className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800"
                             >
                               {copiedIndex === index ? "Copied!" : "Copy"}
@@ -1051,8 +1083,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
+                onChange={(event) => {
+                  setInput(event.target.value);
                   if (limitReached) {
                     setError(null);
                   }
@@ -1063,8 +1095,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   limitReached
                     ? "Daily limit reached. Upgrade to continue..."
                     : conversationId
-                    ? "Message your AI agent..."
-                    : "Create a new chat to begin..."
+                      ? "Message your AI agent..."
+                      : "Create a new chat to begin..."
                 }
                 disabled={!conversationId || loading || limitReached}
                 className="max-h-32 min-h-[40px] w-full resize-none bg-transparent px-2 py-1.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed"
@@ -1078,6 +1110,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                 </p>
 
                 <button
+                  type="button"
                   onClick={() => void sendMessage()}
                   disabled={
                     !conversationId ||
@@ -1112,6 +1145,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
             <div className="mt-6 flex justify-end gap-3">
               <button
+                type="button"
                 onClick={() => setConfirmDeleteConversation(null)}
                 className="rounded-2xl border border-zinc-700 px-4 py-2 text-sm text-zinc-300 transition hover:bg-zinc-800"
               >
@@ -1119,6 +1153,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
               </button>
 
               <button
+                type="button"
                 onClick={async () => {
                   await deleteConversation(confirmDeleteConversation.id);
                   setConfirmDeleteConversation(null);

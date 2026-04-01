@@ -1,16 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
+
+const MAX_TITLE_LENGTH = 120;
+
+function jsonError(message: string, status: number) {
+  return NextResponse.json({ error: message }, { status });
+}
+
+function normalizeTitle(input: unknown): string {
+  return typeof input === "string" ? input.trim() : "";
+}
 
 export async function GET() {
   try {
-    const supabase = await createClient();
+    const supabase = await createServerSupabaseClient();
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return jsonError("Unauthorized", 401);
     }
 
     const { data, error } = await supabase
@@ -21,41 +31,43 @@ export async function GET() {
 
     if (error) {
       console.error("GET /api/conversations error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return jsonError("Failed to load conversations.", 500);
     }
 
     return NextResponse.json({ conversations: data ?? [] });
-  } catch (err) {
-    console.error("GET /api/conversations unexpected error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Unknown server error" },
-      { status: 500 }
-    );
+  } catch (error) {
+    console.error("GET /api/conversations unexpected error:", error);
+    return jsonError("Unknown server error", 500);
   }
 }
 
 export async function POST(req: Request) {
   try {
-    const supabase = await createClient();
+    const supabase = await createServerSupabaseClient();
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return jsonError("Unauthorized", 401);
     }
 
-    const body = await req.json();
-    const title =
-      typeof body?.title === "string" && body.title.trim()
-        ? body.title.trim()
-        : "New Chat";
+    let body: unknown = null;
+
+    try {
+      body = await req.json();
+    } catch {
+      body = null;
+    }
+
+    const title = normalizeTitle((body as { title?: unknown } | null)?.title);
+    const finalTitle = title ? title.slice(0, MAX_TITLE_LENGTH) : "New Chat";
 
     const { data, error } = await supabase
       .from("conversations")
       .insert({
-        title,
+        title: finalTitle,
         user_id: user.id,
         updated_at: new Date().toISOString(),
       })
@@ -64,47 +76,53 @@ export async function POST(req: Request) {
 
     if (error) {
       console.error("POST /api/conversations error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return jsonError("Failed to create conversation.", 500);
     }
 
-    return NextResponse.json({ conversation: data });
-  } catch (err) {
-    console.error("POST /api/conversations unexpected error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Invalid request body." },
-      { status: 400 }
-    );
+    return NextResponse.json({ conversation: data }, { status: 201 });
+  } catch (error) {
+    console.error("POST /api/conversations unexpected error:", error);
+    return jsonError("Invalid request body.", 400);
   }
 }
 
 export async function PATCH(req: Request) {
   try {
-    const supabase = await createClient();
+    const supabase = await createServerSupabaseClient();
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return jsonError("Unauthorized", 401);
     }
 
-    const body = await req.json();
-    const id = typeof body?.id === "string" ? body.id : "";
-    const title =
-      typeof body?.title === "string" ? body.title.trim() : "";
+    let body: unknown;
+
+    try {
+      body = await req.json();
+    } catch {
+      return jsonError("Invalid request body.", 400);
+    }
+
+    const id =
+      typeof (body as { id?: unknown }).id === "string"
+        ? (body as { id: string }).id.trim()
+        : "";
+
+    const title = normalizeTitle((body as { title?: unknown }).title);
 
     if (!id || !title) {
-      return NextResponse.json(
-        { error: "Conversation id and title are required." },
-        { status: 400 }
-      );
+      return jsonError("Conversation id and title are required.", 400);
     }
+
+    const finalTitle = title.slice(0, MAX_TITLE_LENGTH);
 
     const { data, error } = await supabase
       .from("conversations")
       .update({
-        title,
+        title: finalTitle,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
@@ -114,38 +132,32 @@ export async function PATCH(req: Request) {
 
     if (error) {
       console.error("PATCH /api/conversations error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return jsonError("Failed to rename conversation.", 500);
     }
 
     return NextResponse.json({ conversation: data });
-  } catch (err) {
-    console.error("PATCH /api/conversations unexpected error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Invalid request body." },
-      { status: 400 }
-    );
+  } catch (error) {
+    console.error("PATCH /api/conversations unexpected error:", error);
+    return jsonError("Invalid request body.", 400);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
-    const supabase = await createClient();
+    const supabase = await createServerSupabaseClient();
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return jsonError("Unauthorized", 401);
     }
 
-    const id = req.nextUrl.searchParams.get("id");
+    const id = req.nextUrl.searchParams.get("id")?.trim() ?? "";
 
     if (!id) {
-      return NextResponse.json(
-        { error: "Conversation id is required." },
-        { status: 400 }
-      );
+      return jsonError("Conversation id is required.", 400);
     }
 
     const { error } = await supabase
@@ -156,15 +168,12 @@ export async function DELETE(req: NextRequest) {
 
     if (error) {
       console.error("DELETE /api/conversations error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return jsonError("Failed to delete conversation.", 500);
     }
 
     return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("DELETE /api/conversations unexpected error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Unknown server error" },
-      { status: 500 }
-    );
+  } catch (error) {
+    console.error("DELETE /api/conversations unexpected error:", error);
+    return jsonError("Unknown server error", 500);
   }
 }

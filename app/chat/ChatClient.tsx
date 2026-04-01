@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useRouter } from "next/navigation";
+import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 type SourceItem = {
   title: string;
@@ -14,6 +15,9 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   sources?: SourceItem[];
+  image_path?: string | null;
+  image_name?: string | null;
+  image_url?: string | null;
 };
 
 type ConversationItem = {
@@ -137,7 +141,8 @@ export default function ChatClient({
   initialMessages,
   initialConversations,
 }: ChatClientProps) {
-  const supabase = createClient();
+  const supabase = createBrowserSupabaseClient();
+  const router = useRouter();
 
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
@@ -145,6 +150,7 @@ export default function ChatClient({
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imageName, setImageName] = useState("");
+  const [imagePath, setImagePath] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
 
   const [conversationId, setConversationId] = useState(initialConversationId);
@@ -155,6 +161,7 @@ export default function ChatClient({
 
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [usageError, setUsageError] = useState("");
+  const [uiError, setUiError] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -184,12 +191,13 @@ export default function ChatClient({
   }, []);
 
   useEffect(() => {
-    fetchUsage();
+    void fetchUsage();
   }, []);
 
   function clearImage() {
     setImageBase64(null);
     setImageName("");
+    setImagePath(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -207,6 +215,7 @@ export default function ChatClient({
   function handleConversationStarterClick(starter: string) {
     if (loading || isLimitReached) return;
     setInput(starter);
+    setUiError("");
   }
 
   function handleOpenFilePicker() {
@@ -237,9 +246,77 @@ export default function ChatClient({
     }
   }
 
+  async function getSignedImageUrl(path: string): Promise<string | null> {
+    const { data, error } = await supabase.storage
+      .from("chat-images")
+      .createSignedUrl(path, 60 * 60);
+
+    if (error) {
+      console.error("Signed URL error:", error);
+      return null;
+    }
+
+    return data.signedUrl;
+  }
+
+  async function uploadImageToStorage(file: File): Promise<{
+    path: string;
+    name: string;
+    dataUrl: string;
+  }> {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      throw new Error("You must be signed in to upload images.");
+    }
+
+    const processedDataUrl = await fileToProcessedDataUrl(file);
+
+    const fileExt =
+      file.name.split(".").pop()?.toLowerCase() ||
+      (processedDataUrl.startsWith("data:image/png") ? "png" : "jpg");
+
+    const filePath = `${user.id}/${crypto.randomUUID()}.${fileExt}`;
+
+    const response = await fetch(processedDataUrl);
+    const blob = await response.blob();
+
+    const { error: uploadError } = await supabase.storage
+      .from("chat-images")
+      .upload(filePath, blob, {
+        contentType: blob.type || file.type || "image/jpeg",
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new Error(uploadError.message);
+    }
+
+    return {
+      path: filePath,
+      name: file.name,
+      dataUrl: processedDataUrl,
+    };
+  }
+
   async function handleSignOut() {
-    await supabase.auth.signOut();
-    window.location.href = "/login";
+    try {
+      setUiError("");
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        throw error;
+      }
+      router.push("/login");
+      router.refresh();
+    } catch (error) {
+      setUiError(
+        error instanceof Error ? error.message : "Failed to sign out."
+      );
+    }
   }
 
   async function refreshConversations(preferredId?: string) {
@@ -263,6 +340,7 @@ export default function ChatClient({
     if (loading || nextConversationId === conversationId) return;
 
     setSidebarLoading(true);
+    setUiError("");
     clearImage();
     setInput("");
 
@@ -277,12 +355,22 @@ export default function ChatClient({
       }
 
       const data = await res.json();
-      const nextMessages = Array.isArray(data?.messages) ? data.messages : [];
+      const rawMessages = Array.isArray(data?.messages) ? data.messages : [];
+
+      const nextMessages = await Promise.all(
+        rawMessages.map(async (msg: Message) => {
+          if (msg.image_path) {
+            const imageUrl = await getSignedImageUrl(msg.image_path);
+            return { ...msg, image_url: imageUrl };
+          }
+          return msg;
+        })
+      );
 
       setConversationId(nextConversationId);
       setMessages(nextMessages);
     } catch (error) {
-      window.alert(
+      setUiError(
         error instanceof Error ? error.message : "Failed to load conversation."
       );
     } finally {
@@ -299,6 +387,7 @@ export default function ChatClient({
     if (loading) return;
 
     setSidebarLoading(true);
+    setUiError("");
     clearImage();
     setInput("");
 
@@ -332,7 +421,7 @@ export default function ChatClient({
       setMessages([]);
       setMobileMenuOpen(false);
     } catch (error) {
-      window.alert(
+      setUiError(
         error instanceof Error ? error.message : "Failed to create conversation."
       );
     } finally {
@@ -354,6 +443,7 @@ export default function ChatClient({
     if (!trimmed) return;
 
     setSidebarLoading(true);
+    setUiError("");
 
     try {
       const res = await fetch("/api/conversations", {
@@ -374,7 +464,7 @@ export default function ChatClient({
 
       await refreshConversations(target.id);
     } catch (error) {
-      window.alert(
+      setUiError(
         error instanceof Error ? error.message : "Failed to rename conversation."
       );
     } finally {
@@ -392,6 +482,7 @@ export default function ChatClient({
     if (!confirmed) return;
 
     setSidebarLoading(true);
+    setUiError("");
 
     try {
       const res = await fetch(
@@ -420,7 +511,7 @@ export default function ChatClient({
         await refreshConversations(conversationId);
       }
     } catch (error) {
-      window.alert(
+      setUiError(
         error instanceof Error ? error.message : "Failed to delete conversation."
       );
     } finally {
@@ -429,26 +520,28 @@ export default function ChatClient({
   }
 
   async function handleImageChange(
-    e: React.ChangeEvent<HTMLInputElement>
+    event: React.ChangeEvent<HTMLInputElement>
   ) {
-    const file = e.target.files?.[0];
+    const file = event.target.files?.[0];
     if (!file) return;
 
     if (useWebSearch) {
-      window.alert("Image upload is only available in Standard mode.");
+      setUiError("Image upload is only available in Standard mode.");
       clearImage();
       return;
     }
 
     setUploadingImage(true);
+    setUiError("");
 
     try {
-      const processed = await fileToProcessedDataUrl(file);
-      setImageBase64(processed);
-      setImageName(file.name);
+      const uploaded = await uploadImageToStorage(file);
+      setImageBase64(uploaded.dataUrl);
+      setImageName(uploaded.name);
+      setImagePath(uploaded.path);
     } catch (error) {
       clearImage();
-      window.alert(
+      setUiError(
         error instanceof Error ? error.message : "Failed to process image."
       );
     } finally {
@@ -456,8 +549,8 @@ export default function ChatClient({
     }
   }
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
     const trimmed = input.trim();
     const hasImage = Boolean(imageBase64);
@@ -465,24 +558,26 @@ export default function ChatClient({
     if (loading || uploadingImage || (!trimmed && !hasImage)) return;
 
     if (isLimitReached) {
-      window.alert("You’ve reached your daily message limit.");
+      setUiError("You’ve reached your daily message limit.");
       return;
     }
 
     if (!conversationId) {
-      window.alert("Missing conversationId.");
+      setUiError("Missing conversationId.");
       return;
     }
 
     if (trimmed.length > MAX_INPUT_LENGTH) {
-      window.alert(`Message too long. Maximum ${MAX_INPUT_LENGTH} characters.`);
+      setUiError(`Message too long. Maximum ${MAX_INPUT_LENGTH} characters.`);
       return;
     }
 
     if (useWebSearch && hasImage) {
-      window.alert("Web Search mode does not support image upload.");
+      setUiError("Web Search mode does not support image upload.");
       return;
     }
+
+    setUiError("");
 
     const userVisibleContent =
       trimmed || (hasImage
@@ -493,6 +588,9 @@ export default function ChatClient({
       id: createId(),
       role: "user",
       content: userVisibleContent,
+      image_path: imagePath,
+      image_name: imageName,
+      image_url: imageBase64,
     };
 
     const assistantId = createId();
@@ -505,6 +603,8 @@ export default function ChatClient({
     };
 
     const payloadImage = imageBase64;
+    const payloadImagePath = imagePath;
+    const payloadImageName = imageName;
 
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
@@ -528,6 +628,8 @@ export default function ChatClient({
           conversationId,
           message: trimmed,
           imageBase64: payloadImage,
+          imagePath: payloadImagePath,
+          imageName: payloadImageName,
         }),
       });
 
@@ -624,6 +726,7 @@ export default function ChatClient({
     }
 
     setUseWebSearch(nextUseWebSearch);
+    setUiError("");
   }
 
   function renderConversationCard(
@@ -708,7 +811,9 @@ export default function ChatClient({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-xs text-neutral-500">Origin Sable</p>
-                  <div className="truncate text-sm font-semibold">{userEmail}</div>
+                  <div className="truncate text-sm font-semibold">
+                    {userEmail}
+                  </div>
 
                   {usage && (
                     <div className="mt-2 text-xs text-neutral-400">
@@ -732,6 +837,10 @@ export default function ChatClient({
                   {usageError && (
                     <div className="mt-2 text-xs text-red-400">{usageError}</div>
                   )}
+
+                  {uiError && (
+                    <div className="mt-2 text-xs text-red-400">{uiError}</div>
+                  )}
                 </div>
 
                 <button
@@ -751,6 +860,17 @@ export default function ChatClient({
                   className="rounded-xl bg-white px-4 py-2 text-sm text-black disabled:opacity-50"
                 >
                   New Chat
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    router.push("/account");
+                  }}
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm text-white"
+                >
+                  Account
                 </button>
 
                 <button
@@ -805,6 +925,10 @@ export default function ChatClient({
               <div className="mt-2 text-xs text-red-400">{usageError}</div>
             )}
 
+            {uiError && (
+              <div className="mt-2 text-xs text-red-400">{uiError}</div>
+            )}
+
             <div className="mt-3 flex flex-col gap-2">
               <button
                 type="button"
@@ -813,6 +937,14 @@ export default function ChatClient({
                 className="rounded-xl bg-white px-4 py-2 text-sm text-black disabled:opacity-50"
               >
                 New Chat
+              </button>
+
+              <button
+                type="button"
+                onClick={() => router.push("/account")}
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm text-white"
+              >
+                Account
               </button>
 
               <button
@@ -924,27 +1056,48 @@ export default function ChatClient({
 
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className={`${CONTENT_RAIL_CLASS} py-5`}>
+              {uiError && (
+                <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
+                  {uiError}
+                </div>
+              )}
+
               <div className="space-y-4">
-                {messages.map((m) => {
-                  const sources = Array.isArray(m.sources) ? m.sources : [];
+                {messages.map((message) => {
+                  const sources = Array.isArray(message.sources)
+                    ? message.sources
+                    : [];
                   const isStreamingAssistant =
                     loading &&
-                    m.role === "assistant" &&
-                    m.id === messages[messages.length - 1]?.id;
+                    message.role === "assistant" &&
+                    message.id === messages[messages.length - 1]?.id;
 
                   const bubbleWidthClass =
-                    m.role === "user" ? USER_BUBBLE_CLASS : ASSISTANT_BUBBLE_CLASS;
+                    message.role === "user"
+                      ? USER_BUBBLE_CLASS
+                      : ASSISTANT_BUBBLE_CLASS;
 
                   return (
-                    <div key={m.id} className="space-y-2">
+                    <div key={message.id} className="space-y-2">
                       <div
                         className={`${bubbleWidthClass} mx-auto rounded-2xl p-4 whitespace-pre-wrap break-words ${
-                          m.role === "user"
+                          message.role === "user"
                             ? "bg-white text-black"
                             : "bg-neutral-900 text-white"
                         }`}
                       >
-                        {m.content}
+                        {message.content}
+
+                        {message.image_url && (
+                          <div className="mt-3">
+                            <img
+                              src={message.image_url}
+                              alt={message.image_name || "Uploaded image"}
+                              className="max-h-56 rounded-xl border border-neutral-800 object-contain"
+                            />
+                          </div>
+                        )}
+
                         {isStreamingAssistant ? (
                           <span className="ml-1 inline-block animate-pulse">▍</span>
                         ) : null}
@@ -952,20 +1105,20 @@ export default function ChatClient({
 
                       {sources.length > 0 && (
                         <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto space-y-2`}>
-                          {sources.map((s, j) => (
+                          {sources.map((source, index) => (
                             <a
-                              key={`${s.url}-${j}`}
-                              href={s.url}
+                              key={`${source.url}-${index}`}
+                              href={source.url}
                               target="_blank"
                               rel="noreferrer"
                               className="block rounded-xl border border-neutral-800 bg-neutral-950 p-3 transition hover:border-neutral-700"
                             >
                               <div className="text-xs text-blue-400 underline">
-                                {s.title}
+                                {source.title}
                               </div>
-                              {s.snippet ? (
+                              {source.snippet ? (
                                 <div className="mt-1 text-xs text-neutral-400">
-                                  {s.snippet}
+                                  {source.snippet}
                                 </div>
                               ) : null}
                             </a>
@@ -977,11 +1130,13 @@ export default function ChatClient({
                 })}
 
                 {loading && messages.length > 0 && (
-                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs text-neutral-500`}>
+                  <div
+                    className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs text-neutral-500`}
+                  >
                     {useWebSearch
                       ? "Using web search..."
-                      : imageBase64
-                        ? "Analyzing image..."
+                      : uploadingImage
+                        ? "Processing image..."
                         : "Thinking..."}
                   </div>
                 )}
@@ -998,7 +1153,9 @@ export default function ChatClient({
                 type="file"
                 accept="image/*"
                 onChange={handleImageChange}
-                disabled={loading || uploadingImage || isLimitReached || useWebSearch}
+                disabled={
+                  loading || uploadingImage || isLimitReached || useWebSearch
+                }
                 className="hidden"
               />
 
@@ -1046,7 +1203,12 @@ export default function ChatClient({
 
                 <input
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(event) => {
+                    setInput(event.target.value);
+                    if (uiError) {
+                      setUiError("");
+                    }
+                  }}
                   className="flex-1 rounded-2xl bg-neutral-900 px-4 py-3.5 outline-none"
                   placeholder={
                     useWebSearch
