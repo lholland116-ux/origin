@@ -5,14 +5,38 @@ type ForgotPasswordBody = {
   email?: string;
 };
 
-function isValidEmail(email: string) {
+function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function normalizeAppUrl(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function successResponse() {
+  return NextResponse.json(
+    {
+      message:
+        "If an account exists for that email, a password reset link has been sent.",
+    },
+    { status: 200 }
+  );
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as ForgotPasswordBody;
-    const email = body.email?.trim().toLowerCase();
+    let body: ForgotPasswordBody;
+
+    try {
+      body = (await request.json()) as ForgotPasswordBody;
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid request body." },
+        { status: 400 }
+      );
+    }
+
+    const email = body.email?.trim().toLowerCase() ?? "";
 
     if (!email || !isValidEmail(email)) {
       return NextResponse.json(
@@ -21,14 +45,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = await createServerSupabaseClient();
-
     const appUrl = process.env.NEXT_PUBLIC_APP_URL;
     if (!appUrl) {
-      throw new Error("Missing NEXT_PUBLIC_APP_URL");
+      console.error("Forgot password config error: missing NEXT_PUBLIC_APP_URL");
+      return successResponse();
     }
 
-    const redirectTo = `${appUrl}/reset-password`;
+    const redirectTo = `${normalizeAppUrl(appUrl)}/reset-password`;
+
+    const supabase = await createServerSupabaseClient();
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo,
@@ -38,22 +63,9 @@ export async function POST(request: Request) {
       console.error("resetPasswordForEmail error:", error.message);
     }
 
-    return NextResponse.json(
-      {
-        message:
-          "If an account exists for that email, a password reset link has been sent.",
-      },
-      { status: 200 }
-    );
+    return successResponse();
   } catch (error) {
-    console.error("Forgot password route error:", error);
-
-    return NextResponse.json(
-      {
-        message:
-          "If an account exists for that email, a password reset link has been sent.",
-      },
-      { status: 200 }
-    );
+    console.error("Forgot password route unexpected error:", error);
+    return successResponse();
   }
 }
