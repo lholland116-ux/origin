@@ -1,11 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 const MIN_PASSWORD_LENGTH = 8;
-const INVALID_LINK_TIMEOUT_MS = 3000;
+const INVALID_LINK_TIMEOUT_MS = 8000;
 const SUCCESS_REDIRECT_DELAY_MS = 1500;
 
 export default function ResetPasswordPage() {
@@ -19,11 +19,16 @@ export default function ResetPasswordPage() {
   const [isReady, setIsReady] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const hasHandledRecoveryRef = useRef(false);
+
   useEffect(() => {
     let mounted = true;
 
     async function initializeRecovery() {
       try {
+        const hasCode = window.location.search.includes("code=");
+        const hasTokenHash = window.location.hash.includes("access_token");
+
         const {
           data: { session },
         } = await supabase.auth.getSession();
@@ -31,8 +36,16 @@ export default function ResetPasswordPage() {
         if (!mounted) return;
 
         if (session) {
+          hasHandledRecoveryRef.current = true;
           setIsReady(true);
           setError(null);
+          return;
+        }
+
+        // If there is no session yet but the URL clearly contains recovery data,
+        // wait for Supabase auth state to finish initializing.
+        if (!hasCode && !hasTokenHash) {
+          setError("Invalid reset link.");
         }
       } catch {
         if (!mounted) return;
@@ -46,6 +59,7 @@ export default function ResetPasswordPage() {
       if (!mounted) return;
 
       if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
+        hasHandledRecoveryRef.current = true;
         setIsReady(true);
         setError(null);
       }
@@ -56,12 +70,11 @@ export default function ResetPasswordPage() {
     const timer = window.setTimeout(() => {
       if (!mounted) return;
 
-      setIsReady((current) => {
-        if (!current) {
-          setError("This reset link is invalid or expired.");
-        }
-        return current;
-      });
+      if (!hasHandledRecoveryRef.current) {
+        setError(
+          "This reset link may be invalid or expired. Please request a new one."
+        );
+      }
     }, INVALID_LINK_TIMEOUT_MS);
 
     return () => {
@@ -75,6 +88,11 @@ export default function ResetPasswordPage() {
     event.preventDefault();
     setStatus(null);
     setError(null);
+
+    if (!isReady) {
+      setError("This reset link is not ready yet. Please try again.");
+      return;
+    }
 
     if (password.length < MIN_PASSWORD_LENGTH) {
       setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
