@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 const MIN_PASSWORD_LENGTH = 8;
-const INVALID_LINK_TIMEOUT_MS = 8000;
+const INVALID_LINK_TIMEOUT_MS = 12000; // ⬅️ increased for reliability
 const SUCCESS_REDIRECT_DELAY_MS = 1500;
 
 export default function ResetPasswordPage() {
@@ -26,9 +26,12 @@ export default function ResetPasswordPage() {
 
     async function initializeRecovery() {
       try {
-        const hasCode = window.location.search.includes("code=");
-        const hasTokenHash = window.location.hash.includes("access_token");
+        const url = new URL(window.location.href);
 
+        const hasCode = url.searchParams.has("code");
+        const hasAccessToken = url.hash.includes("access_token");
+
+        // 🔍 Check session
         const {
           data: { session },
         } = await supabase.auth.getSession();
@@ -42,11 +45,12 @@ export default function ResetPasswordPage() {
           return;
         }
 
-        // If there is no session yet but the URL clearly contains recovery data,
-        // wait for Supabase auth state to finish initializing.
-        if (!hasCode && !hasTokenHash) {
+        // ⛔ Only mark invalid if NO recovery indicators at all
+        if (!hasCode && !hasAccessToken) {
           setError("Invalid reset link.");
         }
+
+        // Otherwise → wait for Supabase event
       } catch {
         if (!mounted) return;
         setError("Unable to validate this reset link.");
@@ -90,7 +94,7 @@ export default function ResetPasswordPage() {
     setError(null);
 
     if (!isReady) {
-      setError("This reset link is not ready yet. Please try again.");
+      setError("This reset link is still being validated. Please wait.");
       return;
     }
 
@@ -137,7 +141,9 @@ export default function ResetPasswordPage() {
       <h1 className="text-2xl font-semibold">Reset password</h1>
 
       {!isReady && !error && (
-        <p className="mt-4 text-sm text-gray-600">Validating reset link...</p>
+        <p className="mt-4 text-sm text-gray-600">
+          Validating reset link... (this can take a few seconds)
+        </p>
       )}
 
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
@@ -154,16 +160,13 @@ export default function ResetPasswordPage() {
               autoComplete="new-password"
               required
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               className="mt-1 w-full rounded-md border px-3 py-2"
             />
           </div>
 
           <div>
-            <label
-              htmlFor="confirmPassword"
-              className="block text-sm font-medium"
-            >
+            <label htmlFor="confirmPassword" className="block text-sm font-medium">
               Confirm new password
             </label>
             <input
@@ -172,7 +175,7 @@ export default function ResetPasswordPage() {
               autoComplete="new-password"
               required
               value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
+              onChange={(e) => setConfirmPassword(e.target.value)}
               className="mt-1 w-full rounded-md border px-3 py-2"
             />
           </div>

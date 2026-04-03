@@ -13,6 +13,15 @@ function normalizeAppUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+function isValidAbsoluteUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function successResponse() {
   return NextResponse.json(
     {
@@ -45,13 +54,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-    if (!appUrl) {
-      console.error("Forgot password config error: missing NEXT_PUBLIC_APP_URL");
+    const rawAppUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const appUrl = normalizeAppUrl(rawAppUrl);
+
+    if (!appUrl || !isValidAbsoluteUrl(appUrl)) {
+      console.error(
+        "Forgot password config error: invalid NEXT_PUBLIC_APP_URL",
+        rawAppUrl
+      );
       return successResponse();
     }
 
-    const redirectTo = `${normalizeAppUrl(appUrl)}/reset-password`;
+    const redirectTo = `${appUrl}/reset-password`;
+
+    console.log("Forgot password redirectTo:", redirectTo);
 
     const supabase = await createServerSupabaseClient();
 
