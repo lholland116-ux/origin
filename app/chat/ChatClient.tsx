@@ -1049,6 +1049,28 @@ export default function ChatClient({
                       </button>
                     ))}
                   </div>
+
+                  <div className="mt-4 rounded-2xl border border-neutral-800 bg-neutral-950 p-4">
+                    <div className="text-[11px] uppercase tracking-wide text-neutral-500">
+                      App information
+                    </div>
+
+                    <div className="mt-2 text-sm text-white">
+                      <span className="font-medium">App Developer:</span> Levi Holland
+                    </div>
+
+                    <div className="mt-1 text-sm text-neutral-400">
+                      <span className="font-medium text-neutral-300">
+                        Questions or support:
+                      </span>{" "}
+                      <a
+                        href="mailto:Lholland116@gmail.com"
+                        className="underline transition hover:text-white"
+                      >
+                        Lholland116@gmail.com
+                      </a>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
