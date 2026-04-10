@@ -68,6 +68,7 @@ const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
 const DOCUMENT_POLL_INTERVAL_MS = 2000;
 const DOCUMENT_POLL_MAX_ATTEMPTS = 10;
+const ENABLE_UPLOAD_DEBUG = true;
 
 const PRODUCT_DESCRIPTION =
   "A multimodal AI workspace for chat, image understanding, document analysis, and web-assisted answers with saved conversation history.";
@@ -89,6 +90,20 @@ function createId() {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function debugLog(...args: unknown[]) {
+  if (ENABLE_UPLOAD_DEBUG) {
+    console.log(...args);
+  }
+}
+
+function extractErrorMessage(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const maybeError = (data as { error?: unknown }).error;
+  return typeof maybeError === "string" && maybeError.trim()
+    ? maybeError
+    : null;
 }
 
 async function fileToProcessedDataUrl(file: File): Promise<string> {
@@ -300,9 +315,15 @@ export default function ChatClient({
         );
 
         if (!stillPending) {
+          debugLog("Document polling completed", {
+            conversationId,
+            docs,
+          });
           return;
         }
       }
+
+      debugLog("Document polling max attempts reached", { conversationId });
     })();
 
     return () => {
@@ -408,6 +429,13 @@ export default function ChatClient({
 
       const data = (await res.json()) as DocumentsResponse;
       const normalized = normalizeUploadedDocuments(data.documents);
+
+      debugLog("fetchDocuments result", {
+        conversationId: targetConversationId,
+        count: normalized.length,
+        documents: normalized,
+      });
+
       setAttachedDocuments(normalized);
       return normalized;
     } catch (error) {
@@ -478,21 +506,31 @@ export default function ChatClient({
   }
 
   async function handleFilesSelected(files: File[]) {
+    debugLog("STEP 1: Files received", files);
+
     if (useWebSearch) {
+      debugLog("STEP 2: Blocked because Web Search mode is active");
       setDocumentError("Document upload is only available in Standard mode.");
       return;
     }
 
     const validationError = validateFiles(files);
+
     if (validationError) {
+      debugLog("STEP 3: Validation failed", validationError);
       setDocumentError(validationError);
       return;
     }
 
+    debugLog("STEP 3: Validation passed");
+
     if (!conversationId) {
+      debugLog("STEP 4: Missing conversationId");
       setDocumentError("Missing conversationId.");
       return;
     }
+
+    debugLog("STEP 4: conversationId exists", conversationId);
 
     try {
       setIsUploadingDocuments(true);
@@ -518,26 +556,40 @@ export default function ChatClient({
 
       formData.append("conversationId", conversationId);
 
+      debugLog("STEP 5: ABOUT TO CALL /api/documents/upload");
+
       const res = await fetch("/api/documents/upload", {
         method: "POST",
         body: formData,
       });
 
+      debugLog("STEP 6: Upload response status", res.status);
+
       const data = (await res.json().catch(() => null)) as
         | DocumentsResponse
+        | { error?: string }
         | null;
 
+      debugLog("STEP 7: Upload response body", data);
+
       if (!res.ok) {
-        throw new Error(data?.error || "Upload failed.");
+        throw new Error(extractErrorMessage(data) || "Upload failed.");
       }
 
-      // Do not trust optimistic state or upload response as final truth.
-      // Always refresh from the backend.
-      await fetchDocuments(conversationId, { silent: true });
+      debugLog("STEP 8: Upload succeeded. Refreshing documents from server...");
+
+      const refreshedDocs = await fetchDocuments(conversationId, {
+        silent: true,
+      });
+
+      debugLog("STEP 9: Refreshed documents", refreshedDocs);
     } catch (error) {
+      console.error("STEP 10: Upload error", error);
+
       setDocumentError(
         error instanceof Error ? error.message : "Upload failed."
       );
+
       await fetchDocuments(conversationId, { silent: true });
     } finally {
       setIsUploadingDocuments(false);
