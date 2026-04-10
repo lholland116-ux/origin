@@ -66,6 +66,8 @@ const MAX_INPUT_LENGTH = 2000;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
+const DOCUMENT_POLL_INTERVAL_MS = 2000;
+const DOCUMENT_POLL_MAX_ATTEMPTS = 10;
 
 const PRODUCT_DESCRIPTION =
   "A multimodal AI workspace for chat, image understanding, document analysis, and web-assisted answers with saved conversation history.";
@@ -83,6 +85,10 @@ const USER_BUBBLE_CLASS = "w-full max-w-2xl";
 
 function createId() {
   return crypto.randomUUID();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fileToProcessedDataUrl(file: File): Promise<string> {
@@ -156,10 +162,16 @@ function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
   if (!Array.isArray(input)) return [];
 
   return input
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item && typeof item === "object")
+    )
     .map((item) => ({
       id: typeof item.id === "string" ? item.id : createId(),
-      file_name: typeof item.file_name === "string" ? item.file_name : "Untitled document",
+      file_name:
+        typeof item.file_name === "string"
+          ? item.file_name
+          : "Untitled document",
       mime_type: typeof item.mime_type === "string" ? item.mime_type : "",
       size_bytes: typeof item.size_bytes === "number" ? item.size_bytes : 0,
       extraction_status:
@@ -192,7 +204,9 @@ export default function ChatClient({
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
 
-  const [attachedDocuments, setAttachedDocuments] = useState<UploadedDocument[]>([]);
+  const [attachedDocuments, setAttachedDocuments] = useState<UploadedDocument[]>(
+    []
+  );
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
   const [documentError, setDocumentError] = useState("");
 
@@ -209,6 +223,25 @@ export default function ChatClient({
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const activeDocumentPollRef = useRef(0);
+
+  const readyDocumentIds = useMemo(
+    () =>
+      attachedDocuments
+        .filter((doc) => doc.extraction_status === "ready")
+        .map((doc) => doc.id),
+    [attachedDocuments]
+  );
+
+  const hasPendingDocuments = useMemo(
+    () =>
+      attachedDocuments.some(
+        (doc) =>
+          doc.extraction_status === "uploading" ||
+          doc.extraction_status === "processing"
+      ),
+    [attachedDocuments]
+  );
 
   const modeLabel = useMemo(() => {
     if (useWebSearch) return "Using web search";
@@ -219,14 +252,6 @@ export default function ChatClient({
 
   const isLimitReached = Boolean(
     usage && usage.limit > 0 && usage.remaining <= 0
-  );
-
-  const readyDocumentIds = useMemo(
-    () =>
-      attachedDocuments
-        .filter((doc) => doc.extraction_status === "ready")
-        .map((doc) => doc.id),
-    [attachedDocuments]
   );
 
   useEffect(() => {
@@ -250,10 +275,46 @@ export default function ChatClient({
     void fetchDocuments(conversationId);
   }, [conversationId]);
 
+  useEffect(() => {
+    if (!conversationId || !hasPendingDocuments) {
+      return;
+    }
+
+    const pollId = ++activeDocumentPollRef.current;
+
+    void (async () => {
+      for (let attempt = 0; attempt < DOCUMENT_POLL_MAX_ATTEMPTS; attempt++) {
+        await sleep(DOCUMENT_POLL_INTERVAL_MS);
+
+        if (pollId !== activeDocumentPollRef.current) {
+          return;
+        }
+
+        const docs = await fetchDocuments(conversationId, { silent: true });
+        if (!docs) return;
+
+        const stillPending = docs.some(
+          (doc) =>
+            doc.extraction_status === "uploading" ||
+            doc.extraction_status === "processing"
+        );
+
+        if (!stillPending) {
+          return;
+        }
+      }
+    })();
+
+    return () => {
+      activeDocumentPollRef.current++;
+    };
+  }, [conversationId, hasPendingDocuments]);
+
   function clearImage() {
     setImageBase64(null);
     setImageName("");
     setImagePath(null);
+
     if (imageInputRef.current) {
       imageInputRef.current.value = "";
     }
@@ -262,6 +323,7 @@ export default function ChatClient({
   function clearDocuments() {
     setAttachedDocuments([]);
     setDocumentError("");
+    activeDocumentPollRef.current++;
   }
 
   function updateAssistantMessage(
@@ -316,31 +378,45 @@ export default function ChatClient({
     }
   }
 
-  async function fetchDocuments(targetConversationId: string) {
+  async function fetchDocuments(
+    targetConversationId: string,
+    options?: { silent?: boolean }
+  ): Promise<UploadedDocument[] | null> {
     if (!targetConversationId) {
       clearDocuments();
-      return;
+      return [];
     }
 
     try {
-      setDocumentError("");
+      if (!options?.silent) {
+        setDocumentError("");
+      }
 
       const res = await fetch(
-        `/api/documents?conversationId=${encodeURIComponent(targetConversationId)}`,
+        `/api/documents?conversationId=${encodeURIComponent(
+          targetConversationId
+        )}`,
         { cache: "no-store" }
       );
 
       if (!res.ok) {
-        const data = (await res.json().catch(() => null)) as DocumentsResponse | null;
+        const data = (await res.json().catch(() => null)) as
+          | DocumentsResponse
+          | null;
         throw new Error(data?.error || "Failed to load documents.");
       }
 
       const data = (await res.json()) as DocumentsResponse;
-      setAttachedDocuments(normalizeUploadedDocuments(data.documents));
+      const normalized = normalizeUploadedDocuments(data.documents);
+      setAttachedDocuments(normalized);
+      return normalized;
     } catch (error) {
-      setDocumentError(
-        error instanceof Error ? error.message : "Failed to load documents."
-      );
+      if (!options?.silent) {
+        setDocumentError(
+          error instanceof Error ? error.message : "Failed to load documents."
+        );
+      }
+      return null;
     }
   }
 
@@ -447,23 +523,22 @@ export default function ChatClient({
         body: formData,
       });
 
-      const data = (await res.json().catch(() => null)) as DocumentsResponse | null;
+      const data = (await res.json().catch(() => null)) as
+        | DocumentsResponse
+        | null;
 
       if (!res.ok) {
         throw new Error(data?.error || "Upload failed.");
       }
 
-      const uploadedDocs = normalizeUploadedDocuments(data?.documents);
-
-      setAttachedDocuments((prev) => {
-        const withoutOptimistic = prev.filter((doc) => !doc.id.startsWith("temp-"));
-        return [...withoutOptimistic, ...uploadedDocs];
-      });
+      // Do not trust optimistic state or upload response as final truth.
+      // Always refresh from the backend.
+      await fetchDocuments(conversationId, { silent: true });
     } catch (error) {
-      setAttachedDocuments((prev) => prev.filter((doc) => !doc.id.startsWith("temp-")));
       setDocumentError(
         error instanceof Error ? error.message : "Upload failed."
       );
+      await fetchDocuments(conversationId, { silent: true });
     } finally {
       setIsUploadingDocuments(false);
     }
@@ -753,6 +828,13 @@ export default function ChatClient({
       return;
     }
 
+    if (hasPendingDocuments) {
+      setUiError(
+        "Please wait for attached documents to finish processing before sending."
+      );
+      return;
+    }
+
     if (!trimmed && !hasImage) {
       if (hasReadyDocuments) {
         setInput("Please summarize the attached document(s).");
@@ -765,7 +847,8 @@ export default function ChatClient({
     setDocumentError("");
 
     const effectiveMessage =
-      trimmed || (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
+      trimmed ||
+      (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
 
     const attachmentNotes = [
       hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "",
@@ -891,7 +974,7 @@ export default function ChatClient({
 
       await refreshConversations(conversationId);
       await fetchUsage();
-      await fetchDocuments(conversationId);
+      await fetchDocuments(conversationId, { silent: true });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         updateAssistantMessage(assistantId, (msg) => ({
@@ -1039,7 +1122,9 @@ export default function ChatClient({
                   )}
 
                   {usageError && (
-                    <div className="mt-2 text-xs text-red-400">{usageError}</div>
+                    <div className="mt-2 text-xs text-red-400">
+                      {usageError}
+                    </div>
                   )}
 
                   {uiError && (
@@ -1047,7 +1132,9 @@ export default function ChatClient({
                   )}
 
                   {documentError && (
-                    <div className="mt-2 text-xs text-red-400">{documentError}</div>
+                    <div className="mt-2 text-xs text-red-400">
+                      {documentError}
+                    </div>
                   )}
                 </div>
 
@@ -1339,12 +1426,16 @@ export default function ChatClient({
                         )}
 
                         {isStreamingAssistant ? (
-                          <span className="ml-1 inline-block animate-pulse">▍</span>
+                          <span className="ml-1 inline-block animate-pulse">
+                            ▍
+                          </span>
                         ) : null}
                       </div>
 
                       {sources.length > 0 && (
-                        <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto space-y-2`}>
+                        <div
+                          className={`${ASSISTANT_BUBBLE_CLASS} mx-auto space-y-2`}
+                        >
                           {sources.map((source, index) => (
                             <a
                               key={`${source.url}-${index}`}
@@ -1377,7 +1468,7 @@ export default function ChatClient({
                       ? "Using web search..."
                       : uploadingImage
                         ? "Processing image..."
-                        : isUploadingDocuments
+                        : isUploadingDocuments || hasPendingDocuments
                           ? "Processing documents..."
                           : "Thinking..."}
                   </div>
@@ -1396,7 +1487,11 @@ export default function ChatClient({
                 accept="image/*"
                 onChange={handleImageChange}
                 disabled={
-                  loading || uploadingImage || isUploadingDocuments || isLimitReached || useWebSearch
+                  loading ||
+                  uploadingImage ||
+                  isUploadingDocuments ||
+                  isLimitReached ||
+                  useWebSearch
                 }
                 className="hidden"
               />
@@ -1409,16 +1504,14 @@ export default function ChatClient({
                         key={doc.id}
                         name={doc.file_name}
                         status={
-                          doc.extraction_status === "processing"
-                            ? "uploading"
-                            : doc.extraction_status === "uploading"
-                              ? "uploading"
-                              : doc.extraction_status === "ready"
-                                ? "ready"
-                                : "failed"
+                          doc.extraction_status === "ready"
+                            ? "ready"
+                            : doc.extraction_status === "failed"
+                              ? "failed"
+                              : "uploading"
                         }
                         onRemove={
-                          loading || isUploadingDocuments
+                          loading || isUploadingDocuments || hasPendingDocuments
                             ? undefined
                             : () => removeAttachedDocument(doc.id)
                         }
@@ -1460,14 +1553,24 @@ export default function ChatClient({
                 {!useWebSearch && (
                   <div className="flex gap-2">
                     <DocumentUploadButton
-                      disabled={loading || uploadingImage || isUploadingDocuments || isLimitReached}
+                      disabled={
+                        loading ||
+                        uploadingImage ||
+                        isUploadingDocuments ||
+                        isLimitReached
+                      }
                       onFilesSelected={handleFilesSelected}
                     />
 
                     <button
                       type="button"
                       onClick={handleOpenImagePicker}
-                      disabled={loading || uploadingImage || isUploadingDocuments || isLimitReached}
+                      disabled={
+                        loading ||
+                        uploadingImage ||
+                        isUploadingDocuments ||
+                        isLimitReached
+                      }
                       className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-neutral-700 bg-neutral-900 text-xl text-white transition hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label="Attach image"
                       title="Attach image"
@@ -1495,11 +1598,18 @@ export default function ChatClient({
                       : imageBase64
                         ? "Add context for the image, or send without text..."
                         : attachedDocuments.length > 0
-                          ? "Ask about the attached documents..."
+                          ? hasPendingDocuments
+                            ? "Please wait while documents finish processing..."
+                            : "Ask about the attached documents..."
                           : "Ask something..."
                   }
                   maxLength={MAX_INPUT_LENGTH}
-                  disabled={loading || uploadingImage || isUploadingDocuments || isLimitReached}
+                  disabled={
+                    loading ||
+                    uploadingImage ||
+                    isUploadingDocuments ||
+                    isLimitReached
+                  }
                 />
 
                 {loading ? (
@@ -1517,6 +1627,7 @@ export default function ChatClient({
                       uploadingImage ||
                       isUploadingDocuments ||
                       isLimitReached ||
+                      hasPendingDocuments ||
                       (!imageBase64 &&
                         readyDocumentIds.length === 0 &&
                         input.trim().length === 0)
