@@ -2,6 +2,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
+import { buildDocumentContext } from "@/lib/documents/prepare-context";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,7 @@ const MIN_IMAGE_BASE64_LENGTH = 1_000;
 const MIN_ACCEPTABLE_REPLY_LENGTH = 10;
 const MAX_IMAGE_PATH_LENGTH = 500;
 const MAX_IMAGE_NAME_LENGTH = 255;
+const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 
 type ChatRequestBody = {
@@ -22,6 +24,7 @@ type ChatRequestBody = {
   imageBase64?: string;
   imagePath?: string;
   imageName?: string;
+  documentIds?: string[];
 };
 
 type DbMessage = {
@@ -37,6 +40,13 @@ type ConversationRow = {
   title: string;
 };
 
+type DocumentContextRow = {
+  id: string;
+  file_name: string;
+  extracted_text: string | null;
+  extraction_status: "pending" | "processing" | "ready" | "failed";
+};
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -47,20 +57,35 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function normalizeMessage(input: unknown): string {
+function normalizeString(input: unknown): string {
   return typeof input === "string" ? input.trim() : "";
+}
+
+function normalizeMessage(input: unknown): string {
+  return normalizeString(input);
 }
 
 function normalizeImageBase64(input: unknown): string {
-  return typeof input === "string" ? input.trim() : "";
+  return normalizeString(input);
 }
 
 function normalizeImagePath(input: unknown): string {
-  return typeof input === "string" ? input.trim() : "";
+  return normalizeString(input);
 }
 
 function normalizeImageName(input: unknown): string {
-  return typeof input === "string" ? input.trim() : "";
+  return normalizeString(input);
+}
+
+function normalizeDocumentIds(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+
+  const ids = input
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(ids)).slice(0, MAX_DOCUMENT_IDS);
 }
 
 function sanitizeTitle(title: string, fallback: string): string {
@@ -95,6 +120,91 @@ function buildImageAnalysisInstruction(latestMessage: string): string {
   return "Carefully analyze this image. Describe everything you can see in detail. If there is text, extract it clearly. If the image is unclear, explain what might be happening and note any uncertainty.";
 }
 
+function buildSystemInstructions(hasDocumentContext: boolean): string {
+  const base = [SYSTEM_PROMPT.trim()];
+
+  if (hasDocumentContext) {
+    base.push(
+      "When document context is provided, use it as the primary source of truth.",
+      "If the answer is not contained in the document context, say so clearly.",
+      "Do not fabricate document details, quotations, or conclusions."
+    );
+  }
+
+  return base.join("\n\n");
+}
+
+function buildLatestUserContent(params: {
+  latestMessage: string;
+  imageBase64: string;
+  documentContext: string;
+}) {
+  const { latestMessage, imageBase64, documentContext } = params;
+
+  const effectiveText = imageBase64
+    ? buildImageAnalysisInstruction(latestMessage)
+    : latestMessage;
+
+  const userText = documentContext
+    ? `${documentContext}\n\nUser question:\n${effectiveText}`
+    : effectiveText;
+
+  if (imageBase64) {
+    return [
+      {
+        type: "input_text" as const,
+        text: userText,
+      },
+      {
+        type: "input_image" as const,
+        image_url: imageBase64,
+        detail: "auto" as const,
+      },
+    ];
+  }
+
+  return userText;
+}
+
+function buildResponsesInput(params: {
+  history: DbMessage[];
+  latestMessage: string;
+  imageBase64: string;
+  documentContext: string;
+}) {
+  const { history, latestMessage, imageBase64, documentContext } = params;
+
+  const priorMessages = history.slice(0, -1).map((msg) => ({
+    role: msg.role,
+    content: msg.content,
+  }));
+
+  const latestUserInput = {
+    role: "user" as const,
+    content: buildLatestUserContent({
+      latestMessage,
+      imageBase64,
+      documentContext,
+    }),
+  };
+
+  return [...priorMessages, latestUserInput];
+}
+
+async function createRetryResponse(params: {
+  input: ReturnType<typeof buildResponsesInput>;
+  hasDocumentContext: boolean;
+}) {
+  const { input, hasDocumentContext } = params;
+
+  return openai.responses.create({
+    model: "gpt-4.1",
+    instructions: buildSystemInstructions(hasDocumentContext),
+    input,
+    store: false,
+  } as never);
+}
+
 async function generateConversationTitle(message: string): Promise<string> {
   try {
     const titleResponse = await openai.responses.create({
@@ -114,50 +224,29 @@ async function generateConversationTitle(message: string): Promise<string> {
   }
 }
 
-function buildResponsesInput(params: {
-  history: DbMessage[];
-  latestMessage: string;
-  imageBase64: string;
+async function loadDocumentContext(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+  documentIds: string[];
 }) {
-  const { history, latestMessage, imageBase64 } = params;
+  const { supabase, userId, documentIds } = params;
 
-  const priorMessages = history.slice(0, -1).map((msg) => ({
-    role: msg.role,
-    content: msg.content,
-  }));
+  if (documentIds.length === 0) {
+    return "";
+  }
 
-  const latestUserInput = imageBase64
-    ? {
-        role: "user" as const,
-        content: [
-          {
-            type: "input_text" as const,
-            text: buildImageAnalysisInstruction(latestMessage),
-          },
-          {
-            type: "input_image" as const,
-            image_url: imageBase64,
-            detail: "auto" as const,
-          },
-        ],
-      }
-    : {
-        role: "user" as const,
-        content: latestMessage || history[history.length - 1]?.content || "",
-      };
+  const { data, error } = await supabase
+    .from("documents")
+    .select("id, file_name, extracted_text, extraction_status")
+    .eq("user_id", userId)
+    .in("id", documentIds)
+    .eq("extraction_status", "ready");
 
-  return [...priorMessages, latestUserInput];
-}
+  if (error) {
+    throw new Error(`Failed to load document context: ${error.message}`);
+  }
 
-async function createRetryResponse(
-  input: ReturnType<typeof buildResponsesInput>
-) {
-  return openai.responses.create({
-    model: "gpt-4.1",
-    instructions: SYSTEM_PROMPT,
-    input,
-    store: false,
-  } as never);
+  return buildDocumentContext((data ?? []) as DocumentContextRow[]);
 }
 
 export async function POST(req: Request) {
@@ -181,12 +270,13 @@ export async function POST(req: Request) {
     }
 
     const conversationId =
-      typeof body.conversationId === "string" ? body.conversationId : "";
+      typeof body.conversationId === "string" ? body.conversationId.trim() : "";
     const message = normalizeMessage(body.message);
     const regenerate = Boolean(body.regenerate);
     const imageBase64 = normalizeImageBase64(body.imageBase64);
     const imagePath = normalizeImagePath(body.imagePath);
     const imageName = normalizeImageName(body.imageName);
+    const documentIds = normalizeDocumentIds(body.documentIds);
 
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);
@@ -324,16 +414,14 @@ export async function POST(req: Request) {
         Boolean(imageBase64)
       );
 
-      const { error: insertUserError } = await supabase
-        .from("messages")
-        .insert({
-          conversation_id: conversationId,
-          user_id: user.id,
-          role: "user",
-          content: storedUserContent,
-          image_path: imagePath || null,
-          image_name: imageName || null,
-        });
+      const { error: insertUserError } = await supabase.from("messages").insert({
+        conversation_id: conversationId,
+        user_id: user.id,
+        role: "user",
+        content: storedUserContent,
+        image_path: imagePath || null,
+        image_name: imageName || null,
+      });
 
       if (insertUserError) {
         console.error("User message insert error:", insertUserError);
@@ -366,10 +454,23 @@ export async function POST(req: Request) {
       ? recentHistory[recentHistory.length - 1]?.content ?? ""
       : message || recentHistory[recentHistory.length - 1]?.content || "";
 
+    let documentContext = "";
+    try {
+      documentContext = await loadDocumentContext({
+        supabase,
+        userId: user.id,
+        documentIds,
+      });
+    } catch (error) {
+      console.error("Document context load error:", error);
+      return jsonResponse({ error: "Failed to load document context." }, 500);
+    }
+
     const input = buildResponsesInput({
       history: recentHistory,
       latestMessage: latestUserMessage,
       imageBase64,
+      documentContext,
     }) as never;
 
     const encoder = new TextEncoder();
@@ -382,12 +483,14 @@ export async function POST(req: Request) {
             console.log("Image included:", Boolean(imageBase64));
             console.log("Image length:", imageBase64 ? imageBase64.length : 0);
             console.log("Image path included:", Boolean(imagePath));
+            console.log("Document IDs included:", documentIds.length);
+            console.log("Document context length:", documentContext.length);
             console.log("Latest user message:", latestUserMessage);
           }
 
           const responseStream = (await openai.responses.create({
             model: "gpt-4.1",
-            instructions: SYSTEM_PROMPT,
+            instructions: buildSystemInstructions(Boolean(documentContext)),
             input,
             stream: true,
             store: false,
@@ -421,7 +524,10 @@ export async function POST(req: Request) {
             console.warn("Weak or empty image response detected. Retrying once.");
 
             try {
-              const retry = await createRetryResponse(input);
+              const retry = await createRetryResponse({
+                input,
+                hasDocumentContext: Boolean(documentContext),
+              });
               const retryText = retry.output_text?.trim() ?? "";
 
               if (!isWeakReply(retryText)) {
@@ -434,7 +540,7 @@ export async function POST(req: Request) {
 
           const persistedReply =
             finalReply ||
-            "I couldn’t fully analyze this image. Try uploading a clearer image or adding a short description of what you want to know.";
+            "I couldn’t generate a complete response. Try again, upload a clearer image, or ask a more specific question.";
 
           if (isWeakReply(streamedReply) && persistedReply !== streamedReply) {
             controller.enqueue(encoder.encode(`\n\n${persistedReply}`));

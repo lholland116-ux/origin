@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import DocumentUploadButton from "@/components/DocumentUploadButton";
+import DocumentChip from "@/components/DocumentChip";
+import { validateFiles } from "@/lib/documents/validate-upload";
 
 type SourceItem = {
   title: string;
@@ -26,6 +29,15 @@ type ConversationItem = {
   updated_at: string;
 };
 
+type UploadedDocument = {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  extraction_status: "uploading" | "processing" | "ready" | "failed";
+  conversation_id: string | null;
+};
+
 type ChatClientProps = {
   userEmail: string;
   initialConversationId: string;
@@ -45,18 +57,23 @@ type UsageState = {
   remaining: number;
 };
 
+type DocumentsResponse = {
+  documents?: UploadedDocument[];
+  error?: string;
+};
+
 const MAX_INPUT_LENGTH = 2000;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
 
 const PRODUCT_DESCRIPTION =
-  "A multimodal AI workspace for chat, image understanding, and web-assisted answers with saved conversation history.";
+  "A multimodal AI workspace for chat, image understanding, document analysis, and web-assisted answers with saved conversation history.";
 
 const CONVERSATION_STARTERS = [
   "Summarize this image for me",
+  "Summarize this document for me",
   "Help me brainstorm a SaaS feature",
-  "Write code for a small web feature",
   "Explain something step by step",
 ];
 
@@ -135,6 +152,28 @@ async function fileToProcessedDataUrl(file: File): Promise<string> {
   return processedDataUrl;
 }
 
+function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : createId(),
+      file_name: typeof item.file_name === "string" ? item.file_name : "Untitled document",
+      mime_type: typeof item.mime_type === "string" ? item.mime_type : "",
+      size_bytes: typeof item.size_bytes === "number" ? item.size_bytes : 0,
+      extraction_status:
+        item.extraction_status === "uploading" ||
+        item.extraction_status === "processing" ||
+        item.extraction_status === "ready" ||
+        item.extraction_status === "failed"
+          ? item.extraction_status
+          : "failed",
+      conversation_id:
+        typeof item.conversation_id === "string" ? item.conversation_id : null,
+    }));
+}
+
 export default function ChatClient({
   userEmail,
   initialConversationId,
@@ -153,6 +192,10 @@ export default function ChatClient({
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
 
+  const [attachedDocuments, setAttachedDocuments] = useState<UploadedDocument[]>([]);
+  const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
+  const [documentError, setDocumentError] = useState("");
+
   const [conversationId, setConversationId] = useState(initialConversationId);
   const [conversations, setConversations] =
     useState<ConversationItem[]>(initialConversations);
@@ -165,16 +208,25 @@ export default function ChatClient({
 
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   const modeLabel = useMemo(() => {
     if (useWebSearch) return "Using web search";
     if (imageBase64) return "Image attached";
+    if (attachedDocuments.length > 0) return "Documents attached";
     return "Standard assistant";
-  }, [useWebSearch, imageBase64]);
+  }, [useWebSearch, imageBase64, attachedDocuments.length]);
 
   const isLimitReached = Boolean(
     usage && usage.limit > 0 && usage.remaining <= 0
+  );
+
+  const readyDocumentIds = useMemo(
+    () =>
+      attachedDocuments
+        .filter((doc) => doc.extraction_status === "ready")
+        .map((doc) => doc.id),
+    [attachedDocuments]
   );
 
   useEffect(() => {
@@ -194,13 +246,22 @@ export default function ChatClient({
     void fetchUsage();
   }, []);
 
+  useEffect(() => {
+    void fetchDocuments(conversationId);
+  }, [conversationId]);
+
   function clearImage() {
     setImageBase64(null);
     setImageName("");
     setImagePath(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+    if (imageInputRef.current) {
+      imageInputRef.current.value = "";
     }
+  }
+
+  function clearDocuments() {
+    setAttachedDocuments([]);
+    setDocumentError("");
   }
 
   function updateAssistantMessage(
@@ -218,9 +279,18 @@ export default function ChatClient({
     setUiError("");
   }
 
-  function handleOpenFilePicker() {
-    if (loading || uploadingImage || isLimitReached || useWebSearch) return;
-    fileInputRef.current?.click();
+  function handleOpenImagePicker() {
+    if (
+      loading ||
+      uploadingImage ||
+      isUploadingDocuments ||
+      isLimitReached ||
+      useWebSearch
+    ) {
+      return;
+    }
+
+    imageInputRef.current?.click();
   }
 
   async function fetchUsage() {
@@ -242,6 +312,34 @@ export default function ChatClient({
     } catch (error) {
       setUsageError(
         error instanceof Error ? error.message : "Failed to load usage."
+      );
+    }
+  }
+
+  async function fetchDocuments(targetConversationId: string) {
+    if (!targetConversationId) {
+      clearDocuments();
+      return;
+    }
+
+    try {
+      setDocumentError("");
+
+      const res = await fetch(
+        `/api/documents?conversationId=${encodeURIComponent(targetConversationId)}`,
+        { cache: "no-store" }
+      );
+
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as DocumentsResponse | null;
+        throw new Error(data?.error || "Failed to load documents.");
+      }
+
+      const data = (await res.json()) as DocumentsResponse;
+      setAttachedDocuments(normalizeUploadedDocuments(data.documents));
+    } catch (error) {
+      setDocumentError(
+        error instanceof Error ? error.message : "Failed to load documents."
       );
     }
   }
@@ -303,6 +401,78 @@ export default function ChatClient({
     };
   }
 
+  async function handleFilesSelected(files: File[]) {
+    if (useWebSearch) {
+      setDocumentError("Document upload is only available in Standard mode.");
+      return;
+    }
+
+    const validationError = validateFiles(files);
+    if (validationError) {
+      setDocumentError(validationError);
+      return;
+    }
+
+    if (!conversationId) {
+      setDocumentError("Missing conversationId.");
+      return;
+    }
+
+    try {
+      setIsUploadingDocuments(true);
+      setDocumentError("");
+      setUiError("");
+
+      const optimisticDocs: UploadedDocument[] = files.map((file, index) => ({
+        id: `temp-${Date.now()}-${index}`,
+        file_name: file.name,
+        mime_type: file.type,
+        size_bytes: file.size,
+        extraction_status: "uploading",
+        conversation_id: conversationId,
+      }));
+
+      setAttachedDocuments((prev) => [...prev, ...optimisticDocs]);
+
+      const formData = new FormData();
+
+      for (const file of files) {
+        formData.append("files", file);
+      }
+
+      formData.append("conversationId", conversationId);
+
+      const res = await fetch("/api/documents/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = (await res.json().catch(() => null)) as DocumentsResponse | null;
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Upload failed.");
+      }
+
+      const uploadedDocs = normalizeUploadedDocuments(data?.documents);
+
+      setAttachedDocuments((prev) => {
+        const withoutOptimistic = prev.filter((doc) => !doc.id.startsWith("temp-"));
+        return [...withoutOptimistic, ...uploadedDocs];
+      });
+    } catch (error) {
+      setAttachedDocuments((prev) => prev.filter((doc) => !doc.id.startsWith("temp-")));
+      setDocumentError(
+        error instanceof Error ? error.message : "Upload failed."
+      );
+    } finally {
+      setIsUploadingDocuments(false);
+    }
+  }
+
+  function removeAttachedDocument(id: string) {
+    setAttachedDocuments((prev) => prev.filter((doc) => doc.id !== id));
+  }
+
   async function handleSignOut() {
     try {
       setUiError("");
@@ -341,6 +511,7 @@ export default function ChatClient({
 
     setSidebarLoading(true);
     setUiError("");
+    setDocumentError("");
     clearImage();
     setInput("");
 
@@ -369,6 +540,7 @@ export default function ChatClient({
 
       setConversationId(nextConversationId);
       setMessages(nextMessages);
+      await fetchDocuments(nextConversationId);
     } catch (error) {
       setUiError(
         error instanceof Error ? error.message : "Failed to load conversation."
@@ -388,7 +560,9 @@ export default function ChatClient({
 
     setSidebarLoading(true);
     setUiError("");
+    setDocumentError("");
     clearImage();
+    clearDocuments();
     setInput("");
 
     try {
@@ -419,6 +593,7 @@ export default function ChatClient({
       await refreshConversations(newConversationId);
       setConversationId(newConversationId);
       setMessages([]);
+      setAttachedDocuments([]);
       setMobileMenuOpen(false);
     } catch (error) {
       setUiError(
@@ -554,8 +729,9 @@ export default function ChatClient({
 
     const trimmed = input.trim();
     const hasImage = Boolean(imageBase64);
+    const hasReadyDocuments = readyDocumentIds.length > 0;
 
-    if (loading || uploadingImage || (!trimmed && !hasImage)) return;
+    if (loading || uploadingImage || isUploadingDocuments) return;
 
     if (isLimitReached) {
       setUiError("You’ve reached your daily message limit.");
@@ -572,17 +748,40 @@ export default function ChatClient({
       return;
     }
 
-    if (useWebSearch && hasImage) {
-      setUiError("Web Search mode does not support image upload.");
+    if (useWebSearch && (hasImage || attachedDocuments.length > 0)) {
+      setUiError("Web Search mode does not support file upload.");
       return;
     }
 
-    setUiError("");
+    if (!trimmed && !hasImage) {
+      if (hasReadyDocuments) {
+        setInput("Please summarize the attached document(s).");
+      } else {
+        return;
+      }
+    }
 
-    const userVisibleContent =
-      trimmed || (hasImage
-        ? `[Image attached${imageName ? `: ${imageName}` : ""}]`
-        : "");
+    setUiError("");
+    setDocumentError("");
+
+    const effectiveMessage =
+      trimmed || (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
+
+    const attachmentNotes = [
+      hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "",
+      hasReadyDocuments
+        ? `[Documents attached: ${attachedDocuments
+            .filter((doc) => doc.extraction_status === "ready")
+            .map((doc) => doc.file_name)
+            .join(", ")}]`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const userVisibleContent = [effectiveMessage, attachmentNotes]
+      .filter(Boolean)
+      .join("\n\n");
 
     const userMessage: Message = {
       id: createId(),
@@ -605,6 +804,7 @@ export default function ChatClient({
     const payloadImage = imageBase64;
     const payloadImagePath = imagePath;
     const payloadImageName = imageName;
+    const payloadDocumentIds = readyDocumentIds;
 
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
@@ -626,10 +826,11 @@ export default function ChatClient({
         },
         body: JSON.stringify({
           conversationId,
-          message: trimmed,
+          message: effectiveMessage,
           imageBase64: payloadImage,
           imagePath: payloadImagePath,
           imageName: payloadImageName,
+          documentIds: payloadDocumentIds,
         }),
       });
 
@@ -690,6 +891,7 @@ export default function ChatClient({
 
       await refreshConversations(conversationId);
       await fetchUsage();
+      await fetchDocuments(conversationId);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         updateAssistantMessage(assistantId, (msg) => ({
@@ -723,10 +925,12 @@ export default function ChatClient({
 
     if (nextUseWebSearch) {
       clearImage();
+      clearDocuments();
     }
 
     setUseWebSearch(nextUseWebSearch);
     setUiError("");
+    setDocumentError("");
   }
 
   function renderConversationCard(
@@ -841,6 +1045,10 @@ export default function ChatClient({
                   {uiError && (
                     <div className="mt-2 text-xs text-red-400">{uiError}</div>
                   )}
+
+                  {documentError && (
+                    <div className="mt-2 text-xs text-red-400">{documentError}</div>
+                  )}
                 </div>
 
                 <button
@@ -927,6 +1135,10 @@ export default function ChatClient({
 
             {uiError && (
               <div className="mt-2 text-xs text-red-400">{uiError}</div>
+            )}
+
+            {documentError && (
+              <div className="mt-2 text-xs text-red-400">{documentError}</div>
             )}
 
             <div className="mt-3 flex flex-col gap-2">
@@ -1084,6 +1296,12 @@ export default function ChatClient({
                 </div>
               )}
 
+              {documentError && (
+                <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
+                  {documentError}
+                </div>
+              )}
+
               <div className="space-y-4">
                 {messages.map((message) => {
                   const sources = Array.isArray(message.sources)
@@ -1159,7 +1377,9 @@ export default function ChatClient({
                       ? "Using web search..."
                       : uploadingImage
                         ? "Processing image..."
-                        : "Thinking..."}
+                        : isUploadingDocuments
+                          ? "Processing documents..."
+                          : "Thinking..."}
                   </div>
                 )}
 
@@ -1171,15 +1391,42 @@ export default function ChatClient({
           <div className="sticky bottom-0 z-20 border-t border-neutral-800 bg-black/95 backdrop-blur">
             <div className={`${CONTENT_RAIL_CLASS} space-y-1.5 py-2.5`}>
               <input
-                ref={fileInputRef}
+                ref={imageInputRef}
                 type="file"
                 accept="image/*"
                 onChange={handleImageChange}
                 disabled={
-                  loading || uploadingImage || isLimitReached || useWebSearch
+                  loading || uploadingImage || isUploadingDocuments || isLimitReached || useWebSearch
                 }
                 className="hidden"
               />
+
+              {!useWebSearch && attachedDocuments.length > 0 && (
+                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-2">
+                  <div className="flex flex-wrap gap-2">
+                    {attachedDocuments.map((doc) => (
+                      <DocumentChip
+                        key={doc.id}
+                        name={doc.file_name}
+                        status={
+                          doc.extraction_status === "processing"
+                            ? "uploading"
+                            : doc.extraction_status === "uploading"
+                              ? "uploading"
+                              : doc.extraction_status === "ready"
+                                ? "ready"
+                                : "failed"
+                        }
+                        onRemove={
+                          loading || isUploadingDocuments
+                            ? undefined
+                            : () => removeAttachedDocument(doc.id)
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {!useWebSearch && imageBase64 && (
                 <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-2">
@@ -1211,16 +1458,23 @@ export default function ChatClient({
 
               <form onSubmit={handleSubmit} className="flex items-end gap-2">
                 {!useWebSearch && (
-                  <button
-                    type="button"
-                    onClick={handleOpenFilePicker}
-                    disabled={loading || uploadingImage || isLimitReached}
-                    className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-neutral-700 bg-neutral-900 text-xl text-white transition hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label="Attach image"
-                    title="Attach image"
-                  >
-                    +
-                  </button>
+                  <div className="flex gap-2">
+                    <DocumentUploadButton
+                      disabled={loading || uploadingImage || isUploadingDocuments || isLimitReached}
+                      onFilesSelected={handleFilesSelected}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={handleOpenImagePicker}
+                      disabled={loading || uploadingImage || isUploadingDocuments || isLimitReached}
+                      className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-neutral-700 bg-neutral-900 text-xl text-white transition hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Attach image"
+                      title="Attach image"
+                    >
+                      🖼️
+                    </button>
+                  </div>
                 )}
 
                 <input
@@ -1230,6 +1484,9 @@ export default function ChatClient({
                     if (uiError) {
                       setUiError("");
                     }
+                    if (documentError) {
+                      setDocumentError("");
+                    }
                   }}
                   className="flex-1 rounded-2xl bg-neutral-900 px-4 py-3.5 outline-none"
                   placeholder={
@@ -1237,10 +1494,12 @@ export default function ChatClient({
                       ? "Ask something with web search..."
                       : imageBase64
                         ? "Add context for the image, or send without text..."
-                        : "Ask something..."
+                        : attachedDocuments.length > 0
+                          ? "Ask about the attached documents..."
+                          : "Ask something..."
                   }
                   maxLength={MAX_INPUT_LENGTH}
-                  disabled={loading || uploadingImage || isLimitReached}
+                  disabled={loading || uploadingImage || isUploadingDocuments || isLimitReached}
                 />
 
                 {loading ? (
@@ -1256,8 +1515,11 @@ export default function ChatClient({
                     type="submit"
                     disabled={
                       uploadingImage ||
+                      isUploadingDocuments ||
                       isLimitReached ||
-                      (!imageBase64 && input.trim().length === 0)
+                      (!imageBase64 &&
+                        readyDocumentIds.length === 0 &&
+                        input.trim().length === 0)
                     }
                     className="rounded-2xl bg-white px-5 py-3.5 text-black disabled:cursor-not-allowed disabled:opacity-50"
                   >
