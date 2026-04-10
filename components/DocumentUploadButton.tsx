@@ -1,44 +1,39 @@
 "use client";
 
-import { useRef } from "react";
-import { Plus } from "lucide-react";
-
 type Props = {
-  disabled?: boolean;
   onFilesSelected: (files: File[]) => void;
+  disabled?: boolean;
 };
 
 export default function DocumentUploadButton({
-  disabled,
   onFilesSelected,
+  disabled,
 }: Props) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
   return (
-    <>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => inputRef.current?.click()}
-        className="inline-flex h-10 w-10 items-center justify-center rounded-full border hover:bg-muted disabled:opacity-50"
-        aria-label="Upload document"
-        title="Upload document"
-      >
-        <Plus className="h-5 w-5" />
-      </button>
-
+    <label className="cursor-pointer">
       <input
-        ref={inputRef}
         type="file"
         multiple
-        accept=".pdf,.docx,.txt,.md,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv"
         className="hidden"
+        disabled={disabled}
         onChange={(e) => {
-          const files = Array.from(e.target.files ?? []);
-          if (files.length) onFilesSelected(files);
-          e.currentTarget.value = "";
+          const files = e.target.files;
+          if (!files) return;
+
+          const fileArray = Array.from(files);
+
+          console.log("UPLOAD BUTTON FILES:", fileArray);
+
+          onFilesSelected(fileArray);
+
+          // reset input so same file can be selected again
+          e.target.value = "";
         }}
       />
-    </>
+
+      <div className="flex h-[52px] w-[52px] items-center justify-center rounded-2xl border border-neutral-700 bg-neutral-900 text-xl text-white hover:border-neutral-500">
+        +
+      </div>
+    </label>
   );
 }
