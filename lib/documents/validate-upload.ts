@@ -1,6 +1,11 @@
-import { DOCUMENT_LIMITS } from "@/lib/documents/config";
+import {
+  DOCUMENT_LIMITS,
+  formatMaxFileSize,
+  isAllowedDocumentExtension,
+  isAllowedDocumentMimeType,
+} from "@/lib/documents/config";
 
-export function validateFiles(files: File[]) {
+export function validateFiles(files: File[]): string | null {
   if (!files.length) {
     return "No files selected.";
   }
@@ -10,12 +15,27 @@ export function validateFiles(files: File[]) {
   }
 
   for (const file of files) {
-    if (!DOCUMENT_LIMITS.allowedMimeTypes.includes(file.type as any)) {
-      return `Unsupported file type: ${file.name}`;
+    const fileName = file.name?.trim() || "Unnamed file";
+    const mimeType = file.type?.trim() || "";
+
+    if (file.size <= 0) {
+      return `File is empty: ${fileName}`;
     }
 
     if (file.size > DOCUMENT_LIMITS.maxFileSizeBytes) {
-      return `File exceeds 10 MB: ${file.name}`;
+      return `File exceeds ${formatMaxFileSize(
+        DOCUMENT_LIMITS.maxFileSizeBytes
+      )}: ${fileName}`;
+    }
+
+    const hasAllowedMimeType = mimeType
+      ? isAllowedDocumentMimeType(mimeType)
+      : false;
+
+    const hasAllowedExtension = isAllowedDocumentExtension(fileName);
+
+    if (!hasAllowedMimeType && !hasAllowedExtension) {
+      return `Unsupported file type: ${fileName}`;
     }
   }
 

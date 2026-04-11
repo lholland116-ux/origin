@@ -61,22 +61,6 @@ function normalizeString(input: unknown): string {
   return typeof input === "string" ? input.trim() : "";
 }
 
-function normalizeMessage(input: unknown): string {
-  return normalizeString(input);
-}
-
-function normalizeImageBase64(input: unknown): string {
-  return normalizeString(input);
-}
-
-function normalizeImagePath(input: unknown): string {
-  return normalizeString(input);
-}
-
-function normalizeImageName(input: unknown): string {
-  return normalizeString(input);
-}
-
 function normalizeDocumentIds(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
 
@@ -127,7 +111,8 @@ function buildSystemInstructions(hasDocumentContext: boolean): string {
     base.push(
       "When document context is provided, use it as the primary source of truth.",
       "If the answer is not contained in the document context, say so clearly.",
-      "Do not fabricate document details, quotations, or conclusions."
+      "Do not fabricate document details, quotations, findings, or conclusions.",
+      "If multiple documents are provided, synthesize them carefully and mention disagreements or missing information when relevant."
     );
   }
 
@@ -269,13 +254,12 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Invalid JSON body." }, 400);
     }
 
-    const conversationId =
-      typeof body.conversationId === "string" ? body.conversationId.trim() : "";
-    const message = normalizeMessage(body.message);
+    const conversationId = normalizeString(body.conversationId);
+    const message = normalizeString(body.message);
     const regenerate = Boolean(body.regenerate);
-    const imageBase64 = normalizeImageBase64(body.imageBase64);
-    const imagePath = normalizeImagePath(body.imagePath);
-    const imageName = normalizeImageName(body.imageName);
+    const imageBase64 = normalizeString(body.imageBase64);
+    const imagePath = normalizeString(body.imagePath);
+    const imageName = normalizeString(body.imageName);
     const documentIds = normalizeDocumentIds(body.documentIds);
 
     if (!conversationId) {
@@ -479,15 +463,6 @@ export async function POST(req: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          if (IS_DEV) {
-            console.log("Image included:", Boolean(imageBase64));
-            console.log("Image length:", imageBase64 ? imageBase64.length : 0);
-            console.log("Image path included:", Boolean(imagePath));
-            console.log("Document IDs included:", documentIds.length);
-            console.log("Document context length:", documentContext.length);
-            console.log("Latest user message:", latestUserMessage);
-          }
-
           const responseStream = (await openai.responses.create({
             model: "gpt-4.1",
             instructions: buildSystemInstructions(Boolean(documentContext)),
@@ -513,16 +488,10 @@ export async function POST(req: Request) {
             }
           }
 
-          if (IS_DEV) {
-            console.log("Reply length:", fullReply.length);
-          }
-
           const streamedReply = fullReply.trim();
           let finalReply = streamedReply;
 
           if (imageBase64 && isWeakReply(finalReply)) {
-            console.warn("Weak or empty image response detected. Retrying once.");
-
             try {
               const retry = await createRetryResponse({
                 input,
