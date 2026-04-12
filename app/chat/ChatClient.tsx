@@ -35,6 +35,7 @@ type UploadedDocument = {
   mime_type: string;
   size_bytes: number;
   extraction_status: "uploading" | "processing" | "ready" | "failed";
+  extraction_error?: string | null;
   conversation_id: string | null;
 };
 
@@ -68,7 +69,18 @@ const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
 const DOCUMENT_POLL_INTERVAL_MS = 2000;
 const DOCUMENT_POLL_MAX_ATTEMPTS = 10;
-const ENABLE_UPLOAD_DEBUG = true;
+const DOCUMENT_UPLOAD_TIMEOUT_MS = 30_000;
+const ENABLE_UPLOAD_DEBUG = process.env.NODE_ENV !== "production";
+
+const ALLOWED_DOCUMENT_MIME_TYPES = [
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/csv",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+] as const;
 
 const PRODUCT_DESCRIPTION =
   "A multimodal AI workspace for chat, image understanding, document analysis, and web-assisted answers with saved conversation history.";
@@ -104,6 +116,60 @@ function extractErrorMessage(data: unknown): string | null {
   return typeof maybeError === "string" && maybeError.trim()
     ? maybeError
     : null;
+}
+
+function inferMimeType(file: File): string {
+  const declaredType = file.type?.trim();
+  if (declaredType) {
+    return declaredType;
+  }
+
+  const lowerName = file.name.toLowerCase();
+
+  if (lowerName.endsWith(".pdf")) return "application/pdf";
+  if (lowerName.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (lowerName.endsWith(".xlsx")) {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
+  if (lowerName.endsWith(".csv")) return "text/csv";
+  if (lowerName.endsWith(".txt")) return "text/plain";
+  if (lowerName.endsWith(".md")) return "text/markdown";
+
+  return "application/octet-stream";
+}
+
+function isAllowedUploadMimeType(mimeType: string, fileName: string): boolean {
+  return (
+    ALLOWED_DOCUMENT_MIME_TYPES.includes(
+      mimeType as (typeof ALLOWED_DOCUMENT_MIME_TYPES)[number]
+    ) ||
+    fileName.toLowerCase().endsWith(".xlsx") ||
+    fileName.toLowerCase().endsWith(".csv") ||
+    fileName.toLowerCase().endsWith(".txt") ||
+    fileName.toLowerCase().endsWith(".md") ||
+    fileName.toLowerCase().endsWith(".docx") ||
+    fileName.toLowerCase().endsWith(".pdf")
+  );
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function fileToProcessedDataUrl(file: File): Promise<string> {
@@ -196,6 +262,10 @@ function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
         item.extraction_status === "failed"
           ? item.extraction_status
           : "failed",
+      extraction_error:
+        typeof item.extraction_error === "string"
+          ? item.extraction_error
+          : null,
       conversation_id:
         typeof item.conversation_id === "string" ? item.conversation_id : null,
     }));
@@ -299,7 +369,8 @@ export default function ChatClient({
 
     void (async () => {
       for (let attempt = 0; attempt < DOCUMENT_POLL_MAX_ATTEMPTS; attempt++) {
-        await sleep(DOCUMENT_POLL_INTERVAL_MS);
+        const delay = DOCUMENT_POLL_INTERVAL_MS * (attempt + 1);
+        await sleep(delay);
 
         if (pollId !== activeDocumentPollRef.current) {
           return;
@@ -440,9 +511,9 @@ export default function ChatClient({
       return normalized;
     } catch (error) {
       if (!options?.silent) {
-        setDocumentError(
-          error instanceof Error ? error.message : "Failed to load documents."
-        );
+        const message =
+          error instanceof Error ? error.message : "Failed to load documents.";
+        setDocumentError(message);
       }
       return null;
     }
@@ -508,6 +579,10 @@ export default function ChatClient({
   async function handleFilesSelected(files: File[]) {
     debugLog("STEP 1: Files received", files);
 
+    if (isUploadingDocuments) {
+      return;
+    }
+
     if (useWebSearch) {
       debugLog("STEP 2: Blocked because Web Search mode is active");
       setDocumentError("Document upload is only available in Standard mode.");
@@ -520,6 +595,20 @@ export default function ChatClient({
       debugLog("STEP 3: Validation failed", validationError);
       setDocumentError(validationError);
       return;
+    }
+
+    for (const file of files) {
+      const mimeType = inferMimeType(file);
+
+      if (!isAllowedUploadMimeType(mimeType, file.name)) {
+        const message = `Unsupported file type: ${file.name}`;
+        debugLog("STEP 3B: MIME fallback validation failed", {
+          fileName: file.name,
+          mimeType,
+        });
+        setDocumentError(message);
+        return;
+      }
     }
 
     debugLog("STEP 3: Validation passed");
@@ -540,9 +629,10 @@ export default function ChatClient({
       const optimisticDocs: UploadedDocument[] = files.map((file, index) => ({
         id: `temp-${Date.now()}-${index}`,
         file_name: file.name,
-        mime_type: file.type,
+        mime_type: inferMimeType(file),
         size_bytes: file.size,
         extraction_status: "uploading",
+        extraction_error: null,
         conversation_id: conversationId,
       }));
 
@@ -558,10 +648,20 @@ export default function ChatClient({
 
       debugLog("STEP 5: ABOUT TO CALL /api/documents/upload");
 
-      const res = await fetch("/api/documents/upload", {
-        method: "POST",
-        body: formData,
-      });
+      let res: Response;
+
+      try {
+        res = await fetchWithTimeout(
+          "/api/documents/upload",
+          {
+            method: "POST",
+            body: formData,
+          },
+          DOCUMENT_UPLOAD_TIMEOUT_MS
+        );
+      } catch {
+        throw new Error("Upload request failed or timed out.");
+      }
 
       debugLog("STEP 6: Upload response status", res.status);
 
@@ -573,7 +673,10 @@ export default function ChatClient({
       debugLog("STEP 7: Upload response body", data);
 
       if (!res.ok) {
-        throw new Error(extractErrorMessage(data) || "Upload failed.");
+        const errorMessage =
+          extractErrorMessage(data) || `Upload failed (status ${res.status})`;
+
+        throw new Error(errorMessage);
       }
 
       debugLog("STEP 8: Upload succeeded. Refreshing documents from server...");
@@ -586,8 +689,21 @@ export default function ChatClient({
     } catch (error) {
       console.error("STEP 10: Upload error", error);
 
-      setDocumentError(
-        error instanceof Error ? error.message : "Upload failed."
+      const message =
+        error instanceof Error ? error.message : "Upload failed.";
+
+      setDocumentError(message);
+
+      setAttachedDocuments((prev) =>
+        prev.map((doc) =>
+          doc.extraction_status === "uploading"
+            ? {
+                ...doc,
+                extraction_status: "failed",
+                extraction_error: message,
+              }
+            : doc
+        )
       );
 
       await fetchDocuments(conversationId, { silent: true });
@@ -1430,13 +1546,17 @@ export default function ChatClient({
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className={`${CONTENT_RAIL_CLASS} py-5`}>
               {uiError && (
-                <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
+                <div
+                  className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}
+                >
                   {uiError}
                 </div>
               )}
 
               {documentError && (
-                <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
+                <div
+                  className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}
+                >
                   {documentError}
                 </div>
               )}
@@ -1552,22 +1672,30 @@ export default function ChatClient({
                 <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-2">
                   <div className="flex flex-wrap gap-2">
                     {attachedDocuments.map((doc) => (
-                      <DocumentChip
+                      <div
                         key={doc.id}
-                        name={doc.file_name}
-                        status={
-                          doc.extraction_status === "ready"
-                            ? "ready"
-                            : doc.extraction_status === "failed"
-                              ? "failed"
-                              : "uploading"
+                        title={
+                          doc.extraction_status === "failed"
+                            ? doc.extraction_error || "Document processing failed."
+                            : undefined
                         }
-                        onRemove={
-                          loading || isUploadingDocuments || hasPendingDocuments
-                            ? undefined
-                            : () => removeAttachedDocument(doc.id)
-                        }
-                      />
+                      >
+                        <DocumentChip
+                          name={doc.file_name}
+                          status={
+                            doc.extraction_status === "ready"
+                              ? "ready"
+                              : doc.extraction_status === "failed"
+                                ? "failed"
+                                : "uploading"
+                          }
+                          onRemove={
+                            loading || isUploadingDocuments || hasPendingDocuments
+                              ? undefined
+                              : () => removeAttachedDocument(doc.id)
+                          }
+                        />
+                      </div>
                     ))}
                   </div>
                 </div>
