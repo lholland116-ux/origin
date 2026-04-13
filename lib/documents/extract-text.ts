@@ -5,6 +5,7 @@ const MAX_EXTRACTED_TEXT_LENGTH = 200_000;
 const MIN_MEANINGFUL_TEXT_LENGTH = 20;
 const LOW_TEXT_WARNING_PREFIX =
   "[Low text content detected — document may be scanned]\n\n";
+const PDF_PREVIEW_LENGTH = 200;
 
 function normalizeText(input: string): string {
   return input
@@ -115,8 +116,10 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
     const text = truncateText(normalized);
 
     console.log("PDF extraction result", {
+      sizeBytes: buffer.length,
       rawLength: rawText.length,
       normalizedLength: normalized.length,
+      preview: normalized.slice(0, PDF_PREVIEW_LENGTH),
     });
 
     if (!hasAnyText(normalized)) {
@@ -125,7 +128,9 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
 
     if (!hasMeaningfulText(normalized)) {
       console.warn("PDF extraction low text volume", {
+        sizeBytes: buffer.length,
         normalizedLength: normalized.length,
+        preview: normalized.slice(0, PDF_PREVIEW_LENGTH),
       });
 
       return `${LOW_TEXT_WARNING_PREFIX}${text}`;
@@ -135,9 +140,12 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown PDF parsing error.";
+    const stack = error instanceof Error ? error.stack : undefined;
 
     console.error("PDF extraction failed", {
+      sizeBytes: buffer.length,
       message,
+      stack,
     });
 
     if (/password|encrypted/i.test(message)) {
