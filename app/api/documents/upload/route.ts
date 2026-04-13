@@ -9,17 +9,30 @@ import {
 } from "@/lib/documents/config";
 import { extractTextFromFile } from "@/lib/documents/extract-text";
 
+type ExtractionStatus = "processing" | "ready" | "failed";
+
 type UploadedDocumentResponse = {
   id: string;
   file_name: string;
   mime_type: string;
   size_bytes: number;
-  extraction_status: "processing" | "ready" | "failed";
+  extraction_status: ExtractionStatus;
   extraction_error: string | null;
   conversation_id: string | null;
 };
 
-const EXTRACTION_TIMEOUT_MS = 15_000;
+type UploadDocumentsApiResponse = {
+  ok: boolean;
+  uploaded: boolean;
+  documents: UploadedDocumentResponse[];
+  summary: {
+    total: number;
+    ready: number;
+    failed: number;
+  };
+};
+
+const EXTRACTION_TIMEOUT_MS = 30_000;
 
 const allowedMimeTypes = [
   "text/plain",
@@ -116,12 +129,242 @@ function normalizeExtractionError(error: unknown, mimeType: string): string {
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return await Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Extraction timed out.")), ms)
-    ),
-  ]);
+  let timeoutId: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("Extraction timed out.")),
+          ms
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+function buildResponse(
+  documents: UploadedDocumentResponse[]
+): UploadDocumentsApiResponse {
+  const ready = documents.filter(
+    (doc) => doc.extraction_status === "ready"
+  ).length;
+  const failed = documents.filter(
+    (doc) => doc.extraction_status === "failed"
+  ).length;
+
+  return {
+    ok: true,
+    uploaded: true,
+    documents,
+    summary: {
+      total: documents.length,
+      ready,
+      failed,
+    },
+  };
+}
+
+function validateFiles(files: File[]) {
+  if (!files.length) {
+    return "No files uploaded.";
+  }
+
+  if (files.length > DOCUMENT_LIMITS.maxFilesPerMessage) {
+    return `You can upload up to ${DOCUMENT_LIMITS.maxFilesPerMessage} files per message.`;
+  }
+
+  for (const file of files) {
+    const fileName = file.name?.trim() || "Unnamed file";
+    const safeMimeType = getSafeMimeType(file);
+
+    if (file.size <= 0) {
+      return `File is empty: ${fileName}`;
+    }
+
+    if (file.size > DOCUMENT_LIMITS.maxFileSizeBytes) {
+      return `File exceeds ${formatMaxFileSize(
+        DOCUMENT_LIMITS.maxFileSizeBytes
+      )}: ${fileName}`;
+    }
+
+    const hasAllowedMimeType = safeMimeType
+      ? isAllowedMimeType(safeMimeType)
+      : false;
+
+    const hasAllowedExtension = isAllowedDocumentExtension(fileName);
+
+    if (!hasAllowedMimeType && !hasAllowedExtension) {
+      return `Unsupported file type: ${fileName}`;
+    }
+  }
+
+  return null;
+}
+
+async function processSingleFile(params: {
+  admin: ReturnType<typeof createAdminClient>;
+  userId: string;
+  conversationId: string;
+  file: File;
+}): Promise<UploadedDocumentResponse> {
+  const { admin, userId, conversationId, file } = params;
+
+  const fileName = file.name?.trim() || "Unnamed file";
+  const safeMimeType = getSafeMimeType(file) || "application/octet-stream";
+  const safeName = sanitizeFileName(fileName);
+  const storagePath = `${userId}/${conversationId}/${Date.now()}-${safeName}`;
+
+  console.log("/api/documents/upload: received file", {
+    fileName,
+    declaredMimeType: file.type || "",
+    safeMimeType,
+    sizeBytes: file.size,
+    conversationId,
+  });
+
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  const { error: uploadError } = await admin.storage
+    .from(DOCUMENT_BUCKET)
+    .upload(storagePath, buffer, {
+      contentType: safeMimeType,
+      upsert: false,
+      cacheControl: "3600",
+    });
+
+  if (uploadError) {
+    console.error("/api/documents/upload: storage upload failed", {
+      fileName,
+      safeMimeType,
+      storagePath,
+      message: uploadError.message,
+    });
+
+    throw new Error(
+      `Storage upload failed for ${fileName}: ${uploadError.message}`
+    );
+  }
+
+  const { data: inserted, error: insertError } = await admin
+    .from("documents")
+    .insert({
+      user_id: userId,
+      conversation_id: conversationId,
+      file_name: fileName,
+      mime_type: safeMimeType,
+      size_bytes: file.size,
+      storage_path: storagePath,
+      extraction_status: "processing",
+      extraction_error: null,
+    })
+    .select(
+      "id, file_name, mime_type, size_bytes, extraction_status, extraction_error, conversation_id"
+    )
+    .single();
+
+  if (insertError || !inserted) {
+    await admin.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
+
+    console.error("/api/documents/upload: database insert failed", {
+      fileName,
+      safeMimeType,
+      storagePath,
+      message: insertError?.message ?? "Insert returned no row.",
+    });
+
+    throw new Error(`Database insert failed for ${fileName}.`);
+  }
+
+  try {
+    console.log("/api/documents/upload: extraction starting", {
+      fileName,
+      mimeType: safeMimeType,
+      sizeBytes: buffer.length,
+      documentId: inserted.id,
+    });
+
+    const extractedText = await withTimeout(
+      extractTextFromFile(buffer, safeMimeType),
+      EXTRACTION_TIMEOUT_MS
+    );
+
+    if (!extractedText.trim()) {
+      throw new Error("No extractable text found.");
+    }
+
+    const { error: updateError } = await admin
+      .from("documents")
+      .update({
+        extracted_text: extractedText,
+        extraction_status: "ready",
+        extraction_error: null,
+      })
+      .eq("id", inserted.id)
+      .eq("user_id", userId);
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+
+    console.log("/api/documents/upload: extraction completed", {
+      fileName,
+      mimeType: inserted.mime_type,
+      documentId: inserted.id,
+      extractedLength: extractedText.length,
+    });
+
+    return {
+      id: inserted.id,
+      file_name: inserted.file_name,
+      mime_type: inserted.mime_type,
+      size_bytes: inserted.size_bytes,
+      extraction_status: "ready",
+      extraction_error: null,
+      conversation_id: inserted.conversation_id,
+    };
+  } catch (extractionError) {
+    const message = normalizeExtractionError(extractionError, safeMimeType);
+
+    console.error("/api/documents/upload: extraction failed", {
+      fileName,
+      mimeType: safeMimeType,
+      documentId: inserted.id,
+      message,
+    });
+
+    const { error: failedUpdateError } = await admin
+      .from("documents")
+      .update({
+        extraction_status: "failed",
+        extraction_error: message,
+      })
+      .eq("id", inserted.id)
+      .eq("user_id", userId);
+
+    if (failedUpdateError) {
+      console.error(
+        "/api/documents/upload: failed-status update error",
+        failedUpdateError
+      );
+    }
+
+    return {
+      id: inserted.id,
+      file_name: inserted.file_name,
+      mime_type: inserted.mime_type,
+      size_bytes: inserted.size_bytes,
+      extraction_status: "failed",
+      extraction_error: message,
+      conversation_id: inserted.conversation_id,
+    };
+  }
 }
 
 export async function POST(req: Request) {
@@ -154,220 +397,45 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Missing conversationId." }, 400);
     }
 
-    if (!files.length) {
-      return jsonResponse({ error: "No files uploaded." }, 400);
-    }
+    const validationError = validateFiles(files);
 
-    if (files.length > DOCUMENT_LIMITS.maxFilesPerMessage) {
-      return jsonResponse(
-        {
-          error: `You can upload up to ${DOCUMENT_LIMITS.maxFilesPerMessage} files per message.`,
-        },
-        400
-      );
+    if (validationError) {
+      return jsonResponse({ error: validationError }, 400);
     }
 
     const uploadedDocuments: UploadedDocumentResponse[] = [];
 
     for (const file of files) {
-      const fileName = file.name?.trim() || "Unnamed file";
-      const safeMimeType = getSafeMimeType(file);
-
-      console.log("/api/documents/upload: received file", {
-        fileName,
-        declaredMimeType: file.type || "",
-        safeMimeType,
-        sizeBytes: file.size,
+      const uploadedDocument = await processSingleFile({
+        admin,
+        userId: user.id,
         conversationId,
+        file,
       });
 
-      if (file.size <= 0) {
-        return jsonResponse({ error: `File is empty: ${fileName}` }, 400);
-      }
-
-      if (file.size > DOCUMENT_LIMITS.maxFileSizeBytes) {
-        return jsonResponse(
-          {
-            error: `File exceeds ${formatMaxFileSize(
-              DOCUMENT_LIMITS.maxFileSizeBytes
-            )}: ${fileName}`,
-          },
-          400
-        );
-      }
-
-      const hasAllowedMimeType = safeMimeType
-        ? isAllowedMimeType(safeMimeType)
-        : false;
-
-      const hasAllowedExtension = isAllowedDocumentExtension(fileName);
-
-      if (!hasAllowedMimeType && !hasAllowedExtension) {
-        return jsonResponse(
-          { error: `Unsupported file type: ${fileName}` },
-          400
-        );
-      }
-
-      const safeName = sanitizeFileName(fileName);
-      const storagePath = `${user.id}/${conversationId}/${Date.now()}-${safeName}`;
-
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      const { error: uploadError } = await admin.storage
-        .from(DOCUMENT_BUCKET)
-        .upload(storagePath, buffer, {
-          contentType: safeMimeType || "application/octet-stream",
-          upsert: false,
-          cacheControl: "3600",
-        });
-
-      if (uploadError) {
-        console.error("/api/documents/upload: storage upload failed", {
-          fileName,
-          safeMimeType,
-          storagePath,
-          message: uploadError.message,
-        });
-
-        return jsonResponse(
-          {
-            error: `Storage upload failed for ${fileName}: ${uploadError.message}`,
-          },
-          500
-        );
-      }
-
-      const { data: inserted, error: insertError } = await admin
-        .from("documents")
-        .insert({
-          user_id: user.id,
-          conversation_id: conversationId,
-          file_name: fileName,
-          mime_type: safeMimeType || "application/octet-stream",
-          size_bytes: file.size,
-          storage_path: storagePath,
-          extraction_status: "processing",
-          extraction_error: null,
-        })
-        .select(
-          "id, file_name, mime_type, size_bytes, extraction_status, extraction_error, conversation_id"
-        )
-        .single();
-
-      if (insertError || !inserted) {
-        await admin.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
-
-        console.error("/api/documents/upload: database insert failed", {
-          fileName,
-          safeMimeType,
-          storagePath,
-          message: insertError?.message ?? "Insert returned no row.",
-        });
-
-        return jsonResponse(
-          { error: `Database insert failed for ${fileName}.` },
-          500
-        );
-      }
-
-      try {
-        console.log("/api/documents/upload: extraction starting", {
-          fileName,
-          mimeType: safeMimeType || "application/octet-stream",
-          sizeBytes: buffer.length,
-          documentId: inserted.id,
-        });
-
-        const extractedText = await withTimeout(
-          extractTextFromFile(
-            buffer,
-            safeMimeType || "application/octet-stream"
-          ),
-          EXTRACTION_TIMEOUT_MS
-        );
-
-        if (!extractedText.trim()) {
-          throw new Error("No extractable text found.");
-        }
-
-        const { error: updateError } = await admin
-          .from("documents")
-          .update({
-            extracted_text: extractedText,
-            extraction_status: "ready",
-            extraction_error: null,
-          })
-          .eq("id", inserted.id)
-          .eq("user_id", user.id);
-
-        if (updateError) {
-          throw new Error(updateError.message);
-        }
-
-        console.log("/api/documents/upload: extraction completed", {
-          fileName,
-          mimeType: inserted.mime_type,
-          documentId: inserted.id,
-          extractedLength: extractedText.length,
-        });
-
-        uploadedDocuments.push({
-          id: inserted.id,
-          file_name: inserted.file_name,
-          mime_type: inserted.mime_type,
-          size_bytes: inserted.size_bytes,
-          extraction_status: "ready",
-          extraction_error: null,
-          conversation_id: inserted.conversation_id,
-        });
-      } catch (extractionError) {
-        const message = normalizeExtractionError(
-          extractionError,
-          safeMimeType || "application/octet-stream"
-        );
-
-        console.error("/api/documents/upload: extraction failed", {
-          fileName,
-          mimeType: safeMimeType || "application/octet-stream",
-          documentId: inserted.id,
-          message,
-        });
-
-        const { error: failedUpdateError } = await admin
-          .from("documents")
-          .update({
-            extraction_status: "failed",
-            extraction_error: message,
-          })
-          .eq("id", inserted.id)
-          .eq("user_id", user.id);
-
-        if (failedUpdateError) {
-          console.error(
-            "/api/documents/upload failed-status update error:",
-            failedUpdateError
-          );
-        }
-
-        uploadedDocuments.push({
-          id: inserted.id,
-          file_name: inserted.file_name,
-          mime_type: inserted.mime_type,
-          size_bytes: inserted.size_bytes,
-          extraction_status: "failed",
-          extraction_error: message,
-          conversation_id: inserted.conversation_id,
-        });
-      }
+      uploadedDocuments.push(uploadedDocument);
     }
 
-    return jsonResponse({ documents: uploadedDocuments });
+    return jsonResponse(buildResponse(uploadedDocuments), 200);
   } catch (error) {
-    console.error("/api/documents/upload unexpected error:", error);
+    console.error("/api/documents/upload: unexpected error", error);
+
     const message =
       error instanceof Error ? error.message : "Unexpected error.";
-    return jsonResponse({ error: message }, 500);
+
+    return jsonResponse(
+      {
+        ok: false,
+        uploaded: false,
+        error: message,
+        documents: [],
+        summary: {
+          total: 0,
+          ready: 0,
+          failed: 0,
+        },
+      },
+      500
+    );
   }
 }

@@ -47,6 +47,11 @@ type DocumentContextRow = {
   extraction_status: "pending" | "processing" | "ready" | "failed";
 };
 
+type ResponsesStreamEvent = {
+  type: string;
+  delta?: string;
+};
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -232,6 +237,53 @@ async function loadDocumentContext(params: {
   }
 
   return buildDocumentContext((data ?? []) as DocumentContextRow[]);
+}
+
+async function persistAssistantMessage(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  conversationId: string;
+  userId: string;
+  content: string;
+}) {
+  const { supabase, conversationId, userId, content } = params;
+
+  const { error } = await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    user_id: userId,
+    role: "assistant",
+    content,
+  });
+
+  if (error) {
+    console.error("Assistant message insert error:", error);
+  }
+}
+
+async function touchConversation(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  conversationId: string;
+  userId: string;
+  title?: string;
+}) {
+  const { supabase, conversationId, userId, title } = params;
+
+  const updates: Record<string, string> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (title) {
+    updates.title = title;
+  }
+
+  const { error } = await supabase
+    .from("conversations")
+    .update(updates)
+    .eq("id", conversationId)
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("Conversation update error:", error);
+  }
 }
 
 export async function POST(req: Request) {
@@ -469,10 +521,7 @@ export async function POST(req: Request) {
             input,
             stream: true,
             store: false,
-          } as never)) as unknown as AsyncIterable<{
-            type: string;
-            delta?: string;
-          }>;
+          } as never)) as unknown as AsyncIterable<ResponsesStreamEvent>;
 
           for await (const event of responseStream) {
             if (event.type === "response.output_text.delta") {
@@ -515,25 +564,12 @@ export async function POST(req: Request) {
             controller.enqueue(encoder.encode(`\n\n${persistedReply}`));
           }
 
-          const { error: insertAssistantError } = await supabase
-            .from("messages")
-            .insert({
-              conversation_id: conversationId,
-              user_id: user.id,
-              role: "assistant",
-              content: persistedReply,
-            });
-
-          if (insertAssistantError) {
-            console.error(
-              "Assistant message insert error:",
-              insertAssistantError
-            );
-          }
-
-          const updates: Record<string, string> = {
-            updated_at: new Date().toISOString(),
-          };
+          await persistAssistantMessage({
+            supabase,
+            conversationId,
+            userId: user.id,
+            content: persistedReply,
+          });
 
           const shouldGenerateTitle =
             !regenerate &&
@@ -541,19 +577,16 @@ export async function POST(req: Request) {
             (conversation.title === "New Chat" ||
               conversation.title === buildConversationTitle(message));
 
-          if (shouldGenerateTitle) {
-            updates.title = await generateConversationTitle(message);
-          }
+          const title = shouldGenerateTitle
+            ? await generateConversationTitle(message)
+            : undefined;
 
-          const { error: updateConversationError } = await supabase
-            .from("conversations")
-            .update(updates)
-            .eq("id", conversationId)
-            .eq("user_id", user.id);
-
-          if (updateConversationError) {
-            console.error("Conversation update error:", updateConversationError);
-          }
+          await touchConversation({
+            supabase,
+            conversationId,
+            userId: user.id,
+            title,
+          });
 
           controller.close();
         } catch (error) {
@@ -567,31 +600,18 @@ export async function POST(req: Request) {
             controller.enqueue(encoder.encode(fallback));
           }
 
-          const { error: insertAssistantError } = await supabase
-            .from("messages")
-            .insert({
-              conversation_id: conversationId,
-              user_id: user.id,
-              role: "assistant",
-              content: fallback,
-            });
+          await persistAssistantMessage({
+            supabase,
+            conversationId,
+            userId: user.id,
+            content: fallback,
+          });
 
-          if (insertAssistantError) {
-            console.error(
-              "Assistant fallback insert error:",
-              insertAssistantError
-            );
-          }
-
-          const { error: updateConversationError } = await supabase
-            .from("conversations")
-            .update({ updated_at: new Date().toISOString() })
-            .eq("id", conversationId)
-            .eq("user_id", user.id);
-
-          if (updateConversationError) {
-            console.error("Conversation update error:", updateConversationError);
-          }
+          await touchConversation({
+            supabase,
+            conversationId,
+            userId: user.id,
+          });
 
           controller.close();
         }

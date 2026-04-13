@@ -29,6 +29,16 @@ type Message = {
   imagePreview?: string;
 };
 
+type DocumentItem = {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  extraction_status: "processing" | "ready" | "failed";
+  extraction_error: string | null;
+  conversation_id: string | null;
+};
+
 type ChatAppProps = {
   userEmail: string;
 };
@@ -52,6 +62,18 @@ type ChatSuccessResponse = {
   code?: string;
 };
 
+type UploadDocumentsResponse = {
+  ok?: boolean;
+  uploaded?: boolean;
+  documents?: DocumentItem[];
+  error?: string;
+  summary?: {
+    total?: number;
+    ready?: number;
+    failed?: number;
+  };
+};
+
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_INPUT_LENGTH = 2000;
 
@@ -62,8 +84,10 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [sidebarLoading, setSidebarLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [limitReached, setLimitReached] = useState(false);
@@ -83,11 +107,20 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === conversationId) || null,
     [conversations, conversationId]
+  );
+
+  const readyDocumentIds = useMemo(
+    () =>
+      documents
+        .filter((doc) => doc.extraction_status === "ready")
+        .map((doc) => doc.id),
+    [documents]
   );
 
   async function signOut() {
@@ -212,6 +245,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         const nextConversation = remaining[0] ?? null;
         setConversationId(nextConversation ? nextConversation.id : null);
         setMessages([]);
+        setDocuments([]);
       }
     } catch (err) {
       setError(
@@ -229,7 +263,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }
 
   async function createConversation() {
-    if (loading) return;
+    if (loading || uploading) return;
 
     try {
       setError(null);
@@ -249,9 +283,11 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       setConversations((prev) => [data.conversation, ...prev]);
       setConversationId(data.conversation.id);
       setMessages([]);
+      setDocuments([]);
       setEditingConversationId(null);
       setEditingTitle("");
       clearSelectedImage();
+      clearSelectedDocuments();
 
       window.setTimeout(() => inputRef.current?.focus(), 50);
     } catch (err) {
@@ -302,8 +338,15 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       return null;
     });
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+    if (imageInputRef.current) {
+      imageInputRef.current.value = "";
+    }
+  }
+
+  function clearSelectedDocuments() {
+    setDocuments([]);
+    if (documentInputRef.current) {
+      documentInputRef.current.value = "";
     }
   }
 
@@ -335,6 +378,61 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       if (previous) URL.revokeObjectURL(previous);
       return previewUrl;
     });
+  }
+
+  async function handleDocumentUpload(files: FileList | null) {
+    if (!files || !conversationId) return;
+
+    try {
+      setUploading(true);
+      setError(null);
+
+      const formData = new FormData();
+
+      Array.from(files).forEach((file) => {
+        formData.append("files", file);
+      });
+
+      formData.append("conversationId", conversationId);
+
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data: UploadDocumentsResponse = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Upload failed.");
+      }
+
+      const newDocs: DocumentItem[] = Array.isArray(data.documents)
+        ? data.documents.filter(
+            (doc): doc is DocumentItem =>
+              Boolean(doc) &&
+              typeof doc === "object" &&
+              typeof doc.id === "string" &&
+              typeof doc.file_name === "string" &&
+              typeof doc.mime_type === "string"
+          )
+        : [];
+
+      setDocuments((prev) => [...prev, ...newDocs]);
+
+      if (process.env.NODE_ENV === "development") {
+        console.log("UPLOAD RESPONSE:", data);
+      }
+    } catch (err) {
+      console.error("UPLOAD ERROR:", err);
+      setError(
+        err instanceof Error ? err.message : "Document upload failed."
+      );
+    } finally {
+      setUploading(false);
+      if (documentInputRef.current) {
+        documentInputRef.current.value = "";
+      }
+    }
   }
 
   function fileToBase64(file: File): Promise<string> {
@@ -374,6 +472,42 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     ].some((keyword) => text.includes(keyword));
   }
 
+  async function readTextResponse(res: Response): Promise<string> {
+    if (!res.body) {
+      return (await res.text()).trim();
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      if (!chunk) continue;
+
+      fullText += chunk;
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+
+        if (last?.role === "assistant" && last.id === "streaming-assistant") {
+          next[next.length - 1] = {
+            ...last,
+            content: fullText,
+          };
+        }
+
+        return next;
+      });
+    }
+
+    fullText += decoder.decode();
+    return fullText.trim();
+  }
+
   async function requestAssistantReply(
     targetConversationId: string,
     message: string,
@@ -385,20 +519,41 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       ? "/api/chat-web"
       : "/api/chat";
 
+    const payload = {
+      conversationId: targetConversationId,
+      message,
+      regenerate,
+      imageBase64,
+      documentIds: route === "/api/chat" ? readyDocumentIds : [],
+    };
+
+    if (route === "/api/chat") {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: "streaming-assistant",
+          role: "assistant",
+          content: "",
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    }
+
     const res = await fetch(route, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        conversationId: targetConversationId,
-        message,
-        regenerate,
-        imageBase64,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
+      if (route === "/api/chat") {
+        setMessages((prev) =>
+          prev.filter((messageItem) => messageItem.id !== "streaming-assistant")
+        );
+      }
+
       let errorMessage = regenerate
         ? "Failed to regenerate response."
         : "Failed to send message.";
@@ -422,6 +577,30 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       }
 
       throw new Error(errorMessage);
+    }
+
+    if (route === "/api/chat") {
+      const assistantContent = await readTextResponse(res);
+      const finalContent =
+        assistantContent || "I couldn’t generate a complete response.";
+
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+
+        if (last?.role === "assistant" && last.id === "streaming-assistant") {
+          next[next.length - 1] = {
+            ...last,
+            id: crypto.randomUUID(),
+            content: finalContent,
+          };
+        }
+
+        return next;
+      });
+
+      setLimitReached(false);
+      return;
     }
 
     const data: ChatSuccessResponse = await res.json();
@@ -455,7 +634,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     const trimmed = input.trim();
     const hasImage = Boolean(selectedImage);
 
-    if ((!trimmed && !hasImage) || !conversationId || loading) return;
+    if ((!trimmed && !hasImage) || !conversationId || loading || uploading) {
+      return;
+    }
 
     if (trimmed.length > MAX_INPUT_LENGTH) {
       setError(`Message must be ${MAX_INPUT_LENGTH} characters or fewer.`);
@@ -499,7 +680,10 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         setUsageUsed(previousUsage);
 
         setMessages((prev) => {
-          const next = [...prev];
+          const next = [...prev].filter(
+            (messageItem) => messageItem.id !== "streaming-assistant"
+          );
+
           for (let i = next.length - 1; i >= 0; i--) {
             if (
               next[i].role === "user" &&
@@ -519,15 +703,20 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
       setUsageUsed(previousUsage);
 
-      setMessages((prev) => [
-        ...prev,
-        {
+      setMessages((prev) => {
+        const next = [...prev].filter(
+          (messageItem) => messageItem.id !== "streaming-assistant"
+        );
+
+        next.push({
           id: crypto.randomUUID(),
           role: "assistant",
           content: "Sorry, something went wrong while generating a reply.",
           created_at: new Date().toISOString(),
-        },
-      ]);
+        });
+
+        return next;
+      });
 
       setError(
         err instanceof Error
@@ -541,7 +730,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }
 
   async function regenerateResponse() {
-    if (!conversationId || loading) return;
+    if (!conversationId || loading || uploading) return;
 
     setError(null);
     setLoading(true);
@@ -554,7 +743,10 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       null;
 
     setMessages((prev) => {
-      const next = [...prev];
+      const next = [...prev].filter(
+        (messageItem) => messageItem.id !== "streaming-assistant"
+      );
+
       for (let i = next.length - 1; i >= 0; i--) {
         if (next[i].role === "assistant") {
           next.splice(i, 1);
@@ -613,6 +805,28 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     }
   }
 
+  function getDocumentStatusLabel(document: DocumentItem) {
+    switch (document.extraction_status) {
+      case "ready":
+        return "Ready";
+      case "failed":
+        return "Extraction failed";
+      default:
+        return "Processing";
+    }
+  }
+
+  function getDocumentStatusClass(document: DocumentItem) {
+    switch (document.extraction_status) {
+      case "ready":
+        return "text-green-400";
+      case "failed":
+        return "text-red-400";
+      default:
+        return "text-amber-400";
+    }
+  }
+
   useEffect(() => {
     void loadConversations();
     void loadUsage();
@@ -621,6 +835,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   useEffect(() => {
     if (conversationId) {
       void loadMessages(conversationId);
+      setDocuments([]);
     }
   }, [conversationId]);
 
@@ -643,10 +858,23 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     };
   }, [selectedImagePreview]);
 
+  useEffect(() => {
+    if (process.env.NODE_ENV === "development") {
+      console.log("DOCUMENT STATE:", documents);
+    }
+  }, [documents]);
+
   return (
     <main className="flex h-screen bg-zinc-950 text-zinc-100">
       <aside className="hidden w-80 border-r border-zinc-800 bg-zinc-950 md:flex md:flex-col">
         <div className="border-b border-zinc-800 p-4">
+          <div className="mb-3">
+            <div className="text-sm font-medium text-zinc-100">{userEmail}</div>
+            <div className="mt-1 text-xs text-zinc-500">
+              {usageUsed}/{usageLimit} messages used today
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={createConversation}
@@ -1004,7 +1232,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                               <button
                                 type="button"
                                 onClick={() => void regenerateResponse()}
-                                disabled={loading || limitReached}
+                                disabled={loading || limitReached || uploading}
                                 className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
                               >
                                 Regenerate
@@ -1042,17 +1270,36 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         <div className="border-t border-zinc-800 bg-zinc-950">
           <div className="mx-auto w-full max-w-4xl px-4 py-3">
             <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-xl">
-              <div className="mb-2 flex items-center gap-2">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <label className="cursor-pointer rounded-xl border border-zinc-700 px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800">
+                  Attach document
+                  <input
+                    ref={documentInputRef}
+                    type="file"
+                    multiple
+                    onChange={(event) => {
+                      void handleDocumentUpload(event.target.files);
+                    }}
+                    className="hidden"
+                  />
+                </label>
+
                 <label className="cursor-pointer rounded-xl border border-zinc-700 px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800">
                   Attach image
                   <input
-                    ref={fileInputRef}
+                    ref={imageInputRef}
                     type="file"
                     accept="image/*"
                     onChange={handleImageChange}
                     className="hidden"
                   />
                 </label>
+
+                {uploading && (
+                  <div className="text-xs text-amber-400">
+                    Uploading documents...
+                  </div>
+                )}
 
                 {selectedImage && (
                   <>
@@ -1064,11 +1311,52 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                       type="button"
                       className="rounded-xl border border-zinc-700 px-3 py-1 text-xs text-zinc-300 transition hover:bg-zinc-800"
                     >
-                      Remove
+                      Remove image
                     </button>
                   </>
                 )}
+
+                {documents.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearSelectedDocuments}
+                    className="rounded-xl border border-zinc-700 px-3 py-1 text-xs text-zinc-300 transition hover:bg-zinc-800"
+                  >
+                    Clear documents
+                  </button>
+                )}
               </div>
+
+              {documents.length > 0 && (
+                <div className="mb-3 space-y-2">
+                  {documents.map((doc) => {
+                    if (!doc || typeof doc !== "object") return null;
+
+                    return (
+                      <div
+                        key={doc.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-zinc-200">
+                            {doc.file_name || "Unknown file"}
+                          </div>
+
+                          {doc.extraction_error ? (
+                            <div className="mt-1 truncate text-[11px] text-zinc-500">
+                              {doc.extraction_error}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <span className={`shrink-0 font-medium ${getDocumentStatusClass(doc)}`}>
+                          {getDocumentStatusLabel(doc)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {selectedImagePreview && (
                 <div className="mb-2">
@@ -1098,7 +1386,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                       ? "Message your AI agent..."
                       : "Create a new chat to begin..."
                 }
-                disabled={!conversationId || loading || limitReached}
+                disabled={!conversationId || loading || uploading || limitReached}
                 className="max-h-32 min-h-[40px] w-full resize-none bg-transparent px-2 py-1.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed"
               />
 
@@ -1106,7 +1394,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                 <p className="text-[11px] text-zinc-500">
                   {limitReached
                     ? "Free plan limit reached for today"
-                    : "Press Enter to send, Shift+Enter for a new line"}
+                    : uploading
+                      ? "Uploading documents..."
+                      : "Press Enter to send, Shift+Enter for a new line"}
                 </p>
 
                 <button
@@ -1116,11 +1406,18 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     !conversationId ||
                     (!input.trim() && !selectedImage) ||
                     loading ||
+                    uploading ||
                     limitReached
                   }
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {loading ? "Sending..." : limitReached ? "Locked" : "Send"}
+                  {uploading
+                    ? "Uploading..."
+                    : loading
+                      ? "Sending..."
+                      : limitReached
+                        ? "Locked"
+                        : "Send"}
                 </button>
               </div>
             </div>
