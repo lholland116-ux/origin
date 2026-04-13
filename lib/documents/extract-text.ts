@@ -1,6 +1,10 @@
 import mammoth from "mammoth";
 import ExcelJS from "exceljs";
 
+// Force CommonJS build of pdf-parse for Node/Vercel compatibility.
+// This avoids the ESM path that can trigger "DOMMatrix is not defined".
+const pdfParse: (input: Buffer) => Promise<{ text?: string }> = require("pdf-parse");
+
 const MAX_EXTRACTED_TEXT_LENGTH = 200_000;
 const MIN_MEANINGFUL_TEXT_LENGTH = 20;
 const LOW_TEXT_WARNING_PREFIX =
@@ -103,13 +107,6 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
       sizeBytes: buffer.length,
     });
 
-    const mod = await import("pdf-parse");
-
-    const pdfParse =
-      (mod as { default?: (input: Buffer) => Promise<{ text?: string }> })
-        .default ??
-      (mod as unknown as (input: Buffer) => Promise<{ text?: string }>);
-
     const result = await pdfParse(buffer);
     const rawText = result.text || "";
     const normalized = normalizeText(rawText);
@@ -142,11 +139,18 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
       error instanceof Error ? error.message : "Unknown PDF parsing error.";
     const stack = error instanceof Error ? error.stack : undefined;
 
-    console.error("PDF extraction failed", {
-      sizeBytes: buffer.length,
-      message,
-      stack,
-    });
+    console.error(
+      "PDF extraction failed:",
+      JSON.stringify(
+        {
+          sizeBytes: buffer.length,
+          message,
+          stack,
+        },
+        null,
+        2
+      )
+    );
 
     if (/password|encrypted/i.test(message)) {
       throw new Error("Encrypted or password-protected PDF is not supported.");
