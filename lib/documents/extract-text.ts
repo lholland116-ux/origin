@@ -2,6 +2,7 @@ import mammoth from "mammoth";
 import ExcelJS from "exceljs";
 
 const MAX_EXTRACTED_TEXT_LENGTH = 200_000;
+const MIN_MEANINGFUL_TEXT_LENGTH = 20;
 
 function normalizeText(input: string): string {
   return input
@@ -25,6 +26,11 @@ function truncateText(
 
 function finalizeText(input: string): string {
   return truncateText(normalizeText(input));
+}
+
+function hasMeaningfulText(input: string): boolean {
+  const normalized = normalizeText(input);
+  return normalized.length >= MIN_MEANINGFUL_TEXT_LENGTH;
 }
 
 function normalizeExcelCellValue(value: unknown): string {
@@ -84,15 +90,36 @@ function normalizeExcelCellValue(value: unknown): string {
 }
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
-  const mod = await import("pdf-parse");
+  try {
+    const mod = await import("pdf-parse");
 
-  const pdfParse =
-    (mod as { default?: (input: Buffer) => Promise<{ text?: string }> })
-      .default ??
-    (mod as unknown as (input: Buffer) => Promise<{ text?: string }>);
+    const pdfParse =
+      (mod as { default?: (input: Buffer) => Promise<{ text?: string }> })
+        .default ??
+      (mod as unknown as (input: Buffer) => Promise<{ text?: string }>);
 
-  const result = await pdfParse(buffer);
-  return finalizeText(result.text || "");
+    const result = await pdfParse(buffer);
+    const text = finalizeText(result.text || "");
+
+    if (!hasMeaningfulText(text)) {
+      throw new Error("No extractable text found.");
+    }
+
+    return text;
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown PDF parsing error.";
+
+    if (/password|encrypted/i.test(message)) {
+      throw new Error("Encrypted or password-protected PDF is not supported.");
+    }
+
+    if (/no extractable text found/i.test(message)) {
+      throw error;
+    }
+
+    throw new Error(message);
+  }
 }
 
 async function extractDocxText(buffer: Buffer): Promise<string> {

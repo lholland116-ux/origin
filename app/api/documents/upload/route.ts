@@ -22,21 +22,12 @@ type UploadedDocumentResponse = {
 const EXTRACTION_TIMEOUT_MS = 15_000;
 
 const allowedMimeTypes = [
-  // Plain text
   "text/plain",
   "text/markdown",
-
-  // CSV
   "text/csv",
   "application/csv",
-
-  // PDF
   "application/pdf",
-
-  // DOCX
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-
-  // XLSX
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ] as const;
 
@@ -95,8 +86,12 @@ function normalizeExtractionError(error: unknown, mimeType: string): string {
       return "PDF extraction timed out.";
     }
 
-    if (/no extractable text|empty extracted text|no extractable text found/i.test(message)) {
-      return "PDF appears to contain no extractable text.";
+    if (/encrypted|password-protected/i.test(message)) {
+      return "Encrypted or password-protected PDF is not supported.";
+    }
+
+    if (/no extractable text/i.test(message)) {
+      return "PDF appears to contain no extractable text. It may be scanned or image-only.";
     }
 
     return `PDF extraction failed: ${message}`;
@@ -110,7 +105,7 @@ function normalizeExtractionError(error: unknown, mimeType: string): string {
       return "Spreadsheet extraction timed out.";
     }
 
-    if (/no extractable text|empty extracted text|no extractable text found/i.test(message)) {
+    if (/no extractable text/i.test(message)) {
       return "Spreadsheet appears to contain no extractable text.";
     }
 
