@@ -3,11 +3,14 @@ import ExcelJS from "exceljs";
 
 const MAX_EXTRACTED_TEXT_LENGTH = 200_000;
 const MIN_MEANINGFUL_TEXT_LENGTH = 20;
+const LOW_TEXT_WARNING_PREFIX =
+  "[Low text content detected — document may be scanned]\n\n";
 
 function normalizeText(input: string): string {
   return input
     .replace(/\r\n/g, "\n")
     .replace(/\u0000/g, "")
+    .replace(/[^\S\n]+/g, " ")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -31,6 +34,10 @@ function finalizeText(input: string): string {
 function hasMeaningfulText(input: string): boolean {
   const normalized = normalizeText(input);
   return normalized.length >= MIN_MEANINGFUL_TEXT_LENGTH;
+}
+
+function hasAnyText(input: string): boolean {
+  return normalizeText(input).length > 0;
 }
 
 function normalizeExcelCellValue(value: unknown): string {
@@ -104,15 +111,24 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
 
     const result = await pdfParse(buffer);
     const rawText = result.text || "";
-    const text = finalizeText(rawText);
+    const normalized = normalizeText(rawText);
+    const text = truncateText(normalized);
 
-    console.log("PDF extraction completed", {
+    console.log("PDF extraction result", {
       rawLength: rawText.length,
-      normalizedLength: text.length,
+      normalizedLength: normalized.length,
     });
 
-    if (!hasMeaningfulText(text)) {
+    if (!hasAnyText(normalized)) {
       throw new Error("No extractable text found.");
+    }
+
+    if (!hasMeaningfulText(normalized)) {
+      console.warn("PDF extraction low text volume", {
+        normalizedLength: normalized.length,
+      });
+
+      return `${LOW_TEXT_WARNING_PREFIX}${text}`;
     }
 
     return text;
@@ -128,8 +144,10 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
       throw new Error("Encrypted or password-protected PDF is not supported.");
     }
 
-    if (/no extractable text found/i.test(message)) {
-      throw new Error("No extractable text found.");
+    if (/no extractable text/i.test(message)) {
+      throw new Error(
+        "PDF appears to contain no extractable text. It may be scanned or image-only."
+      );
     }
 
     throw new Error(`PDF parsing error: ${message}`);
