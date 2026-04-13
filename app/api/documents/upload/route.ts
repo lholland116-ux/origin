@@ -173,6 +173,14 @@ export async function POST(req: Request) {
       const fileName = file.name?.trim() || "Unnamed file";
       const safeMimeType = getSafeMimeType(file);
 
+      console.log("/api/documents/upload: received file", {
+        fileName,
+        declaredMimeType: file.type || "",
+        safeMimeType,
+        sizeBytes: file.size,
+        conversationId,
+      });
+
       if (file.size <= 0) {
         return jsonResponse({ error: `File is empty: ${fileName}` }, 400);
       }
@@ -216,6 +224,13 @@ export async function POST(req: Request) {
         });
 
       if (uploadError) {
+        console.error("/api/documents/upload: storage upload failed", {
+          fileName,
+          safeMimeType,
+          storagePath,
+          message: uploadError.message,
+        });
+
         return jsonResponse(
           {
             error: `Storage upload failed for ${fileName}: ${uploadError.message}`,
@@ -244,6 +259,13 @@ export async function POST(req: Request) {
       if (insertError || !inserted) {
         await admin.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
 
+        console.error("/api/documents/upload: database insert failed", {
+          fileName,
+          safeMimeType,
+          storagePath,
+          message: insertError?.message ?? "Insert returned no row.",
+        });
+
         return jsonResponse(
           { error: `Database insert failed for ${fileName}.` },
           500
@@ -251,6 +273,13 @@ export async function POST(req: Request) {
       }
 
       try {
+        console.log("/api/documents/upload: extraction starting", {
+          fileName,
+          mimeType: safeMimeType || "application/octet-stream",
+          sizeBytes: buffer.length,
+          documentId: inserted.id,
+        });
+
         const extractedText = await withTimeout(
           extractTextFromFile(
             buffer,
@@ -277,6 +306,13 @@ export async function POST(req: Request) {
           throw new Error(updateError.message);
         }
 
+        console.log("/api/documents/upload: extraction completed", {
+          fileName,
+          mimeType: inserted.mime_type,
+          documentId: inserted.id,
+          extractedLength: extractedText.length,
+        });
+
         uploadedDocuments.push({
           id: inserted.id,
           file_name: inserted.file_name,
@@ -291,6 +327,13 @@ export async function POST(req: Request) {
           extractionError,
           safeMimeType || "application/octet-stream"
         );
+
+        console.error("/api/documents/upload: extraction failed", {
+          fileName,
+          mimeType: safeMimeType || "application/octet-stream",
+          documentId: inserted.id,
+          message,
+        });
 
         const { error: failedUpdateError } = await admin
           .from("documents")

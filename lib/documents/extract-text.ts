@@ -91,6 +91,10 @@ function normalizeExcelCellValue(value: unknown): string {
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
+    console.log("PDF extraction started", {
+      sizeBytes: buffer.length,
+    });
+
     const mod = await import("pdf-parse");
 
     const pdfParse =
@@ -99,7 +103,13 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
       (mod as unknown as (input: Buffer) => Promise<{ text?: string }>);
 
     const result = await pdfParse(buffer);
-    const text = finalizeText(result.text || "");
+    const rawText = result.text || "";
+    const text = finalizeText(rawText);
+
+    console.log("PDF extraction completed", {
+      rawLength: rawText.length,
+      normalizedLength: text.length,
+    });
 
     if (!hasMeaningfulText(text)) {
       throw new Error("No extractable text found.");
@@ -110,15 +120,19 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
     const message =
       error instanceof Error ? error.message : "Unknown PDF parsing error.";
 
+    console.error("PDF extraction failed", {
+      message,
+    });
+
     if (/password|encrypted/i.test(message)) {
       throw new Error("Encrypted or password-protected PDF is not supported.");
     }
 
     if (/no extractable text found/i.test(message)) {
-      throw error;
+      throw new Error("No extractable text found.");
     }
 
-    throw new Error(message);
+    throw new Error(`PDF parsing error: ${message}`);
   }
 }
 

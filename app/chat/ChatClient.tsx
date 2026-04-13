@@ -304,6 +304,7 @@ export default function ChatClient({
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [usageError, setUsageError] = useState("");
   const [uiError, setUiError] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -425,6 +426,21 @@ export default function ChatClient({
     setMessages((prev) =>
       prev.map((msg) => (msg.id === messageId ? updater(msg) : msg))
     );
+  }
+
+  async function handleCopyMessage(messageId: string, content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(messageId);
+
+      window.setTimeout(() => {
+        setCopiedMessageId((current) =>
+          current === messageId ? null : current
+        );
+      }, 1500);
+    } catch {
+      setUiError("Failed to copy message.");
+    }
   }
 
   function handleConversationStarterClick(starter: string) {
@@ -1585,6 +1601,28 @@ export default function ChatClient({
                             : "bg-neutral-900 text-white"
                         }`}
                       >
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div className="text-xs font-medium opacity-70">
+                            {message.role === "user" ? "You" : "Assistant"}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleCopyMessage(message.id, message.content)
+                            }
+                            className={`rounded-lg px-2 py-1 text-xs transition ${
+                              message.role === "user"
+                                ? "bg-black/10 text-black hover:bg-black/20"
+                                : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                            }`}
+                            aria-label="Copy message"
+                            title="Copy message"
+                          >
+                            {copiedMessageId === message.id ? "Copied" : "Copy"}
+                          </button>
+                        </div>
+
                         {message.content}
 
                         {message.image_url && (
@@ -1676,7 +1714,8 @@ export default function ChatClient({
                         key={doc.id}
                         title={
                           doc.extraction_status === "failed"
-                            ? doc.extraction_error || "Document processing failed."
+                            ? doc.extraction_error ||
+                              "Document processing failed."
                             : undefined
                         }
                       >
@@ -1690,7 +1729,9 @@ export default function ChatClient({
                                 : "uploading"
                           }
                           onRemove={
-                            loading || isUploadingDocuments || hasPendingDocuments
+                            loading ||
+                            isUploadingDocuments ||
+                            hasPendingDocuments
                               ? undefined
                               : () => removeAttachedDocument(doc.id)
                           }
