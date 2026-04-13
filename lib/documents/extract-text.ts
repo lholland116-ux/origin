@@ -1,9 +1,20 @@
 import mammoth from "mammoth";
 import ExcelJS from "exceljs";
 
-// Force CommonJS build of pdf-parse for Node/Vercel compatibility.
-// This avoids the ESM path that can trigger "DOMMatrix is not defined".
-const pdfParse: (input: Buffer) => Promise<{ text?: string }> = require("pdf-parse");
+// Official pdf-parse Node/Vercel setup.
+// Load worker support first, then use CanvasFactory + PDFParse.
+const { CanvasFactory } = require("pdf-parse/worker") as {
+  CanvasFactory: unknown;
+};
+const { PDFParse } = require("pdf-parse") as {
+  PDFParse: new (options: {
+    data: Buffer;
+    CanvasFactory?: unknown;
+  }) => {
+    getText: () => Promise<{ text?: string }>;
+    destroy: () => Promise<void>;
+  };
+};
 
 const MAX_EXTRACTED_TEXT_LENGTH = 200_000;
 const MIN_MEANINGFUL_TEXT_LENGTH = 20;
@@ -37,8 +48,7 @@ function finalizeText(input: string): string {
 }
 
 function hasMeaningfulText(input: string): boolean {
-  const normalized = normalizeText(input);
-  return normalized.length >= MIN_MEANINGFUL_TEXT_LENGTH;
+  return normalizeText(input).length >= MIN_MEANINGFUL_TEXT_LENGTH;
 }
 
 function hasAnyText(input: string): boolean {
@@ -102,12 +112,17 @@ function normalizeExcelCellValue(value: unknown): string {
 }
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
+  const parser = new PDFParse({
+    data: buffer,
+    CanvasFactory,
+  });
+
   try {
     console.log("PDF extraction started", {
       sizeBytes: buffer.length,
     });
 
-    const result = await pdfParse(buffer);
+    const result = await parser.getText();
     const rawText = result.text || "";
     const normalized = normalizeText(rawText);
     const text = truncateText(normalized);
@@ -163,6 +178,12 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
     }
 
     throw new Error(`PDF parsing error: ${message}`);
+  } finally {
+    try {
+      await parser.destroy();
+    } catch (destroyError) {
+      console.warn("PDF parser destroy warning:", destroyError);
+    }
   }
 }
 
