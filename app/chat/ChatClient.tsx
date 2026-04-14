@@ -13,22 +13,6 @@ type SourceItem = {
   snippet?: string;
 };
 
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  sources?: SourceItem[];
-  image_path?: string | null;
-  image_name?: string | null;
-  image_url?: string | null;
-};
-
-type ConversationItem = {
-  id: string;
-  title: string | null;
-  updated_at: string;
-};
-
 type UploadedDocument = {
   id: string;
   file_name: string;
@@ -37,6 +21,23 @@ type UploadedDocument = {
   extraction_status: "uploading" | "processing" | "ready" | "failed";
   extraction_error?: string | null;
   conversation_id: string | null;
+};
+
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  sources?: SourceItem[];
+  image_path?: string | null;
+  image_name?: string | null;
+  image_url?: string | null;
+  documents?: UploadedDocument[];
+};
+
+type ConversationItem = {
+  id: string;
+  title: string | null;
+  updated_at: string;
 };
 
 type ChatClientProps = {
@@ -152,6 +153,19 @@ function isAllowedUploadMimeType(mimeType: string, fileName: string): boolean {
     fileName.toLowerCase().endsWith(".docx") ||
     fileName.toLowerCase().endsWith(".pdf")
   );
+}
+
+function cloneDocuments(documents: UploadedDocument[]): UploadedDocument[] {
+  return documents.map((doc) => ({ ...doc }));
+}
+
+function normalizeInitialMessages(messages: Message[]): Message[] {
+  return messages.map((message) => ({
+    ...message,
+    documents: Array.isArray(message.documents)
+      ? cloneDocuments(message.documents)
+      : [],
+  }));
 }
 
 async function fetchWithTimeout(
@@ -280,7 +294,9 @@ export default function ChatClient({
   const supabase = createBrowserSupabaseClient();
   const router = useRouter();
 
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] = useState<Message[]>(
+    normalizeInitialMessages(initialMessages)
+  );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
@@ -311,12 +327,15 @@ export default function ChatClient({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeDocumentPollRef = useRef(0);
 
-  const readyDocumentIds = useMemo(
+  const readyDocuments = useMemo(
     () =>
-      attachedDocuments
-        .filter((doc) => doc.extraction_status === "ready")
-        .map((doc) => doc.id),
+      attachedDocuments.filter((doc) => doc.extraction_status === "ready"),
     [attachedDocuments]
+  );
+
+  const readyDocumentIds = useMemo(
+    () => readyDocuments.map((doc) => doc.id),
+    [readyDocuments]
   );
 
   const hasPendingDocuments = useMemo(
@@ -772,6 +791,7 @@ export default function ChatClient({
     setUiError("");
     setDocumentError("");
     clearImage();
+    clearDocuments();
     setInput("");
 
     try {
@@ -789,11 +809,19 @@ export default function ChatClient({
 
       const nextMessages = await Promise.all(
         rawMessages.map(async (msg: Message) => {
-          if (msg.image_path) {
-            const imageUrl = await getSignedImageUrl(msg.image_path);
-            return { ...msg, image_url: imageUrl };
+          const normalizedMessage: Message = {
+            ...msg,
+            documents: Array.isArray(msg.documents)
+              ? cloneDocuments(msg.documents)
+              : [],
+          };
+
+          if (normalizedMessage.image_path) {
+            const imageUrl = await getSignedImageUrl(normalizedMessage.image_path);
+            return { ...normalizedMessage, image_url: imageUrl };
           }
-          return msg;
+
+          return normalizedMessage;
         })
       );
 
@@ -1037,8 +1065,7 @@ export default function ChatClient({
     const attachmentNotes = [
       hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "",
       hasReadyDocuments
-        ? `[Documents attached: ${attachedDocuments
-            .filter((doc) => doc.extraction_status === "ready")
+        ? `[Documents attached: ${readyDocuments
             .map((doc) => doc.file_name)
             .join(", ")}]`
         : "",
@@ -1050,6 +1077,8 @@ export default function ChatClient({
       .filter(Boolean)
       .join("\n\n");
 
+    const sentDocuments = cloneDocuments(readyDocuments);
+
     const userMessage: Message = {
       id: createId(),
       role: "user",
@@ -1057,6 +1086,7 @@ export default function ChatClient({
       image_path: imagePath,
       image_name: imageName,
       image_url: imageBase64,
+      documents: sentDocuments,
     };
 
     const assistantId = createId();
@@ -1066,16 +1096,18 @@ export default function ChatClient({
       role: "assistant",
       content: "",
       sources: [],
+      documents: [],
     };
 
     const payloadImage = imageBase64;
     const payloadImagePath = imagePath;
     const payloadImageName = imageName;
-    const payloadDocumentIds = readyDocumentIds;
+    const payloadDocumentIds = [...readyDocumentIds];
 
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
     clearImage();
+    clearDocuments();
     setLoading(true);
 
     abortRef.current?.abort();
@@ -1158,7 +1190,6 @@ export default function ChatClient({
 
       await refreshConversations(conversationId);
       await fetchUsage();
-      await fetchDocuments(conversationId, { silent: true });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         updateAssistantMessage(assistantId, (msg) => ({
@@ -1176,6 +1207,7 @@ export default function ChatClient({
             ? error.message
             : "Something went wrong. Please try again.",
         sources: [],
+        documents: [],
       }));
     } finally {
       abortRef.current = null;
@@ -1582,6 +1614,9 @@ export default function ChatClient({
                   const sources = Array.isArray(message.sources)
                     ? message.sources
                     : [];
+                  const messageDocuments = Array.isArray(message.documents)
+                    ? message.documents
+                    : [];
                   const isStreamingAssistant =
                     loading &&
                     message.role === "assistant" &&
@@ -1632,6 +1667,33 @@ export default function ChatClient({
                               alt={message.image_name || "Uploaded image"}
                               className="max-h-56 rounded-xl border border-neutral-800 object-contain"
                             />
+                          </div>
+                        )}
+
+                        {messageDocuments.length > 0 && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {messageDocuments.map((doc) => (
+                              <div
+                                key={doc.id}
+                                title={
+                                  doc.extraction_status === "failed"
+                                    ? doc.extraction_error ||
+                                      "Document processing failed."
+                                    : undefined
+                                }
+                              >
+                                <DocumentChip
+                                  name={doc.file_name}
+                                  status={
+                                    doc.extraction_status === "failed"
+                                      ? "failed"
+                                      : doc.extraction_status === "ready"
+                                        ? "ready"
+                                        : "uploading"
+                                  }
+                                />
+                              </div>
+                            ))}
                           </div>
                         )}
 
