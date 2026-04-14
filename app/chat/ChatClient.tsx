@@ -168,6 +168,100 @@ function normalizeInitialMessages(messages: Message[]): Message[] {
   }));
 }
 
+function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item && typeof item === "object")
+    )
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : createId(),
+      file_name:
+        typeof item.file_name === "string"
+          ? item.file_name
+          : "Untitled document",
+      mime_type: typeof item.mime_type === "string" ? item.mime_type : "",
+      size_bytes: typeof item.size_bytes === "number" ? item.size_bytes : 0,
+      extraction_status:
+        item.extraction_status === "uploading" ||
+        item.extraction_status === "processing" ||
+        item.extraction_status === "ready" ||
+        item.extraction_status === "failed"
+          ? item.extraction_status
+          : "failed",
+      extraction_error:
+        typeof item.extraction_error === "string"
+          ? item.extraction_error
+          : null,
+      conversation_id:
+        typeof item.conversation_id === "string" ? item.conversation_id : null,
+    }));
+}
+
+function findBestServerMatch(
+  composerDoc: UploadedDocument,
+  serverDocs: UploadedDocument[],
+  usedServerIds: Set<string>
+): UploadedDocument | null {
+  for (const doc of serverDocs) {
+    if (usedServerIds.has(doc.id)) continue;
+    if (
+      doc.file_name === composerDoc.file_name &&
+      doc.size_bytes === composerDoc.size_bytes
+    ) {
+      usedServerIds.add(doc.id);
+      return doc;
+    }
+  }
+
+  for (const doc of serverDocs) {
+    if (usedServerIds.has(doc.id)) continue;
+    if (doc.file_name === composerDoc.file_name) {
+      usedServerIds.add(doc.id);
+      return doc;
+    }
+  }
+
+  return null;
+}
+
+function reconcileComposerDocuments(
+  currentComposerDocs: UploadedDocument[],
+  serverDocs: UploadedDocument[]
+): UploadedDocument[] {
+  const usedServerIds = new Set<string>();
+
+  return currentComposerDocs.map((composerDoc) => {
+    if (
+      composerDoc.extraction_status !== "uploading" &&
+      composerDoc.extraction_status !== "processing"
+    ) {
+      return composerDoc;
+    }
+
+    const match = findBestServerMatch(composerDoc, serverDocs, usedServerIds);
+
+    if (!match) {
+      return {
+        ...composerDoc,
+        extraction_status: "processing",
+      };
+    }
+
+    return {
+      ...composerDoc,
+      id: match.id,
+      mime_type: match.mime_type,
+      size_bytes: match.size_bytes,
+      extraction_status: match.extraction_status,
+      extraction_error: match.extraction_error,
+      conversation_id: match.conversation_id,
+    };
+  });
+}
+
 async function fetchWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit,
@@ -253,38 +347,6 @@ async function fileToProcessedDataUrl(file: File): Promise<string> {
   return processedDataUrl;
 }
 
-function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
-  if (!Array.isArray(input)) return [];
-
-  return input
-    .filter(
-      (item): item is Record<string, unknown> =>
-        Boolean(item && typeof item === "object")
-    )
-    .map((item) => ({
-      id: typeof item.id === "string" ? item.id : createId(),
-      file_name:
-        typeof item.file_name === "string"
-          ? item.file_name
-          : "Untitled document",
-      mime_type: typeof item.mime_type === "string" ? item.mime_type : "",
-      size_bytes: typeof item.size_bytes === "number" ? item.size_bytes : 0,
-      extraction_status:
-        item.extraction_status === "uploading" ||
-        item.extraction_status === "processing" ||
-        item.extraction_status === "ready" ||
-        item.extraction_status === "failed"
-          ? item.extraction_status
-          : "failed",
-      extraction_error:
-        typeof item.extraction_error === "string"
-          ? item.extraction_error
-          : null,
-      conversation_id:
-        typeof item.conversation_id === "string" ? item.conversation_id : null,
-    }));
-}
-
 export default function ChatClient({
   userEmail,
   initialConversationId,
@@ -305,9 +367,16 @@ export default function ChatClient({
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
 
-  const [attachedDocuments, setAttachedDocuments] = useState<UploadedDocument[]>(
+  // Draft-only documents shown in the composer footer.
+  const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>(
     []
   );
+
+  // Conversation-level documents loaded from the server.
+  const [conversationDocuments, setConversationDocuments] = useState<
+    UploadedDocument[]
+  >([]);
+
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
   const [documentError, setDocumentError] = useState("");
 
@@ -327,33 +396,33 @@ export default function ChatClient({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeDocumentPollRef = useRef(0);
 
-  const readyDocuments = useMemo(
+  const readyComposerDocuments = useMemo(
     () =>
-      attachedDocuments.filter((doc) => doc.extraction_status === "ready"),
-    [attachedDocuments]
+      composerDocuments.filter((doc) => doc.extraction_status === "ready"),
+    [composerDocuments]
   );
 
   const readyDocumentIds = useMemo(
-    () => readyDocuments.map((doc) => doc.id),
-    [readyDocuments]
+    () => readyComposerDocuments.map((doc) => doc.id),
+    [readyComposerDocuments]
   );
 
   const hasPendingDocuments = useMemo(
     () =>
-      attachedDocuments.some(
+      composerDocuments.some(
         (doc) =>
           doc.extraction_status === "uploading" ||
           doc.extraction_status === "processing"
       ),
-    [attachedDocuments]
+    [composerDocuments]
   );
 
   const modeLabel = useMemo(() => {
     if (useWebSearch) return "Using web search";
     if (imageBase64) return "Image attached";
-    if (attachedDocuments.length > 0) return "Documents attached";
+    if (composerDocuments.length > 0) return "Documents attached";
     return "Standard assistant";
-  }, [useWebSearch, imageBase64, attachedDocuments.length]);
+  }, [useWebSearch, imageBase64, composerDocuments.length]);
 
   const isLimitReached = Boolean(
     usage && usage.limit > 0 && usage.remaining <= 0
@@ -399,13 +468,26 @@ export default function ChatClient({
         const docs = await fetchDocuments(conversationId, { silent: true });
         if (!docs) return;
 
+        setComposerDocuments((prev) =>
+          reconcileComposerDocuments(prev, docs)
+        );
+
         const stillPending = docs.some(
           (doc) =>
             doc.extraction_status === "uploading" ||
             doc.extraction_status === "processing"
         );
 
-        if (!stillPending) {
+        const composerStillPending = reconcileComposerDocuments(
+          composerDocuments,
+          docs
+        ).some(
+          (doc) =>
+            doc.extraction_status === "uploading" ||
+            doc.extraction_status === "processing"
+        );
+
+        if (!stillPending || !composerStillPending) {
           debugLog("Document polling completed", {
             conversationId,
             docs,
@@ -420,7 +502,7 @@ export default function ChatClient({
     return () => {
       activeDocumentPollRef.current++;
     };
-  }, [conversationId, hasPendingDocuments]);
+  }, [conversationId, hasPendingDocuments]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function clearImage() {
     setImageBase64(null);
@@ -432,10 +514,14 @@ export default function ChatClient({
     }
   }
 
-  function clearDocuments() {
-    setAttachedDocuments([]);
+  function clearComposerDocuments() {
+    setComposerDocuments([]);
     setDocumentError("");
     activeDocumentPollRef.current++;
+  }
+
+  function clearConversationDocuments() {
+    setConversationDocuments([]);
   }
 
   function updateAssistantMessage(
@@ -510,7 +596,7 @@ export default function ChatClient({
     options?: { silent?: boolean }
   ): Promise<UploadedDocument[] | null> {
     if (!targetConversationId) {
-      clearDocuments();
+      clearConversationDocuments();
       return [];
     }
 
@@ -542,7 +628,7 @@ export default function ChatClient({
         documents: normalized,
       });
 
-      setAttachedDocuments(normalized);
+      setConversationDocuments(normalized);
       return normalized;
     } catch (error) {
       if (!options?.silent) {
@@ -671,7 +757,7 @@ export default function ChatClient({
         conversation_id: conversationId,
       }));
 
-      setAttachedDocuments((prev) => [...prev, ...optimisticDocs]);
+      setComposerDocuments((prev) => [...prev, ...optimisticDocs]);
 
       const formData = new FormData();
 
@@ -714,13 +800,19 @@ export default function ChatClient({
         throw new Error(errorMessage);
       }
 
-      debugLog("STEP 8: Upload succeeded. Refreshing documents from server...");
+      debugLog("STEP 8: Upload succeeded. Refreshing conversation documents...");
 
       const refreshedDocs = await fetchDocuments(conversationId, {
         silent: true,
       });
 
-      debugLog("STEP 9: Refreshed documents", refreshedDocs);
+      if (refreshedDocs) {
+        setComposerDocuments((prev) =>
+          reconcileComposerDocuments(prev, refreshedDocs)
+        );
+      }
+
+      debugLog("STEP 9: Conversation documents refreshed", refreshedDocs);
     } catch (error) {
       console.error("STEP 10: Upload error", error);
 
@@ -729,7 +821,7 @@ export default function ChatClient({
 
       setDocumentError(message);
 
-      setAttachedDocuments((prev) =>
+      setComposerDocuments((prev) =>
         prev.map((doc) =>
           doc.extraction_status === "uploading"
             ? {
@@ -747,8 +839,8 @@ export default function ChatClient({
     }
   }
 
-  function removeAttachedDocument(id: string) {
-    setAttachedDocuments((prev) => prev.filter((doc) => doc.id !== id));
+  function removeComposerDocument(id: string) {
+    setComposerDocuments((prev) => prev.filter((doc) => doc.id !== id));
   }
 
   async function handleSignOut() {
@@ -791,7 +883,7 @@ export default function ChatClient({
     setUiError("");
     setDocumentError("");
     clearImage();
-    clearDocuments();
+    clearComposerDocuments();
     setInput("");
 
     try {
@@ -817,7 +909,9 @@ export default function ChatClient({
           };
 
           if (normalizedMessage.image_path) {
-            const imageUrl = await getSignedImageUrl(normalizedMessage.image_path);
+            const imageUrl = await getSignedImageUrl(
+              normalizedMessage.image_path
+            );
             return { ...normalizedMessage, image_url: imageUrl };
           }
 
@@ -849,7 +943,8 @@ export default function ChatClient({
     setUiError("");
     setDocumentError("");
     clearImage();
-    clearDocuments();
+    clearComposerDocuments();
+    clearConversationDocuments();
     setInput("");
 
     try {
@@ -880,7 +975,8 @@ export default function ChatClient({
       await refreshConversations(newConversationId);
       setConversationId(newConversationId);
       setMessages([]);
-      setAttachedDocuments([]);
+      setComposerDocuments([]);
+      setConversationDocuments([]);
       setMobileMenuOpen(false);
     } catch (error) {
       setUiError(
@@ -1035,7 +1131,7 @@ export default function ChatClient({
       return;
     }
 
-    if (useWebSearch && (hasImage || attachedDocuments.length > 0)) {
+    if (useWebSearch && (hasImage || composerDocuments.length > 0)) {
       setUiError("Web Search mode does not support file upload.");
       return;
     }
@@ -1065,7 +1161,7 @@ export default function ChatClient({
     const attachmentNotes = [
       hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "",
       hasReadyDocuments
-        ? `[Documents attached: ${readyDocuments
+        ? `[Documents attached: ${readyComposerDocuments
             .map((doc) => doc.file_name)
             .join(", ")}]`
         : "",
@@ -1077,7 +1173,7 @@ export default function ChatClient({
       .filter(Boolean)
       .join("\n\n");
 
-    const sentDocuments = cloneDocuments(readyDocuments);
+    const sentDocuments = cloneDocuments(readyComposerDocuments);
 
     const userMessage: Message = {
       id: createId(),
@@ -1107,7 +1203,7 @@ export default function ChatClient({
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
     clearImage();
-    clearDocuments();
+    clearComposerDocuments();
     setLoading(true);
 
     abortRef.current?.abort();
@@ -1224,7 +1320,7 @@ export default function ChatClient({
 
     if (nextUseWebSearch) {
       clearImage();
-      clearDocuments();
+      clearComposerDocuments();
     }
 
     setUseWebSearch(nextUseWebSearch);
@@ -1571,7 +1667,8 @@ export default function ChatClient({
                     </div>
 
                     <div className="mt-2 text-sm text-white">
-                      <span className="font-medium">App Developer:</span> Levi Holland
+                      <span className="font-medium">App Developer:</span> Levi
+                      Holland
                     </div>
 
                     <div className="mt-1 text-sm text-neutral-400">
@@ -1768,10 +1865,10 @@ export default function ChatClient({
                 className="hidden"
               />
 
-              {!useWebSearch && attachedDocuments.length > 0 && (
+              {!useWebSearch && composerDocuments.length > 0 && (
                 <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-2">
                   <div className="flex flex-wrap gap-2">
-                    {attachedDocuments.map((doc) => (
+                    {composerDocuments.map((doc) => (
                       <div
                         key={doc.id}
                         title={
@@ -1795,7 +1892,7 @@ export default function ChatClient({
                             isUploadingDocuments ||
                             hasPendingDocuments
                               ? undefined
-                              : () => removeAttachedDocument(doc.id)
+                              : () => removeComposerDocument(doc.id)
                           }
                         />
                       </div>
@@ -1880,7 +1977,7 @@ export default function ChatClient({
                       ? "Ask something with web search..."
                       : imageBase64
                         ? "Add context for the image, or send without text..."
-                        : attachedDocuments.length > 0
+                        : composerDocuments.length > 0
                           ? hasPendingDocuments
                             ? "Please wait while documents finish processing..."
                             : "Ask about the attached documents..."
