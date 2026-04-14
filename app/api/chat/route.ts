@@ -47,6 +47,26 @@ type DocumentContextRow = {
   extraction_status: "pending" | "processing" | "ready" | "failed";
 };
 
+type StoredDocument = {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  extraction_status: "uploading" | "processing" | "ready" | "failed";
+  extraction_error?: string | null;
+  conversation_id: string | null;
+};
+
+type PersistableDocumentRow = {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  extraction_status: "ready";
+  extraction_error: string | null;
+  conversation_id: string | null;
+};
+
 type ResponsesStreamEvent = {
   type: string;
   delta?: string;
@@ -90,11 +110,33 @@ function isLikelyStoragePath(value: string): boolean {
   return value.length > 0 && !value.startsWith("/") && !value.includes("..");
 }
 
-function buildStoredUserContent(message: string, hasImage: boolean): string {
-  if (message && hasImage) return `${message}\n\n[Image attached]`;
-  if (message) return message;
-  if (hasImage) return "[Image attached]";
-  return "";
+function buildStoredUserContent(params: {
+  message: string;
+  hasImage: boolean;
+  documents: StoredDocument[];
+}): string {
+  const parts: string[] = [];
+
+  if (params.message) {
+    parts.push(params.message);
+  }
+
+  const attachmentNotes: string[] = [];
+
+  if (params.hasImage) {
+    attachmentNotes.push("[Image attached]");
+  }
+
+  if (params.documents.length > 0) {
+    const names = params.documents.map((doc) => doc.file_name).join(", ");
+    attachmentNotes.push(`[Documents attached: ${names}]`);
+  }
+
+  if (attachmentNotes.length > 0) {
+    parts.push(attachmentNotes.join("\n"));
+  }
+
+  return parts.join("\n\n").trim();
 }
 
 function isWeakReply(reply: string): boolean {
@@ -214,7 +256,7 @@ async function generateConversationTitle(message: string): Promise<string> {
   }
 }
 
-async function loadDocumentContext(params: {
+async function loadPersistableDocuments(params: {
   supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
   userId: string;
   documentIds: string[];
@@ -222,12 +264,12 @@ async function loadDocumentContext(params: {
   const { supabase, userId, documentIds } = params;
 
   if (documentIds.length === 0) {
-    return "";
+    return [];
   }
 
   const { data, error } = await supabase
     .from("documents")
-    .select("id, file_name, extracted_text, extraction_status")
+    .select("id, file_name, mime_type, size_bytes, extraction_status, extraction_error, conversation_id, extracted_text")
     .eq("user_id", userId)
     .in("id", documentIds)
     .eq("extraction_status", "ready");
@@ -236,7 +278,41 @@ async function loadDocumentContext(params: {
     throw new Error(`Failed to load document context: ${error.message}`);
   }
 
-  return buildDocumentContext((data ?? []) as DocumentContextRow[]);
+  return (data ?? []) as (PersistableDocumentRow & {
+    extracted_text: string | null;
+  })[];
+}
+
+async function loadDocumentArtifacts(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+  documentIds: string[];
+}) {
+  const rows = await loadPersistableDocuments(params);
+
+  const persistedDocuments: StoredDocument[] = rows.map((row) => ({
+    id: row.id,
+    file_name: row.file_name,
+    mime_type: row.mime_type,
+    size_bytes: row.size_bytes,
+    extraction_status: "ready",
+    extraction_error: row.extraction_error,
+    conversation_id: row.conversation_id,
+  }));
+
+  const documentContext = buildDocumentContext(
+    rows.map((row) => ({
+      id: row.id,
+      file_name: row.file_name,
+      extracted_text: row.extracted_text,
+      extraction_status: row.extraction_status,
+    }))
+  );
+
+  return {
+    persistedDocuments,
+    documentContext,
+  };
 }
 
 async function persistAssistantMessage(params: {
@@ -252,6 +328,7 @@ async function persistAssistantMessage(params: {
     user_id: userId,
     role: "assistant",
     content,
+    documents: [],
   });
 
   if (error) {
@@ -318,10 +395,11 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "conversationId is required." }, 400);
     }
 
-    if (!regenerate && !message && !imageBase64) {
+    if (!regenerate && !message && !imageBase64 && documentIds.length === 0) {
       return jsonResponse(
         {
-          error: "message or imageBase64 is required unless regenerate is true.",
+          error:
+            "message, imageBase64, or documentIds is required unless regenerate is true.",
         },
         400
       );
@@ -416,6 +494,23 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Failed to update usage." }, 500);
     }
 
+    let persistedDocuments: StoredDocument[] = [];
+    let documentContext = "";
+
+    try {
+      const artifacts = await loadDocumentArtifacts({
+        supabase,
+        userId: user.id,
+        documentIds,
+      });
+
+      persistedDocuments = artifacts.persistedDocuments;
+      documentContext = artifacts.documentContext;
+    } catch (error) {
+      console.error("Document context load error:", error);
+      return jsonResponse({ error: "Failed to load document context." }, 500);
+    }
+
     if (regenerate) {
       const { data: lastAssistant, error: lastAssistantError } = await supabase
         .from("messages")
@@ -445,10 +540,11 @@ export async function POST(req: Request) {
         }
       }
     } else {
-      const storedUserContent = buildStoredUserContent(
+      const storedUserContent = buildStoredUserContent({
         message,
-        Boolean(imageBase64)
-      );
+        hasImage: Boolean(imageBase64),
+        documents: persistedDocuments,
+      });
 
       const { error: insertUserError } = await supabase.from("messages").insert({
         conversation_id: conversationId,
@@ -457,6 +553,7 @@ export async function POST(req: Request) {
         content: storedUserContent,
         image_path: imagePath || null,
         image_name: imageName || null,
+        documents: persistedDocuments,
       });
 
       if (insertUserError) {
@@ -489,18 +586,6 @@ export async function POST(req: Request) {
     const latestUserMessage = regenerate
       ? recentHistory[recentHistory.length - 1]?.content ?? ""
       : message || recentHistory[recentHistory.length - 1]?.content || "";
-
-    let documentContext = "";
-    try {
-      documentContext = await loadDocumentContext({
-        supabase,
-        userId: user.id,
-        documentIds,
-      });
-    } catch (error) {
-      console.error("Document context load error:", error);
-      return jsonResponse({ error: "Failed to load document context." }, 500);
-    }
 
     const input = buildResponsesInput({
       history: recentHistory,
