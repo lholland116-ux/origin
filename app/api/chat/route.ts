@@ -17,6 +17,25 @@ const MAX_IMAGE_NAME_LENGTH = 255;
 const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 
+const TONE_LAYER = `
+Tone and style requirements:
+- Be warm, calm, friendly, and supportive.
+- Sound approachable and human, not robotic or overly formal.
+- Use clear, natural language with a soft, respectful tone.
+- Be encouraging when helpful, especially if the user seems uncertain or frustrated.
+- Stay professional and concise, but not cold.
+- Avoid harsh phrasing, unnecessary jargon, or stiff corporate wording.
+- When giving steps or instructions, make them feel easy and manageable.
+- When you do not know something, say so clearly and kindly.
+- Prioritize clarity, usefulness, and a positive user experience.
+`.trim();
+
+const TITLE_INSTRUCTIONS = `
+Generate a short, clear conversation title in 3 to 6 words.
+Do not use quotes.
+Keep the wording natural, polished, and user-friendly.
+`.trim();
+
 type ChatRequestBody = {
   conversationId?: string;
   message?: string;
@@ -38,13 +57,6 @@ type ConversationRow = {
   id: string;
   user_id: string;
   title: string;
-};
-
-type DocumentContextRow = {
-  id: string;
-  file_name: string;
-  extracted_text: string | null;
-  extraction_status: "pending" | "processing" | "ready" | "failed";
 };
 
 type StoredDocument = {
@@ -152,7 +164,7 @@ function buildImageAnalysisInstruction(latestMessage: string): string {
 }
 
 function buildSystemInstructions(hasDocumentContext: boolean): string {
-  const base = [SYSTEM_PROMPT.trim()];
+  const base = [SYSTEM_PROMPT.trim(), TONE_LAYER];
 
   if (hasDocumentContext) {
     base.push(
@@ -241,8 +253,7 @@ async function generateConversationTitle(message: string): Promise<string> {
   try {
     const titleResponse = await openai.responses.create({
       model: "gpt-4.1-mini",
-      instructions:
-        "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+      instructions: TITLE_INSTRUCTIONS,
       input: message,
       store: false,
     } as never);

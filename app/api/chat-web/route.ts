@@ -10,6 +10,25 @@ const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
 const IS_DEV = process.env.NODE_ENV === "development";
 
+const TONE_LAYER_WEB = `
+Tone and style requirements:
+- Be warm, calm, friendly, and supportive.
+- Sound approachable and human, not robotic or overly formal.
+- Use clear, natural language with a soft, respectful tone.
+- Be encouraging when helpful, but keep answers grounded in current information.
+- Stay professional, clear, and easy to follow.
+- Avoid harsh phrasing, stiff wording, or unnecessary jargon.
+- When sharing current or time-sensitive information, be precise without sounding cold.
+- When you are uncertain, say so clearly and kindly.
+- Prioritize clarity, usefulness, and a positive user experience.
+`.trim();
+
+const TITLE_INSTRUCTIONS = `
+Generate a short, clear conversation title in 3 to 6 words.
+Do not use quotes.
+Keep the wording natural, polished, and user-friendly.
+`.trim();
+
 type ChatRequestBody = {
   conversationId?: string;
   message?: string;
@@ -59,6 +78,10 @@ function sanitizeTitle(title: string, fallback: string): string {
   return cleaned.length > 0 ? cleaned.slice(0, 80) : fallback;
 }
 
+function buildWebInstructions(): string {
+  return [SYSTEM_PROMPT_WEB.trim(), TONE_LAYER_WEB].join("\n\n");
+}
+
 function extractSources(response: unknown): SourceItem[] {
   const seen = new Set<string>();
   const sources: SourceItem[] = [];
@@ -68,7 +91,13 @@ function extractSources(response: unknown): SourceItem[] {
   for (const item of output) {
     const typedItem = item as {
       type?: string;
-      action?: { sources?: Array<{ title?: string; url?: string; snippet?: string }> };
+      action?: {
+        sources?: Array<{
+          title?: string;
+          url?: string;
+          snippet?: string;
+        }>;
+      };
     };
 
     if (typedItem?.type !== "web_search_call") continue;
@@ -106,7 +135,7 @@ async function generateConversationTitle(message: string): Promise<string> {
           content: [
             {
               type: "input_text",
-              text: "Generate a short, clear conversation title in 3 to 6 words. Do not use quotes.",
+              text: TITLE_INSTRUCTIONS,
             },
           ],
         },
@@ -289,7 +318,7 @@ export async function POST(req: Request) {
 
     const response = await openai.responses.create({
       model: "gpt-4.1",
-      instructions: SYSTEM_PROMPT_WEB,
+      instructions: buildWebInstructions(),
       input: recentMessages,
       tools: [{ type: "web_search_preview" }],
       include: ["web_search_call.action.sources"],
