@@ -537,7 +537,9 @@ export default function ChatClient({
       const sessionBase = speechSessionBaseRef.current.trim();
       lastAppliedTranscriptRef.current = transcriptToApply;
 
-      setInput(sessionBase ? `${sessionBase} ${transcriptToApply}` : transcriptToApply);
+      setInput(
+        sessionBase ? `${sessionBase} ${transcriptToApply}` : transcriptToApply
+      );
       setUiError("");
       setSpeechError(null);
     };
@@ -612,7 +614,10 @@ export default function ChatClient({
             doc.extraction_status === "processing"
         );
 
-        const composerSnapshot = reconcileComposerDocuments(composerDocuments, docs);
+        const composerSnapshot = reconcileComposerDocuments(
+          composerDocuments,
+          docs
+        );
         const composerStillPending = composerSnapshot.some(
           (doc) =>
             doc.extraction_status === "uploading" ||
@@ -2186,7 +2191,7 @@ export default function ChatClient({
                               ? "Please wait while documents finish processing..."
                               : "Ask about the attached documents..."
                             : isListening
-                              ? "Listening… speak now."
+                              ? "Listening… tap mic to stop."
                               : "Ask something..."
                     }
                     maxLength={MAX_INPUT_LENGTH}
@@ -2207,10 +2212,14 @@ export default function ChatClient({
                         !speechSupported
                           ? "Voice input is not supported in this browser"
                           : isListening
-                            ? "Stop voice input"
+                            ? "Tap mic to stop"
                             : "Start voice input"
                       }
-                      className="absolute right-2 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-white/5 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      className={`absolute right-2 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        isListening
+                          ? "border-red-500 bg-red-500/15 text-red-400 shadow-[0_0_0_6px_rgba(239,68,68,0.12)] animate-pulse"
+                          : "border-white/10 bg-white/5 text-white hover:bg-white/10"
+                      }`}
                     >
                       {isListening ? (
                         <MicOff className="h-5 w-5" />
@@ -2249,9 +2258,10 @@ export default function ChatClient({
               </form>
 
               {isListening && !useWebSearch && (
-                <p className="px-1 text-xs text-neutral-400">
-                  Listening… speak now.
-                </p>
+                <div className="flex items-center gap-2 px-1 text-xs text-red-400">
+                  <span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                  <span>Listening… Tap mic to stop.</span>
+                </div>
               )}
 
               {!speechSupported && !useWebSearch && (
