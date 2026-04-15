@@ -2,10 +2,57 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Mic, MicOff } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import DocumentUploadButton from "@/components/DocumentUploadButton";
 import DocumentChip from "@/components/DocumentChip";
 import { validateFiles } from "@/lib/documents/validate-upload";
+
+type AppSpeechRecognitionResultAlternative = {
+  transcript: string;
+  confidence: number;
+};
+
+type AppSpeechRecognitionResult = {
+  [index: number]: AppSpeechRecognitionResultAlternative;
+  isFinal: boolean;
+  length: number;
+};
+
+type AppSpeechRecognitionResultList = {
+  [index: number]: AppSpeechRecognitionResult;
+  length: number;
+};
+
+type AppSpeechRecognitionEvent = {
+  results: AppSpeechRecognitionResultList;
+};
+
+type AppSpeechRecognitionErrorEvent = {
+  error: string;
+  message?: string;
+};
+
+type AppSpeechRecognition = EventTarget & {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((event: AppSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: AppSpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+};
+
+type AppSpeechRecognitionConstructor = new () => AppSpeechRecognition;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: AppSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: AppSpeechRecognitionConstructor;
+  }
+}
 
 type SourceItem = {
   title: string;
@@ -97,15 +144,15 @@ const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4";
 const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl";
 const USER_BUBBLE_CLASS = "w-full max-w-2xl";
 
-function createId() {
+function createId(): string {
   return crypto.randomUUID();
 }
 
-function sleep(ms: number) {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function debugLog(...args: unknown[]) {
+function debugLog(...args: unknown[]): void {
   if (ENABLE_UPLOAD_DEBUG) {
     console.log(...args);
   }
@@ -268,7 +315,7 @@ async function fetchWithTimeout(
   timeoutMs: number
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(input, {
@@ -276,7 +323,7 @@ async function fetchWithTimeout(
       signal: controller.signal,
     });
   } finally {
-    clearTimeout(timeoutId);
+    window.clearTimeout(timeoutId);
   }
 }
 
@@ -367,12 +414,9 @@ export default function ChatClient({
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
 
-  // Draft-only documents shown in the composer footer.
   const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>(
     []
   );
-
-  // Conversation-level documents loaded from the server.
   const [conversationDocuments, setConversationDocuments] = useState<
     UploadedDocument[]
   >([]);
@@ -391,14 +435,20 @@ export default function ChatClient({
   const [uiError, setUiError] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeDocumentPollRef = useRef(0);
+  const recognitionRef = useRef<AppSpeechRecognition | null>(null);
+  const speechSessionBaseRef = useRef<string>("");
+  const lastAppliedTranscriptRef = useRef<string>("");
 
   const readyComposerDocuments = useMemo(
-    () =>
-      composerDocuments.filter((doc) => doc.extraction_status === "ready"),
+    () => composerDocuments.filter((doc) => doc.extraction_status === "ready"),
     [composerDocuments]
   );
 
@@ -419,10 +469,11 @@ export default function ChatClient({
 
   const modeLabel = useMemo(() => {
     if (useWebSearch) return "Using web search";
+    if (isListening) return "Voice input active";
     if (imageBase64) return "Image attached";
     if (composerDocuments.length > 0) return "Documents attached";
     return "Standard assistant";
-  }, [useWebSearch, imageBase64, composerDocuments.length]);
+  }, [useWebSearch, isListening, imageBase64, composerDocuments.length]);
 
   const isLimitReached = Boolean(
     usage && usage.limit > 0 && usage.remaining <= 0
@@ -438,6 +489,8 @@ export default function ChatClient({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      recognitionRef.current?.abort();
+      recognitionRef.current = null;
     };
   }, []);
 
@@ -448,6 +501,89 @@ export default function ChatClient({
   useEffect(() => {
     void fetchDocuments(conversationId);
   }, [conversationId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const SpeechRecognitionConstructor =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognitionConstructor) {
+      setSpeechSupported(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognitionConstructor();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onresult = (event: AppSpeechRecognitionEvent) => {
+      let finalTranscript = "";
+      let interimTranscript = "";
+
+      for (let i = 0; i < event.results.length; i += 1) {
+        const transcript = event.results[i][0]?.transcript ?? "";
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      const transcriptToApply = (finalTranscript || interimTranscript).trim();
+      if (!transcriptToApply) return;
+
+      const sessionBase = speechSessionBaseRef.current.trim();
+      lastAppliedTranscriptRef.current = transcriptToApply;
+
+      setInput(sessionBase ? `${sessionBase} ${transcriptToApply}` : transcriptToApply);
+      setUiError("");
+      setSpeechError(null);
+    };
+
+    recognition.onerror = (event: AppSpeechRecognitionErrorEvent) => {
+      setIsListening(false);
+
+      if (event.error === "not-allowed") {
+        setSpeechError("Microphone access was denied.");
+        return;
+      }
+
+      if (event.error === "no-speech") {
+        setSpeechError("No speech was detected. Please try again.");
+        return;
+      }
+
+      if (event.error === "audio-capture") {
+        setSpeechError("No microphone was found on this device.");
+        return;
+      }
+
+      setSpeechError("Voice input failed. Please try again.");
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      lastAppliedTranscriptRef.current = "";
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.abort();
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loading || useWebSearch || isUploadingDocuments || uploadingImage) {
+      if (isListening) {
+        recognitionRef.current?.stop();
+        setIsListening(false);
+      }
+    }
+  }, [loading, useWebSearch, isUploadingDocuments, uploadingImage, isListening]);
 
   useEffect(() => {
     if (!conversationId || !hasPendingDocuments) {
@@ -468,9 +604,7 @@ export default function ChatClient({
         const docs = await fetchDocuments(conversationId, { silent: true });
         if (!docs) return;
 
-        setComposerDocuments((prev) =>
-          reconcileComposerDocuments(prev, docs)
-        );
+        setComposerDocuments((prev) => reconcileComposerDocuments(prev, docs));
 
         const stillPending = docs.some(
           (doc) =>
@@ -478,10 +612,8 @@ export default function ChatClient({
             doc.extraction_status === "processing"
         );
 
-        const composerStillPending = reconcileComposerDocuments(
-          composerDocuments,
-          docs
-        ).some(
+        const composerSnapshot = reconcileComposerDocuments(composerDocuments, docs);
+        const composerStillPending = composerSnapshot.some(
           (doc) =>
             doc.extraction_status === "uploading" ||
             doc.extraction_status === "processing"
@@ -504,7 +636,7 @@ export default function ChatClient({
     };
   }, [conversationId, hasPendingDocuments]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function clearImage() {
+  function clearImage(): void {
     setImageBase64(null);
     setImageName("");
     setImagePath(null);
@@ -514,20 +646,20 @@ export default function ChatClient({
     }
   }
 
-  function clearComposerDocuments() {
+  function clearComposerDocuments(): void {
     setComposerDocuments([]);
     setDocumentError("");
     activeDocumentPollRef.current++;
   }
 
-  function clearConversationDocuments() {
+  function clearConversationDocuments(): void {
     setConversationDocuments([]);
   }
 
   function updateAssistantMessage(
     messageId: string,
     updater: (msg: Message) => Message
-  ) {
+  ): void {
     setMessages((prev) =>
       prev.map((msg) => (msg.id === messageId ? updater(msg) : msg))
     );
@@ -548,13 +680,14 @@ export default function ChatClient({
     }
   }
 
-  function handleConversationStarterClick(starter: string) {
+  function handleConversationStarterClick(starter: string): void {
     if (loading || isLimitReached) return;
     setInput(starter);
     setUiError("");
+    setSpeechError(null);
   }
 
-  function handleOpenImagePicker() {
+  function handleOpenImagePicker(): void {
     if (
       loading ||
       uploadingImage ||
@@ -566,6 +699,46 @@ export default function ChatClient({
     }
 
     imageInputRef.current?.click();
+  }
+
+  function handleStartListening(): void {
+    if (
+      loading ||
+      uploadingImage ||
+      isUploadingDocuments ||
+      isLimitReached ||
+      useWebSearch ||
+      hasPendingDocuments
+    ) {
+      return;
+    }
+
+    if (!recognitionRef.current) {
+      setSpeechSupported(false);
+      return;
+    }
+
+    setSpeechError(null);
+    setUiError("");
+    speechSessionBaseRef.current = input.trim();
+    lastAppliedTranscriptRef.current = "";
+
+    try {
+      setIsListening(true);
+      recognitionRef.current.start();
+    } catch {
+      setIsListening(false);
+      setSpeechError("Could not start microphone input.");
+    }
+  }
+
+  function handleStopListening(): void {
+    try {
+      recognitionRef.current?.stop();
+    } finally {
+      setIsListening(false);
+      lastAppliedTranscriptRef.current = "";
+    }
   }
 
   async function fetchUsage() {
@@ -746,6 +919,7 @@ export default function ChatClient({
       setIsUploadingDocuments(true);
       setDocumentError("");
       setUiError("");
+      setSpeechError(null);
 
       const optimisticDocs: UploadedDocument[] = files.map((file, index) => ({
         id: `temp-${Date.now()}-${index}`,
@@ -839,7 +1013,7 @@ export default function ChatClient({
     }
   }
 
-  function removeComposerDocument(id: string) {
+  function removeComposerDocument(id: string): void {
     setComposerDocuments((prev) => prev.filter((doc) => doc.id !== id));
   }
 
@@ -882,6 +1056,7 @@ export default function ChatClient({
     setSidebarLoading(true);
     setUiError("");
     setDocumentError("");
+    setSpeechError(null);
     clearImage();
     clearComposerDocuments();
     setInput("");
@@ -942,6 +1117,7 @@ export default function ChatClient({
     setSidebarLoading(true);
     setUiError("");
     setDocumentError("");
+    setSpeechError(null);
     clearImage();
     clearComposerDocuments();
     clearConversationDocuments();
@@ -1091,6 +1267,7 @@ export default function ChatClient({
 
     setUploadingImage(true);
     setUiError("");
+    setSpeechError(null);
 
     try {
       const uploaded = await uploadImageToStorage(file);
@@ -1153,6 +1330,11 @@ export default function ChatClient({
 
     setUiError("");
     setDocumentError("");
+    setSpeechError(null);
+
+    if (isListening) {
+      handleStopListening();
+    }
 
     const effectiveMessage =
       trimmed ||
@@ -1311,14 +1493,17 @@ export default function ChatClient({
     }
   }
 
-  function handleStop() {
+  function handleStop(): void {
     abortRef.current?.abort();
   }
 
-  function handleModeChange(nextUseWebSearch: boolean) {
+  function handleModeChange(nextUseWebSearch: boolean): void {
     if (loading) return;
 
     if (nextUseWebSearch) {
+      if (isListening) {
+        handleStopListening();
+      }
       clearImage();
       clearComposerDocuments();
     }
@@ -1326,6 +1511,7 @@ export default function ChatClient({
     setUseWebSearch(nextUseWebSearch);
     setUiError("");
     setDocumentError("");
+    setSpeechError(null);
   }
 
   function renderConversationCard(
@@ -1394,6 +1580,18 @@ export default function ChatClient({
     );
   }
 
+  const composerDisabled =
+    loading || uploadingImage || isUploadingDocuments || isLimitReached;
+
+  const micDisabled =
+    !speechSupported ||
+    loading ||
+    uploadingImage ||
+    isUploadingDocuments ||
+    isLimitReached ||
+    useWebSearch ||
+    hasPendingDocuments;
+
   return (
     <main className="h-screen overflow-hidden bg-black text-white">
       {mobileMenuOpen && (
@@ -1446,6 +1644,12 @@ export default function ChatClient({
                   {documentError && (
                     <div className="mt-2 text-xs text-red-400">
                       {documentError}
+                    </div>
+                  )}
+
+                  {speechError && (
+                    <div className="mt-2 text-xs text-red-400">
+                      {speechError}
                     </div>
                   )}
                 </div>
@@ -1508,7 +1712,7 @@ export default function ChatClient({
       <div className="flex h-screen overflow-hidden">
         <aside className="hidden h-full w-80 shrink-0 border-r border-neutral-800 bg-neutral-950 md:flex md:flex-col">
           <div className="sticky top-0 border-b border-neutral-800 bg-neutral-950 p-4">
-            <div className="text-sm font-semibold truncate">{userEmail}</div>
+            <div className="truncate text-sm font-semibold">{userEmail}</div>
 
             {usage && (
               <div className="mt-2 text-xs text-neutral-400">
@@ -1538,6 +1742,10 @@ export default function ChatClient({
 
             {documentError && (
               <div className="mt-2 text-xs text-red-400">{documentError}</div>
+            )}
+
+            {speechError && (
+              <div className="mt-2 text-xs text-red-400">{speechError}</div>
             )}
 
             <div className="mt-3 flex flex-col gap-2">
@@ -1706,6 +1914,14 @@ export default function ChatClient({
                 </div>
               )}
 
+              {speechError && (
+                <div
+                  className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}
+                >
+                  {speechError}
+                </div>
+              )}
+
               <div className="space-y-4">
                 {messages.map((message) => {
                   const sources = Array.isArray(message.sources)
@@ -1855,13 +2071,7 @@ export default function ChatClient({
                 type="file"
                 accept="image/*"
                 onChange={handleImageChange}
-                disabled={
-                  loading ||
-                  uploadingImage ||
-                  isUploadingDocuments ||
-                  isLimitReached ||
-                  useWebSearch
-                }
+                disabled={composerDisabled || useWebSearch}
                 className="hidden"
               />
 
@@ -1933,24 +2143,14 @@ export default function ChatClient({
                 {!useWebSearch && (
                   <div className="flex gap-2">
                     <DocumentUploadButton
-                      disabled={
-                        loading ||
-                        uploadingImage ||
-                        isUploadingDocuments ||
-                        isLimitReached
-                      }
+                      disabled={composerDisabled}
                       onFilesSelected={handleFilesSelected}
                     />
 
                     <button
                       type="button"
                       onClick={handleOpenImagePicker}
-                      disabled={
-                        loading ||
-                        uploadingImage ||
-                        isUploadingDocuments ||
-                        isLimitReached
-                      }
+                      disabled={composerDisabled}
                       className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-neutral-700 bg-neutral-900 text-xl text-white transition hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label="Attach image"
                       title="Attach image"
@@ -1960,37 +2160,66 @@ export default function ChatClient({
                   </div>
                 )}
 
-                <input
-                  value={input}
-                  onChange={(event) => {
-                    setInput(event.target.value);
-                    if (uiError) {
-                      setUiError("");
+                <div className="relative flex-1">
+                  <input
+                    value={input}
+                    onChange={(event) => {
+                      setInput(event.target.value);
+                      if (uiError) {
+                        setUiError("");
+                      }
+                      if (documentError) {
+                        setDocumentError("");
+                      }
+                      if (speechError) {
+                        setSpeechError(null);
+                      }
+                    }}
+                    className="w-full rounded-2xl bg-neutral-900 px-4 py-3.5 pr-14 outline-none"
+                    placeholder={
+                      useWebSearch
+                        ? "Ask something with web search..."
+                        : imageBase64
+                          ? "Add context for the image, or send without text..."
+                          : composerDocuments.length > 0
+                            ? hasPendingDocuments
+                              ? "Please wait while documents finish processing..."
+                              : "Ask about the attached documents..."
+                            : isListening
+                              ? "Listening… speak now."
+                              : "Ask something..."
                     }
-                    if (documentError) {
-                      setDocumentError("");
-                    }
-                  }}
-                  className="flex-1 rounded-2xl bg-neutral-900 px-4 py-3.5 outline-none"
-                  placeholder={
-                    useWebSearch
-                      ? "Ask something with web search..."
-                      : imageBase64
-                        ? "Add context for the image, or send without text..."
-                        : composerDocuments.length > 0
-                          ? hasPendingDocuments
-                            ? "Please wait while documents finish processing..."
-                            : "Ask about the attached documents..."
-                          : "Ask something..."
-                  }
-                  maxLength={MAX_INPUT_LENGTH}
-                  disabled={
-                    loading ||
-                    uploadingImage ||
-                    isUploadingDocuments ||
-                    isLimitReached
-                  }
-                />
+                    maxLength={MAX_INPUT_LENGTH}
+                    disabled={composerDisabled}
+                  />
+
+                  {!useWebSearch && (
+                    <button
+                      type="button"
+                      onClick={
+                        isListening ? handleStopListening : handleStartListening
+                      }
+                      disabled={micDisabled}
+                      aria-label={
+                        isListening ? "Stop voice input" : "Start voice input"
+                      }
+                      title={
+                        !speechSupported
+                          ? "Voice input is not supported in this browser"
+                          : isListening
+                            ? "Stop voice input"
+                            : "Start voice input"
+                      }
+                      className="absolute right-2 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-white/5 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isListening ? (
+                        <MicOff className="h-5 w-5" />
+                      ) : (
+                        <Mic className="h-5 w-5" />
+                      )}
+                    </button>
+                  )}
+                </div>
 
                 {loading ? (
                   <button
@@ -2018,6 +2247,18 @@ export default function ChatClient({
                   </button>
                 )}
               </form>
+
+              {isListening && !useWebSearch && (
+                <p className="px-1 text-xs text-neutral-400">
+                  Listening… speak now.
+                </p>
+              )}
+
+              {!speechSupported && !useWebSearch && (
+                <p className="px-1 text-xs text-neutral-500">
+                  Voice input is not supported in this browser.
+                </p>
+              )}
             </div>
           </div>
         </section>
