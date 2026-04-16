@@ -1,14 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
+import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { BRAND } from "@/lib/branding";
 
 const MIN_PASSWORD_LENGTH = 8;
 
 type AuthMode = "signin" | "signup";
 type FeedbackType = "success" | "error" | null;
+
+function getFeedbackClassName(messageType: FeedbackType): string {
+  if (messageType === "success") {
+    return "text-green-400";
+  }
+
+  if (messageType === "error") {
+    return "text-red-400";
+  }
+
+  return "text-zinc-400";
+}
 
 export default function LoginClient() {
   const supabase = createBrowserSupabaseClient();
@@ -44,6 +57,10 @@ export default function LoginClient() {
     setMessageType(nextType);
   }
 
+  function clearFeedback() {
+    setFeedback(null, null);
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -52,7 +69,7 @@ export default function LoginClient() {
     }
 
     setLoading(true);
-    setFeedback(null, null);
+    clearFeedback();
 
     try {
       if (mode === "signup") {
@@ -75,6 +92,7 @@ export default function LoginClient() {
           "Account created. Check your email if confirmation is enabled.",
           "success"
         );
+        setPassword("");
         return;
       }
 
@@ -101,7 +119,10 @@ export default function LoginClient() {
 
   async function handleForgotPassword() {
     if (!normalizedEmail) {
-      setFeedback("Enter your email first, then click Forgot password.", "error");
+      setFeedback(
+        "Enter your email first, then click Forgot password.",
+        "error"
+      );
       return;
     }
 
@@ -110,11 +131,11 @@ export default function LoginClient() {
     }
 
     setResetLoading(true);
-    setFeedback(null, null);
+    clearFeedback();
 
     try {
       const appUrl =
-        process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+        process.env.NEXT_PUBLIC_APP_URL?.trim() || window.location.origin;
 
       const { error } = await supabase.auth.resetPasswordForEmail(
         normalizedEmail,
@@ -145,19 +166,21 @@ export default function LoginClient() {
     setMode((prev) => (prev === "signin" ? "signup" : "signin"));
     setPassword("");
     setShowPassword(false);
-    setFeedback(null, null);
+    clearFeedback();
   }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4 text-zinc-100">
       <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
         <div className="space-y-2">
-          <p className="text-xs uppercase tracking-wide text-zinc-500">
-            Origin Sable
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">
+            {BRAND.name}
           </p>
+
           <h1 className="text-2xl font-semibold">
             {mode === "signin" ? "Sign in" : "Create account"}
           </h1>
+
           <p className="text-sm text-zinc-400">
             Access your AI workspace with chat history, image analysis, and web
             search.
@@ -169,9 +192,15 @@ export default function LoginClient() {
             type="email"
             placeholder="Email"
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={(event) => {
+              setEmail(event.target.value);
+              if (message) {
+                clearFeedback();
+              }
+            }}
             className="w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
             autoComplete="email"
+            inputMode="email"
             required
           />
 
@@ -180,7 +209,12 @@ export default function LoginClient() {
               type={showPassword ? "text" : "password"}
               placeholder="Password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                if (message) {
+                  clearFeedback();
+                }
+              }}
               className="w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-12 outline-none transition focus:border-zinc-500"
               autoComplete={
                 mode === "signin" ? "current-password" : "new-password"
@@ -229,11 +263,7 @@ export default function LoginClient() {
         </form>
 
         {message && (
-          <p
-            className={`mt-4 text-sm ${
-              messageType === "success" ? "text-green-400" : "text-red-400"
-            }`}
-          >
+          <p className={`mt-4 text-sm ${getFeedbackClassName(messageType)}`}>
             {message}
           </p>
         )}
@@ -241,7 +271,8 @@ export default function LoginClient() {
         <button
           type="button"
           onClick={toggleMode}
-          className="mt-4 text-sm text-zinc-400 underline"
+          disabled={loading || resetLoading}
+          className="mt-4 text-sm text-zinc-400 underline disabled:opacity-50"
         >
           {mode === "signin"
             ? "Need an account? Sign up"
