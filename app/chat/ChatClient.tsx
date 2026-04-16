@@ -579,13 +579,13 @@ export default function ChatClient({
   }, []);
 
   useEffect(() => {
-    if (loading || useWebSearch || isUploadingDocuments || uploadingImage) {
+    if (loading || isUploadingDocuments || uploadingImage) {
       if (isListening) {
         recognitionRef.current?.stop();
         setIsListening(false);
       }
     }
-  }, [loading, useWebSearch, isUploadingDocuments, uploadingImage, isListening]);
+  }, [loading, isUploadingDocuments, uploadingImage, isListening]);
 
   useEffect(() => {
     if (!conversationId || !hasPendingDocuments) {
@@ -712,7 +712,6 @@ export default function ChatClient({
       uploadingImage ||
       isUploadingDocuments ||
       isLimitReached ||
-      useWebSearch ||
       hasPendingDocuments
     ) {
       return;
@@ -1506,9 +1505,6 @@ export default function ChatClient({
     if (loading) return;
 
     if (nextUseWebSearch) {
-      if (isListening) {
-        handleStopListening();
-      }
       clearImage();
       clearComposerDocuments();
     }
@@ -1594,7 +1590,6 @@ export default function ChatClient({
     uploadingImage ||
     isUploadingDocuments ||
     isLimitReached ||
-    useWebSearch ||
     hasPendingDocuments;
 
   return (
@@ -2183,7 +2178,9 @@ export default function ChatClient({
                     className="w-full rounded-2xl bg-neutral-900 px-4 py-3.5 pr-14 outline-none"
                     placeholder={
                       useWebSearch
-                        ? "Ask something with web search..."
+                        ? isListening
+                          ? "Listening… tap mic to stop."
+                          : "Ask something with web search..."
                         : imageBase64
                           ? "Add context for the image, or send without text..."
                           : composerDocuments.length > 0
@@ -2198,36 +2195,34 @@ export default function ChatClient({
                     disabled={composerDisabled}
                   />
 
-                  {!useWebSearch && (
-                    <button
-                      type="button"
-                      onClick={
-                        isListening ? handleStopListening : handleStartListening
-                      }
-                      disabled={micDisabled}
-                      aria-label={
-                        isListening ? "Stop voice input" : "Start voice input"
-                      }
-                      title={
-                        !speechSupported
-                          ? "Voice input is not supported in this browser"
-                          : isListening
-                            ? "Tap mic to stop"
-                            : "Start voice input"
-                      }
-                      className={`absolute right-2 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                        isListening
-                          ? "border-red-500 bg-red-500/15 text-red-400 shadow-[0_0_0_6px_rgba(239,68,68,0.12)] animate-pulse"
-                          : "border-white/10 bg-white/5 text-white hover:bg-white/10"
-                      }`}
-                    >
-                      {isListening ? (
-                        <MicOff className="h-5 w-5" />
-                      ) : (
-                        <Mic className="h-5 w-5" />
-                      )}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={
+                      isListening ? handleStopListening : handleStartListening
+                    }
+                    disabled={micDisabled}
+                    aria-label={
+                      isListening ? "Stop voice input" : "Start voice input"
+                    }
+                    title={
+                      !speechSupported
+                        ? "Voice input is not supported in this browser"
+                        : isListening
+                          ? "Tap mic to stop"
+                          : "Start voice input"
+                    }
+                    className={`absolute right-2 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isListening
+                        ? "border-red-500 bg-red-500/15 text-red-400 shadow-[0_0_0_6px_rgba(239,68,68,0.12)] animate-pulse"
+                        : "border-white/10 bg-white/5 text-white hover:bg-white/10"
+                    }`}
+                  >
+                    {isListening ? (
+                      <MicOff className="h-5 w-5" />
+                    ) : (
+                      <Mic className="h-5 w-5" />
+                    )}
+                  </button>
                 </div>
 
                 {loading ? (
@@ -2257,14 +2252,14 @@ export default function ChatClient({
                 )}
               </form>
 
-              {isListening && !useWebSearch && (
+              {isListening && (
                 <div className="flex items-center gap-2 px-1 text-xs text-red-400">
                   <span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-pulse" />
                   <span>Listening… Tap mic to stop.</span>
                 </div>
               )}
 
-              {!speechSupported && !useWebSearch && (
+              {!speechSupported && (
                 <p className="px-1 text-xs text-neutral-500">
                   Voice input is not supported in this browser.
                 </p>
