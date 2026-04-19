@@ -19,6 +19,20 @@ type StoredDocument = {
   conversation_id: string | null;
 };
 
+type SourceItem = {
+  title: string;
+  url: string;
+  snippet?: string;
+};
+
+type TimeWidget = {
+  type: "time";
+  location: string;
+  timezone: string;
+};
+
+type StoredWidget = TimeWidget | null;
+
 type MessageRow = {
   id: string;
   role: "user" | "assistant";
@@ -27,6 +41,9 @@ type MessageRow = {
   image_path: string | null;
   image_name: string | null;
   documents: unknown;
+  sources: unknown;
+  source_count: number | null;
+  widget: unknown;
 };
 
 function jsonError(message: string, status: number) {
@@ -83,6 +100,78 @@ function normalizeStoredDocuments(input: unknown): StoredDocument[] {
     .filter((doc) => doc.id.length > 0);
 }
 
+function normalizeSources(input: unknown): SourceItem[] {
+  if (!Array.isArray(input)) return [];
+
+  const seen = new Set<string>();
+
+  return input
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object"
+    )
+    .map((item) => {
+      const url = typeof item.url === "string" ? item.url.trim() : "";
+      const title =
+        typeof item.title === "string" && item.title.trim().length > 0
+          ? item.title.trim()
+          : url;
+
+      const snippet =
+        typeof item.snippet === "string" && item.snippet.trim().length > 0
+          ? item.snippet.trim()
+          : undefined;
+
+      return {
+        title,
+        url,
+        snippet,
+      };
+    })
+    .filter((source) => {
+      if (!source.url) return false;
+      if (seen.has(source.url)) return false;
+      seen.add(source.url);
+      return true;
+    });
+}
+
+function normalizeSourceCount(
+  input: unknown,
+  fallbackSources: SourceItem[]
+): number {
+  return typeof input === "number" && input >= 0
+    ? input
+    : fallbackSources.length;
+}
+
+function normalizeWidget(input: unknown): StoredWidget {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const widget = input as Record<string, unknown>;
+
+  if (widget.type !== "time") {
+    return null;
+  }
+
+  const location =
+    typeof widget.location === "string" ? widget.location.trim() : "";
+  const timezone =
+    typeof widget.timezone === "string" ? widget.timezone.trim() : "";
+
+  if (!location || !timezone) {
+    return null;
+  }
+
+  return {
+    type: "time",
+    location,
+    timezone,
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
     const supabase = await createServerSupabaseClient();
@@ -111,7 +200,18 @@ export async function GET(req: NextRequest) {
     const { data, error } = await supabase
       .from("messages")
       .select(
-        "id, role, content, created_at, image_path, image_name, documents"
+        `
+          id,
+          role,
+          content,
+          created_at,
+          image_path,
+          image_name,
+          documents,
+          sources,
+          source_count,
+          widget
+        `
       )
       .eq("conversation_id", conversationId)
       .eq("user_id", user.id)
@@ -122,10 +222,17 @@ export async function GET(req: NextRequest) {
       return jsonError("Failed to load messages.", 500);
     }
 
-    const normalizedMessages = ((data ?? []) as MessageRow[]).map((message) => ({
-      ...message,
-      documents: normalizeStoredDocuments(message.documents),
-    }));
+    const normalizedMessages = ((data ?? []) as MessageRow[]).map((message) => {
+      const sources = normalizeSources(message.sources);
+
+      return {
+        ...message,
+        documents: normalizeStoredDocuments(message.documents),
+        sources,
+        sourceCount: normalizeSourceCount(message.source_count, sources),
+        widget: normalizeWidget(message.widget),
+      };
+    });
 
     return NextResponse.json({ messages: normalizedMessages });
   } catch (error) {

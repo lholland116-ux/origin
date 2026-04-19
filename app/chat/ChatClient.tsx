@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { HelpCircle, Mic, MicOff } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Clock3,
+  HelpCircle,
+  Mic,
+  MicOff,
+} from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BRAND } from "@/lib/branding";
 import Tooltip from "@/components/ui/Tooltip";
@@ -64,6 +71,14 @@ type SourceItem = {
   snippet?: string;
 };
 
+type TimeWidgetPayload = {
+  type: "time";
+  location: string;
+  timezone: string;
+};
+
+type MessageWidget = TimeWidgetPayload;
+
 type UploadedDocument = {
   id: string;
   file_name: string;
@@ -79,6 +94,8 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   sources?: SourceItem[];
+  sourceCount?: number;
+  widget?: MessageWidget | null;
   image_path?: string | null;
   image_name?: string | null;
   image_url?: string | null;
@@ -101,6 +118,8 @@ type ChatClientProps = {
 type ChatWebResponse = {
   reply?: string;
   sources?: SourceItem[];
+  sourceCount?: number;
+  widget?: MessageWidget | null;
   error?: string;
 };
 
@@ -227,6 +246,14 @@ function cloneDocuments(documents: UploadedDocument[]): UploadedDocument[] {
 function normalizeInitialMessages(messages: Message[]): Message[] {
   return messages.map((message) => ({
     ...message,
+    sources: Array.isArray(message.sources) ? message.sources : [],
+    sourceCount:
+      typeof message.sourceCount === "number"
+        ? message.sourceCount
+        : Array.isArray(message.sources)
+          ? message.sources.length
+          : 0,
+    widget: normalizeWidget(message.widget),
     documents: Array.isArray(message.documents)
       ? cloneDocuments(message.documents)
       : [],
@@ -263,6 +290,80 @@ function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
       conversation_id:
         typeof item.conversation_id === "string" ? item.conversation_id : null,
     }));
+}
+
+function normalizeWidget(input: unknown): MessageWidget | null {
+  if (!input || typeof input !== "object") return null;
+
+  const widget = input as Record<string, unknown>;
+  if (widget.type !== "time") return null;
+
+  const location =
+    typeof widget.location === "string" && widget.location.trim()
+      ? widget.location.trim()
+      : "";
+  const timezone =
+    typeof widget.timezone === "string" && widget.timezone.trim()
+      ? widget.timezone.trim()
+      : "";
+
+  if (!location || !timezone) return null;
+
+  return {
+    type: "time",
+    location,
+    timezone,
+  };
+}
+
+function formatTimeForZone(timezone: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date());
+}
+
+function formatDateForZone(timezone: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(new Date());
+}
+
+function formatZoneLabel(timezone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      timeZoneName: "short",
+    }).formatToParts(new Date());
+
+    return parts.find((part) => part.type === "timeZoneName")?.value ?? timezone;
+  } catch {
+    return timezone;
+  }
+}
+
+function getSourceHostname(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function dedupeSources(sources: SourceItem[]): SourceItem[] {
+  const seen = new Set<string>();
+
+  return sources.filter((source) => {
+    const key = `${source.url}|${source.title}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function findBestServerMatch(
@@ -424,6 +525,122 @@ function formatConversationDate(value: string): string {
 
 function getMessageCopyValue(message: Message): string {
   return message.content?.trim() || "";
+}
+
+function SourcesDisclosure({
+  sources,
+  sourceCount,
+}: {
+  sources: SourceItem[];
+  sourceCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const visibleSources = sources.slice(0, 3);
+
+  return (
+    <div className="pt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-xs text-neutral-400 transition hover:border-neutral-700 hover:text-white"
+        aria-expanded={open}
+      >
+        <span>Sources ({sourceCount})</span>
+        {open ? (
+          <ChevronUp className="h-3.5 w-3.5" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5" />
+        )}
+      </button>
+
+      {open && (
+        <div className="mt-2 rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
+          <div className="space-y-2">
+            {visibleSources.map((source, index) => (
+              <a
+                key={`${source.url}-${index}`}
+                href={source.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block rounded-xl border border-neutral-800 bg-black/30 p-3 transition hover:border-neutral-700"
+              >
+                <div className="text-xs font-medium text-blue-400">
+                  {source.title?.trim() || getSourceHostname(source.url)}
+                </div>
+                <div className="mt-1 text-[11px] text-neutral-500">
+                  {getSourceHostname(source.url)}
+                </div>
+                {source.snippet ? (
+                  <div className="mt-1 text-xs text-neutral-400 line-clamp-3">
+                    {source.snippet}
+                  </div>
+                ) : null}
+              </a>
+            ))}
+
+            {sourceCount > visibleSources.length && (
+              <div className="text-[11px] text-neutral-500">
+                Showing {visibleSources.length} of {sourceCount} sources
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimeWidget({
+  location,
+  timezone,
+}: {
+  location: string;
+  timezone: string;
+}) {
+  const [time, setTime] = useState(() => formatTimeForZone(timezone));
+  const [dateLabel, setDateLabel] = useState(() => formatDateForZone(timezone));
+
+  useEffect(() => {
+    const tick = () => {
+      setTime(formatTimeForZone(timezone));
+      setDateLabel(formatDateForZone(timezone));
+    };
+
+    tick();
+    const intervalId = window.setInterval(tick, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [timezone]);
+
+  return (
+    <div className="mb-3 rounded-3xl border border-neutral-800 bg-neutral-950 p-5 shadow-xl">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-4xl font-semibold tracking-tight text-white">
+            {time}
+          </div>
+          <div className="mt-2 text-sm text-neutral-300">
+            {location} ({formatZoneLabel(timezone)})
+          </div>
+          <div className="mt-1 text-sm text-neutral-500">{dateLabel}</div>
+        </div>
+
+        <div className="rounded-2xl border border-neutral-800 bg-black/30 p-3 text-neutral-400">
+          <Clock3 className="h-5 w-5" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageWidgetRenderer({ widget }: { widget?: MessageWidget | null }) {
+  if (!widget) return null;
+
+  if (widget.type === "time") {
+    return <TimeWidget location={widget.location} timezone={widget.timezone} />;
+  }
+
+  return null;
 }
 
 export default function ChatClient({
@@ -1101,6 +1318,14 @@ export default function ChatClient({
         rawMessages.map(async (msg: Message) => {
           const normalizedMessage: Message = {
             ...msg,
+            sources: Array.isArray(msg.sources) ? dedupeSources(msg.sources) : [],
+            sourceCount:
+              typeof msg.sourceCount === "number"
+                ? msg.sourceCount
+                : Array.isArray(msg.sources)
+                  ? dedupeSources(msg.sources).length
+                  : 0,
+            widget: normalizeWidget(msg.widget),
             documents: Array.isArray(msg.documents)
               ? cloneDocuments(msg.documents)
               : [],
@@ -1393,6 +1618,8 @@ export default function ChatClient({
       role: "assistant",
       content: "",
       sources: [],
+      sourceCount: 0,
+      widget: null,
       documents: [],
     };
 
@@ -1450,12 +1677,20 @@ export default function ChatClient({
             ? data.reply.trim()
             : "No response generated.";
 
-        const sources = Array.isArray(data.sources) ? data.sources : [];
+        const sources = Array.isArray(data.sources)
+          ? dedupeSources(data.sources)
+          : [];
+        const sourceCount =
+          typeof data.sourceCount === "number"
+            ? data.sourceCount
+            : sources.length;
 
         updateAssistantMessage(assistantId, (msg) => ({
           ...msg,
           content: reply,
           sources,
+          sourceCount,
+          widget: normalizeWidget(data.widget),
         }));
       } else {
         if (!res.body) {
@@ -1504,6 +1739,8 @@ export default function ChatClient({
             ? error.message
             : "Something went wrong. Please try again.",
         sources: [],
+        sourceCount: 0,
+        widget: null,
         documents: [],
       }));
     } finally {
@@ -1947,8 +2184,12 @@ export default function ChatClient({
                 <div className="space-y-4">
                   {messages.map((message) => {
                     const sources = Array.isArray(message.sources)
-                      ? message.sources
+                      ? dedupeSources(message.sources)
                       : [];
+                    const sourceCount =
+                      typeof message.sourceCount === "number"
+                        ? message.sourceCount
+                        : sources.length;
                     const messageDocuments = Array.isArray(message.documents)
                       ? message.documents
                       : [];
@@ -1999,6 +2240,8 @@ export default function ChatClient({
                             </Tooltip>
                           </div>
 
+                          <MessageWidgetRenderer widget={message.widget} />
+
                           {message.content}
 
                           {message.image_url && (
@@ -2046,27 +2289,11 @@ export default function ChatClient({
                         </div>
 
                         {sources.length > 0 && (
-                          <div
-                            className={`${ASSISTANT_BUBBLE_CLASS} mx-auto space-y-2`}
-                          >
-                            {sources.map((source, index) => (
-                              <a
-                                key={`${source.url}-${index}`}
-                                href={source.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block rounded-xl border border-neutral-800 bg-neutral-950 p-3 transition hover:border-neutral-700"
-                              >
-                                <div className="text-xs text-blue-400 underline">
-                                  {source.title}
-                                </div>
-                                {source.snippet ? (
-                                  <div className="mt-1 text-xs text-neutral-400">
-                                    {source.snippet}
-                                  </div>
-                                ) : null}
-                              </a>
-                            ))}
+                          <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto`}>
+                            <SourcesDisclosure
+                              sources={sources}
+                              sourceCount={sourceCount}
+                            />
                           </div>
                         )}
                       </div>

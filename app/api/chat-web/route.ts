@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 const DAILY_LIMIT = Number(process.env.DAILY_MESSAGE_LIMIT ?? 20);
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
+const MAX_RETURNED_SOURCES = 5;
 const IS_DEV = process.env.NODE_ENV === "development";
 
 const TONE_LAYER_WEB = `
@@ -59,6 +60,22 @@ type SourceItem = {
   snippet?: string;
 };
 
+type TimeWidgetPayload = {
+  type: "time";
+  location: string;
+  timezone: string;
+};
+
+type AssistantWidget = TimeWidgetPayload | null;
+
+type WebRouteSuccessResponse = {
+  reply: string;
+  sources: SourceItem[];
+  sourceCount: number;
+  widget: AssistantWidget;
+  web: true;
+};
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -82,6 +99,28 @@ function buildWebInstructions(): string {
   return [SYSTEM_PROMPT_WEB.trim(), TONE_LAYER_WEB].join("\n\n");
 }
 
+function safeLower(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function getHostnameLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function emptyWebResponse(message: string): WebRouteSuccessResponse {
+  return {
+    reply: message,
+    sources: [],
+    sourceCount: 0,
+    widget: null,
+    web: true,
+  };
+}
+
 function extractSources(response: unknown): SourceItem[] {
   const seen = new Set<string>();
   const sources: SourceItem[] = [];
@@ -103,26 +142,93 @@ function extractSources(response: unknown): SourceItem[] {
     if (typedItem?.type !== "web_search_call") continue;
 
     for (const src of typedItem?.action?.sources ?? []) {
-      const url = typeof src?.url === "string" ? src.url : "";
+      const url = typeof src?.url === "string" ? src.url.trim() : "";
       if (!url || seen.has(url)) continue;
 
       seen.add(url);
 
+      const title =
+        typeof src?.title === "string" && src.title.trim().length > 0
+          ? src.title.trim()
+          : getHostnameLabel(url);
+
+      const snippet =
+        typeof src?.snippet === "string" && src.snippet.trim().length > 0
+          ? src.snippet.trim()
+          : undefined;
+
       sources.push({
-        title:
-          typeof src?.title === "string" && src.title.trim().length > 0
-            ? src.title.trim()
-            : url,
+        title,
         url,
-        snippet:
-          typeof src?.snippet === "string" && src.snippet.trim().length > 0
-            ? src.snippet.trim()
-            : undefined,
+        snippet,
       });
     }
   }
 
   return sources;
+}
+
+function compactSources(sources: SourceItem[]): {
+  sources: SourceItem[];
+  sourceCount: number;
+} {
+  const unique = new Map<string, SourceItem>();
+
+  for (const source of sources) {
+    const key = source.url.trim();
+    if (!key || unique.has(key)) continue;
+    unique.set(key, source);
+  }
+
+  const deduped = Array.from(unique.values());
+
+  return {
+    sources: deduped.slice(0, MAX_RETURNED_SOURCES),
+    sourceCount: deduped.length,
+  };
+}
+
+function detectTimeWidget(
+  message: string,
+  reply: string
+): TimeWidgetPayload | null {
+  const normalizedMessage = safeLower(message);
+  const normalizedReply = safeLower(reply);
+
+  const looksLikeTimeQuestion =
+    normalizedMessage.includes("what time is it") ||
+    normalizedMessage.includes("current time") ||
+    normalizedMessage.includes("local time") ||
+    normalizedMessage.includes("time in ");
+
+  if (!looksLikeTimeQuestion) {
+    return null;
+  }
+
+  if (
+    normalizedMessage.includes("rentz") ||
+    normalizedMessage.includes("rentz, ga") ||
+    normalizedMessage.includes("rentz ga")
+  ) {
+    return {
+      type: "time",
+      location: "Rentz, GA",
+      timezone: "America/New_York",
+    };
+  }
+
+  if (
+    normalizedReply.includes("eastern daylight time") ||
+    normalizedReply.includes("eastern time")
+  ) {
+    return {
+      type: "time",
+      location: "Eastern Time",
+      timezone: "America/New_York",
+    };
+  }
+
+  return null;
 }
 
 async function generateConversationTitle(message: string): Promise<string> {
@@ -154,6 +260,40 @@ async function generateConversationTitle(message: string): Promise<string> {
   } catch {
     return buildConversationTitle(message);
   }
+}
+
+async function buildAssistantResponse(
+  recentMessages: ModelInputMessage[],
+  message: string
+): Promise<WebRouteSuccessResponse> {
+  const response = await openai.responses.create({
+    model: "gpt-4.1",
+    instructions: buildWebInstructions(),
+    input: recentMessages,
+    tools: [{ type: "web_search_preview" }],
+    include: ["web_search_call.action.sources"],
+    store: false,
+  });
+
+  const reply = response.output_text?.trim() || "";
+
+  if (!reply) {
+    return emptyWebResponse(
+      "I'm having trouble generating a response right now. Please try again."
+    );
+  }
+
+  const extractedSources = extractSources(response);
+  const { sources, sourceCount } = compactSources(extractedSources);
+  const widget = detectTimeWidget(message, reply);
+
+  return {
+    reply,
+    sources,
+    sourceCount,
+    widget,
+    web: true,
+  };
 }
 
 export async function POST(req: Request) {
@@ -275,7 +415,10 @@ export async function POST(req: Request) {
 
         if (deleteError) {
           console.error("Assistant delete error:", deleteError);
-          return jsonResponse({ error: "Failed to prepare regeneration." }, 500);
+          return jsonResponse(
+            { error: "Failed to prepare regeneration." },
+            500
+          );
         }
       }
     } else {
@@ -316,26 +459,10 @@ export async function POST(req: Request) {
       console.log("MODEL IN USE:", "gpt-4.1");
     }
 
-    const response = await openai.responses.create({
-      model: "gpt-4.1",
-      instructions: buildWebInstructions(),
-      input: recentMessages,
-      tools: [{ type: "web_search_preview" }],
-      include: ["web_search_call.action.sources"],
-      store: false,
-    });
-
-    const reply = response.output_text?.trim() || "";
-
-    if (!reply) {
-      return jsonResponse({
-        reply:
-          "I'm having trouble generating a response right now. Please try again.",
-        sources: [],
-      });
-    }
-
-    const sources = extractSources(response);
+    const assistantResponse = await buildAssistantResponse(
+      recentMessages,
+      message
+    );
 
     const { error: insertAssistantError } = await supabase
       .from("messages")
@@ -343,7 +470,10 @@ export async function POST(req: Request) {
         conversation_id: conversationId,
         user_id: user.id,
         role: "assistant",
-        content: reply,
+        content: assistantResponse.reply,
+        sources: assistantResponse.sources ?? [],
+        source_count: assistantResponse.sourceCount ?? 0,
+        widget: assistantResponse.widget ?? null,
       });
 
     if (insertAssistantError) {
@@ -375,11 +505,7 @@ export async function POST(req: Request) {
       console.error("Conversation update error:", updateConversationError);
     }
 
-    return jsonResponse({
-      reply,
-      sources,
-      web: true,
-    });
+    return jsonResponse(assistantResponse);
   } catch (error) {
     console.error("/api/chat-web error:", error);
     return jsonResponse({ error: "Something went wrong in /api/chat-web." }, 500);
