@@ -1,0 +1,25 @@
+<svg width="600" height="160" viewBox="0 0 600 160" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Chat bubble -->
+  <rect x="10" y="30" width="120" height="100" rx="28" stroke="url(#grad)" stroke-width="5" fill="none"/>
+  <polygon points="50,130 80,130 65,150" fill="url(#grad)"/>
+
+  <!-- LVT inside -->
+  <text x="35" y="90" fill="white" font-size="34" font-weight="700">LVT</text>
+
+  <!-- Wordmark -->
+  <text x="160" y="85" fill="white" font-size="42" font-weight="600">
+    LVT<tspan fill="url(#grad)">Chat</tspan>
+  </text>
+
+  <!-- Slogan -->
+  <text x="160" y="115" fill="#9CA3AF" font-size="16">
+    PRACTICAL AI <tspan fill="url(#grad)">YOU CAN ACTUALLY USE.</tspan>
+  </text>
+</svg>
