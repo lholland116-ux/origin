@@ -7,26 +7,62 @@ export const BRAND = {
   // Domain / URLs
   domain: "lvtchat.com",
   url: "https://lvtchat.com",
+
+  // Backward-compatible route fields
   loginPath: "/login",
   appPath: "/chat",
 
-  // Messaging (Marketing + SEO)
+  // Centralized routes
+  routes: {
+    home: "/",
+    login: "/login",
+    app: "/chat",
+    pricing: "/pricing",
+    about: "/about",
+    blog: "/blog",
+    help: "/help",
+    privacy: "/privacy",
+    terms: "/terms",
+  },
+
+  // Messaging
   slogan: "Practical AI you can actually use.",
   headline: "Clear answers. Better decisions.",
   subheadline:
     "LVTChat helps individuals and businesses solve problems faster, think more clearly, and move forward with confidence.",
   tagline: "Smart AI help for work, research, and everyday tasks",
 
-  // Creator / Authority
+  // Founder / Authority
   creator: "Levi Holland",
   creatorTitle: "AI Engineer",
 
-  // Contact / Support
+  // Contact
   supportEmail: "support@lvtchat.com",
+  contact: {
+    email: "support@lvtchat.com",
+    address: {
+      line1: "1101 Hillcrest Pkwy",
+      line2: "Ste L PMB 1041",
+      city: "Dublin",
+      state: "GA",
+      postalCode: "31021",
+      country: "United States",
+    },
+  },
 
   // UI Labels
   ctaPrimary: "Try LVTChat Free",
   ctaSecondary: "See How It Works",
+
+  // Pricing Defaults
+  pricing: {
+    currencySymbol: "$",
+    freePlanName: "Free",
+    proPlanName: "Pro",
+    proMonthlyPrice: 15,
+    freeDailyMessageLimit: 20,
+    proDailyMessageLimit: 300,
+  },
 
   // SEO Defaults
   seo: {
@@ -43,7 +79,7 @@ export const BRAND = {
     ] as const,
   },
 
-  // Social / OpenGraph
+  // Social / Open Graph
   social: {
     ogImage: "/logos/logo-primary.svg",
     twitterHandle: "@lvtchat",
@@ -54,9 +90,11 @@ export const BRAND = {
     company: "LVTChat LLC",
     jurisdiction: "Georgia, United States",
     rightsText: "All rights reserved.",
+    privacyPath: "/privacy",
+    termsPath: "/terms",
   },
 
-  // Product / App metadata
+  // Product Metadata
   product: {
     category: "AI Assistant",
     availability: "Web",

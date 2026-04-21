@@ -1,11 +1,20 @@
+import Link from "next/link";
 import { BRAND } from "@/lib/branding";
-import { navItems, toId } from "@/lib/landing-content";
+import { navItems } from "@/lib/landing-content";
+
+const NAV_ROUTES = {
+  Features: "#features",
+  "Use Cases": "#use-cases",
+  Pricing: BRAND.routes.pricing,
+  About: BRAND.routes.about,
+  Blog: BRAND.routes.blog,
+} satisfies Record<string, string>;
 
 export default function Header() {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 md:px-8">
-      <a
-        href="#top"
+      <Link
+        href={BRAND.routes.home}
         aria-label={`${BRAND.name} home`}
         className="flex items-center gap-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
       >
@@ -16,30 +25,46 @@ export default function Header() {
         <span className="text-lg font-semibold tracking-tight text-white">
           {BRAND.name}
         </span>
-      </a>
+      </Link>
 
       <nav
         aria-label="Primary navigation"
         className="hidden items-center gap-7 text-sm text-white/70 md:flex"
       >
-        {navItems.map((item) => (
-          <a
-            key={item}
-            href={`#${toId(item)}`}
-            className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-          >
-            {item}
-          </a>
-        ))}
+        {navItems.map((item) => {
+          const href = NAV_ROUTES[item] ?? "#";
+
+          if (href.startsWith("/")) {
+            return (
+              <Link
+                key={item}
+                href={href}
+                className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+              >
+                {item}
+              </Link>
+            );
+          }
+
+          return (
+            <a
+              key={item}
+              href={href}
+              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            >
+              {item}
+            </a>
+          );
+        })}
       </nav>
 
       <div className="flex items-center gap-3">
-        <a
-          href="/login"
+        <Link
+          href={BRAND.routes.login}
           className="rounded-xl bg-[linear-gradient(90deg,#3B82F6,#4F8CFF)] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(59,130,246,0.35)] transition hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
         >
           Get Started
-        </a>
+        </Link>
       </div>
     </header>
   );
