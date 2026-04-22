@@ -97,7 +97,9 @@ export default function Footer() {
             {BRAND.creator}
           </p>
 
-          <p className="mt-2 text-sm text-white/60">{BRAND.creatorTitle}</p>
+          <p className="mt-2 text-sm text-white/60">
+            AI Engineer • Scientist
+          </p>
 
           <div className="mt-4 text-sm text-white/60">
             <p>{BRAND.contact.email}</p>

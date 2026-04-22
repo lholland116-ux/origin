@@ -3,6 +3,7 @@ import FeatureGrid from "@/components/landing/FeatureGrid";
 import Footer from "@/components/landing/Footer";
 import Header from "@/components/landing/Header";
 import Hero from "@/components/landing/Hero";
+import TrustedSection from "@/components/landing/TrustedSection";
 import UseCases from "@/components/landing/UseCases";
 import { BRAND } from "@/lib/branding";
 
@@ -25,6 +26,7 @@ export default function LandingPage() {
           <FeatureGrid />
         </section>
 
+        <TrustedSection />
         <UseCases />
         <CTASection />
         <Footer />

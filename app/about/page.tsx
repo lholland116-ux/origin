@@ -26,9 +26,22 @@ export default function AboutPage() {
           </h1>
 
           <p className="mt-6 text-base leading-7 text-white/70 sm:text-lg">
-            {BRAND.name} was built by {BRAND.creator},{" "}
-            {BRAND.creatorTitle.toLowerCase()}, to deliver practical AI that
-            people can actually use in real life.
+            {BRAND.name} was built by {BRAND.creator}, an AI Engineer and
+            scientist with over 30 years of combined experience across the
+            pharmaceutical, biotechnology, cosmetic, and medical device
+            industries.
+          </p>
+
+          <p className="mt-4 text-base leading-7 text-white/70 sm:text-lg">
+            He holds a Bachelor of Science in Biology from Stony Brook
+            University and has led work in validation, quality systems, and
+            regulatory compliance, including FDA and EU MDR environments.
+          </p>
+
+          <p className="mt-4 text-base leading-7 text-white/70 sm:text-lg">
+            This background shapes {BRAND.name} into more than a generic AI
+            tool. It is designed to support real-world decision-making with
+            clarity, structure, and practical insight.
           </p>
 
           <p className="mt-4 text-base leading-7 text-white/70 sm:text-lg">
@@ -53,7 +66,7 @@ export default function AboutPage() {
               <li>• Practical AI support for real tasks</li>
               <li>• Clear answers and better decisions</li>
               <li>• A user experience built for trust and simplicity</li>
-              <li>• Continuous improvement with real-world usefulness in mind</li>
+              <li>• Real-world insight shaped by scientific and industry experience</li>
             </ul>
           </div>
 
@@ -66,6 +79,12 @@ export default function AboutPage() {
               <div>
                 <p className="font-medium text-white">Business</p>
                 <p>{BRAND.legalName}</p>
+              </div>
+
+              <div>
+                <p className="font-medium text-white">Founder</p>
+                <p>{BRAND.creator}</p>
+                <p>{BRAND.creatorTitle} • Scientist</p>
               </div>
 
               <div>

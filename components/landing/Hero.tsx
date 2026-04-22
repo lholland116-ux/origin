@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 const PREVIEW_STEPS = [
@@ -39,19 +40,24 @@ export default function Hero() {
           {BRAND.subheadline}
         </p>
 
+        <p className="mt-6 text-sm leading-6 text-white/60">
+          Built by a scientist with 30+ years of experience in pharma, biotech,
+          cosmetics, and medical devices.
+        </p>
+
         <div className="mt-8 flex flex-wrap gap-4">
-          <a
-            href="/login"
+          <Link
+            href={BRAND.routes.login}
             className="rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-6 py-3 text-sm font-semibold text-white shadow-[0_14px_35px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
-            Try {BRAND.name} Free
-          </a>
+            {BRAND.ctaPrimary}
+          </Link>
 
           <a
             href="#features"
             className="rounded-2xl border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white/90 backdrop-blur transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
-            See How It Works
+            {BRAND.ctaSecondary}
           </a>
         </div>
 
