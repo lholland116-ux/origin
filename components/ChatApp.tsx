@@ -79,22 +79,30 @@ const MAX_INPUT_LENGTH = 2000;
 
 const APP_SHELL =
   "bg-[radial-gradient(circle_at_15%_20%,rgba(59,130,246,0.08),transparent_40%),radial-gradient(circle_at_85%_10%,rgba(139,92,246,0.06),transparent_45%),linear-gradient(180deg,#020817_0%,#020617_100%)]";
+
 const APP_PANEL =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.92),rgba(7,13,30,0.95))] backdrop-blur shadow-[0_18px_50px_rgba(0,0,0,0.3)]";
+
 const APP_PANEL_SOFT =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(14,24,52,0.9),rgba(9,16,34,0.92))] backdrop-blur";
+
 const APP_PANEL_DARK =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(8,14,30,0.95),rgba(5,10,22,0.98))] backdrop-blur shadow-[0_12px_30px_rgba(0,0,0,0.24)]";
+
 const APP_INPUT =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(7,13,28,0.94),rgba(4,8,20,0.98))] backdrop-blur";
+
 const APP_BUTTON_PRIMARY =
   "rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
+
 const APP_BUTTON_SECONDARY =
   "rounded-xl border border-white/10 bg-white/[0.03] text-zinc-200 transition hover:bg-white/[0.06]";
+
 const APP_MESSAGE_ASSISTANT =
-  "border border-white/10 bg-[linear-gradient(180deg,rgba(10,18,40,0.9),rgba(6,12,28,0.95))] text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.28)]";
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(10,18,40,0.9),rgba(6,12,28,0.95))] text-zinc-100 shadow-[0_10px_40px_rgba(0,0,0,0.4)]";
+
 const APP_MESSAGE_USER =
-  "bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] text-white shadow-[0_10px_30px_rgba(37,99,235,0.3)]";
+  "border border-white/10 bg-white/10 text-white backdrop-blur shadow-[0_10px_30px_rgba(0,0,0,0.22)]";
 
 export default function ChatApp({ userEmail }: ChatAppProps) {
   const router = useRouter();
@@ -330,9 +338,10 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     try {
       setError(null);
 
-      const res = await fetch(`/api/messages?conversationId=${encodeURIComponent(id)}`, {
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/messages?conversationId=${encodeURIComponent(id)}`,
+        { cache: "no-store" }
+      );
 
       const data = await res.json();
 
@@ -437,15 +446,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         : [];
 
       setDocuments((prev) => [...prev, ...newDocs]);
-
-      if (process.env.NODE_ENV === "development") {
-        console.log("UPLOAD RESPONSE:", data);
-      }
     } catch (err) {
       console.error("UPLOAD ERROR:", err);
-      setError(
-        err instanceof Error ? err.message : "Document upload failed."
-      );
+      setError(err instanceof Error ? err.message : "Document upload failed.");
     } finally {
       setUploading(false);
       if (documentInputRef.current) {
@@ -560,9 +563,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
     const res = await fetch(route, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
@@ -623,11 +624,6 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     }
 
     const data: ChatSuccessResponse = await res.json();
-
-    if (process.env.NODE_ENV === "development") {
-      console.log("chat success response:", JSON.stringify(data, null, 2));
-      console.log("route used:", route);
-    }
 
     const assistantContent =
       typeof data.reply === "string" && data.reply.trim().length > 0
@@ -877,12 +873,6 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
     };
   }, [selectedImagePreview]);
 
-  useEffect(() => {
-    if (process.env.NODE_ENV === "development") {
-      console.log("DOCUMENT STATE:", documents);
-    }
-  }, [documents]);
-
   return (
     <main
       className={`relative flex h-screen overflow-hidden text-zinc-100 ${APP_SHELL}`}
@@ -1033,9 +1023,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       </aside>
 
       <section className="relative flex flex-1 flex-col">
-        <header
-          className={`border-b border-white/10 px-4 py-4 pb-4 ${APP_PANEL_DARK}`}
-        >
+        <header className={`border-b border-white/10 px-6 py-4 ${APP_PANEL_DARK}`}>
           <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4">
             <div className="flex flex-col">
               <h1 className="text-sm font-semibold text-zinc-100">
@@ -1079,9 +1067,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   <button
                     type="button"
                     className={`px-3 py-2 text-xs font-medium ${APP_BUTTON_PRIMARY}`}
-                    onClick={() => {
-                      setError("Upgrade flow not connected yet.");
-                    }}
+                    onClick={() => setError("Upgrade flow not connected yet.")}
                   >
                     Upgrade
                   </button>
@@ -1165,7 +1151,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                       className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-[85%] rounded-3xl px-4 py-3 shadow-lg md:max-w-[75%] ${
+                        className={`max-w-[85%] rounded-3xl px-4 py-3 md:max-w-[75%] ${
                           isUser ? APP_MESSAGE_USER : APP_MESSAGE_ASSISTANT
                         }`}
                       >
@@ -1284,7 +1270,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
                 {loading && (
                   <div className="flex justify-start">
-                    <div className={`max-w-[85%] rounded-3xl px-4 py-3 text-sm text-zinc-300 shadow-lg ${APP_MESSAGE_ASSISTANT}`}>
+                    <div
+                      className={`max-w-[85%] rounded-3xl px-4 py-3 text-sm text-zinc-300 md:max-w-[75%] ${APP_MESSAGE_ASSISTANT}`}
+                    >
                       Thinking...
                     </div>
                   </div>
@@ -1303,7 +1291,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                 focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]`}
             >
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <label className={`cursor-pointer px-3 py-2 text-xs text-zinc-300 ${APP_BUTTON_SECONDARY}`}>
+                <label
+                  className={`cursor-pointer px-3 py-2 text-xs text-zinc-300 ${APP_BUTTON_SECONDARY}`}
+                >
                   Attach document
                   <input
                     ref={documentInputRef}
@@ -1316,7 +1306,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   />
                 </label>
 
-                <label className={`cursor-pointer px-3 py-2 text-xs text-zinc-300 ${APP_BUTTON_SECONDARY}`}>
+                <label
+                  className={`cursor-pointer px-3 py-2 text-xs text-zinc-300 ${APP_BUTTON_SECONDARY}`}
+                >
                   Attach image
                   <input
                     ref={imageInputRef}
@@ -1381,7 +1373,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                           ) : null}
                         </div>
 
-                        <span className={`shrink-0 font-medium ${getDocumentStatusClass(doc)}`}>
+                        <span
+                          className={`shrink-0 font-medium ${getDocumentStatusClass(doc)}`}
+                        >
                           {getDocumentStatusLabel(doc)}
                         </span>
                       </div>
