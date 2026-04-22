@@ -1,6 +1,9 @@
+import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 export default function CTASection() {
+  const ctaLabel = BRAND.ctaPrimary?.trim() || `Try ${BRAND.name} Free`;
+
   return (
     <section
       className="overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(90deg,rgba(7,16,35,1)_0%,rgba(18,38,92,0.96)_45%,rgba(103,63,195,0.96)_100%)] px-5 py-8 shadow-[0_25px_80px_rgba(0,0,0,0.4)] md:px-8 lg:px-10"
@@ -25,14 +28,17 @@ export default function CTASection() {
         </div>
 
         <div className="flex flex-col items-start gap-3 lg:items-end">
-          <a
-            href="/login"
-            className="rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-[#17326F] shadow-[0_16px_35px_rgba(255,255,255,0.2)] transition hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#17326F]"
+          <Link
+            href={BRAND.routes.login}
+            aria-label={`${ctaLabel} - go to login`}
+            className="inline-flex items-center justify-center rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-[#17326F] shadow-[0_16px_35px_rgba(255,255,255,0.2)] transition hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(255,255,255,0.3)] focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#17326F]"
           >
-            Try {BRAND.name} Free
-          </a>
+            {ctaLabel}
+          </Link>
 
-          <p className="text-sm text-white/75">No credit card required.</p>
+          <p className="text-sm text-white/75">
+            Start free. No credit card required.
+          </p>
         </div>
       </div>
     </section>

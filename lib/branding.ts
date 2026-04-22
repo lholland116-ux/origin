@@ -8,10 +8,6 @@ export const BRAND = {
   domain: "lvtchat.com",
   url: "https://lvtchat.com",
 
-  // Backward-compatible route fields
-  loginPath: "/login",
-  appPath: "/chat",
-
   // Centralized routes
   routes: {
     home: "/",
@@ -24,6 +20,10 @@ export const BRAND = {
     privacy: "/privacy",
     terms: "/terms",
   },
+
+  // Backward-compatible route fields
+  loginPath: "/login",
+  appPath: "/chat",
 
   // Messaging
   slogan: "Practical AI you can actually use.",
