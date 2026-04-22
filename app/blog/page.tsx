@@ -11,6 +11,15 @@ const UPCOMING_TOPICS = [
 export default function BlogPage() {
   return (
     <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
+      <div className="mx-auto mb-8 max-w-4xl">
+        <Link
+          href={BRAND.routes.home}
+          className="inline-flex rounded-md text-sm text-white/60 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+        >
+          ← Back to Home
+        </Link>
+      </div>
+
       <div className="mx-auto max-w-4xl">
         <section className="text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
