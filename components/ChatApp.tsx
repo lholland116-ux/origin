@@ -82,7 +82,7 @@ const APP_PANEL =
 const APP_PANEL_SOFT =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(14,24,52,0.9),rgba(9,16,34,0.92))] backdrop-blur";
 const APP_PANEL_DARK =
-  "border border-white/10 bg-[linear-gradient(180deg,rgba(6,12,28,0.96),rgba(4,8,20,0.98))] backdrop-blur";
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(10,18,40,0.96),rgba(6,12,28,0.98))] backdrop-blur shadow-[0_12px_30px_rgba(0,0,0,0.24)]";
 const APP_INPUT =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(7,13,28,0.94),rgba(4,8,20,0.98))] backdrop-blur";
 const APP_BUTTON_PRIMARY =

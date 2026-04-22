@@ -13,15 +13,24 @@ type FeedbackType = "success" | "error" | null;
 
 function getFeedbackClassName(messageType: FeedbackType): string {
   if (messageType === "success") {
-    return "text-green-400";
+    return "rounded-2xl border border-green-500/20 bg-green-500/10 px-4 py-3 text-sm text-green-200";
   }
 
   if (messageType === "error") {
-    return "text-red-400";
+    return "rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200";
   }
 
-  return "text-zinc-400";
+  return "text-sm text-zinc-400";
 }
+
+const CARD_CLASS =
+  "w-full max-w-md rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.92),rgba(7,13,30,0.95))] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur";
+const INPUT_CLASS =
+  "w-full rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(7,13,28,0.94),rgba(4,8,20,0.98))] px-4 py-3 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-blue-400/40 focus:shadow-[0_0_0_1px_rgba(59,130,246,0.35),0_0_20px_rgba(59,130,246,0.15)]";
+const PRIMARY_BUTTON_CLASS =
+  "w-full rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-4 py-3 font-medium text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.01] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
+const TEXT_BUTTON_CLASS =
+  "text-sm text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200 disabled:opacity-50";
 
 export default function LoginClient() {
   const supabase = createBrowserSupabaseClient();
@@ -170,18 +179,24 @@ export default function LoginClient() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4 text-zinc-100">
-      <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 text-zinc-100">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[-8%] top-[6%] h-[360px] w-[360px] rounded-full bg-blue-600/10 blur-3xl" />
+        <div className="absolute right-[4%] top-[10%] h-[320px] w-[320px] rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="absolute bottom-[8%] left-[18%] h-[240px] w-[380px] rounded-full bg-cyan-500/8 blur-3xl" />
+      </div>
+
+      <div className={CARD_CLASS}>
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">
             {BRAND.name}
           </p>
 
-          <h1 className="text-2xl font-semibold">
+          <h1 className="text-2xl font-semibold text-white">
             {mode === "signin" ? "Sign in" : "Create account"}
           </h1>
 
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm leading-6 text-zinc-400">
             Access your AI workspace with chat history, image analysis, and web
             search.
           </p>
@@ -198,7 +213,7 @@ export default function LoginClient() {
                 clearFeedback();
               }
             }}
-            className="w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
+            className={INPUT_CLASS}
             autoComplete="email"
             inputMode="email"
             required
@@ -215,7 +230,7 @@ export default function LoginClient() {
                   clearFeedback();
                 }
               }}
-              className="w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-12 outline-none transition focus:border-zinc-500"
+              className={`${INPUT_CLASS} pr-12`}
               autoComplete={
                 mode === "signin" ? "current-password" : "new-password"
               }
@@ -243,7 +258,7 @@ export default function LoginClient() {
               type="button"
               onClick={handleForgotPassword}
               disabled={resetLoading || loading}
-              className="text-sm text-zinc-400 underline disabled:opacity-50"
+              className={TEXT_BUTTON_CLASS}
             >
               {resetLoading ? "Sending reset email..." : "Forgot password?"}
             </button>
@@ -252,7 +267,7 @@ export default function LoginClient() {
           <button
             type="submit"
             disabled={!canSubmit}
-            className="w-full rounded-2xl bg-white px-4 py-3 font-medium text-black transition disabled:cursor-not-allowed disabled:opacity-50"
+            className={PRIMARY_BUTTON_CLASS}
           >
             {loading
               ? "Please wait..."
@@ -263,7 +278,7 @@ export default function LoginClient() {
         </form>
 
         {message && (
-          <p className={`mt-4 text-sm ${getFeedbackClassName(messageType)}`}>
+          <p className={`mt-4 ${getFeedbackClassName(messageType)}`}>
             {message}
           </p>
         )}
@@ -272,7 +287,7 @@ export default function LoginClient() {
           type="button"
           onClick={toggleMode}
           disabled={loading || resetLoading}
-          className="mt-4 text-sm text-zinc-400 underline disabled:opacity-50"
+          className={`mt-4 ${TEXT_BUTTON_CLASS}`}
         >
           {mode === "signin"
             ? "Need an account? Sign up"
