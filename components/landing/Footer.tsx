@@ -5,16 +5,10 @@ import { footerColumns } from "@/lib/landing-content";
 const FOOTER_ROUTES: Record<string, string> = {
   Features: "#features",
   Pricing: BRAND.routes.pricing,
-  Updates: "#",
-  Changelog: "#",
   About: BRAND.routes.about,
   Blog: BRAND.routes.blog,
-  Careers: "#",
-  Contact: BRAND.routes.help,
+  Contact: `mailto:${BRAND.contact.email}`,
   "Help Center": BRAND.routes.help,
-  Guides: "#",
-  API: "#",
-  Status: "#",
 };
 
 export default function Footer() {

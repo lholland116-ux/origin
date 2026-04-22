@@ -87,15 +87,15 @@ export const useCases: UseCaseItem[] = [
 export const footerColumns: FooterColumn[] = [
   {
     title: "Product",
-    links: ["Features", "Pricing", "Updates", "Changelog"],
+    links: ["Features", "Pricing"],
   },
   {
     title: "Company",
-    links: ["About", "Blog", "Careers", "Contact"],
+    links: ["About", "Blog"],
   },
   {
     title: "Resources",
-    links: ["Help Center", "Guides", "API", "Status"],
+    links: ["Help Center", "Contact"],
   },
 ];
 
