@@ -3,6 +3,9 @@ import { BRAND } from "@/lib/branding";
 
 export default function AboutPage() {
   const address = BRAND.contact.address;
+  const founderRoleLine = `${BRAND.creatorTitle}${
+    BRAND.creatorSecondaryTitle ? ` • ${BRAND.creatorSecondaryTitle}` : ""
+  }`;
 
   return (
     <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
@@ -26,10 +29,12 @@ export default function AboutPage() {
           </h1>
 
           <p className="mt-6 text-base leading-7 text-white/70 sm:text-lg">
-            {BRAND.name} was built by {BRAND.creator}, an AI Engineer and
-            scientist with over 30 years of combined experience across the
-            pharmaceutical, biotechnology, cosmetic, and medical device
-            industries.
+            {BRAND.name} was built by {BRAND.creator}, an{" "}
+            {BRAND.creatorTitle.toLowerCase()}
+            {BRAND.creatorSecondaryTitle
+              ? ` and ${BRAND.creatorSecondaryTitle.toLowerCase()}`
+              : ""}
+            {" "}with {BRAND.creatorExperience}.
           </p>
 
           <p className="mt-4 text-base leading-7 text-white/70 sm:text-lg">
@@ -66,7 +71,10 @@ export default function AboutPage() {
               <li>• Practical AI support for real tasks</li>
               <li>• Clear answers and better decisions</li>
               <li>• A user experience built for trust and simplicity</li>
-              <li>• Real-world insight shaped by scientific and industry experience</li>
+              <li>
+                • Real-world insight shaped by scientific and industry
+                experience
+              </li>
             </ul>
           </div>
 
@@ -84,7 +92,7 @@ export default function AboutPage() {
               <div>
                 <p className="font-medium text-white">Founder</p>
                 <p>{BRAND.creator}</p>
-                <p>{BRAND.creatorTitle} • Scientist</p>
+                <p>{founderRoleLine}</p>
               </div>
 
               <div>

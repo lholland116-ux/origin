@@ -35,6 +35,9 @@ export const BRAND = {
   // Founder / Authority
   creator: "Levi Holland",
   creatorTitle: "AI Engineer",
+  creatorSecondaryTitle: "Scientist",
+  creatorExperience:
+    "25+ years of experience in pharmaceutical, biotech, cosmetic, and medical device industries",
 
   // Contact
   supportEmail: "support@lvtchat.com",

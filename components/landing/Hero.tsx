@@ -21,6 +21,8 @@ const PREVIEW_STEPS = [
 ] as const;
 
 export default function Hero() {
+  const credibilityLine = `Built by ${BRAND.creator}, a ${BRAND.creatorSecondaryTitle?.toLowerCase() || "scientist"} with ${BRAND.creatorExperience}.`;
+
   return (
     <section className="grid gap-10 px-5 pb-8 pt-6 md:px-8 md:pb-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:px-10 lg:pb-12 lg:pt-10">
       <div className="max-w-2xl">
@@ -40,9 +42,8 @@ export default function Hero() {
           {BRAND.subheadline}
         </p>
 
-        <p className="mt-6 text-sm leading-6 text-white/60">
-          Built by a scientist with 30+ years of experience in pharma, biotech,
-          cosmetics, and medical devices.
+        <p className="mt-6 max-w-xl text-sm leading-6 text-white/60">
+          {credibilityLine}
         </p>
 
         <div className="mt-8 flex flex-wrap gap-4">

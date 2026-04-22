@@ -2,7 +2,10 @@ import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 export default function CTASection() {
-  const ctaLabel = BRAND.ctaPrimary?.trim() || `Try ${BRAND.name} Free`;
+  const ctaLabel =
+    typeof BRAND.ctaPrimary === "string" && BRAND.ctaPrimary.trim().length > 0
+      ? BRAND.ctaPrimary.trim()
+      : `Try ${BRAND.name} Free`;
 
   return (
     <section
@@ -31,9 +34,11 @@ export default function CTASection() {
           <Link
             href={BRAND.routes.login}
             aria-label={`${ctaLabel} - go to login`}
-            className="inline-flex items-center justify-center rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-[#17326F] shadow-[0_16px_35px_rgba(255,255,255,0.2)] transition hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(255,255,255,0.3)] focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#17326F]"
+            className="inline-flex min-w-[190px] items-center justify-center rounded-2xl bg-white px-6 py-3 shadow-[0_16px_35px_rgba(255,255,255,0.2)] transition hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(255,255,255,0.3)] focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#17326F]"
           >
-            {ctaLabel}
+            <span className="whitespace-nowrap text-sm font-semibold leading-none text-[#17326F]">
+              {ctaLabel}
+            </span>
           </Link>
 
           <p className="text-sm text-white/75">
