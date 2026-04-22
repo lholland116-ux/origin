@@ -77,12 +77,14 @@ type UploadDocumentsResponse = {
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_INPUT_LENGTH = 2000;
 
+const APP_SHELL =
+  "bg-[radial-gradient(circle_at_15%_20%,rgba(59,130,246,0.08),transparent_40%),radial-gradient(circle_at_85%_10%,rgba(139,92,246,0.06),transparent_45%),linear-gradient(180deg,#020817_0%,#020617_100%)]";
 const APP_PANEL =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.92),rgba(7,13,30,0.95))] backdrop-blur shadow-[0_18px_50px_rgba(0,0,0,0.3)]";
 const APP_PANEL_SOFT =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(14,24,52,0.9),rgba(9,16,34,0.92))] backdrop-blur";
 const APP_PANEL_DARK =
-  "border border-white/10 bg-[linear-gradient(180deg,rgba(10,18,40,0.96),rgba(6,12,28,0.98))] backdrop-blur shadow-[0_12px_30px_rgba(0,0,0,0.24)]";
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(8,14,30,0.95),rgba(5,10,22,0.98))] backdrop-blur shadow-[0_12px_30px_rgba(0,0,0,0.24)]";
 const APP_INPUT =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(7,13,28,0.94),rgba(4,8,20,0.98))] backdrop-blur";
 const APP_BUTTON_PRIMARY =
@@ -90,7 +92,7 @@ const APP_BUTTON_PRIMARY =
 const APP_BUTTON_SECONDARY =
   "rounded-xl border border-white/10 bg-white/[0.03] text-zinc-200 transition hover:bg-white/[0.06]";
 const APP_MESSAGE_ASSISTANT =
-  "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.94),rgba(7,13,30,0.96))] text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.28)]";
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(10,18,40,0.9),rgba(6,12,28,0.95))] text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.28)]";
 const APP_MESSAGE_USER =
   "bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] text-white shadow-[0_10px_30px_rgba(37,99,235,0.3)]";
 
@@ -882,7 +884,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }, [documents]);
 
   return (
-    <main className="relative flex h-screen overflow-hidden bg-transparent text-zinc-100">
+    <main
+      className={`relative flex h-screen overflow-hidden text-zinc-100 ${APP_SHELL}`}
+    >
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute left-[-8%] top-[4%] h-[380px] w-[380px] rounded-full bg-blue-600/10 blur-3xl" />
         <div className="absolute right-[3%] top-[8%] h-[320px] w-[320px] rounded-full bg-violet-500/10 blur-3xl" />
@@ -1029,7 +1033,9 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       </aside>
 
       <section className="relative flex flex-1 flex-col">
-        <header className={`border-b border-white/10 px-4 py-2 ${APP_PANEL_DARK}`}>
+        <header
+          className={`border-b border-white/10 px-4 py-4 pb-4 ${APP_PANEL_DARK}`}
+        >
           <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4">
             <div className="flex flex-col">
               <h1 className="text-sm font-semibold text-zinc-100">
@@ -1294,7 +1300,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
           <div className="mx-auto w-full max-w-4xl px-4 py-3">
             <div
               className={`rounded-3xl p-2 shadow-xl ${APP_PANEL}
-                focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.25)]`}
+                focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]`}
             >
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <label className={`cursor-pointer px-3 py-2 text-xs text-zinc-300 ${APP_BUTTON_SECONDARY}`}>
@@ -1452,7 +1458,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       </section>
 
       {confirmDeleteConversation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
           <div className={`w-full max-w-md rounded-3xl p-6 shadow-2xl ${APP_PANEL}`}>
             <h2 className="text-lg font-semibold text-white">
               Delete conversation?
