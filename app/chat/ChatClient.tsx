@@ -183,6 +183,32 @@ const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4";
 const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl";
 const USER_BUBBLE_CLASS = "w-full max-w-2xl";
 
+const APP_SIDEBAR =
+  "bg-[linear-gradient(180deg,rgba(6,11,25,0.98),rgba(3,8,20,0.98))] border-r border-white/10";
+const APP_TOPBAR =
+  "border-b border-white/10 bg-[linear-gradient(180deg,rgba(6,11,25,0.92),rgba(3,8,20,0.94))] backdrop-blur";
+const APP_SURFACE =
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.92),rgba(7,13,30,0.95))] backdrop-blur shadow-[0_18px_50px_rgba(0,0,0,0.28)]";
+const APP_SURFACE_SOFT =
+  "border border-white/10 bg-white/[0.04] backdrop-blur-md";
+const APP_SURFACE_SUBTLE =
+  "border border-white/10 bg-white/[0.03] backdrop-blur";
+const APP_ASSISTANT_BUBBLE =
+  "bg-[linear-gradient(180deg,rgba(10,18,40,0.9),rgba(6,12,28,0.95))] border border-white/10 text-white shadow-[0_10px_40px_rgba(0,0,0,0.4)]";
+const APP_USER_BUBBLE =
+  "bg-[linear-gradient(180deg,rgba(37,99,235,0.18),rgba(255,255,255,0.05))] border border-blue-400/15 text-white backdrop-blur-md shadow-[0_10px_30px_rgba(0,0,0,0.22)]";
+const APP_INPUT_SHELL =
+  "border border-white/10 bg-white/[0.04] backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,0.25)]";
+const APP_INPUT_FIELD =
+  "w-full rounded-2xl bg-transparent px-4 py-3.5 pr-14 text-white outline-none placeholder:text-white/40";
+const APP_BUTTON_PRIMARY =
+  "rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-5 py-3.5 text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
+const APP_BUTTON_SECONDARY =
+  "rounded-xl border border-white/10 bg-white/[0.03] text-white transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50";
+const APP_BUTTON_ACTIVE = "bg-white text-black shadow-sm";
+const APP_BUTTON_INACTIVE =
+  "border border-white/10 bg-white/[0.06] text-white/80 transition hover:bg-white/[0.12]";
+
 function createId(): string {
   return crypto.randomUUID();
 }
@@ -542,7 +568,7 @@ function SourcesDisclosure({
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-xs text-neutral-400 transition hover:border-neutral-700 hover:text-white"
+        className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs text-neutral-300 ${APP_SURFACE_SUBTLE}`}
         aria-expanded={open}
       >
         <span>Sources ({sourceCount})</span>
@@ -554,7 +580,7 @@ function SourcesDisclosure({
       </button>
 
       {open && (
-        <div className="mt-2 rounded-2xl border border-neutral-800 bg-neutral-950 p-3">
+        <div className={`mt-2 rounded-2xl p-3 ${APP_SURFACE}`}>
           <div className="space-y-2">
             {visibleSources.map((source, index) => (
               <a
@@ -562,16 +588,16 @@ function SourcesDisclosure({
                 href={source.url}
                 target="_blank"
                 rel="noreferrer"
-                className="block rounded-xl border border-neutral-800 bg-black/30 p-3 transition hover:border-neutral-700"
+                className={`block rounded-xl p-3 transition hover:border-blue-400/25 ${APP_SURFACE_SUBTLE}`}
               >
-                <div className="text-xs font-medium text-blue-400">
+                <div className="text-xs font-medium text-blue-300">
                   {source.title?.trim() || getSourceHostname(source.url)}
                 </div>
                 <div className="mt-1 text-[11px] text-neutral-500">
                   {getSourceHostname(source.url)}
                 </div>
                 {source.snippet ? (
-                  <div className="mt-1 text-xs text-neutral-400 line-clamp-3">
+                  <div className="mt-1 text-xs text-neutral-300 line-clamp-3">
                     {source.snippet}
                   </div>
                 ) : null}
@@ -613,7 +639,7 @@ function TimeWidget({
   }, [timezone]);
 
   return (
-    <div className="mb-3 rounded-3xl border border-neutral-800 bg-neutral-950 p-5 shadow-xl">
+    <div className={`mb-3 rounded-3xl p-5 ${APP_SURFACE}`}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-4xl font-semibold tracking-tight text-white">
@@ -625,7 +651,7 @@ function TimeWidget({
           <div className="mt-1 text-sm text-neutral-500">{dateLabel}</div>
         </div>
 
-        <div className="rounded-2xl border border-neutral-800 bg-black/30 p-3 text-neutral-400">
+        <div className={`rounded-2xl p-3 text-neutral-300 ${APP_SURFACE_SUBTLE}`}>
           <Clock3 className="h-5 w-5" />
         </div>
       </div>
@@ -1790,7 +1816,7 @@ export default function ChatClient({
             type="button"
             onClick={handleNewChat}
             disabled={loading || sidebarLoading}
-            className="rounded-xl bg-white px-4 py-2 text-sm text-black disabled:opacity-50"
+            className={`px-4 py-2 text-sm ${APP_BUTTON_PRIMARY}`}
           >
             New Chat
           </button>
@@ -1805,7 +1831,7 @@ export default function ChatClient({
               }
               router.push("/account");
             }}
-            className="rounded-xl border border-neutral-700 px-4 py-2 text-sm text-white"
+            className={`px-4 py-2 text-sm ${APP_BUTTON_SECONDARY}`}
           >
             Account
           </button>
@@ -1819,7 +1845,7 @@ export default function ChatClient({
                 setMobileMenuOpen(false);
               }
             }}
-            className="rounded-xl border border-neutral-700 px-4 py-2 text-center text-sm text-white"
+            className={`px-4 py-2 text-center text-sm ${APP_BUTTON_SECONDARY}`}
           >
             Help
           </Link>
@@ -1829,7 +1855,7 @@ export default function ChatClient({
           <button
             type="button"
             onClick={handleSignOut}
-            className="rounded-xl border border-neutral-700 px-4 py-2 text-sm text-white"
+            className={`px-4 py-2 text-sm ${APP_BUTTON_SECONDARY}`}
           >
             Sign Out
           </button>
@@ -1848,7 +1874,9 @@ export default function ChatClient({
       <div
         key={conversation.id}
         className={`rounded-xl p-2 transition ${
-          isActive ? "bg-white text-black" : "bg-neutral-900 text-white"
+          isActive
+            ? "border border-blue-400/20 bg-[linear-gradient(180deg,rgba(37,99,235,0.20),rgba(255,255,255,0.05))] text-white"
+            : "border border-white/5 bg-white/[0.03] text-white hover:bg-white/[0.06]"
         }`}
       >
         <button
@@ -1864,11 +1892,7 @@ export default function ChatClient({
           <div className="truncate font-medium">
             {conversation.title?.trim() || "New Chat"}
           </div>
-          <div
-            className={`mt-1 text-xs ${
-              isActive ? "text-neutral-700" : "text-neutral-400"
-            }`}
-          >
+          <div className="mt-1 text-xs text-neutral-400">
             {formatConversationDate(conversation.updated_at)}
           </div>
         </button>
@@ -1879,11 +1903,7 @@ export default function ChatClient({
               type="button"
               onClick={() => handleRenameConversation(conversation)}
               disabled={loading || sidebarLoading}
-              className={`rounded-lg px-2 py-1 text-xs ${
-                isActive
-                  ? "bg-black/10 text-black hover:bg-black/20"
-                  : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
-              }`}
+              className={`rounded-lg px-2 py-1 text-xs ${APP_BUTTON_SECONDARY}`}
             >
               Rename
             </button>
@@ -1894,11 +1914,7 @@ export default function ChatClient({
               type="button"
               onClick={() => handleDeleteConversation(conversation)}
               disabled={loading || sidebarLoading}
-              className={`rounded-lg px-2 py-1 text-xs ${
-                isActive
-                  ? "bg-red-600/15 text-red-700 hover:bg-red-600/25"
-                  : "border border-red-900/60 text-red-400 hover:border-red-700"
-              }`}
+              className="rounded-lg border border-red-900/60 px-2 py-1 text-xs text-red-400 transition hover:border-red-700 disabled:opacity-50"
             >
               Delete
             </button>
@@ -1912,7 +1928,7 @@ export default function ChatClient({
     <>
       <OnboardingModal />
 
-      <main className="h-screen overflow-hidden bg-black text-white">
+      <main className="h-[100dvh] overflow-hidden bg-transparent text-white">
         {mobileMenuOpen && (
           <div className="fixed inset-0 z-50 flex md:hidden">
             <button
@@ -1922,8 +1938,8 @@ export default function ChatClient({
               onClick={() => setMobileMenuOpen(false)}
             />
 
-            <div className="relative z-10 flex h-full w-80 max-w-[85vw] flex-col border-r border-neutral-800 bg-neutral-950">
-              <div className="sticky top-0 border-b border-neutral-800 bg-neutral-950 p-4">
+            <div className={`relative z-10 flex h-full w-80 max-w-[85vw] flex-col ${APP_SIDEBAR}`}>
+              <div className={`sticky top-0 p-4 ${APP_TOPBAR}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-xs text-neutral-500">{BRAND.name}</p>
@@ -1956,7 +1972,7 @@ export default function ChatClient({
                   <button
                     type="button"
                     onClick={() => setMobileMenuOpen(false)}
-                    className="rounded-lg border border-neutral-700 px-2 py-1 text-sm text-white"
+                    className={`px-2 py-1 text-sm ${APP_BUTTON_SECONDARY}`}
                   >
                     Close
                   </button>
@@ -1980,9 +1996,9 @@ export default function ChatClient({
           </div>
         )}
 
-        <div className="flex h-screen overflow-hidden">
-          <aside className="hidden h-full w-80 shrink-0 border-r border-neutral-800 bg-neutral-950 md:flex md:flex-col">
-            <div className="sticky top-0 border-b border-neutral-800 bg-neutral-950 p-4">
+        <div className="flex h-[100dvh] overflow-hidden">
+          <aside className={`hidden h-full w-80 shrink-0 md:flex md:flex-col ${APP_SIDEBAR}`}>
+            <div className={`sticky top-0 p-4 ${APP_TOPBAR}`}>
               <div className="truncate text-sm font-semibold">{userEmail}</div>
 
               {usage && (
@@ -2020,15 +2036,15 @@ export default function ChatClient({
             </div>
           </aside>
 
-          <section className="flex h-full flex-1 flex-col bg-black">
-            <div className="sticky top-0 z-20 border-b border-neutral-800 bg-black/95 backdrop-blur">
+          <section className="flex h-full flex-1 flex-col bg-transparent">
+            <div className={`sticky top-0 z-20 ${APP_TOPBAR}`}>
               <div className={`${CONTENT_RAIL_CLASS} py-3`}>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex min-w-0 items-start gap-3">
                     <button
                       type="button"
                       onClick={() => setMobileMenuOpen(true)}
-                      className="mt-0.5 rounded-lg border border-neutral-700 px-2 py-1 text-sm text-white md:hidden"
+                      className={`mt-0.5 px-2 py-1 text-sm md:hidden ${APP_BUTTON_SECONDARY}`}
                       aria-label="Open menu"
                     >
                       ☰
@@ -2053,7 +2069,7 @@ export default function ChatClient({
                     <Tooltip content={TOOLTIP_TEXT.help}>
                       <Link
                         href="/help"
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-neutral-700 bg-neutral-900 text-white transition hover:border-neutral-500"
+                        className={`inline-flex h-9 w-9 items-center justify-center ${APP_BUTTON_SECONDARY}`}
                         aria-label="Open help"
                       >
                         <HelpCircle className="h-4 w-4" />
@@ -2069,9 +2085,7 @@ export default function ChatClient({
                       onClick={() => handleModeChange(false)}
                       disabled={loading}
                       className={`rounded-xl px-3 py-2 text-sm transition ${
-                        !useWebSearch
-                          ? "bg-white text-black"
-                          : "border border-neutral-700 bg-neutral-900 text-white"
+                        !useWebSearch ? APP_BUTTON_ACTIVE : APP_BUTTON_INACTIVE
                       }`}
                     >
                       Standard
@@ -2084,9 +2098,7 @@ export default function ChatClient({
                       onClick={() => handleModeChange(true)}
                       disabled={loading}
                       className={`rounded-xl px-3 py-2 text-sm transition ${
-                        useWebSearch
-                          ? "bg-white text-black"
-                          : "border border-neutral-700 bg-neutral-900 text-white"
+                        useWebSearch ? APP_BUTTON_ACTIVE : APP_BUTTON_INACTIVE
                       }`}
                     >
                       Web Search
@@ -2100,7 +2112,7 @@ export default function ChatClient({
                   <Tooltip content={TOOLTIP_TEXT.help}>
                     <Link
                       href="/help"
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-neutral-700 bg-neutral-900 text-white transition hover:border-neutral-500 md:hidden"
+                      className={`inline-flex h-9 w-9 items-center justify-center md:hidden ${APP_BUTTON_SECONDARY}`}
                       aria-label="Open help"
                     >
                       <HelpCircle className="h-4 w-4" />
@@ -2121,14 +2133,14 @@ export default function ChatClient({
                           type="button"
                           onClick={() => handleConversationStarterClick(starter)}
                           disabled={loading || isLimitReached}
-                          className="rounded-full border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white transition hover:border-neutral-500 disabled:opacity-50"
+                          className={`rounded-full px-3 py-2 text-sm ${APP_BUTTON_INACTIVE}`}
                         >
                           {starter}
                         </button>
                       ))}
                     </div>
 
-                    <div className="mt-4 rounded-2xl border border-neutral-800 bg-neutral-950 p-4">
+                    <div className={`mt-4 rounded-2xl p-4 ${APP_SURFACE}`}>
                       <div className="text-[11px] uppercase tracking-wide text-neutral-500">
                         App information
                       </div>
@@ -2208,8 +2220,8 @@ export default function ChatClient({
                         <div
                           className={`${bubbleWidthClass} mx-auto rounded-2xl p-4 whitespace-pre-wrap break-words ${
                             message.role === "user"
-                              ? "bg-white text-black"
-                              : "bg-neutral-900 text-white"
+                              ? APP_USER_BUBBLE
+                              : APP_ASSISTANT_BUBBLE
                           }`}
                         >
                           <div className="mb-3 flex items-center justify-between gap-3">
@@ -2226,10 +2238,10 @@ export default function ChatClient({
                                     getMessageCopyValue(message)
                                   )
                                 }
-                                className={`rounded-lg px-2 py-1 text-xs transition ${
+                                className={`rounded-lg px-2 py-1 text-xs ${
                                   message.role === "user"
-                                    ? "bg-black/10 text-black hover:bg-black/20"
-                                    : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                                    ? "border border-white/10 bg-white/10 text-white transition hover:bg-white/20"
+                                    : APP_BUTTON_SECONDARY
                                 }`}
                                 aria-label="Copy message"
                               >
@@ -2249,7 +2261,7 @@ export default function ChatClient({
                               <img
                                 src={message.image_url}
                                 alt={message.image_name || "Uploaded image"}
-                                className="max-h-56 rounded-xl border border-neutral-800 object-contain"
+                                className="max-h-56 rounded-xl border border-white/10 object-contain"
                               />
                             </div>
                           )}
@@ -2319,7 +2331,7 @@ export default function ChatClient({
               </div>
             </div>
 
-            <div className="sticky bottom-0 z-20 border-t border-neutral-800 bg-black/95 backdrop-blur">
+            <div className={`sticky bottom-0 z-20 border-t border-white/10 bg-black/10 backdrop-blur-xl`}>
               <div className={`${CONTENT_RAIL_CLASS} space-y-1.5 py-2.5`}>
                 <input
                   ref={imageInputRef}
@@ -2331,7 +2343,7 @@ export default function ChatClient({
                 />
 
                 {!useWebSearch && composerDocuments.length > 0 && (
-                  <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-2">
+                  <div className={`rounded-2xl p-2 ${APP_SURFACE}`}>
                     <div className="flex flex-wrap gap-2">
                       {composerDocuments.map((doc) => (
                         <div
@@ -2367,9 +2379,9 @@ export default function ChatClient({
                 )}
 
                 {!useWebSearch && imageBase64 && (
-                  <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-2">
+                  <div className={`rounded-2xl p-2 ${APP_SURFACE}`}>
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="rounded-full border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300">
+                      <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-neutral-300">
                         {imageName || "Image attached"}
                       </div>
 
@@ -2377,7 +2389,7 @@ export default function ChatClient({
                         <button
                           type="button"
                           onClick={clearImage}
-                          className="rounded-full border border-neutral-700 px-2.5 py-1 text-xs text-white transition hover:border-neutral-500"
+                          className={`rounded-full px-2.5 py-1 text-xs ${APP_BUTTON_SECONDARY}`}
                         >
                           Remove
                         </button>
@@ -2388,7 +2400,7 @@ export default function ChatClient({
                       <img
                         src={imageBase64}
                         alt="Selected upload preview"
-                        className="max-h-24 rounded-xl border border-neutral-800 object-contain"
+                        className="max-h-24 rounded-xl border border-white/10 object-contain"
                       />
                     </div>
                   </div>
@@ -2407,7 +2419,7 @@ export default function ChatClient({
                           type="button"
                           onClick={handleOpenImagePicker}
                           disabled={composerDisabled}
-                          className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-neutral-700 bg-neutral-900 text-xl text-white transition hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl ${APP_BUTTON_SECONDARY}`}
                           aria-label="Attach image"
                         >
                           🖼️
@@ -2416,7 +2428,9 @@ export default function ChatClient({
                     </div>
                   )}
 
-                  <div className="relative flex-1">
+                  <div
+                    className={`relative flex-1 rounded-2xl ${APP_INPUT_SHELL} focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]`}
+                  >
                     <input
                       value={input}
                       onChange={(event) => {
@@ -2426,7 +2440,7 @@ export default function ChatClient({
                         if (documentError) setDocumentError("");
                         if (speechError) setSpeechError(null);
                       }}
-                      className="w-full rounded-2xl bg-neutral-900 px-4 py-3.5 pr-14 outline-none"
+                      className={APP_INPUT_FIELD}
                       placeholder={
                         useWebSearch
                           ? isListening
@@ -2478,7 +2492,7 @@ export default function ChatClient({
                       <button
                         type="button"
                         onClick={handleStop}
-                        className="rounded-2xl border border-neutral-700 px-5 py-3.5 text-white"
+                        className={`px-5 py-3.5 ${APP_BUTTON_SECONDARY}`}
                       >
                         Stop
                       </button>
@@ -2496,7 +2510,7 @@ export default function ChatClient({
                             readyDocumentIds.length === 0 &&
                             input.trim().length === 0)
                         }
-                        className="rounded-2xl bg-white px-5 py-3.5 text-black disabled:cursor-not-allowed disabled:opacity-50"
+                        className={APP_BUTTON_PRIMARY}
                       >
                         Send
                       </button>
@@ -2518,7 +2532,7 @@ export default function ChatClient({
                 )}
 
                 {!useWebSearch && conversationDocuments.length > 0 && (
-                  <p className="px-1 text-xs text-neutral-600">
+                  <p className="px-1 text-xs text-neutral-500">
                     {conversationDocuments.length} document
                     {conversationDocuments.length === 1 ? "" : "s"} available
                     in this conversation.

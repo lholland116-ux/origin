@@ -90,11 +90,20 @@ export default async function ChatPage() {
   );
 
   return (
-    <ChatClient
-      userEmail={user.email ?? ""}
-      initialConversationId={activeConversationId}
-      initialMessages={initialMessages}
-      initialConversations={conversationList}
-    />
+    <main className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#020817_0%,#020617_100%)] text-white">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[10%] top-[10%] h-[300px] w-[300px] rounded-full bg-blue-600/10 blur-3xl" />
+        <div className="absolute right-[5%] top-[15%] h-[260px] w-[260px] rounded-full bg-violet-500/10 blur-3xl" />
+      </div>
+
+      <div className="relative">
+        <ChatClient
+          userEmail={user.email ?? ""}
+          initialConversationId={activeConversationId}
+          initialMessages={initialMessages}
+          initialConversations={conversationList}
+        />
+      </div>
+    </main>
   );
 }

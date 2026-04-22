@@ -77,9 +77,6 @@ type UploadDocumentsResponse = {
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_INPUT_LENGTH = 2000;
 
-const APP_SHELL =
-  "bg-[radial-gradient(circle_at_15%_20%,rgba(59,130,246,0.08),transparent_40%),radial-gradient(circle_at_85%_10%,rgba(139,92,246,0.06),transparent_45%),linear-gradient(180deg,#020817_0%,#020617_100%)]";
-
 const APP_PANEL =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.92),rgba(7,13,30,0.95))] backdrop-blur shadow-[0_18px_50px_rgba(0,0,0,0.3)]";
 
@@ -102,7 +99,7 @@ const APP_MESSAGE_ASSISTANT =
   "border border-white/10 bg-[linear-gradient(180deg,rgba(10,18,40,0.9),rgba(6,12,28,0.95))] text-zinc-100 shadow-[0_10px_40px_rgba(0,0,0,0.4)]";
 
 const APP_MESSAGE_USER =
-  "border border-white/10 bg-white/10 text-white backdrop-blur shadow-[0_10px_30px_rgba(0,0,0,0.22)]";
+  "border border-blue-400/15 bg-[linear-gradient(180deg,rgba(37,99,235,0.18),rgba(255,255,255,0.05))] text-white backdrop-blur shadow-[0_10px_30px_rgba(0,0,0,0.22)]";
 
 export default function ChatApp({ userEmail }: ChatAppProps) {
   const router = useRouter();
@@ -874,15 +871,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }, [selectedImagePreview]);
 
   return (
-    <main
-      className={`relative flex h-screen overflow-hidden text-zinc-100 ${APP_SHELL}`}
-    >
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[-8%] top-[4%] h-[380px] w-[380px] rounded-full bg-blue-600/10 blur-3xl" />
-        <div className="absolute right-[3%] top-[8%] h-[320px] w-[320px] rounded-full bg-violet-500/10 blur-3xl" />
-        <div className="absolute bottom-[6%] left-[18%] h-[260px] w-[420px] rounded-full bg-cyan-500/8 blur-3xl" />
-      </div>
-
+    <main className="relative flex h-[100dvh] overflow-hidden bg-transparent text-zinc-100">
       <aside
         className={`relative hidden w-80 border-r border-white/10 md:flex md:flex-col ${APP_PANEL_DARK}`}
       >
