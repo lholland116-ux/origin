@@ -77,6 +77,23 @@ type UploadDocumentsResponse = {
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_INPUT_LENGTH = 2000;
 
+const APP_PANEL =
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.92),rgba(7,13,30,0.95))] backdrop-blur shadow-[0_18px_50px_rgba(0,0,0,0.3)]";
+const APP_PANEL_SOFT =
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(14,24,52,0.9),rgba(9,16,34,0.92))] backdrop-blur";
+const APP_PANEL_DARK =
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(6,12,28,0.96),rgba(4,8,20,0.98))] backdrop-blur";
+const APP_INPUT =
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(7,13,28,0.94),rgba(4,8,20,0.98))] backdrop-blur";
+const APP_BUTTON_PRIMARY =
+  "rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
+const APP_BUTTON_SECONDARY =
+  "rounded-xl border border-white/10 bg-white/[0.03] text-zinc-200 transition hover:bg-white/[0.06]";
+const APP_MESSAGE_ASSISTANT =
+  "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.94),rgba(7,13,30,0.96))] text-zinc-100 shadow-[0_10px_30px_rgba(0,0,0,0.28)]";
+const APP_MESSAGE_USER =
+  "bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] text-white shadow-[0_10px_30px_rgba(37,99,235,0.3)]";
+
 export default function ChatApp({ userEmail }: ChatAppProps) {
   const router = useRouter();
   const supabase = createBrowserSupabaseClient();
@@ -865,12 +882,20 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
   }, [documents]);
 
   return (
-    <main className="flex h-screen bg-zinc-950 text-zinc-100">
-      <aside className="hidden w-80 border-r border-zinc-800 bg-zinc-950 md:flex md:flex-col">
-        <div className="border-b border-zinc-800 p-4">
+    <main className="relative flex h-screen overflow-hidden bg-transparent text-zinc-100">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[-8%] top-[4%] h-[380px] w-[380px] rounded-full bg-blue-600/10 blur-3xl" />
+        <div className="absolute right-[3%] top-[8%] h-[320px] w-[320px] rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="absolute bottom-[6%] left-[18%] h-[260px] w-[420px] rounded-full bg-cyan-500/8 blur-3xl" />
+      </div>
+
+      <aside
+        className={`relative hidden w-80 border-r border-white/10 md:flex md:flex-col ${APP_PANEL_DARK}`}
+      >
+        <div className="border-b border-white/10 p-4">
           <div className="mb-3">
             <div className="text-sm font-medium text-zinc-100">{userEmail}</div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="mt-1 text-xs text-zinc-400">
               {usageUsed}/{usageLimit} messages used today
             </div>
           </div>
@@ -878,7 +903,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
           <button
             type="button"
             onClick={createConversation}
-            className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-medium text-black transition hover:opacity-90"
+            className={`w-full px-4 py-3 text-sm font-medium ${APP_BUTTON_PRIMARY}`}
           >
             + New Chat
           </button>
@@ -887,12 +912,12 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         <div className="flex-1 overflow-y-auto p-3">
           {sidebarLoading ? (
             <div className="space-y-2">
-              <div className="h-14 animate-pulse rounded-2xl bg-zinc-900" />
-              <div className="h-14 animate-pulse rounded-2xl bg-zinc-900" />
-              <div className="h-14 animate-pulse rounded-2xl bg-zinc-900" />
+              <div className={`h-14 animate-pulse rounded-2xl ${APP_PANEL_SOFT}`} />
+              <div className={`h-14 animate-pulse rounded-2xl ${APP_PANEL_SOFT}`} />
+              <div className={`h-14 animate-pulse rounded-2xl ${APP_PANEL_SOFT}`} />
             </div>
           ) : conversations.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-zinc-800 p-4 text-sm text-zinc-400">
+            <div className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-zinc-400">
               No conversations yet. Start a new one.
             </div>
           ) : (
@@ -906,8 +931,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     key={conversation.id}
                     className={`rounded-2xl border px-3 py-3 transition ${
                       active
-                        ? "border-zinc-700 bg-zinc-800"
-                        : "border-transparent bg-zinc-900 hover:bg-zinc-950"
+                        ? "border-blue-400/25 bg-[linear-gradient(180deg,rgba(20,40,90,0.28),rgba(10,20,50,0.34))]"
+                        : "border-white/5 bg-white/[0.02] hover:bg-white/[0.04]"
                     }`}
                   >
                     {isEditing ? (
@@ -928,7 +953,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                             }
                           }}
                           autoFocus
-                          className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none"
+                          className={`w-full rounded-xl px-3 py-2 text-sm text-zinc-100 outline-none ${APP_INPUT}`}
                         />
                         <div className="flex gap-2">
                           <button
@@ -939,7 +964,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                                 editingTitle
                               )
                             }
-                            className="rounded-xl bg-white px-3 py-1.5 text-xs font-medium text-black"
+                            className={`px-3 py-1.5 text-xs font-medium ${APP_BUTTON_PRIMARY}`}
                           >
                             Save
                           </button>
@@ -949,7 +974,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                               setEditingConversationId(null);
                               setEditingTitle("");
                             }}
-                            className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300"
+                            className={`px-3 py-1.5 text-xs ${APP_BUTTON_SECONDARY}`}
                           >
                             Cancel
                           </button>
@@ -979,7 +1004,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                                 conversation.title
                               )
                             }
-                            className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-950"
+                            className={`px-3 py-1.5 text-xs ${APP_BUTTON_SECONDARY}`}
                           >
                             Rename
                           </button>
@@ -988,7 +1013,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                             type="button"
                             onClick={() => setConfirmDeleteConversation(conversation)}
                             disabled={deletingId === conversation.id}
-                            className="rounded-xl border border-red-900/50 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-950/30 disabled:opacity-50"
+                            className="rounded-xl border border-red-900/40 bg-red-950/10 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-950/20 disabled:opacity-50"
                           >
                             {deletingId === conversation.id ? "Deleting..." : "Delete"}
                           </button>
@@ -1003,14 +1028,14 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         </div>
       </aside>
 
-      <section className="flex flex-1 flex-col">
-        <header className="border-b border-zinc-800 bg-zinc-950 px-4 py-2">
+      <section className="relative flex flex-1 flex-col">
+        <header className={`border-b border-white/10 px-4 py-2 ${APP_PANEL_DARK}`}>
           <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4">
             <div className="flex flex-col">
               <h1 className="text-sm font-semibold text-zinc-100">
                 {activeConversation?.title || "AI Chat"}
               </h1>
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[11px] text-zinc-400">
                 {usageUsed}/{usageLimit} messages used
               </p>
             </div>
@@ -1019,7 +1044,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
               <button
                 type="button"
                 onClick={createConversation}
-                className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-900 md:hidden"
+                className={`px-3 py-2 text-xs font-medium md:hidden ${APP_BUTTON_SECONDARY}`}
               >
                 New Chat
               </button>
@@ -1027,7 +1052,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
               <button
                 type="button"
                 onClick={signOut}
-                className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-900"
+                className={`px-3 py-2 text-xs font-medium ${APP_BUTTON_SECONDARY}`}
               >
                 Sign out
               </button>
@@ -1038,7 +1063,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-4 py-3">
             {limitReached && (
-              <div className="mb-4 rounded-2xl border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+              <div className="mb-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 backdrop-blur">
                 <div className="font-medium">Free plan limit reached</div>
                 <div className="mt-1 text-amber-100/80">
                   You’ve reached your daily message limit. Upgrade to continue
@@ -1047,7 +1072,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                 <div className="mt-3">
                   <button
                     type="button"
-                    className="rounded-xl bg-white px-3 py-2 text-xs font-medium text-black transition hover:opacity-90"
+                    className={`px-3 py-2 text-xs font-medium ${APP_BUTTON_PRIMARY}`}
                     onClick={() => {
                       setError("Upgrade flow not connected yet.");
                     }}
@@ -1059,24 +1084,24 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
             )}
 
             {error && (
-              <div className="mb-4 rounded-2xl border border-red-900/40 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+              <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-100 backdrop-blur">
                 {error}
               </div>
             )}
 
             {messages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center">
-                <div className="max-w-md rounded-3xl border border-zinc-800 bg-zinc-900/60 p-6 text-center shadow-2xl">
+                <div className={`max-w-md rounded-3xl p-6 text-center shadow-2xl ${APP_PANEL}`}>
                   <h2 className="text-xl font-semibold text-white">
                     Start a conversation
                   </h2>
 
-                  <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  <p className="mt-2 text-sm leading-6 text-zinc-300">
                     {PRODUCT_DESCRIPTION}
                   </p>
 
                   <div className="mt-3 space-y-1 text-sm text-zinc-400">
-                    <p className="font-medium text-zinc-300">Try asking:</p>
+                    <p className="font-medium text-zinc-200">Try asking:</p>
                     <div className="space-y-1">
                       <button
                         type="button"
@@ -1115,7 +1140,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   <button
                     type="button"
                     onClick={createConversation}
-                    className="mt-6 rounded-2xl bg-white px-5 py-3 text-sm font-medium text-black transition hover:opacity-90"
+                    className={`mt-6 px-5 py-3 text-sm font-medium ${APP_BUTTON_PRIMARY}`}
                   >
                     New Chat
                   </button>
@@ -1135,9 +1160,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     >
                       <div
                         className={`max-w-[85%] rounded-3xl px-4 py-3 shadow-lg md:max-w-[75%] ${
-                          isUser
-                            ? "bg-white text-black"
-                            : "border border-zinc-800 bg-zinc-900 text-zinc-100"
+                          isUser ? APP_MESSAGE_USER : APP_MESSAGE_ASSISTANT
                         }`}
                       >
                         <div className="break-words text-sm leading-7">
@@ -1147,7 +1170,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                                 <img
                                   src={message.imagePreview}
                                   alt="Uploaded"
-                                  className="max-h-48 rounded-2xl border border-zinc-300"
+                                  className="max-h-48 rounded-2xl border border-white/15"
                                 />
                               )}
 
@@ -1166,8 +1189,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                                 prose-code:text-zinc-100
                                 prose-pre:rounded-2xl
                                 prose-pre:border
-                                prose-pre:border-zinc-700
-                                prose-pre:bg-zinc-950
+                                prose-pre:border-white/10
+                                prose-pre:bg-[#050B17]
                                 prose-ul:list-disc
                                 prose-ul:pl-6
                                 prose-ol:list-decimal
@@ -1196,7 +1219,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                                   href={source.url}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="block rounded-2xl border border-zinc-800 bg-zinc-950 px-3 py-3 transition hover:border-zinc-700"
+                                  className={`block rounded-2xl px-3 py-3 transition hover:border-blue-400/20 ${APP_PANEL_DARK}`}
                                 >
                                   <div className="text-sm font-medium text-zinc-100">
                                     {source.title}
@@ -1219,7 +1242,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                         {message.created_at && (
                           <div
                             className={`mt-2 text-[11px] ${
-                              isUser ? "text-zinc-700" : "text-zinc-500"
+                              isUser ? "text-white/70" : "text-zinc-500"
                             }`}
                           >
                             {formatTimestamp(message.created_at)}
@@ -1233,7 +1256,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                                 type="button"
                                 onClick={() => void regenerateResponse()}
                                 disabled={loading || limitReached || uploading}
-                                className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
+                                className={`px-3 py-1.5 text-xs ${APP_BUTTON_SECONDARY}`}
                               >
                                 Regenerate
                               </button>
@@ -1242,7 +1265,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                             <button
                               type="button"
                               onClick={() => void copyMessage(message.content, index)}
-                              className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800"
+                              className={`px-3 py-1.5 text-xs ${APP_BUTTON_SECONDARY}`}
                             >
                               {copiedIndex === index ? "Copied!" : "Copy"}
                             </button>
@@ -1255,7 +1278,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
 
                 {loading && (
                   <div className="flex justify-start">
-                    <div className="max-w-[85%] rounded-3xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-400 shadow-lg">
+                    <div className={`max-w-[85%] rounded-3xl px-4 py-3 text-sm text-zinc-300 shadow-lg ${APP_MESSAGE_ASSISTANT}`}>
                       Thinking...
                     </div>
                   </div>
@@ -1267,11 +1290,14 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
           </div>
         </div>
 
-        <div className="border-t border-zinc-800 bg-zinc-950">
+        <div className={`border-t border-white/10 ${APP_PANEL_DARK}`}>
           <div className="mx-auto w-full max-w-4xl px-4 py-3">
-            <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-2 shadow-xl">
+            <div
+              className={`rounded-3xl p-2 shadow-xl ${APP_PANEL}
+                focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.25)]`}
+            >
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <label className="cursor-pointer rounded-xl border border-zinc-700 px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800">
+                <label className={`cursor-pointer px-3 py-2 text-xs text-zinc-300 ${APP_BUTTON_SECONDARY}`}>
                   Attach document
                   <input
                     ref={documentInputRef}
@@ -1284,7 +1310,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   />
                 </label>
 
-                <label className="cursor-pointer rounded-xl border border-zinc-700 px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800">
+                <label className={`cursor-pointer px-3 py-2 text-xs text-zinc-300 ${APP_BUTTON_SECONDARY}`}>
                   Attach image
                   <input
                     ref={imageInputRef}
@@ -1309,7 +1335,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     <button
                       onClick={clearSelectedImage}
                       type="button"
-                      className="rounded-xl border border-zinc-700 px-3 py-1 text-xs text-zinc-300 transition hover:bg-zinc-800"
+                      className={`px-3 py-1 text-xs ${APP_BUTTON_SECONDARY}`}
                     >
                       Remove image
                     </button>
@@ -1320,7 +1346,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   <button
                     type="button"
                     onClick={clearSelectedDocuments}
-                    className="rounded-xl border border-zinc-700 px-3 py-1 text-xs text-zinc-300 transition hover:bg-zinc-800"
+                    className={`px-3 py-1 text-xs ${APP_BUTTON_SECONDARY}`}
                   >
                     Clear documents
                   </button>
@@ -1335,7 +1361,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     return (
                       <div
                         key={doc.id}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs"
+                        className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-xs ${APP_PANEL_DARK}`}
                       >
                         <div className="min-w-0">
                           <div className="truncate text-zinc-200">
@@ -1363,7 +1389,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                   <img
                     src={selectedImagePreview}
                     alt="Selected preview"
-                    className="max-h-32 rounded-2xl border border-zinc-800"
+                    className="max-h-32 rounded-2xl border border-white/10"
                   />
                 </div>
               )}
@@ -1409,7 +1435,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
                     uploading ||
                     limitReached
                   }
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-medium text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  className={`px-4 py-2 text-sm font-medium ${APP_BUTTON_PRIMARY}`}
                 >
                   {uploading
                     ? "Uploading..."
@@ -1426,8 +1452,8 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
       </section>
 
       {confirmDeleteConversation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className={`w-full max-w-md rounded-3xl p-6 shadow-2xl ${APP_PANEL}`}>
             <h2 className="text-lg font-semibold text-white">
               Delete conversation?
             </h2>
@@ -1444,7 +1470,7 @@ export default function ChatApp({ userEmail }: ChatAppProps) {
               <button
                 type="button"
                 onClick={() => setConfirmDeleteConversation(null)}
-                className="rounded-2xl border border-zinc-700 px-4 py-2 text-sm text-zinc-300 transition hover:bg-zinc-800"
+                className={`px-4 py-2 text-sm ${APP_BUTTON_SECONDARY}`}
               >
                 Cancel
               </button>
