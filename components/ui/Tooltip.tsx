@@ -1,62 +1,111 @@
 "use client";
 
-import { ReactNode, useId, useState } from "react";
-
-type TooltipSide = "top" | "bottom";
+import {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type HTMLAttributes,
+  type ReactElement,
+} from "react";
 
 type TooltipProps = {
   content: string;
-  children: ReactNode;
-  side?: TooltipSide;
-  disabled?: boolean;
+  children: ReactElement<HTMLAttributes<HTMLElement>>;
 };
 
-export default function Tooltip({
-  content,
-  children,
-  side = "top",
-  disabled = false,
-}: TooltipProps) {
+type TooltipPosition = "top" | "bottom";
+
+export default function Tooltip({ content, children }: TooltipProps) {
+  const id = useId();
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+
   const [open, setOpen] = useState(false);
-  const tooltipId = useId();
+  const [position, setPosition] = useState<TooltipPosition>("top");
+  const [left, setLeft] = useState(0);
+  const [top, setTop] = useState(0);
 
-  const trimmedContent = content.trim();
-  const shouldRenderTooltip = !disabled && trimmedContent.length > 0;
+  function updatePosition() {
+    const triggerEl = triggerRef.current;
+    const tooltipEl = tooltipRef.current;
 
-  const positionClasses =
-    side === "bottom"
-      ? "top-full left-1/2 mt-2 -translate-x-1/2"
-      : "bottom-full left-1/2 mb-2 -translate-x-1/2";
+    if (!triggerEl || !tooltipEl) return;
 
-  function showTooltip() {
-    if (!shouldRenderTooltip) return;
-    setOpen(true);
+    const triggerRect = triggerEl.getBoundingClientRect();
+    const tooltipRect = tooltipEl.getBoundingClientRect();
+
+    const spaceAbove = triggerRect.top;
+    const spaceBelow = window.innerHeight - triggerRect.bottom;
+
+    const nextPosition: TooltipPosition =
+      spaceAbove < tooltipRect.height + 12 && spaceBelow > spaceAbove
+        ? "bottom"
+        : "top";
+
+    setPosition(nextPosition);
+
+    const centeredLeft = triggerRect.left + triggerRect.width / 2;
+    const minLeft = tooltipRect.width / 2 + 8;
+    const maxLeft = window.innerWidth - tooltipRect.width / 2 - 8;
+    const clampedLeft = Math.min(Math.max(centeredLeft, minLeft), maxLeft);
+
+    setLeft(clampedLeft);
+    setTop(nextPosition === "top" ? triggerRect.top : triggerRect.bottom);
   }
 
-  function hideTooltip() {
-    setOpen(false);
+  useEffect(() => {
+    if (!open) return;
+
+    updatePosition();
+
+    const handleWindowChange = () => updatePosition();
+
+    window.addEventListener("resize", handleWindowChange);
+    window.addEventListener("scroll", handleWindowChange, true);
+
+    return () => {
+      window.removeEventListener("resize", handleWindowChange);
+      window.removeEventListener("scroll", handleWindowChange, true);
+    };
+  }, [open]);
+
+  if (!isValidElement(children)) {
+    return children;
   }
 
   return (
     <span
+      ref={triggerRef}
       className="relative inline-flex"
-      onMouseEnter={showTooltip}
-      onMouseLeave={hideTooltip}
-      onFocus={showTooltip}
-      onBlur={hideTooltip}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
     >
-      <span aria-describedby={open && shouldRenderTooltip ? tooltipId : undefined}>
-        {children}
-      </span>
+      {cloneElement(children, {
+        "aria-describedby": open ? id : undefined,
+      })}
 
-      {open && shouldRenderTooltip ? (
-        <span
-          id={tooltipId}
+      {open ? (
+        <div
+          ref={tooltipRef}
+          id={id}
           role="tooltip"
-          className={`pointer-events-none absolute z-50 max-w-xs whitespace-normal rounded-lg bg-zinc-900 px-3 py-1.5 text-center text-xs leading-5 text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900 ${positionClasses}`}
+          className={[
+            "pointer-events-none fixed z-[100] max-w-[220px] -translate-x-1/2 rounded-xl",
+            "border border-zinc-700 bg-zinc-900 px-3 py-2 text-center text-xs text-white shadow-xl",
+            position === "top" ? "-translate-y-2" : "translate-y-2",
+          ].join(" ")}
+          style={{
+            left,
+            top,
+          }}
         >
-          {trimmedContent}
-        </span>
+          {content}
+        </div>
       ) : null}
     </span>
   );
