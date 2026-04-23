@@ -64,7 +64,7 @@ export default function PricingPage() {
 
         {/* Trust signal */}
         <p className="mt-4 text-sm text-white/60">
-          Built by a scientist with 30+ years of experience in pharma, biotech,
+          Built by a scientist with 25+ years of experience in pharma, biotech,
           cosmetics, and medical devices.
         </p>
       </div>
