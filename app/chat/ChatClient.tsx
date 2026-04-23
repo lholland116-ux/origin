@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Mic,
   MicOff,
+  Palette,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BRAND } from "@/lib/branding";
@@ -18,6 +19,16 @@ import OnboardingModal from "@/components/help/OnboardingModal";
 import DocumentUploadButton from "@/components/DocumentUploadButton";
 import DocumentChip from "@/components/DocumentChip";
 import { validateFiles } from "@/lib/documents/validate-upload";
+import {
+  CHAT_THEMES,
+  DEFAULT_CHAT_THEME_ID,
+  getChatThemeById,
+  type ChatTheme,
+} from "@/lib/chat-themes";
+import {
+  getStoredChatThemeId,
+  setStoredChatThemeId,
+} from "@/lib/chat-theme-storage";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -177,37 +188,16 @@ const TOOLTIP_TEXT = {
   deleteConversation: "Delete this conversation",
   account: "Open your account settings",
   signOut: "Sign out of your account",
+  theme: "Choose chat colors",
 } as const;
 
 const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4";
 const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl";
 const USER_BUBBLE_CLASS = "w-full max-w-2xl";
 
-const APP_SIDEBAR =
-  "bg-[linear-gradient(180deg,rgba(6,11,25,0.98),rgba(3,8,20,0.98))] border-r border-white/10";
-const APP_TOPBAR =
-  "border-b border-white/10 bg-[linear-gradient(180deg,rgba(6,11,25,0.92),rgba(3,8,20,0.94))] backdrop-blur";
-const APP_SURFACE =
-  "border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.92),rgba(7,13,30,0.95))] backdrop-blur shadow-[0_18px_50px_rgba(0,0,0,0.28)]";
-const APP_SURFACE_SOFT =
-  "border border-white/10 bg-white/[0.04] backdrop-blur-md";
-const APP_SURFACE_SUBTLE =
-  "border border-white/10 bg-white/[0.03] backdrop-blur";
-const APP_ASSISTANT_BUBBLE =
-  "bg-[linear-gradient(180deg,rgba(10,18,40,0.9),rgba(6,12,28,0.95))] border border-white/10 text-white shadow-[0_10px_40px_rgba(0,0,0,0.4)]";
-const APP_USER_BUBBLE =
-  "bg-[linear-gradient(180deg,rgba(37,99,235,0.18),rgba(255,255,255,0.05))] border border-blue-400/15 text-white backdrop-blur-md shadow-[0_10px_30px_rgba(0,0,0,0.22)]";
-const APP_INPUT_SHELL =
-  "border border-white/10 bg-white/[0.04] backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,0.25)]";
-const APP_INPUT_FIELD =
-  "w-full rounded-2xl bg-transparent px-4 py-3.5 pr-14 text-white outline-none placeholder:text-white/40";
-const APP_BUTTON_PRIMARY =
-  "rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-5 py-3.5 text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
-const APP_BUTTON_SECONDARY =
-  "rounded-xl border border-white/10 bg-white/[0.03] text-white transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50";
-const APP_BUTTON_ACTIVE = "bg-white text-black shadow-sm";
-const APP_BUTTON_INACTIVE =
-  "border border-white/10 bg-white/[0.06] text-white/80 transition hover:bg-white/[0.12]";
+function cx(...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(" ");
+}
 
 function createId(): string {
   return crypto.randomUUID();
@@ -269,6 +259,30 @@ function cloneDocuments(documents: UploadedDocument[]): UploadedDocument[] {
   return documents.map((doc) => ({ ...doc }));
 }
 
+function normalizeWidget(input: unknown): MessageWidget | null {
+  if (!input || typeof input !== "object") return null;
+
+  const widget = input as Record<string, unknown>;
+  if (widget.type !== "time") return null;
+
+  const location =
+    typeof widget.location === "string" && widget.location.trim()
+      ? widget.location.trim()
+      : "";
+  const timezone =
+    typeof widget.timezone === "string" && widget.timezone.trim()
+      ? widget.timezone.trim()
+      : "";
+
+  if (!location || !timezone) return null;
+
+  return {
+    type: "time",
+    location,
+    timezone,
+  };
+}
+
 function normalizeInitialMessages(messages: Message[]): Message[] {
   return messages.map((message) => ({
     ...message,
@@ -316,30 +330,6 @@ function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
       conversation_id:
         typeof item.conversation_id === "string" ? item.conversation_id : null,
     }));
-}
-
-function normalizeWidget(input: unknown): MessageWidget | null {
-  if (!input || typeof input !== "object") return null;
-
-  const widget = input as Record<string, unknown>;
-  if (widget.type !== "time") return null;
-
-  const location =
-    typeof widget.location === "string" && widget.location.trim()
-      ? widget.location.trim()
-      : "";
-  const timezone =
-    typeof widget.timezone === "string" && widget.timezone.trim()
-      ? widget.timezone.trim()
-      : "";
-
-  if (!location || !timezone) return null;
-
-  return {
-    type: "time",
-    location,
-    timezone,
-  };
 }
 
 function formatTimeForZone(timezone: string): string {
@@ -553,12 +543,108 @@ function getMessageCopyValue(message: Message): string {
   return message.content?.trim() || "";
 }
 
+function getSecondaryButtonClass(theme: ChatTheme): string {
+  return cx(
+    "rounded-xl border px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-50",
+    theme.panelBorder,
+    "text-white/90 hover:bg-white/10"
+  );
+}
+
+function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
+  return isActive
+    ? cx("rounded-xl px-3 py-2 text-sm transition", theme.buttonPrimary)
+    : getSecondaryButtonClass(theme);
+}
+
+function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
+  return cx(
+    "rounded-2xl border p-4 whitespace-pre-wrap break-words shadow-[0_10px_30px_rgba(0,0,0,0.22)]",
+    role === "user" ? theme.userBubble : theme.assistantBubble,
+    role === "user" ? theme.userText : theme.assistantText,
+    theme.panelBorder
+  );
+}
+
+function ChatThemePicker({
+  theme,
+  selectedThemeId,
+  onChange,
+  onClose,
+}: {
+  theme: ChatTheme;
+  selectedThemeId: string;
+  onChange: (themeId: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className={cx("rounded-2xl border p-4", theme.panelBg, theme.panelBorder)}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 className={cx("text-sm font-semibold", theme.titleText)}>Chat theme</h2>
+          <p className={cx("mt-1 text-xs", theme.mutedText)}>
+            Let users choose the chat window colors.
+          </p>
+        </div>
+
+        <button type="button" onClick={onClose} className={getSecondaryButtonClass(theme)}>
+          Close
+        </button>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {CHAT_THEMES.map((item) => {
+          const active = item.id === selectedThemeId;
+
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onChange(item.id)}
+              className={cx(
+                "rounded-2xl border p-3 text-left transition",
+                active ? "border-blue-400/50 bg-white/10" : theme.panelBorder,
+                "hover:bg-white/5"
+              )}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-white">{item.label}</div>
+                  <div className="mt-1 text-xs text-white/60">{item.id}</div>
+                </div>
+                {active ? (
+                  <span className="rounded-full bg-white px-2 py-1 text-[10px] font-medium text-black">
+                    Active
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="mt-3 rounded-xl border border-white/10 p-2">
+                <div className={cx("rounded-lg border p-2", item.panelBg, item.panelBorder)}>
+                  <div className={cx("mb-2 rounded-lg px-3 py-2 text-xs", item.assistantBubble, item.assistantText)}>
+                    Assistant
+                  </div>
+                  <div className={cx("ml-auto w-fit rounded-lg px-3 py-2 text-xs", item.userBubble, item.userText)}>
+                    User
+                  </div>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function SourcesDisclosure({
   sources,
   sourceCount,
+  theme,
 }: {
   sources: SourceItem[];
   sourceCount: number;
+  theme: ChatTheme;
 }) {
   const [open, setOpen] = useState(false);
   const visibleSources = sources.slice(0, 3);
@@ -568,19 +654,19 @@ function SourcesDisclosure({
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs text-neutral-300 ${APP_SURFACE_SUBTLE}`}
+        className={cx(
+          "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs",
+          theme.panelBorder,
+          "text-white/80 hover:bg-white/5"
+        )}
         aria-expanded={open}
       >
         <span>Sources ({sourceCount})</span>
-        {open ? (
-          <ChevronUp className="h-3.5 w-3.5" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5" />
-        )}
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
       </button>
 
       {open && (
-        <div className={`mt-2 rounded-2xl p-3 ${APP_SURFACE}`}>
+        <div className={cx("mt-2 rounded-2xl border p-3", theme.panelBg, theme.panelBorder)}>
           <div className="space-y-2">
             {visibleSources.map((source, index) => (
               <a
@@ -588,24 +674,23 @@ function SourcesDisclosure({
                 href={source.url}
                 target="_blank"
                 rel="noreferrer"
-                className={`block rounded-xl p-3 transition hover:border-blue-400/25 ${APP_SURFACE_SUBTLE}`}
+                className={cx(
+                  "block rounded-xl border p-3 transition hover:bg-white/5",
+                  theme.panelBorder
+                )}
               >
                 <div className="text-xs font-medium text-blue-300">
                   {source.title?.trim() || getSourceHostname(source.url)}
                 </div>
-                <div className="mt-1 text-[11px] text-neutral-500">
-                  {getSourceHostname(source.url)}
-                </div>
+                <div className="mt-1 text-[11px] text-white/50">{getSourceHostname(source.url)}</div>
                 {source.snippet ? (
-                  <div className="mt-1 text-xs text-neutral-300 line-clamp-3">
-                    {source.snippet}
-                  </div>
+                  <div className="mt-1 line-clamp-3 text-xs text-white/80">{source.snippet}</div>
                 ) : null}
               </a>
             ))}
 
             {sourceCount > visibleSources.length && (
-              <div className="text-[11px] text-neutral-500">
+              <div className="text-[11px] text-white/50">
                 Showing {visibleSources.length} of {sourceCount} sources
               </div>
             )}
@@ -619,9 +704,11 @@ function SourcesDisclosure({
 function TimeWidget({
   location,
   timezone,
+  theme,
 }: {
   location: string;
   timezone: string;
+  theme: ChatTheme;
 }) {
   const [time, setTime] = useState(() => formatTimeForZone(timezone));
   const [dateLabel, setDateLabel] = useState(() => formatDateForZone(timezone));
@@ -639,19 +726,17 @@ function TimeWidget({
   }, [timezone]);
 
   return (
-    <div className={`mb-3 rounded-3xl p-5 ${APP_SURFACE}`}>
+    <div className={cx("mb-3 rounded-3xl border p-5", theme.panelBg, theme.panelBorder)}>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-4xl font-semibold tracking-tight text-white">
-            {time}
-          </div>
-          <div className="mt-2 text-sm text-neutral-300">
+          <div className={cx("text-4xl font-semibold tracking-tight", theme.titleText)}>{time}</div>
+          <div className="mt-2 text-sm text-white/80">
             {location} ({formatZoneLabel(timezone)})
           </div>
-          <div className="mt-1 text-sm text-neutral-500">{dateLabel}</div>
+          <div className={cx("mt-1 text-sm", theme.mutedText)}>{dateLabel}</div>
         </div>
 
-        <div className={`rounded-2xl p-3 text-neutral-300 ${APP_SURFACE_SUBTLE}`}>
+        <div className={cx("rounded-2xl border p-3 text-white/80", theme.panelBorder)}>
           <Clock3 className="h-5 w-5" />
         </div>
       </div>
@@ -659,11 +744,17 @@ function TimeWidget({
   );
 }
 
-function MessageWidgetRenderer({ widget }: { widget?: MessageWidget | null }) {
+function MessageWidgetRenderer({
+  widget,
+  theme,
+}: {
+  widget?: MessageWidget | null;
+  theme: ChatTheme;
+}) {
   if (!widget) return null;
 
   if (widget.type === "time") {
-    return <TimeWidget location={widget.location} timezone={widget.timezone} />;
+    return <TimeWidget location={widget.location} timezone={widget.timezone} theme={theme} />;
   }
 
   return null;
@@ -688,31 +779,23 @@ export default function ChatClient({
   const [imageName, setImageName] = useState("");
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
-
-  const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>(
-    []
-  );
-  const [conversationDocuments, setConversationDocuments] = useState<
-    UploadedDocument[]
-  >([]);
-
+  const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>([]);
+  const [conversationDocuments, setConversationDocuments] = useState<UploadedDocument[]>([]);
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
   const [documentError, setDocumentError] = useState("");
-
   const [conversationId, setConversationId] = useState(initialConversationId);
-  const [conversations, setConversations] =
-    useState<ConversationItem[]>(initialConversations);
+  const [conversations, setConversations] = useState<ConversationItem[]>(initialConversations);
   const [sidebarLoading, setSidebarLoading] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [usageError, setUsageError] = useState("");
   const [uiError, setUiError] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [selectedThemeId, setSelectedThemeId] = useState(DEFAULT_CHAT_THEME_ID);
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -721,6 +804,8 @@ export default function ChatClient({
   const recognitionRef = useRef<AppSpeechRecognition | null>(null);
   const speechSessionBaseRef = useRef<string>("");
   const lastAppliedTranscriptRef = useRef<string>("");
+
+  const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
 
   const readyComposerDocuments = useMemo(
     () => composerDocuments.filter((doc) => doc.extraction_status === "ready"),
@@ -750,9 +835,7 @@ export default function ChatClient({
     return "Standard assistant";
   }, [useWebSearch, isListening, imageBase64, composerDocuments.length]);
 
-  const isLimitReached = Boolean(
-    usage && usage.limit > 0 && usage.remaining <= 0
-  );
+  const isLimitReached = Boolean(usage && usage.limit > 0 && usage.remaining <= 0);
 
   const composerDisabled =
     loading || uploadingImage || isUploadingDocuments || isLimitReached;
@@ -771,6 +854,10 @@ export default function ChatClient({
       block: "end",
     });
   }, [messages, loading]);
+
+  useEffect(() => {
+    setSelectedThemeId(getStoredChatThemeId());
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -823,9 +910,7 @@ export default function ChatClient({
       const sessionBase = speechSessionBaseRef.current.trim();
       lastAppliedTranscriptRef.current = transcriptToApply;
 
-      setInput(
-        sessionBase ? `${sessionBase} ${transcriptToApply}` : transcriptToApply
-      );
+      setInput(sessionBase ? `${sessionBase} ${transcriptToApply}` : transcriptToApply);
       setUiError("");
       setSpeechError(null);
     };
@@ -874,20 +959,16 @@ export default function ChatClient({
   }, [loading, isUploadingDocuments, uploadingImage, isListening]);
 
   useEffect(() => {
-    if (!conversationId || !hasPendingDocuments) {
-      return;
-    }
+    if (!conversationId || !hasPendingDocuments) return;
 
     const pollId = ++activeDocumentPollRef.current;
 
     void (async () => {
-      for (let attempt = 0; attempt < DOCUMENT_POLL_MAX_ATTEMPTS; attempt++) {
+      for (let attempt = 0; attempt < DOCUMENT_POLL_MAX_ATTEMPTS; attempt += 1) {
         const delay = DOCUMENT_POLL_INTERVAL_MS * (attempt + 1);
         await sleep(delay);
 
-        if (pollId !== activeDocumentPollRef.current) {
-          return;
-        }
+        if (pollId !== activeDocumentPollRef.current) return;
 
         const docs = await fetchDocuments(conversationId, { silent: true });
         if (!docs) return;
@@ -900,10 +981,7 @@ export default function ChatClient({
             doc.extraction_status === "processing"
         );
 
-        const composerSnapshot = reconcileComposerDocuments(
-          composerDocuments,
-          docs
-        );
+        const composerSnapshot = reconcileComposerDocuments(composerDocuments, docs);
         const composerStillPending = composerSnapshot.some(
           (doc) =>
             doc.extraction_status === "uploading" ||
@@ -911,10 +989,7 @@ export default function ChatClient({
         );
 
         if (!stillPending || !composerStillPending) {
-          debugLog("Document polling completed", {
-            conversationId,
-            docs,
-          });
+          debugLog("Document polling completed", { conversationId, docs });
           return;
         }
       }
@@ -925,7 +1000,12 @@ export default function ChatClient({
     return () => {
       activeDocumentPollRef.current += 1;
     };
-  }, [conversationId, hasPendingDocuments]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [conversationId, hasPendingDocuments]);
+
+  function handleThemeChange(themeId: string) {
+    setSelectedThemeId(themeId);
+    setStoredChatThemeId(themeId);
+  }
 
   function clearImage(): void {
     setImageBase64(null);
@@ -957,9 +1037,7 @@ export default function ChatClient({
     messageId: string,
     updater: (msg: Message) => Message
   ): void {
-    setMessages((prev) =>
-      prev.map((msg) => (msg.id === messageId ? updater(msg) : msg))
-    );
+    setMessages((prev) => prev.map((msg) => (msg.id === messageId ? updater(msg) : msg)));
   }
 
   async function handleCopyMessage(messageId: string, content: string) {
@@ -973,9 +1051,7 @@ export default function ChatClient({
       setCopiedMessageId(messageId);
 
       window.setTimeout(() => {
-        setCopiedMessageId((current) =>
-          current === messageId ? null : current
-        );
+        setCopiedMessageId((current) => (current === messageId ? null : current));
       }, 1500);
     } catch {
       setUiError("Failed to copy message.");
@@ -989,13 +1065,7 @@ export default function ChatClient({
   }
 
   function handleOpenImagePicker(): void {
-    if (
-      loading ||
-      uploadingImage ||
-      isUploadingDocuments ||
-      isLimitReached ||
-      useWebSearch
-    ) {
+    if (loading || uploadingImage || isUploadingDocuments || isLimitReached || useWebSearch) {
       return;
     }
 
@@ -1003,13 +1073,7 @@ export default function ChatClient({
   }
 
   function handleStartListening(): void {
-    if (
-      loading ||
-      uploadingImage ||
-      isUploadingDocuments ||
-      isLimitReached ||
-      hasPendingDocuments
-    ) {
+    if (loading || uploadingImage || isUploadingDocuments || isLimitReached || hasPendingDocuments) {
       return;
     }
 
@@ -1057,9 +1121,7 @@ export default function ChatClient({
         remaining: typeof data?.remaining === "number" ? data.remaining : 0,
       });
     } catch (error) {
-      setUsageError(
-        error instanceof Error ? error.message : "Failed to load usage."
-      );
+      setUsageError(error instanceof Error ? error.message : "Failed to load usage.");
     }
   }
 
@@ -1078,34 +1140,22 @@ export default function ChatClient({
       }
 
       const res = await fetch(
-        `/api/documents?conversationId=${encodeURIComponent(
-          targetConversationId
-        )}`,
+        `/api/documents?conversationId=${encodeURIComponent(targetConversationId)}`,
         { cache: "no-store" }
       );
 
       if (!res.ok) {
-        const data = (await res.json().catch(() => null)) as
-          | DocumentsResponse
-          | null;
+        const data = (await res.json().catch(() => null)) as DocumentsResponse | null;
         throw new Error(data?.error || "Failed to load documents.");
       }
 
       const data = (await res.json()) as DocumentsResponse;
       const normalized = normalizeUploadedDocuments(data.documents);
-
-      debugLog("fetchDocuments result", {
-        conversationId: targetConversationId,
-        count: normalized.length,
-        documents: normalized,
-      });
-
       setConversationDocuments(normalized);
       return normalized;
     } catch (error) {
       if (!options?.silent) {
-        const message =
-          error instanceof Error ? error.message : "Failed to load documents.";
+        const message = error instanceof Error ? error.message : "Failed to load documents.";
         setDocumentError(message);
       }
       return null;
@@ -1150,13 +1200,11 @@ export default function ChatClient({
     const response = await fetch(processedDataUrl);
     const blob = await response.blob();
 
-    const { error: uploadError } = await supabase.storage
-      .from("chat-images")
-      .upload(filePath, blob, {
-        contentType: blob.type || file.type || "image/jpeg",
-        cacheControl: "3600",
-        upsert: false,
-      });
+    const { error: uploadError } = await supabase.storage.from("chat-images").upload(filePath, blob, {
+      contentType: blob.type || file.type || "image/jpeg",
+      cacheControl: "3600",
+      upsert: false,
+    });
 
     if (uploadError) {
       throw new Error(uploadError.message);
@@ -1170,8 +1218,6 @@ export default function ChatClient({
   }
 
   async function handleFilesSelected(files: File[]) {
-    debugLog("STEP 1: Files received", files);
-
     if (isUploadingDocuments) return;
 
     if (useWebSearch) {
@@ -1187,7 +1233,6 @@ export default function ChatClient({
 
     for (const file of files) {
       const mimeType = inferMimeType(file);
-
       if (!isAllowedUploadMimeType(mimeType, file.name)) {
         setDocumentError(`Unsupported file type: ${file.name}`);
         return;
@@ -1216,67 +1261,43 @@ export default function ChatClient({
       setComposerDocuments((prev) => [...prev, ...optimisticDocs]);
 
       const formData = new FormData();
-
       for (const file of files) {
         formData.append("files", file);
       }
-
       formData.append("conversationId", conversationId);
 
       let res: Response;
-
       try {
         res = await fetchWithTimeout(
           "/api/documents/upload",
-          {
-            method: "POST",
-            body: formData,
-          },
+          { method: "POST", body: formData },
           DOCUMENT_UPLOAD_TIMEOUT_MS
         );
       } catch {
         throw new Error("Upload request failed or timed out.");
       }
 
-      const data = (await res.json().catch(() => null)) as
-        | DocumentsResponse
-        | { error?: string }
-        | null;
+      const data = (await res.json().catch(() => null)) as DocumentsResponse | { error?: string } | null;
 
       if (!res.ok) {
-        const errorMessage =
-          extractErrorMessage(data) || `Upload failed (status ${res.status})`;
-
+        const errorMessage = extractErrorMessage(data) || `Upload failed (status ${res.status})`;
         throw new Error(errorMessage);
       }
 
-      const refreshedDocs = await fetchDocuments(conversationId, {
-        silent: true,
-      });
-
+      const refreshedDocs = await fetchDocuments(conversationId, { silent: true });
       if (refreshedDocs) {
-        setComposerDocuments((prev) =>
-          reconcileComposerDocuments(prev, refreshedDocs)
-        );
+        setComposerDocuments((prev) => reconcileComposerDocuments(prev, refreshedDocs));
       }
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Upload failed.";
-
+      const message = error instanceof Error ? error.message : "Upload failed.";
       setDocumentError(message);
-
       setComposerDocuments((prev) =>
         prev.map((doc) =>
           doc.extraction_status === "uploading"
-            ? {
-                ...doc,
-                extraction_status: "failed",
-                extraction_error: message,
-              }
+            ? { ...doc, extraction_status: "failed", extraction_error: message }
             : doc
         )
       );
-
       await fetchDocuments(conversationId, { silent: true });
     } finally {
       setIsUploadingDocuments(false);
@@ -1295,9 +1316,7 @@ export default function ChatClient({
       router.push("/login");
       router.refresh();
     } catch (error) {
-      setUiError(
-        error instanceof Error ? error.message : "Failed to sign out."
-      );
+      setUiError(error instanceof Error ? error.message : "Failed to sign out.");
     }
   }
 
@@ -1352,15 +1371,11 @@ export default function ChatClient({
                   ? dedupeSources(msg.sources).length
                   : 0,
             widget: normalizeWidget(msg.widget),
-            documents: Array.isArray(msg.documents)
-              ? cloneDocuments(msg.documents)
-              : [],
+            documents: Array.isArray(msg.documents) ? cloneDocuments(msg.documents) : [],
           };
 
           if (normalizedMessage.image_path) {
-            const imageUrl = await getSignedImageUrl(
-              normalizedMessage.image_path
-            );
+            const imageUrl = await getSignedImageUrl(normalizedMessage.image_path);
             return { ...normalizedMessage, image_url: imageUrl };
           }
 
@@ -1372,9 +1387,7 @@ export default function ChatClient({
       setMessages(nextMessages);
       await fetchDocuments(nextConversationId);
     } catch (error) {
-      setUiError(
-        error instanceof Error ? error.message : "Failed to load conversation."
-      );
+      setUiError(error instanceof Error ? error.message : "Failed to load conversation.");
     } finally {
       setSidebarLoading(false);
     }
@@ -1398,9 +1411,7 @@ export default function ChatClient({
     try {
       const res = await fetch("/api/conversations", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: "New Chat" }),
       });
 
@@ -1427,9 +1438,7 @@ export default function ChatClient({
       setConversationDocuments([]);
       setMobileMenuOpen(false);
     } catch (error) {
-      setUiError(
-        error instanceof Error ? error.message : "Failed to create conversation."
-      );
+      setUiError(error instanceof Error ? error.message : "Failed to create conversation.");
     } finally {
       setSidebarLoading(false);
     }
@@ -1438,11 +1447,7 @@ export default function ChatClient({
   async function handleRenameConversation(target: ConversationItem) {
     if (loading || sidebarLoading) return;
 
-    const nextTitle = window.prompt(
-      "Rename conversation",
-      target.title?.trim() || "New Chat"
-    );
-
+    const nextTitle = window.prompt("Rename conversation", target.title?.trim() || "New Chat");
     if (!nextTitle) return;
 
     const trimmed = nextTitle.trim();
@@ -1454,13 +1459,8 @@ export default function ChatClient({
     try {
       const res = await fetch("/api/conversations", {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          id: target.id,
-          title: trimmed,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: target.id, title: trimmed }),
       });
 
       if (!res.ok) {
@@ -1470,9 +1470,7 @@ export default function ChatClient({
 
       await refreshConversations(target.id);
     } catch (error) {
-      setUiError(
-        error instanceof Error ? error.message : "Failed to rename conversation."
-      );
+      setUiError(error instanceof Error ? error.message : "Failed to rename conversation.");
     } finally {
       setSidebarLoading(false);
     }
@@ -1481,22 +1479,16 @@ export default function ChatClient({
   async function handleDeleteConversation(target: ConversationItem) {
     if (loading || sidebarLoading) return;
 
-    const confirmed = window.confirm(
-      `Delete "${target.title?.trim() || "New Chat"}"?`
-    );
-
+    const confirmed = window.confirm(`Delete "${target.title?.trim() || "New Chat"}"?`);
     if (!confirmed) return;
 
     setSidebarLoading(true);
     setUiError("");
 
     try {
-      const res = await fetch(
-        `/api/conversations?id=${encodeURIComponent(target.id)}`,
-        {
-          method: "DELETE",
-        }
-      );
+      const res = await fetch(`/api/conversations?id=${encodeURIComponent(target.id)}`, {
+        method: "DELETE",
+      });
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -1517,17 +1509,13 @@ export default function ChatClient({
         await refreshConversations(conversationId);
       }
     } catch (error) {
-      setUiError(
-        error instanceof Error ? error.message : "Failed to delete conversation."
-      );
+      setUiError(error instanceof Error ? error.message : "Failed to delete conversation.");
     } finally {
       setSidebarLoading(false);
     }
   }
 
-  async function handleImageChange(
-    event: React.ChangeEvent<HTMLInputElement>
-  ) {
+  async function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -1548,9 +1536,7 @@ export default function ChatClient({
       setImagePath(uploaded.path);
     } catch (error) {
       clearImage();
-      setUiError(
-        error instanceof Error ? error.message : "Failed to process image."
-      );
+      setUiError(error instanceof Error ? error.message : "Failed to process image.");
     } finally {
       setUploadingImage(false);
     }
@@ -1586,9 +1572,7 @@ export default function ChatClient({
     }
 
     if (hasPendingDocuments) {
-      setUiError(
-        "Please wait for attached documents to finish processing before sending."
-      );
+      setUiError("Please wait for attached documents to finish processing before sending.");
       return;
     }
 
@@ -1607,24 +1591,18 @@ export default function ChatClient({
     }
 
     const effectiveMessage =
-      trimmed ||
-      (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
+      trimmed || (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
 
     const attachmentNotes = [
       hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "",
       hasReadyDocuments
-        ? `[Documents attached: ${readyComposerDocuments
-            .map((doc) => doc.file_name)
-            .join(", ")}]`
+        ? `[Documents attached: ${readyComposerDocuments.map((doc) => doc.file_name).join(", ")}]`
         : "",
     ]
       .filter(Boolean)
       .join("\n");
 
-    const userVisibleContent = [effectiveMessage, attachmentNotes]
-      .filter(Boolean)
-      .join("\n\n");
-
+    const userVisibleContent = [effectiveMessage, attachmentNotes].filter(Boolean).join("\n\n");
     const sentDocuments = cloneDocuments(readyComposerDocuments);
 
     const userMessage: Message = {
@@ -1638,7 +1616,6 @@ export default function ChatClient({
     };
 
     const assistantId = createId();
-
     const assistantPlaceholder: Message = {
       id: assistantId,
       role: "assistant",
@@ -1670,9 +1647,7 @@ export default function ChatClient({
       const res = await fetch(endpoint, {
         method: "POST",
         signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversationId,
           message: effectiveMessage,
@@ -1697,19 +1672,12 @@ export default function ChatClient({
 
       if (useWebSearch) {
         const data = (await res.json()) as ChatWebResponse;
-
         const reply =
           typeof data.reply === "string" && data.reply.trim().length > 0
             ? data.reply.trim()
             : "No response generated.";
-
-        const sources = Array.isArray(data.sources)
-          ? dedupeSources(data.sources)
-          : [];
-        const sourceCount =
-          typeof data.sourceCount === "number"
-            ? data.sourceCount
-            : sources.length;
+        const sources = Array.isArray(data.sources) ? dedupeSources(data.sources) : [];
+        const sourceCount = typeof data.sourceCount === "number" ? data.sourceCount : sources.length;
 
         updateAssistantMessage(assistantId, (msg) => ({
           ...msg,
@@ -1734,10 +1702,7 @@ export default function ChatClient({
           const chunk = decoder.decode(value, { stream: true });
           fullText += chunk;
 
-          updateAssistantMessage(assistantId, (msg) => ({
-            ...msg,
-            content: fullText,
-          }));
+          updateAssistantMessage(assistantId, (msg) => ({ ...msg, content: fullText }));
         }
 
         updateAssistantMessage(assistantId, (msg) => ({
@@ -1761,9 +1726,7 @@ export default function ChatClient({
         id: assistantId,
         role: "assistant",
         content:
-          error instanceof Error
-            ? error.message
-            : "Something went wrong. Please try again.",
+          error instanceof Error ? error.message : "Something went wrong. Please try again.",
         sources: [],
         sourceCount: 0,
         widget: null,
@@ -1794,16 +1757,10 @@ export default function ChatClient({
   function renderStatusMessages() {
     return (
       <>
-        {usageError && (
-          <div className="mt-2 text-xs text-red-400">{usageError}</div>
-        )}
+        {usageError && <div className="mt-2 text-xs text-red-400">{usageError}</div>}
         {uiError && <div className="mt-2 text-xs text-red-400">{uiError}</div>}
-        {documentError && (
-          <div className="mt-2 text-xs text-red-400">{documentError}</div>
-        )}
-        {speechError && (
-          <div className="mt-2 text-xs text-red-400">{speechError}</div>
-        )}
+        {documentError && <div className="mt-2 text-xs text-red-400">{documentError}</div>}
+        {speechError && <div className="mt-2 text-xs text-red-400">{speechError}</div>}
       </>
     );
   }
@@ -1816,7 +1773,7 @@ export default function ChatClient({
             type="button"
             onClick={handleNewChat}
             disabled={loading || sidebarLoading}
-            className={`px-4 py-2 text-sm ${APP_BUTTON_PRIMARY}`}
+            className={cx("px-4 py-2 text-sm", activeTheme.buttonPrimary)}
           >
             New Chat
           </button>
@@ -1826,12 +1783,10 @@ export default function ChatClient({
           <button
             type="button"
             onClick={() => {
-              if (isMobile) {
-                setMobileMenuOpen(false);
-              }
+              if (isMobile) setMobileMenuOpen(false);
               router.push("/account");
             }}
-            className={`px-4 py-2 text-sm ${APP_BUTTON_SECONDARY}`}
+            className={getSecondaryButtonClass(activeTheme)}
           >
             Account
           </button>
@@ -1841,22 +1796,16 @@ export default function ChatClient({
           <Link
             href="/help"
             onClick={() => {
-              if (isMobile) {
-                setMobileMenuOpen(false);
-              }
+              if (isMobile) setMobileMenuOpen(false);
             }}
-            className={`px-4 py-2 text-center text-sm ${APP_BUTTON_SECONDARY}`}
+            className={cx(getSecondaryButtonClass(activeTheme), "text-center")}
           >
             Help
           </Link>
         </Tooltip>
 
         <Tooltip content={TOOLTIP_TEXT.signOut}>
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className={`px-4 py-2 text-sm ${APP_BUTTON_SECONDARY}`}
-          >
+          <button type="button" onClick={handleSignOut} className={getSecondaryButtonClass(activeTheme)}>
             Sign Out
           </button>
         </Tooltip>
@@ -1864,35 +1813,27 @@ export default function ChatClient({
     );
   }
 
-  function renderConversationCard(
-    conversation: ConversationItem,
-    isMobile = false
-  ) {
+  function renderConversationCard(conversation: ConversationItem, isMobile = false) {
     const isActive = conversation.id === conversationId;
 
     return (
       <div
         key={conversation.id}
-        className={`rounded-xl p-2 transition ${
-          isActive
-            ? "border border-blue-400/20 bg-[linear-gradient(180deg,rgba(37,99,235,0.20),rgba(255,255,255,0.05))] text-white"
-            : "border border-white/5 bg-white/[0.03] text-white hover:bg-white/[0.06]"
-        }`}
+        className={cx(
+          "rounded-xl border p-2 transition",
+          isActive ? "border-blue-400/30 bg-white/10 text-white" : cx(activeTheme.panelBorder, "bg-white/[0.03] text-white hover:bg-white/[0.06]")
+        )}
       >
         <button
           type="button"
           onClick={() =>
-            isMobile
-              ? handleMobileConversationOpen(conversation.id)
-              : loadConversation(conversation.id)
+            isMobile ? handleMobileConversationOpen(conversation.id) : loadConversation(conversation.id)
           }
           disabled={loading || sidebarLoading}
           className="w-full text-left"
         >
-          <div className="truncate font-medium">
-            {conversation.title?.trim() || "New Chat"}
-          </div>
-          <div className="mt-1 text-xs text-neutral-400">
+          <div className="truncate font-medium">{conversation.title?.trim() || "New Chat"}</div>
+          <div className={cx("mt-1 text-xs", activeTheme.mutedText)}>
             {formatConversationDate(conversation.updated_at)}
           </div>
         </button>
@@ -1903,7 +1844,7 @@ export default function ChatClient({
               type="button"
               onClick={() => handleRenameConversation(conversation)}
               disabled={loading || sidebarLoading}
-              className={`rounded-lg px-2 py-1 text-xs ${APP_BUTTON_SECONDARY}`}
+              className={cx("rounded-lg px-2 py-1 text-xs", getSecondaryButtonClass(activeTheme))}
             >
               Rename
             </button>
@@ -1928,7 +1869,7 @@ export default function ChatClient({
     <>
       <OnboardingModal />
 
-      <main className="h-[100dvh] overflow-hidden bg-transparent text-white">
+      <main className={cx("h-[100dvh] overflow-hidden transition-colors", activeTheme.pageBg, activeTheme.inputText)}>
         {mobileMenuOpen && (
           <div className="fixed inset-0 z-50 flex md:hidden">
             <button
@@ -1938,17 +1879,15 @@ export default function ChatClient({
               onClick={() => setMobileMenuOpen(false)}
             />
 
-            <div className={`relative z-10 flex h-full w-80 max-w-[85vw] flex-col ${APP_SIDEBAR}`}>
-              <div className={`sticky top-0 p-4 ${APP_TOPBAR}`}>
+            <div className={cx("relative z-10 flex h-full w-80 max-w-[85vw] flex-col border-r", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
+              <div className={cx("sticky top-0 border-b p-4 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-xs text-neutral-500">{BRAND.name}</p>
-                    <div className="truncate text-sm font-semibold">
-                      {userEmail}
-                    </div>
+                    <p className={cx("text-xs", activeTheme.mutedText)}>{BRAND.name}</p>
+                    <div className="truncate text-sm font-semibold">{userEmail}</div>
 
                     {usage && (
-                      <div className="mt-2 text-xs text-neutral-400">
+                      <div className={cx("mt-2 text-xs", activeTheme.mutedText)}>
                         {usage.used} / {usage.limit} messages used today
                       </div>
                     )}
@@ -1961,19 +1900,14 @@ export default function ChatClient({
 
                     {isLimitReached && (
                       <div className="mt-2 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
-                        Daily limit reached. Come back tomorrow or upgrade your
-                        plan.
+                        Daily limit reached. Come back tomorrow or upgrade your plan.
                       </div>
                     )}
 
                     {renderStatusMessages()}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setMobileMenuOpen(false)}
-                    className={`px-2 py-1 text-sm ${APP_BUTTON_SECONDARY}`}
-                  >
+                  <button type="button" onClick={() => setMobileMenuOpen(false)} className={getSecondaryButtonClass(activeTheme)}>
                     Close
                   </button>
                 </div>
@@ -1982,35 +1916,29 @@ export default function ChatClient({
               </div>
 
               <div className="flex-1 overflow-y-auto p-3">
-                <div className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+                <div className={cx("mb-2 text-xs uppercase tracking-wide", activeTheme.mutedText)}>
                   Chat History
                 </div>
 
-                <div className="space-y-2">
-                  {conversations.map((conversation) =>
-                    renderConversationCard(conversation, true)
-                  )}
-                </div>
+                <div className="space-y-2">{conversations.map((conversation) => renderConversationCard(conversation, true))}</div>
               </div>
             </div>
           </div>
         )}
 
         <div className="flex h-[100dvh] overflow-hidden">
-          <aside className={`hidden h-full w-80 shrink-0 md:flex md:flex-col ${APP_SIDEBAR}`}>
-            <div className={`sticky top-0 p-4 ${APP_TOPBAR}`}>
+          <aside className={cx("hidden h-full w-80 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
+            <div className={cx("sticky top-0 border-b p-4 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               <div className="truncate text-sm font-semibold">{userEmail}</div>
 
               {usage && (
-                <div className="mt-2 text-xs text-neutral-400">
+                <div className={cx("mt-2 text-xs", activeTheme.mutedText)}>
                   {usage.used} / {usage.limit} messages used today
                 </div>
               )}
 
               {usage && usage.remaining > 0 && usage.remaining <= 5 && (
-                <div className="mt-1 text-xs text-yellow-400">
-                  Only {usage.remaining} messages remaining today
-                </div>
+                <div className="mt-1 text-xs text-yellow-400">Only {usage.remaining} messages remaining today</div>
               )}
 
               {isLimitReached && (
@@ -2024,52 +1952,54 @@ export default function ChatClient({
             </div>
 
             <div className="flex-1 overflow-y-auto p-3">
-              <div className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+              <div className={cx("mb-2 text-xs uppercase tracking-wide", activeTheme.mutedText)}>
                 Chat History
               </div>
-
-              <div className="space-y-2">
-                {conversations.map((conversation) =>
-                  renderConversationCard(conversation)
-                )}
-              </div>
+              <div className="space-y-2">{conversations.map((conversation) => renderConversationCard(conversation))}</div>
             </div>
           </aside>
 
           <section className="flex h-full flex-1 flex-col bg-transparent">
-            <div className={`sticky top-0 z-20 ${APP_TOPBAR}`}>
+            <div className={cx("sticky top-0 z-20 border-b backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               <div className={`${CONTENT_RAIL_CLASS} py-3`}>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex min-w-0 items-start gap-3">
                     <button
                       type="button"
                       onClick={() => setMobileMenuOpen(true)}
-                      className={`mt-0.5 px-2 py-1 text-sm md:hidden ${APP_BUTTON_SECONDARY}`}
+                      className={cx("mt-0.5 px-2 py-1 text-sm md:hidden", getSecondaryButtonClass(activeTheme))}
                       aria-label="Open menu"
                     >
                       ☰
                     </button>
 
                     <div className="min-w-0">
-                      <p className="text-[11px] text-neutral-500">
-                        {BRAND.name}
-                      </p>
-                      <h1 className="text-lg font-semibold">AI Assistant</h1>
-                      <p className="mt-1 line-clamp-2 max-w-2xl text-sm text-neutral-400">
+                      <p className={cx("text-[11px]", activeTheme.mutedText)}>{BRAND.name}</p>
+                      <h1 className={cx("text-lg font-semibold", activeTheme.titleText)}>AI Assistant</h1>
+                      <p className={cx("mt-1 line-clamp-2 max-w-2xl text-sm", activeTheme.mutedText)}>
                         {PRODUCT_DESCRIPTION}
                       </p>
                     </div>
                   </div>
 
                   <div className="hidden items-start gap-2 md:flex">
-                    <div className="pt-1 text-right text-xs text-neutral-500">
-                      {modeLabel}
-                    </div>
+                    <div className={cx("pt-1 text-right text-xs", activeTheme.mutedText)}>{modeLabel}</div>
+
+                    <Tooltip content={TOOLTIP_TEXT.theme}>
+                      <button
+                        type="button"
+                        onClick={() => setThemePickerOpen((prev) => !prev)}
+                        className={cx("inline-flex h-9 w-9 items-center justify-center", getSecondaryButtonClass(activeTheme))}
+                        aria-label="Open theme picker"
+                      >
+                        <Palette className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
 
                     <Tooltip content={TOOLTIP_TEXT.help}>
                       <Link
                         href="/help"
-                        className={`inline-flex h-9 w-9 items-center justify-center ${APP_BUTTON_SECONDARY}`}
+                        className={cx("inline-flex h-9 w-9 items-center justify-center", getSecondaryButtonClass(activeTheme))}
                         aria-label="Open help"
                       >
                         <HelpCircle className="h-4 w-4" />
@@ -2084,9 +2014,7 @@ export default function ChatClient({
                       type="button"
                       onClick={() => handleModeChange(false)}
                       disabled={loading}
-                      className={`rounded-xl px-3 py-2 text-sm transition ${
-                        !useWebSearch ? APP_BUTTON_ACTIVE : APP_BUTTON_INACTIVE
-                      }`}
+                      className={getModeButtonClass(activeTheme, !useWebSearch)}
                     >
                       Standard
                     </button>
@@ -2097,22 +2025,29 @@ export default function ChatClient({
                       type="button"
                       onClick={() => handleModeChange(true)}
                       disabled={loading}
-                      className={`rounded-xl px-3 py-2 text-sm transition ${
-                        useWebSearch ? APP_BUTTON_ACTIVE : APP_BUTTON_INACTIVE
-                      }`}
+                      className={getModeButtonClass(activeTheme, useWebSearch)}
                     >
                       Web Search
                     </button>
                   </Tooltip>
 
-                  <span className="text-xs text-neutral-500 md:hidden">
-                    {modeLabel}
-                  </span>
+                  <Tooltip content={TOOLTIP_TEXT.theme}>
+                    <button
+                      type="button"
+                      onClick={() => setThemePickerOpen((prev) => !prev)}
+                      className={cx("inline-flex items-center gap-2 md:hidden", getSecondaryButtonClass(activeTheme))}
+                    >
+                      <Palette className="h-4 w-4" />
+                      Theme
+                    </button>
+                  </Tooltip>
+
+                  <span className={cx("text-xs md:hidden", activeTheme.mutedText)}>{modeLabel}</span>
 
                   <Tooltip content={TOOLTIP_TEXT.help}>
                     <Link
                       href="/help"
-                      className={`inline-flex h-9 w-9 items-center justify-center md:hidden ${APP_BUTTON_SECONDARY}`}
+                      className={cx("inline-flex h-9 w-9 items-center justify-center md:hidden", getSecondaryButtonClass(activeTheme))}
                       aria-label="Open help"
                     >
                       <HelpCircle className="h-4 w-4" />
@@ -2120,9 +2055,20 @@ export default function ChatClient({
                   </Tooltip>
                 </div>
 
+                {themePickerOpen && (
+                  <div className="mt-4">
+                    <ChatThemePicker
+                      theme={activeTheme}
+                      selectedThemeId={selectedThemeId}
+                      onChange={handleThemeChange}
+                      onClose={() => setThemePickerOpen(false)}
+                    />
+                  </div>
+                )}
+
                 {messages.length === 0 && (
                   <div className="mt-3">
-                    <div className="mb-2 text-[11px] uppercase tracking-wide text-neutral-500">
+                    <div className={cx("mb-2 text-[11px] uppercase tracking-wide", activeTheme.mutedText)}>
                       Conversation starters
                     </div>
 
@@ -2133,31 +2079,25 @@ export default function ChatClient({
                           type="button"
                           onClick={() => handleConversationStarterClick(starter)}
                           disabled={loading || isLimitReached}
-                          className={`rounded-full px-3 py-2 text-sm ${APP_BUTTON_INACTIVE}`}
+                          className={cx("rounded-full px-3 py-2 text-sm", getSecondaryButtonClass(activeTheme))}
                         >
                           {starter}
                         </button>
                       ))}
                     </div>
 
-                    <div className={`mt-4 rounded-2xl p-4 ${APP_SURFACE}`}>
-                      <div className="text-[11px] uppercase tracking-wide text-neutral-500">
+                    <div className={cx("mt-4 rounded-2xl border p-4", activeTheme.panelBg, activeTheme.panelBorder)}>
+                      <div className={cx("text-[11px] uppercase tracking-wide", activeTheme.mutedText)}>
                         App information
                       </div>
 
                       <div className="mt-2 text-sm text-white">
-                        <span className="font-medium">App Developer:</span> Levi
-                        Holland
+                        <span className="font-medium">App Developer:</span> Levi Holland
                       </div>
 
-                      <div className="mt-1 text-sm text-neutral-400">
-                        <span className="font-medium text-neutral-300">
-                          Questions or support:
-                        </span>{" "}
-                        <a
-                          href={`mailto:${BRAND.supportEmail}`}
-                          className="underline transition hover:text-white"
-                        >
+                      <div className={cx("mt-1 text-sm", activeTheme.mutedText)}>
+                        <span className="font-medium text-white/80">Questions or support:</span>{" "}
+                        <a href={`mailto:${BRAND.supportEmail}`} className="underline transition hover:text-white">
                           {BRAND.supportEmail}
                         </a>
                       </div>
@@ -2170,60 +2110,38 @@ export default function ChatClient({
             <div className="min-h-0 flex-1 overflow-y-auto">
               <div className={`${CONTENT_RAIL_CLASS} py-5`}>
                 {uiError && (
-                  <div
-                    className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}
-                  >
+                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
                     {uiError}
                   </div>
                 )}
 
                 {documentError && (
-                  <div
-                    className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}
-                  >
+                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
                     {documentError}
                   </div>
                 )}
 
                 {speechError && (
-                  <div
-                    className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}
-                  >
+                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
                     {speechError}
                   </div>
                 )}
 
                 <div className="space-y-4">
                   {messages.map((message) => {
-                    const sources = Array.isArray(message.sources)
-                      ? dedupeSources(message.sources)
-                      : [];
+                    const sources = Array.isArray(message.sources) ? dedupeSources(message.sources) : [];
                     const sourceCount =
-                      typeof message.sourceCount === "number"
-                        ? message.sourceCount
-                        : sources.length;
-                    const messageDocuments = Array.isArray(message.documents)
-                      ? message.documents
-                      : [];
+                      typeof message.sourceCount === "number" ? message.sourceCount : sources.length;
+                    const messageDocuments = Array.isArray(message.documents) ? message.documents : [];
                     const isStreamingAssistant =
-                      loading &&
-                      message.role === "assistant" &&
-                      message.id === messages[messages.length - 1]?.id;
+                      loading && message.role === "assistant" && message.id === messages[messages.length - 1]?.id;
 
                     const bubbleWidthClass =
-                      message.role === "user"
-                        ? USER_BUBBLE_CLASS
-                        : ASSISTANT_BUBBLE_CLASS;
+                      message.role === "user" ? USER_BUBBLE_CLASS : ASSISTANT_BUBBLE_CLASS;
 
                     return (
                       <div key={message.id} className="space-y-2">
-                        <div
-                          className={`${bubbleWidthClass} mx-auto rounded-2xl p-4 whitespace-pre-wrap break-words ${
-                            message.role === "user"
-                              ? APP_USER_BUBBLE
-                              : APP_ASSISTANT_BUBBLE
-                          }`}
-                        >
+                        <div className={`${bubbleWidthClass} mx-auto ${getBubbleClass(activeTheme, message.role)}`}>
                           <div className="mb-3 flex items-center justify-between gap-3">
                             <div className="text-xs font-medium opacity-70">
                               {message.role === "user" ? "You" : "Assistant"}
@@ -2232,27 +2150,21 @@ export default function ChatClient({
                             <Tooltip content={TOOLTIP_TEXT.copy}>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  handleCopyMessage(
-                                    message.id,
-                                    getMessageCopyValue(message)
-                                  )
-                                }
-                                className={`rounded-lg px-2 py-1 text-xs ${
+                                onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
+                                className={cx(
+                                  "rounded-lg px-2 py-1 text-xs",
                                   message.role === "user"
                                     ? "border border-white/10 bg-white/10 text-white transition hover:bg-white/20"
-                                    : APP_BUTTON_SECONDARY
-                                }`}
+                                    : getSecondaryButtonClass(activeTheme)
+                                )}
                                 aria-label="Copy message"
                               >
-                                {copiedMessageId === message.id
-                                  ? "Copied"
-                                  : "Copy"}
+                                {copiedMessageId === message.id ? "Copied" : "Copy"}
                               </button>
                             </Tooltip>
                           </div>
 
-                          <MessageWidgetRenderer widget={message.widget} />
+                          <MessageWidgetRenderer widget={message.widget} theme={activeTheme} />
 
                           {message.content}
 
@@ -2273,8 +2185,7 @@ export default function ChatClient({
                                   key={doc.id}
                                   title={
                                     doc.extraction_status === "failed"
-                                      ? doc.extraction_error ||
-                                        "Document processing failed."
+                                      ? doc.extraction_error || "Document processing failed."
                                       : undefined
                                   }
                                 >
@@ -2293,19 +2204,12 @@ export default function ChatClient({
                             </div>
                           )}
 
-                          {isStreamingAssistant ? (
-                            <span className="ml-1 inline-block animate-pulse">
-                              ▍
-                            </span>
-                          ) : null}
+                          {isStreamingAssistant ? <span className="ml-1 inline-block animate-pulse">▍</span> : null}
                         </div>
 
                         {sources.length > 0 && (
                           <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto`}>
-                            <SourcesDisclosure
-                              sources={sources}
-                              sourceCount={sourceCount}
-                            />
+                            <SourcesDisclosure sources={sources} sourceCount={sourceCount} theme={activeTheme} />
                           </div>
                         )}
                       </div>
@@ -2313,9 +2217,7 @@ export default function ChatClient({
                   })}
 
                   {loading && messages.length > 0 && (
-                    <div
-                      className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs text-neutral-500`}
-                    >
+                    <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs ${activeTheme.mutedText}`}>
                       {useWebSearch
                         ? "Using web search..."
                         : uploadingImage
@@ -2331,7 +2233,7 @@ export default function ChatClient({
               </div>
             </div>
 
-            <div className={`sticky bottom-0 z-20 border-t border-white/10 bg-black/10 backdrop-blur-xl`}>
+            <div className={cx("sticky bottom-0 z-20 border-t bg-black/10 backdrop-blur-xl", activeTheme.panelBorder)}>
               <div className={`${CONTENT_RAIL_CLASS} space-y-1.5 py-2.5`}>
                 <input
                   ref={imageInputRef}
@@ -2343,15 +2245,14 @@ export default function ChatClient({
                 />
 
                 {!useWebSearch && composerDocuments.length > 0 && (
-                  <div className={`rounded-2xl p-2 ${APP_SURFACE}`}>
+                  <div className={cx("rounded-2xl border p-2", activeTheme.panelBg, activeTheme.panelBorder)}>
                     <div className="flex flex-wrap gap-2">
                       {composerDocuments.map((doc) => (
                         <div
                           key={doc.id}
                           title={
                             doc.extraction_status === "failed"
-                              ? doc.extraction_error ||
-                                "Document processing failed."
+                              ? doc.extraction_error || "Document processing failed."
                               : undefined
                           }
                         >
@@ -2365,9 +2266,7 @@ export default function ChatClient({
                                   : "uploading"
                             }
                             onRemove={
-                              loading ||
-                              isUploadingDocuments ||
-                              hasPendingDocuments
+                              loading || isUploadingDocuments || hasPendingDocuments
                                 ? undefined
                                 : () => removeComposerDocument(doc.id)
                             }
@@ -2379,18 +2278,14 @@ export default function ChatClient({
                 )}
 
                 {!useWebSearch && imageBase64 && (
-                  <div className={`rounded-2xl p-2 ${APP_SURFACE}`}>
+                  <div className={cx("rounded-2xl border p-2", activeTheme.panelBg, activeTheme.panelBorder)}>
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-neutral-300">
+                      <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-white/80">
                         {imageName || "Image attached"}
                       </div>
 
                       {!loading && (
-                        <button
-                          type="button"
-                          onClick={clearImage}
-                          className={`rounded-full px-2.5 py-1 text-xs ${APP_BUTTON_SECONDARY}`}
-                        >
+                        <button type="button" onClick={clearImage} className={getSecondaryButtonClass(activeTheme)}>
                           Remove
                         </button>
                       )}
@@ -2409,17 +2304,17 @@ export default function ChatClient({
                 <form onSubmit={handleSubmit} className="flex items-end gap-2">
                   {!useWebSearch && (
                     <div className="flex gap-2">
-                      <DocumentUploadButton
-                        disabled={composerDisabled}
-                        onFilesSelected={handleFilesSelected}
-                      />
+                      <DocumentUploadButton disabled={composerDisabled} onFilesSelected={handleFilesSelected} />
 
                       <Tooltip content={TOOLTIP_TEXT.image}>
                         <button
                           type="button"
                           onClick={handleOpenImagePicker}
                           disabled={composerDisabled}
-                          className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl ${APP_BUTTON_SECONDARY}`}
+                          className={cx(
+                            "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
+                            getSecondaryButtonClass(activeTheme)
+                          )}
                           aria-label="Attach image"
                         >
                           🖼️
@@ -2428,19 +2323,19 @@ export default function ChatClient({
                     </div>
                   )}
 
-                  <div
-                    className={`relative flex-1 rounded-2xl ${APP_INPUT_SHELL} focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]`}
-                  >
+                  <div className={cx("relative flex-1 rounded-2xl border shadow-[0_10px_30px_rgba(0,0,0,0.25)] focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <input
                       value={input}
                       onChange={(event) => {
                         setInput(event.target.value);
-
                         if (uiError) setUiError("");
                         if (documentError) setDocumentError("");
                         if (speechError) setSpeechError(null);
                       }}
-                      className={APP_INPUT_FIELD}
+                      className={cx(
+                        "w-full rounded-2xl bg-transparent px-4 py-3.5 pr-14 outline-none placeholder:text-white/40",
+                        activeTheme.inputText
+                      )}
                       placeholder={
                         useWebSearch
                           ? isListening
@@ -2463,37 +2358,24 @@ export default function ChatClient({
                     <Tooltip content={TOOLTIP_TEXT.mic}>
                       <button
                         type="button"
-                        onClick={
-                          isListening
-                            ? handleStopListening
-                            : handleStartListening
-                        }
+                        onClick={isListening ? handleStopListening : handleStartListening}
                         disabled={micDisabled}
-                        aria-label={
-                          isListening ? "Stop voice input" : "Start voice input"
-                        }
-                        className={`absolute right-2 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        aria-label={isListening ? "Stop voice input" : "Start voice input"}
+                        className={cx(
+                          "absolute right-2 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-50",
                           isListening
                             ? "border-red-500 bg-red-500/15 text-red-400 shadow-[0_0_0_6px_rgba(239,68,68,0.12)] animate-pulse"
                             : "border-white/10 bg-white/5 text-white hover:bg-white/10"
-                        }`}
-                      >
-                        {isListening ? (
-                          <MicOff className="h-5 w-5" />
-                        ) : (
-                          <Mic className="h-5 w-5" />
                         )}
+                      >
+                        {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                       </button>
                     </Tooltip>
                   </div>
 
                   {loading ? (
                     <Tooltip content={TOOLTIP_TEXT.stop}>
-                      <button
-                        type="button"
-                        onClick={handleStop}
-                        className={`px-5 py-3.5 ${APP_BUTTON_SECONDARY}`}
-                      >
+                      <button type="button" onClick={handleStop} className="rounded-2xl border border-red-700 px-5 py-3.5 text-white transition hover:bg-red-900/30">
                         Stop
                       </button>
                     </Tooltip>
@@ -2501,16 +2383,8 @@ export default function ChatClient({
                     <Tooltip content={TOOLTIP_TEXT.send}>
                       <button
                         type="submit"
-                        disabled={
-                          uploadingImage ||
-                          isUploadingDocuments ||
-                          isLimitReached ||
-                          hasPendingDocuments ||
-                          (!imageBase64 &&
-                            readyDocumentIds.length === 0 &&
-                            input.trim().length === 0)
-                        }
-                        className={APP_BUTTON_PRIMARY}
+                        disabled={composerDisabled || (!input.trim() && !imageBase64 && readyDocumentIds.length === 0)}
+                        className={cx("rounded-2xl px-5 py-3.5 text-white transition disabled:cursor-not-allowed disabled:opacity-50", activeTheme.buttonPrimary)}
                       >
                         Send
                       </button>
@@ -2518,26 +2392,17 @@ export default function ChatClient({
                   )}
                 </form>
 
-                {isListening && (
-                  <div className="flex items-center gap-2 px-1 text-xs text-red-400">
-                    <span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-                    <span>Listening… Tap mic to stop.</span>
+                <div className="flex items-center justify-between gap-3 px-1">
+                  <div className={cx("text-[11px]", activeTheme.mutedText)}>
+                    {MAX_INPUT_LENGTH - input.length} characters remaining
                   </div>
-                )}
 
-                {!speechSupported && (
-                  <p className="px-1 text-xs text-neutral-500">
-                    Voice input is not supported in this browser.
-                  </p>
-                )}
-
-                {!useWebSearch && conversationDocuments.length > 0 && (
-                  <p className="px-1 text-xs text-neutral-500">
-                    {conversationDocuments.length} document
-                    {conversationDocuments.length === 1 ? "" : "s"} available
-                    in this conversation.
-                  </p>
-                )}
+                  <div className={cx("text-[11px]", activeTheme.mutedText)}>
+                    {conversationDocuments.length > 0
+                      ? `${conversationDocuments.length} document${conversationDocuments.length === 1 ? "" : "s"} in this conversation`
+                      : "No conversation documents"}
+                  </div>
+                </div>
               </div>
             </div>
           </section>
