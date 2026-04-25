@@ -3,6 +3,7 @@
 import {
   cloneElement,
   isValidElement,
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -18,6 +19,9 @@ type TooltipProps = {
 
 type TooltipPosition = "top" | "bottom";
 
+const VIEWPORT_PADDING = 12;
+const TOOLTIP_GAP = 10;
+
 export default function Tooltip({ content, children }: TooltipProps) {
   const id = useId();
   const triggerRef = useRef<HTMLSpanElement | null>(null);
@@ -28,7 +32,7 @@ export default function Tooltip({ content, children }: TooltipProps) {
   const [left, setLeft] = useState(0);
   const [top, setTop] = useState(0);
 
-  function updatePosition() {
+  const updatePosition = useCallback(() => {
     const triggerEl = triggerRef.current;
     const tooltipEl = tooltipRef.current;
 
@@ -41,49 +45,75 @@ export default function Tooltip({ content, children }: TooltipProps) {
     const spaceBelow = window.innerHeight - triggerRect.bottom;
 
     const nextPosition: TooltipPosition =
-      spaceAbove < tooltipRect.height + 12 && spaceBelow > spaceAbove
+      spaceAbove < tooltipRect.height + TOOLTIP_GAP + VIEWPORT_PADDING &&
+      spaceBelow > spaceAbove
         ? "bottom"
         : "top";
 
-    setPosition(nextPosition);
-
     const centeredLeft = triggerRect.left + triggerRect.width / 2;
-    const minLeft = tooltipRect.width / 2 + 8;
-    const maxLeft = window.innerWidth - tooltipRect.width / 2 - 8;
-    const clampedLeft = Math.min(Math.max(centeredLeft, minLeft), maxLeft);
+    const minLeft = VIEWPORT_PADDING + tooltipRect.width / 2;
+    const maxLeft =
+      window.innerWidth - VIEWPORT_PADDING - tooltipRect.width / 2;
 
+    const clampedLeft = Math.min(
+      Math.max(centeredLeft, minLeft),
+      Math.max(minLeft, maxLeft)
+    );
+
+    const nextTop =
+      nextPosition === "top"
+        ? triggerRect.top - TOOLTIP_GAP
+        : triggerRect.bottom + TOOLTIP_GAP;
+
+    setPosition(nextPosition);
     setLeft(clampedLeft);
-    setTop(nextPosition === "top" ? triggerRect.top : triggerRect.bottom);
-  }
+    setTop(nextTop);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
 
-    updatePosition();
+    const animationFrameId = window.requestAnimationFrame(updatePosition);
 
-    const handleWindowChange = () => updatePosition();
+    const handleWindowChange = () => {
+      window.requestAnimationFrame(updatePosition);
+    };
 
     window.addEventListener("resize", handleWindowChange);
     window.addEventListener("scroll", handleWindowChange, true);
 
     return () => {
+      window.cancelAnimationFrame(animationFrameId);
       window.removeEventListener("resize", handleWindowChange);
       window.removeEventListener("scroll", handleWindowChange, true);
     };
-  }, [open]);
+  }, [open, updatePosition]);
 
   if (!isValidElement(children)) {
     return children;
   }
 
+  const showTooltip = () => {
+    if (content.trim()) setOpen(true);
+  };
+
+  const hideTooltip = () => {
+    setOpen(false);
+  };
+
   return (
     <span
       ref={triggerRef}
       className="relative inline-flex"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
+      onMouseEnter={showTooltip}
+      onMouseLeave={hideTooltip}
+      onFocus={showTooltip}
+      onBlur={hideTooltip}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          hideTooltip();
+        }
+      }}
     >
       {cloneElement(children, {
         "aria-describedby": open ? id : undefined,
@@ -95,9 +125,10 @@ export default function Tooltip({ content, children }: TooltipProps) {
           id={id}
           role="tooltip"
           className={[
-            "pointer-events-none fixed z-[100] max-w-[220px] -translate-x-1/2 rounded-xl",
-            "border border-zinc-700 bg-zinc-900 px-3 py-2 text-center text-xs text-white shadow-xl",
-            position === "top" ? "-translate-y-2" : "translate-y-2",
+            "pointer-events-none fixed z-[100] max-w-[240px] rounded-xl",
+            "border border-zinc-700 bg-zinc-950 px-3 py-2 text-center text-xs leading-relaxed text-white shadow-xl shadow-black/30",
+            "-translate-x-1/2",
+            position === "top" ? "-translate-y-full" : "translate-y-0",
           ].join(" ")}
           style={{
             left,

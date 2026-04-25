@@ -578,62 +578,104 @@ function ChatThemePicker({
   onClose: () => void;
 }) {
   return (
-    <div className={cx("rounded-2xl border p-4", theme.panelBg, theme.panelBorder)}>
-      <div className="mb-3 flex items-center justify-between gap-3">
+    <section
+      className={cx(
+        "rounded-2xl border p-4",
+        "max-h-[calc(100dvh-230px)] overflow-hidden",
+        theme.panelBg,
+        theme.panelBorder
+      )}
+      aria-label="Chat theme picker"
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <h2 className={cx("text-sm font-semibold", theme.titleText)}>Chat theme</h2>
+          <h2 className={cx("text-sm font-semibold", theme.titleText)}>
+            Chat theme
+          </h2>
           <p className={cx("mt-1 text-xs", theme.mutedText)}>
             Let users choose the chat window colors.
           </p>
         </div>
 
-        <button type="button" onClick={onClose} className={getSecondaryButtonClass(theme)}>
+        <button
+          type="button"
+          onClick={onClose}
+          className={cx("shrink-0", getSecondaryButtonClass(theme))}
+        >
           Close
         </button>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {CHAT_THEMES.map((item) => {
-          const active = item.id === selectedThemeId;
+      <div className="max-h-[calc(100dvh-310px)] overflow-y-auto overscroll-contain pr-1 pb-28 sm:max-h-none sm:overflow-visible sm:pb-0">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {CHAT_THEMES.map((item) => {
+            const active = item.id === selectedThemeId;
 
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onChange(item.id)}
-              className={cx(
-                "rounded-2xl border p-3 text-left transition",
-                active ? "border-blue-400/50 bg-white/10" : theme.panelBorder,
-                "hover:bg-white/5"
-              )}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-medium text-white">{item.label}</div>
-                  <div className="mt-1 text-xs text-white/60">{item.id}</div>
-                </div>
-                {active ? (
-                  <span className="rounded-full bg-white px-2 py-1 text-[10px] font-medium text-black">
-                    Active
-                  </span>
-                ) : null}
-              </div>
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onChange(item.id)}
+                aria-pressed={active}
+                className={cx(
+                  "rounded-2xl border p-3 text-left transition",
+                  "focus:outline-none focus:ring-2 focus:ring-blue-400/60 focus:ring-offset-2 focus:ring-offset-black",
+                  active ? "border-blue-400/50 bg-white/10" : theme.panelBorder,
+                  "hover:bg-white/5"
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-white">
+                      {item.label}
+                    </div>
+                    <div className="mt-1 text-xs text-white/60">
+                      {item.id}
+                    </div>
+                  </div>
 
-              <div className="mt-3 rounded-xl border border-white/10 p-2">
-                <div className={cx("rounded-lg border p-2", item.panelBg, item.panelBorder)}>
-                  <div className={cx("mb-2 rounded-lg px-3 py-2 text-xs", item.assistantBubble, item.assistantText)}>
-                    Assistant
-                  </div>
-                  <div className={cx("ml-auto w-fit rounded-lg px-3 py-2 text-xs", item.userBubble, item.userText)}>
-                    User
+                  {active ? (
+                    <span className="rounded-full bg-white px-2 py-1 text-[10px] font-medium text-black">
+                      Active
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 rounded-xl border border-white/10 p-2">
+                  <div
+                    className={cx(
+                      "rounded-lg border p-2",
+                      item.panelBg,
+                      item.panelBorder
+                    )}
+                  >
+                    <div
+                      className={cx(
+                        "mb-2 rounded-lg px-3 py-2 text-xs",
+                        item.assistantBubble,
+                        item.assistantText
+                      )}
+                    >
+                      Assistant
+                    </div>
+
+                    <div
+                      className={cx(
+                        "ml-auto w-fit rounded-lg px-3 py-2 text-xs",
+                        item.userBubble,
+                        item.userText
+                      )}
+                    >
+                      User
+                    </div>
                   </div>
                 </div>
-              </div>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
