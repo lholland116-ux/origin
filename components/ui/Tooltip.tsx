@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type HTMLAttributes,
@@ -21,6 +22,7 @@ type TooltipPosition = "top" | "bottom";
 
 const VIEWPORT_PADDING = 12;
 const TOOLTIP_GAP = 10;
+const TOOLTIP_MAX_WIDTH = 240;
 
 export default function Tooltip({ content, children }: TooltipProps) {
   const id = useId();
@@ -29,8 +31,8 @@ export default function Tooltip({ content, children }: TooltipProps) {
 
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<TooltipPosition>("top");
-  const [left, setLeft] = useState(0);
-  const [top, setTop] = useState(0);
+  const [left, setLeft] = useState(VIEWPORT_PADDING);
+  const [top, setTop] = useState(VIEWPORT_PADDING);
 
   const updatePosition = useCallback(() => {
     const triggerEl = triggerRef.current;
@@ -41,8 +43,13 @@ export default function Tooltip({ content, children }: TooltipProps) {
     const triggerRect = triggerEl.getBoundingClientRect();
     const tooltipRect = tooltipEl.getBoundingClientRect();
 
-    const spaceAbove = triggerRect.top;
-    const spaceBelow = window.innerHeight - triggerRect.bottom;
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const viewportOffsetLeft = window.visualViewport?.offsetLeft ?? 0;
+    const viewportOffsetTop = window.visualViewport?.offsetTop ?? 0;
+
+    const spaceAbove = triggerRect.top - viewportOffsetTop;
+    const spaceBelow = viewportHeight - (triggerRect.bottom - viewportOffsetTop);
 
     const nextPosition: TooltipPosition =
       spaceAbove < tooltipRect.height + TOOLTIP_GAP + VIEWPORT_PADDING &&
@@ -50,30 +57,35 @@ export default function Tooltip({ content, children }: TooltipProps) {
         ? "bottom"
         : "top";
 
-    const centeredLeft = triggerRect.left + triggerRect.width / 2;
-    const minLeft = VIEWPORT_PADDING + tooltipRect.width / 2;
-    const maxLeft =
-      window.innerWidth - VIEWPORT_PADDING - tooltipRect.width / 2;
+    const preferredLeft =
+      triggerRect.left + triggerRect.width / 2 - tooltipRect.width / 2;
 
-    const clampedLeft = Math.min(
-      Math.max(centeredLeft, minLeft),
+    const minLeft = viewportOffsetLeft + VIEWPORT_PADDING;
+    const maxLeft =
+      viewportOffsetLeft + viewportWidth - tooltipRect.width - VIEWPORT_PADDING;
+
+    const nextLeft = Math.min(
+      Math.max(preferredLeft, minLeft),
       Math.max(minLeft, maxLeft)
     );
 
     const nextTop =
       nextPosition === "top"
-        ? triggerRect.top - TOOLTIP_GAP
+        ? triggerRect.top - tooltipRect.height - TOOLTIP_GAP
         : triggerRect.bottom + TOOLTIP_GAP;
 
     setPosition(nextPosition);
-    setLeft(clampedLeft);
+    setLeft(nextLeft);
     setTop(nextTop);
   }, []);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePosition();
+  }, [open, updatePosition]);
+
   useEffect(() => {
     if (!open) return;
-
-    const animationFrameId = window.requestAnimationFrame(updatePosition);
 
     const handleWindowChange = () => {
       window.requestAnimationFrame(updatePosition);
@@ -81,11 +93,14 @@ export default function Tooltip({ content, children }: TooltipProps) {
 
     window.addEventListener("resize", handleWindowChange);
     window.addEventListener("scroll", handleWindowChange, true);
+    window.visualViewport?.addEventListener("resize", handleWindowChange);
+    window.visualViewport?.addEventListener("scroll", handleWindowChange);
 
     return () => {
-      window.cancelAnimationFrame(animationFrameId);
       window.removeEventListener("resize", handleWindowChange);
       window.removeEventListener("scroll", handleWindowChange, true);
+      window.visualViewport?.removeEventListener("resize", handleWindowChange);
+      window.visualViewport?.removeEventListener("scroll", handleWindowChange);
     };
   }, [open, updatePosition]);
 
@@ -104,15 +119,13 @@ export default function Tooltip({ content, children }: TooltipProps) {
   return (
     <span
       ref={triggerRef}
-      className="relative inline-flex"
+      className="inline-flex"
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
       onFocus={showTooltip}
       onBlur={hideTooltip}
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          hideTooltip();
-        }
+        if (event.key === "Escape") hideTooltip();
       }}
     >
       {cloneElement(children, {
@@ -125,15 +138,17 @@ export default function Tooltip({ content, children }: TooltipProps) {
           id={id}
           role="tooltip"
           className={[
-            "pointer-events-none fixed z-[100] max-w-[240px] rounded-xl",
-            "border border-zinc-700 bg-zinc-950 px-3 py-2 text-center text-xs leading-relaxed text-white shadow-xl shadow-black/30",
-            "-translate-x-1/2",
-            position === "top" ? "-translate-y-full" : "translate-y-0",
+            "pointer-events-none fixed z-[100]",
+            "rounded-xl border border-zinc-700 bg-zinc-950",
+            "px-3 py-2 text-center text-xs leading-relaxed text-white",
+            "shadow-xl shadow-black/30",
           ].join(" ")}
           style={{
             left,
             top,
+            maxWidth: TOOLTIP_MAX_WIDTH,
           }}
+          data-position={position}
         >
           {content}
         </div>
