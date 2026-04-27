@@ -49,14 +49,14 @@ export default function LeviPage() {
 
         <div className="mt-8 w-full space-y-3">
           <Link
-            href="/chat?src=levi"
+            href="/chat?src=qr&entry=levi"
             className="inline-flex w-full items-center justify-center rounded-2xl bg-blue-500 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
             Try LVTChat Free →
           </Link>
 
           <Link
-            href="/pricing?src=levi"
+            href="/pricing?src=qr&entry=levi"
             className="inline-flex w-full items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-6 py-3.5 text-base font-medium text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/30 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
             View Pricing
