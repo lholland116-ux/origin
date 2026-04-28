@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-06-20",
+  apiVersion: "2026-04-22.dahlia",
 });
 
 const supabaseAdmin = createClient(
@@ -19,6 +19,26 @@ const supabaseAdmin = createClient(
     },
   }
 );
+
+type SubscriptionWithPeriod = Stripe.Subscription & {
+  current_period_end?: number | null;
+};
+
+function getCurrentPeriodEnd(subscription: Stripe.Subscription): number | null {
+  const directValue = (subscription as SubscriptionWithPeriod).current_period_end;
+
+  if (typeof directValue === "number") {
+    return directValue;
+  }
+
+  const firstItem = subscription.items?.data?.[0] as
+    | (Stripe.SubscriptionItem & { current_period_end?: number | null })
+    | undefined;
+
+  return typeof firstItem?.current_period_end === "number"
+    ? firstItem.current_period_end
+    : null;
+}
 
 function isActiveProStatus(status: Stripe.Subscription.Status) {
   return status === "active" || status === "trialing";
@@ -39,9 +59,11 @@ async function updateUserSubscription(params: {
     currentPeriodEnd,
   } = params;
 
-  const plan = subscriptionStatus && isActiveProStatus(subscriptionStatus as Stripe.Subscription.Status)
-    ? "pro"
-    : "free";
+  const plan =
+    subscriptionStatus &&
+    isActiveProStatus(subscriptionStatus as Stripe.Subscription.Status)
+      ? "pro"
+      : "free";
 
   const updatePayload = {
     plan,
@@ -62,7 +84,9 @@ async function updateUserSubscription(params: {
   } else if (stripeCustomerId) {
     query = query.eq("stripe_customer_id", stripeCustomerId);
   } else {
-    throw new Error("No userId, stripeSubscriptionId, or stripeCustomerId available.");
+    throw new Error(
+      "No userId, stripeSubscriptionId, or stripeCustomerId available."
+    );
   }
 
   const { error } = await query;
@@ -72,12 +96,26 @@ async function updateUserSubscription(params: {
   }
 }
 
+function getCustomerId(customer: string | Stripe.Customer | Stripe.DeletedCustomer | null) {
+  if (!customer) return null;
+  return typeof customer === "string" ? customer : customer.id;
+}
+
+function getSubscriptionId(
+  subscription: string | Stripe.Subscription | null
+) {
+  if (!subscription) return null;
+  return typeof subscription === "string" ? subscription : subscription.id;
+}
+
 export async function POST(req: Request) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
     console.error("Missing STRIPE_WEBHOOK_SECRET.");
-    return new NextResponse("Webhook secret is not configured.", { status: 500 });
+    return new NextResponse("Webhook secret is not configured.", {
+      status: 500,
+    });
   }
 
   const signature = req.headers.get("stripe-signature");
@@ -107,58 +145,39 @@ export async function POST(req: Request) {
         }
 
         const userId = session.metadata?.userId ?? null;
-        const stripeCustomerId =
-          typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
-        const stripeSubscriptionId =
-          typeof session.subscription === "string"
-            ? session.subscription
-            : session.subscription?.id ?? null;
+        const stripeCustomerId = getCustomerId(session.customer);
+        const stripeSubscriptionId = getSubscriptionId(session.subscription);
 
         if (!stripeSubscriptionId) {
-          throw new Error("Missing subscription ID on checkout.session.completed.");
+          throw new Error(
+            "Missing subscription ID on checkout.session.completed."
+          );
         }
 
-        const subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+        const subscription =
+          await stripe.subscriptions.retrieve(stripeSubscriptionId);
 
         await updateUserSubscription({
           userId,
           stripeCustomerId,
           stripeSubscriptionId,
           subscriptionStatus: subscription.status,
-          currentPeriodEnd: subscription.current_period_end,
+          currentPeriodEnd: getCurrentPeriodEnd(subscription),
         });
 
         break;
       }
 
       case "customer.subscription.created":
-      case "customer.subscription.updated": {
-        const subscription = event.data.object as Stripe.Subscription;
-
-        await updateUserSubscription({
-          stripeCustomerId:
-            typeof subscription.customer === "string"
-              ? subscription.customer
-              : subscription.customer.id,
-          stripeSubscriptionId: subscription.id,
-          subscriptionStatus: subscription.status,
-          currentPeriodEnd: subscription.current_period_end,
-        });
-
-        break;
-      }
-
+      case "customer.subscription.updated":
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
 
         await updateUserSubscription({
-          stripeCustomerId:
-            typeof subscription.customer === "string"
-              ? subscription.customer
-              : subscription.customer.id,
+          stripeCustomerId: getCustomerId(subscription.customer),
           stripeSubscriptionId: subscription.id,
           subscriptionStatus: subscription.status,
-          currentPeriodEnd: subscription.current_period_end,
+          currentPeriodEnd: getCurrentPeriodEnd(subscription),
         });
 
         break;
@@ -169,10 +188,7 @@ export async function POST(req: Request) {
 
         console.warn("Stripe invoice payment failed:", {
           invoiceId: invoice.id,
-          customerId:
-            typeof invoice.customer === "string"
-              ? invoice.customer
-              : invoice.customer?.id,
+          customerId: getCustomerId(invoice.customer),
         });
 
         break;
