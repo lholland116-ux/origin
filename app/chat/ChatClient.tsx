@@ -2448,7 +2448,32 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 <form onSubmit={handleSubmit} className="flex items-end gap-2">
                   {!useWebSearch && (
                     <div className="flex gap-2">
-                      <DocumentUploadButton disabled={composerDisabled} onFilesSelected={handleFilesSelected} />
+                      {plan === "pro" ? (
+                      <DocumentUploadButton
+                       disabled={composerDisabled}
+                        onFilesSelected={handleFilesSelected}
+                      />
+                    ) : (
+                      <Tooltip content="File uploads are a Pro feature">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openUpgradeModal(
+                              "File uploads are a Pro feature",
+                              "Upgrade to Pro to upload and analyze PDF, DOCX, XLSX, CSV, and text files."
+                            )
+                          }
+                          disabled={loading}
+                          className={cx(
+                            "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
+                            getSecondaryButtonClass(activeTheme)
+                          )}
+                          aria-label="Upgrade to upload files"
+                        >
+                          +
+                        </button>
+                      </Tooltip>
+                    )}
 
                       <Tooltip content={TOOLTIP_TEXT.image}>
                         <button
