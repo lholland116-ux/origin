@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { BRAND } from "@/lib/branding";
+import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 const PLANS = [
   {
@@ -47,11 +48,26 @@ export default function PricingPage() {
     setCheckoutError(null);
 
     try {
+      const supabase = createBrowserSupabaseClient();
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        window.location.href = BRAND.routes.login;
+        return;
+      }
+
       const response = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+          userId: user.id,
+        }),
       });
 
       const data = (await response.json()) as {

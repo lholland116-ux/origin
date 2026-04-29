@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,45 +16,71 @@ function getStripe() {
   });
 }
 
-export async function POST() {
+function getAppUrl() {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+
+  if (!appUrl) {
+    throw new Error("Missing NEXT_PUBLIC_APP_URL.");
+  }
+
+  return appUrl.replace(/\/$/, "");
+}
+
+function getProPriceId() {
+  const priceId = process.env.STRIPE_PRO_PRICE_ID;
+
+  if (!priceId) {
+    throw new Error("Missing STRIPE_PRO_PRICE_ID.");
+  }
+
+  return priceId;
+}
+
+export async function POST(req: Request) {
   try {
-    const supabase = await createServerSupabaseClient();
+    const { userId } = (await req.json()) as {
+      userId?: string;
+    };
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
+    if (!userId) {
       return NextResponse.json(
-        { error: "You must be signed in to upgrade." },
-        { status: 401 }
+        { error: "Missing user ID. Please sign in and try again." },
+        { status: 400 }
       );
     }
 
     const stripe = getStripe();
+    const appUrl = getAppUrl();
+    const priceId = getProPriceId();
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
-      customer_email: user.email ?? undefined,
       line_items: [
         {
-          price: process.env.STRIPE_PRO_PRICE_ID!,
+          price: priceId,
           quantity: 1,
         },
       ],
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/account?success=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/pricing?canceled=true`,
+      success_url: `${appUrl}/account?success=true`,
+      cancel_url: `${appUrl}/pricing?canceled=true`,
       metadata: {
-        userId: user.id,
+        userId,
       },
       subscription_data: {
         metadata: {
-          userId: user.id,
+          userId,
         },
       },
+      allow_promotion_codes: true,
     });
+
+    if (!session.url) {
+      return NextResponse.json(
+        { error: "Stripe did not return a checkout URL." },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({ url: session.url });
   } catch (error) {
