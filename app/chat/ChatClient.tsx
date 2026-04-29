@@ -29,10 +29,20 @@ import {
   getStoredChatThemeId,
   setStoredChatThemeId,
 } from "@/lib/chat-theme-storage";
+import UpgradeModal from "@/components/UpgradeModal";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
   confidence: number;
+};
+
+type Plan = "free" | "pro";
+
+type ApiErrorResponse = {
+  error?: string;
+  code?: "PRO_REQUIRED" | "LIMIT_REACHED" | string;
+  plan?: Plan | string;
+  limit?: number;
 };
 
 type AppSpeechRecognitionResult = {
@@ -838,6 +848,12 @@ export default function ChatClient({
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [selectedThemeId, setSelectedThemeId] = useState(DEFAULT_CHAT_THEME_ID);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [plan, setPlan] = useState<Plan>("free");
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [upgradeModalTitle, setUpgradeModalTitle] = useState("Upgrade to Pro");
+  const [upgradeModalMessage, setUpgradeModalMessage] = useState(
+    "This feature is available on the Pro plan."
+  );
 
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -896,6 +912,34 @@ export default function ChatClient({
       block: "end",
     });
   }, [messages, loading]);
+
+function openUpgradeModal(title: string, message: string): void {
+  setUpgradeModalTitle(title);
+  setUpgradeModalMessage(message);
+  setUpgradeModalOpen(true);
+}
+
+function handleApiUpgradeError(data: ApiErrorResponse): boolean {
+  if (data.code === "PRO_REQUIRED") {
+    openUpgradeModal(
+      "Upgrade to unlock this feature",
+      data.error ||
+        "This feature is available on the Pro plan. Upgrade to use web search and file uploads."
+    );
+    return true;
+  }
+
+  if (data.code === "LIMIT_REACHED") {
+    openUpgradeModal(
+      "You’ve reached today’s limit",
+      data.error ||
+        "You’ve reached your daily free message limit. Upgrade to Pro to continue with a higher daily limit."
+    );
+    return true;
+  }
+
+  return false;
+}
 
   useEffect(() => {
     setSelectedThemeId(getStoredChatThemeId());
@@ -1161,7 +1205,9 @@ export default function ChatClient({
         used: typeof data?.used === "number" ? data.used : 0,
         limit: typeof data?.limit === "number" ? data.limit : 0,
         remaining: typeof data?.remaining === "number" ? data.remaining : 0,
-      });
+   });
+
+   setPlan(data?.plan === "pro" ? "pro" : "free");
     } catch (error) {
       setUsageError(error instanceof Error ? error.message : "Failed to load usage.");
     }
@@ -1322,9 +1368,17 @@ export default function ChatClient({
       const data = (await res.json().catch(() => null)) as DocumentsResponse | { error?: string } | null;
 
       if (!res.ok) {
-        const errorMessage = extractErrorMessage(data) || `Upload failed (status ${res.status})`;
-        throw new Error(errorMessage);
+        const errorData = data as ApiErrorResponse | null;
+
+        if (errorData && handleApiUpgradeError(errorData)) {
+          throw new Error(errorData.error || "File uploads are a Pro feature.");
       }
+
+      const errorMessage =
+        extractErrorMessage(data) || `Upload failed (status ${res.status})`;
+
+      throw new Error(errorMessage);
+    }
 
       const refreshedDocs = await fetchDocuments(conversationId, { silent: true });
       if (refreshedDocs) {
@@ -1594,7 +1648,14 @@ export default function ChatClient({
     if (loading || uploadingImage || isUploadingDocuments) return;
 
     if (isLimitReached) {
-      setUiError("You’ve reached your daily message limit.");
+      if (plan !== "pro") {
+        openUpgradeModal(
+          "You’ve reached today’s free limit",
+          "Upgrade to Pro to continue with a higher daily message limit."
+        );
+      } else {
+        setUiError("You’ve reached today’s Pro message limit. Please try again tomorrow.");
+      }
       return;
     }
 
@@ -1704,7 +1765,12 @@ export default function ChatClient({
         const contentType = res.headers.get("content-type") || "";
 
         if (contentType.includes("application/json")) {
-          const errorData = (await res.json()) as { error?: string };
+          const errorData = (await res.json()) as ApiErrorResponse;
+
+          if (handleApiUpgradeError(errorData)) {
+            throw new Error(errorData.error || "Upgrade required.");
+          }
+
           throw new Error(errorData?.error || "Request failed.");
         }
 
@@ -1788,6 +1854,14 @@ export default function ChatClient({
     if (loading) return;
 
     if (nextUseWebSearch) {
+      if (plan !== "pro") {
+        openUpgradeModal(
+          "Web Search is a Pro feature",
+          "Upgrade to Pro to use real-time web search for current answers."
+        );
+        return;
+      }
+    
       clearImage();
       clearComposerDocuments();
     }
@@ -1833,6 +1907,21 @@ export default function ChatClient({
             Account
           </button>
         </Tooltip>
+
+       {plan !== "pro" && (
+         <Tooltip content="Upgrade to Pro">
+           <button
+             type="button"
+             onClick={() => {
+               if (isMobile) setMobileMenuOpen(false);
+               router.push(BRAND.routes.pricing);
+             }}
+             className={cx("px-4 py-2 text-sm", activeTheme.buttonPrimary)}
+           >
+             Upgrade to Pro
+           </button>
+         </Tooltip>
+       )}
 
         <Tooltip content={TOOLTIP_TEXT.help}>
           <Link
@@ -1911,6 +2000,13 @@ export default function ChatClient({
     <>
       <OnboardingModal />
 
+      <UpgradeModal
+        open={upgradeModalOpen}
+        title={upgradeModalTitle}
+        message={upgradeModalMessage}
+        onClose={() => setUpgradeModalOpen(false)}
+      />
+
       <main className={cx("h-[100dvh] overflow-hidden transition-colors", activeTheme.pageBg, activeTheme.inputText)}>
         {mobileMenuOpen && (
           <div className="fixed inset-0 z-50 flex md:hidden">
@@ -1933,6 +2029,9 @@ export default function ChatClient({
                         {usage.used} / {usage.limit} messages used today
                       </div>
                     )}
+                      <div className="mt-2 inline-flex rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/80">
+                        {plan === "pro" ? "Pro Plan" : "Free Plan"}
+                      </div>
 
                     {usage && usage.remaining > 0 && usage.remaining <= 5 && (
                       <div className="mt-1 text-xs text-yellow-400">
@@ -1978,6 +2077,9 @@ export default function ChatClient({
                   {usage.used} / {usage.limit} messages used today
                 </div>
               )}
+                <div className="mt-2 inline-flex rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/80">
+                  {plan === "pro" ? "Pro Plan" : "Free Plan"}
+                </div>
 
               {usage && usage.remaining > 0 && usage.remaining <= 5 && (
                 <div className="mt-1 text-xs text-yellow-400">Only {usage.remaining} messages remaining today</div>
