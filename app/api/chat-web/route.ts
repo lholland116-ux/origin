@@ -49,6 +49,10 @@ type ConversationRow = {
   title: string;
 };
 
+type ProfileRow = {
+  plan: "free" | "pro" | string | null;
+};
+
 type ModelInputMessage = {
   role: "user" | "assistant";
   content: string;
@@ -309,7 +313,29 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Unauthorized." }, 401);
     }
 
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("plan")
+      .eq("id", user.id)
+      .single<ProfileRow>();
+
+    if (profileError || !profile) {
+      console.error("Profile lookup error:", profileError);
+      return jsonResponse({ error: "Failed to verify subscription plan." }, 500);
+    }
+
+    if (profile.plan !== "pro") {
+      return jsonResponse(
+        {
+          error: "Web search is a Pro feature. Please upgrade to continue.",
+          code: "PRO_REQUIRED",
+        },
+        403
+      );
+    }
+
     let body: ChatRequestBody;
+
     try {
       body = (await req.json()) as ChatRequestBody;
     } catch {
@@ -444,7 +470,10 @@ export async function POST(req: Request) {
 
     if (historyError || !history) {
       console.error("History load error:", historyError);
-      return jsonResponse({ error: "Failed to load conversation history." }, 500);
+      return jsonResponse(
+        { error: "Failed to load conversation history." },
+        500
+      );
     }
 
     const recentMessages: ModelInputMessage[] = (history as DbMessage[])
@@ -508,6 +537,9 @@ export async function POST(req: Request) {
     return jsonResponse(assistantResponse);
   } catch (error) {
     console.error("/api/chat-web error:", error);
-    return jsonResponse({ error: "Something went wrong in /api/chat-web." }, 500);
+    return jsonResponse(
+      { error: "Something went wrong in /api/chat-web." },
+      500
+    );
   }
 }

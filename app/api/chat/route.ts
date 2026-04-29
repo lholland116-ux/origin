@@ -6,7 +6,9 @@ import { buildDocumentContext } from "@/lib/documents/prepare-context";
 
 export const runtime = "nodejs";
 
-const DAILY_LIMIT = Number(process.env.DAILY_MESSAGE_LIMIT ?? 20);
+const FREE_DAILY_LIMIT = Number(process.env.FREE_DAILY_MESSAGE_LIMIT ?? 20);
+const PRO_DAILY_LIMIT = Number(process.env.PRO_DAILY_MESSAGE_LIMIT ?? 300);
+
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_IMAGE_BASE64_LENGTH = 8_000_000;
@@ -35,6 +37,12 @@ Generate a short, clear conversation title in 3 to 6 words.
 Do not use quotes.
 Keep the wording natural, polished, and user-friendly.
 `.trim();
+
+type Plan = "free" | "pro";
+
+type ProfileRow = {
+  plan: Plan | string | null;
+};
 
 type ChatRequestBody = {
   conversationId?: string;
@@ -120,6 +128,14 @@ function isLikelyDataUrlImage(value: string): boolean {
 
 function isLikelyStoragePath(value: string): boolean {
   return value.length > 0 && !value.startsWith("/") && !value.includes("..");
+}
+
+function getPlanLimit(plan: Plan): number {
+  return plan === "pro" ? PRO_DAILY_LIMIT : FREE_DAILY_LIMIT;
+}
+
+function normalizePlan(plan: ProfileRow["plan"]): Plan {
+  return plan === "pro" ? "pro" : "free";
 }
 
 function buildStoredUserContent(params: {
@@ -267,6 +283,26 @@ async function generateConversationTitle(message: string): Promise<string> {
   }
 }
 
+async function getUserPlan(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+}): Promise<Plan> {
+  const { supabase, userId } = params;
+
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("plan")
+    .eq("id", userId)
+    .single<ProfileRow>();
+
+  if (error || !profile) {
+    console.error("Profile lookup error:", error);
+    return "free";
+  }
+
+  return normalizePlan(profile.plan);
+}
+
 async function loadPersistableDocuments(params: {
   supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
   userId: string;
@@ -280,7 +316,9 @@ async function loadPersistableDocuments(params: {
 
   const { data, error } = await supabase
     .from("documents")
-    .select("id, file_name, mime_type, size_bytes, extraction_status, extraction_error, conversation_id, extracted_text")
+    .select(
+      "id, file_name, mime_type, size_bytes, extraction_status, extraction_error, conversation_id, extracted_text"
+    )
     .eq("user_id", userId)
     .in("id", documentIds)
     .eq("extraction_status", "ready");
@@ -388,6 +426,7 @@ export async function POST(req: Request) {
     }
 
     let body: ChatRequestBody;
+
     try {
       body = (await req.json()) as ChatRequestBody;
     } catch {
@@ -465,6 +504,9 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Conversation not found." }, 404);
     }
 
+    const plan = await getUserPlan({ supabase, userId: user.id });
+    const dailyLimit = getPlanLimit(plan);
+
     const today = new Date().toISOString().slice(0, 10);
 
     const { data: usageRow, error: usageError } = await supabase
@@ -481,11 +523,16 @@ export async function POST(req: Request) {
 
     const currentCount = usageRow?.message_count ?? 0;
 
-    if (!IS_DEV && currentCount >= DAILY_LIMIT) {
+    if (!IS_DEV && currentCount >= dailyLimit) {
       return jsonResponse(
         {
-          error: "Daily limit reached. Upgrade to continue.",
+          error:
+            plan === "pro"
+              ? "Daily Pro message limit reached. Please try again tomorrow."
+              : "Daily free message limit reached. Upgrade to Pro to continue.",
           code: "LIMIT_REACHED",
+          plan,
+          limit: dailyLimit,
         },
         403
       );
@@ -622,6 +669,7 @@ export async function POST(req: Request) {
           for await (const event of responseStream) {
             if (event.type === "response.output_text.delta") {
               const delta = event.delta ?? "";
+
               if (delta) {
                 fullReply += delta;
                 controller.enqueue(encoder.encode(delta));
@@ -642,6 +690,7 @@ export async function POST(req: Request) {
                 input,
                 hasDocumentContext: Boolean(documentContext),
               });
+
               const retryText = retry.output_text?.trim() ?? "";
 
               if (!isWeakReply(retryText)) {

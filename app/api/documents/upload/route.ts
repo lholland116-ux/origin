@@ -9,7 +9,13 @@ import {
 } from "@/lib/documents/config";
 import { extractTextFromFile } from "@/lib/documents/extract-text";
 
+export const runtime = "nodejs";
+
 type ExtractionStatus = "processing" | "ready" | "failed";
+
+type ProfileRow = {
+  plan: "free" | "pro" | string | null;
+};
 
 type UploadedDocumentResponse = {
   id: string;
@@ -207,6 +213,77 @@ function validateFiles(files: File[]) {
   return null;
 }
 
+async function assertProUser(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+}) {
+  const { supabase, userId } = params;
+
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("plan")
+    .eq("id", userId)
+    .single<ProfileRow>();
+
+  if (profileError || !profile) {
+    console.error("/api/documents/upload: profile lookup error", profileError);
+    return {
+      ok: false as const,
+      response: jsonResponse(
+        { error: "Failed to verify subscription plan." },
+        500
+      ),
+    };
+  }
+
+  if (profile.plan !== "pro") {
+    return {
+      ok: false as const,
+      response: jsonResponse(
+        {
+          error: "File uploads are a Pro feature. Please upgrade to continue.",
+          code: "PRO_REQUIRED",
+        },
+        403
+      ),
+    };
+  }
+
+  return { ok: true as const };
+}
+
+async function verifyConversationOwnership(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+  conversationId: string;
+}) {
+  const { supabase, userId, conversationId } = params;
+
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("id", conversationId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("/api/documents/upload: conversation lookup error", error);
+    return {
+      ok: false as const,
+      response: jsonResponse({ error: "Failed to verify conversation." }, 500),
+    };
+  }
+
+  if (!data) {
+    return {
+      ok: false as const,
+      response: jsonResponse({ error: "Conversation not found." }, 404),
+    };
+  }
+
+  return { ok: true as const };
+}
+
 async function processSingleFile(params: {
   admin: ReturnType<typeof createAdminClient>;
   userId: string;
@@ -218,7 +295,7 @@ async function processSingleFile(params: {
   const fileName = file.name?.trim() || "Unnamed file";
   const safeMimeType = getSafeMimeType(file) || "application/octet-stream";
   const safeName = sanitizeFileName(fileName);
-  const storagePath = `${userId}/${conversationId}/${Date.now()}-${safeName}`;
+  const storagePath = `${userId}/${conversationId}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
 
   console.log("/api/documents/upload: received file", {
     fileName,
@@ -381,6 +458,12 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Unauthorized." }, 401);
     }
 
+    const proCheck = await assertProUser({ supabase, userId: user.id });
+
+    if (!proCheck.ok) {
+      return proCheck.response;
+    }
+
     const formData = await req.formData();
 
     const files = formData
@@ -395,6 +478,16 @@ export async function POST(req: Request) {
 
     if (!conversationId) {
       return jsonResponse({ error: "Missing conversationId." }, 400);
+    }
+
+    const conversationCheck = await verifyConversationOwnership({
+      supabase,
+      userId: user.id,
+      conversationId,
+    });
+
+    if (!conversationCheck.ok) {
+      return conversationCheck.response;
     }
 
     const validationError = validateFiles(files);
@@ -420,8 +513,7 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("/api/documents/upload: unexpected error", error);
 
-    const message =
-      error instanceof Error ? error.message : "Unexpected error.";
+    const message = error instanceof Error ? error.message : "Unexpected error.";
 
     return jsonResponse(
       {
