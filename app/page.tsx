@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import LandingPage from "@/components/landing/LandingPage";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 export default async function HomePage() {
   const supabase = await createServerSupabaseClient();
 
@@ -10,19 +12,16 @@ export default async function HomePage() {
     error,
   } = await supabase.auth.getUser();
 
-  const isExpectedSignedOutState =
-    error?.message?.toLowerCase().includes("auth session missing");
+  const isMissingSession =
+    error?.message?.toLowerCase().includes("auth session missing") ?? false;
 
-  if (error && !isExpectedSignedOutState) {
-    console.error(
-      "Failed to get authenticated user on home page:",
-      error.message
-    );
+  if (error && !isMissingSession) {
+    console.error("Home page auth lookup failed:", error.message);
   }
 
-  if (!user) {
-    return <LandingPage />;
+  if (user) {
+    redirect("/chat");
   }
 
-  redirect("/chat");
+  return <LandingPage />;
 }

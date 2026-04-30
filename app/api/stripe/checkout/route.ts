@@ -8,6 +8,10 @@ export const dynamic = "force-dynamic";
 const STRIPE_API_VERSION = "2026-04-22.dahlia";
 const MOTHERS_DAY_PROMO_CODE = "MOTHERSDAY";
 
+// Test-mode promotion code ID from Stripe.
+// When switching to live mode, create a live promo code and update this env var.
+const FALLBACK_MOTHERS_DAY_PROMOTION_CODE_ID = "promo_1TRsVfJX3uw7yuq";
+
 type CheckoutRequestBody = {
   promoCode?: string;
 };
@@ -44,6 +48,13 @@ function getProPriceId() {
   return priceId;
 }
 
+function getMothersDayPromotionCodeId() {
+  return (
+    process.env.STRIPE_MOTHERSDAY_PROMOTION_CODE_ID ??
+    FALLBACK_MOTHERS_DAY_PROMOTION_CODE_ID
+  );
+}
+
 function normalizePromoCode(value: unknown): string | null {
   if (typeof value !== "string") return null;
 
@@ -54,19 +65,6 @@ function normalizePromoCode(value: unknown): string | null {
   if (!/^[A-Z0-9_-]{3,40}$/.test(cleaned)) return null;
 
   return cleaned;
-}
-
-async function getActivePromotionCodeId(
-  stripe: Stripe,
-  code: string
-): Promise<string | null> {
-  const promotionCodes = await stripe.promotionCodes.list({
-    code,
-    active: true,
-    limit: 1,
-  });
-
-  return promotionCodes.data[0]?.id ?? null;
 }
 
 export async function POST(req: Request) {
@@ -101,20 +99,9 @@ export async function POST(req: Request) {
     const appUrl = getAppUrl();
     const priceId = getProPriceId();
 
-    const discounts: Array<{ promotion_code: string }> = [];
-
-    if (shouldApplyMothersDayPromo) {
-      const promotionCodeId = await getActivePromotionCodeId(
-        stripe,
-        MOTHERS_DAY_PROMO_CODE
-      );
-
-      if (promotionCodeId) {
-        discounts.push({
-          promotion_code: promotionCodeId,
-        });
-      }
-    }
+    const discounts: Array<{ promotion_code: string }> = shouldApplyMothersDayPromo
+      ? [{ promotion_code: getMothersDayPromotionCodeId() }]
+      : [];
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
