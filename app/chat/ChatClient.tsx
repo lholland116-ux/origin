@@ -958,6 +958,20 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }, []);
 
   useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void fetchUsage();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
     void fetchDocuments(conversationId);
   }, [conversationId]);
 
