@@ -8,13 +8,21 @@ export const dynamic = "force-dynamic";
 const STRIPE_API_VERSION = "2026-04-22.dahlia";
 const MOTHERS_DAY_PROMO_CODE = "MOTHERSDAY";
 
-// Test-mode promotion code ID from Stripe.
-// When switching to live mode, create a live promo code and update this env var.
-const FALLBACK_MOTHERS_DAY_PROMOTION_CODE_ID = "promo_1TRsVfJX3uw7yuq";
-
 type CheckoutRequestBody = {
   promoCode?: string;
 };
+
+function jsonError(message: string, status: number) {
+  return NextResponse.json(
+    { error: message },
+    {
+      status,
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    }
+  );
+}
 
 function getStripe() {
   const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -49,10 +57,13 @@ function getProPriceId() {
 }
 
 function getMothersDayPromotionCodeId() {
-  return (
-    process.env.STRIPE_MOTHERSDAY_PROMOTION_CODE_ID ??
-    FALLBACK_MOTHERS_DAY_PROMOTION_CODE_ID
-  );
+  const promotionCodeId = process.env.STRIPE_MOTHERSDAY_PROMOTION_CODE_ID;
+
+  if (!promotionCodeId) {
+    throw new Error("Missing STRIPE_MOTHERSDAY_PROMOTION_CODE_ID.");
+  }
+
+  return promotionCodeId;
 }
 
 function normalizePromoCode(value: unknown): string | null {
@@ -77,10 +88,7 @@ export async function POST(req: Request) {
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return NextResponse.json(
-        { error: "You must be signed in to upgrade." },
-        { status: 401 }
-      );
+      return jsonError("You must be signed in to upgrade.", 401);
     }
 
     let body: CheckoutRequestBody = {};
@@ -99,9 +107,10 @@ export async function POST(req: Request) {
     const appUrl = getAppUrl();
     const priceId = getProPriceId();
 
-    const discounts: Array<{ promotion_code: string }> = shouldApplyMothersDayPromo
-      ? [{ promotion_code: getMothersDayPromotionCodeId() }]
-      : [];
+    const discounts: Array<{ promotion_code: string }> =
+      shouldApplyMothersDayPromo
+        ? [{ promotion_code: getMothersDayPromotionCodeId() }]
+        : [];
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -130,19 +139,23 @@ export async function POST(req: Request) {
     });
 
     if (!session.url) {
-      return NextResponse.json(
-        { error: "Stripe did not return a checkout URL." },
-        { status: 500 }
-      );
+      return jsonError("Stripe did not return a checkout URL.", 500);
     }
 
-    return NextResponse.json({ url: session.url });
-  } catch (error) {
-    console.error("Stripe checkout error:", error);
-
     return NextResponse.json(
-      { error: "Unable to start checkout." },
-      { status: 500 }
+      { url: session.url },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      }
     );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unable to start checkout.";
+
+    console.error("Stripe checkout error:", message);
+
+    return jsonError(message, 500);
   }
 }
