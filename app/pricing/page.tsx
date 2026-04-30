@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useMemo, useState } from "react";
 import { BRAND } from "@/lib/branding";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+
+const MOTHERS_DAY_PROMO_CODE = "MOTHERSDAY";
 
 const PLANS = [
   {
@@ -39,9 +42,22 @@ const PLANS = [
   },
 ] as const;
 
-export default function PricingPage() {
+function normalizePromoCode(value: string | null): string | null {
+  const cleaned = value?.trim().toUpperCase();
+  return cleaned === MOTHERS_DAY_PROMO_CODE ? cleaned : null;
+}
+
+function PricingPageContent() {
+  const searchParams = useSearchParams();
+  const promoCode = useMemo(
+    () => normalizePromoCode(searchParams.get("promo")),
+    [searchParams]
+  );
+
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+
+  const hasMothersDayPromo = promoCode === MOTHERS_DAY_PROMO_CODE;
 
   async function handleUpgradeToPro() {
     setIsUpgrading(true);
@@ -56,7 +72,11 @@ export default function PricingPage() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        window.location.href = BRAND.routes.login;
+        window.location.href = hasMothersDayPromo
+          ? `${BRAND.routes.login}?redirectTo=${encodeURIComponent(
+              `${BRAND.routes.pricing}?promo=${MOTHERS_DAY_PROMO_CODE}`
+            )}`
+          : BRAND.routes.login;
         return;
       }
 
@@ -67,6 +87,7 @@ export default function PricingPage() {
         },
         body: JSON.stringify({
           userId: user.id,
+          promoCode,
         }),
       });
 
@@ -88,7 +109,9 @@ export default function PricingPage() {
     } catch (error) {
       console.error("Stripe checkout failed:", error);
       setCheckoutError(
-        "Unable to start checkout. Please sign in and try again."
+        error instanceof Error
+          ? error.message
+          : "Unable to start checkout. Please sign in and try again."
       );
       setIsUpgrading(false);
     }
@@ -122,6 +145,22 @@ export default function PricingPage() {
           Built by Levi Holland to make practical AI support easier to use for
           work, research, and everyday tasks.
         </p>
+
+        {hasMothersDayPromo && (
+          <div className="mx-auto mt-6 max-w-2xl rounded-3xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-left shadow-[0_20px_60px_rgba(16,185,129,0.12)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
+              Mother&apos;s Day Launch Special Applied
+            </p>
+            <p className="mt-2 text-lg font-semibold text-white">
+              Get Pro for $10/month forever.
+            </p>
+            <p className="mt-1 text-sm text-white/70">
+              Normally $15/month. First 100 first-time users only. Offer ends
+              May 15, 2026. The discount will apply automatically at Stripe
+              Checkout.
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="mx-auto mt-14 grid max-w-5xl gap-6 md:grid-cols-2">
@@ -141,12 +180,28 @@ export default function PricingPage() {
             )}
 
             <h2 className="text-xl font-semibold">{plan.name}</h2>
-
             <p className="mt-2 text-white/70">{plan.description}</p>
 
             <div className="mt-6">
-              <span className="text-3xl font-semibold">{plan.price}</span>
-              <span className="text-white/60">{plan.cadence}</span>
+              {plan.highlight && hasMothersDayPromo ? (
+                <>
+                  <div className="flex items-end gap-3">
+                    <span className="text-3xl font-semibold">$10</span>
+                    <span className="pb-1 text-sm text-white/50 line-through">
+                      {plan.price}
+                    </span>
+                    <span className="pb-1 text-white/60">{plan.cadence}</span>
+                  </div>
+                  <p className="mt-2 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                    Mother&apos;s Day early user pricing: $5 off forever.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <span className="text-3xl font-semibold">{plan.price}</span>
+                  <span className="text-white/60">{plan.cadence}</span>
+                </>
+              )}
             </div>
 
             <ul className="mt-6 space-y-3 text-sm text-white/70">
@@ -162,7 +217,11 @@ export default function PricingPage() {
                 disabled={isUpgrading}
                 className="mt-8 inline-flex w-full items-center justify-center rounded-2xl bg-[linear-gradient(90deg,#2563EB,#3B82F6)] px-5 py-3 text-center text-sm font-semibold text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:scale-100"
               >
-                {isUpgrading ? "Redirecting..." : plan.cta}
+                {isUpgrading
+                  ? "Redirecting..."
+                  : hasMothersDayPromo
+                    ? "Claim $10/month Pro"
+                    : plan.cta}
               </button>
             ) : (
               <Link
@@ -196,5 +255,19 @@ export default function PricingPage() {
         </p>
       </section>
     </main>
+  );
+}
+
+export default function PricingPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-[#020817] px-6 text-white">
+          <div className="text-sm text-white/60">Loading pricing...</div>
+        </main>
+      }
+    >
+      <PricingPageContent />
+    </Suspense>
   );
 }

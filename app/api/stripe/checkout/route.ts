@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const STRIPE_API_VERSION = "2026-04-22.dahlia";
+const MOTHERS_DAY_PROMO_CODE = "MOTHERSDAY";
+
+type CheckoutRequestBody = {
+  promoCode?: string;
+};
 
 function getStripe() {
   const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -12,7 +20,7 @@ function getStripe() {
   }
 
   return new Stripe(stripeSecretKey, {
-    apiVersion: "2026-04-22.dahlia",
+    apiVersion: STRIPE_API_VERSION,
   });
 }
 
@@ -36,43 +44,102 @@ function getProPriceId() {
   return priceId;
 }
 
+function normalizePromoCode(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+
+  const cleaned = value.trim().toUpperCase();
+
+  if (!cleaned) return null;
+
+  if (!/^[A-Z0-9_-]{3,40}$/.test(cleaned)) return null;
+
+  return cleaned;
+}
+
+async function getActivePromotionCodeId(
+  stripe: Stripe,
+  code: string
+): Promise<string | null> {
+  const promotionCodes = await stripe.promotionCodes.list({
+    code,
+    active: true,
+    limit: 1,
+  });
+
+  return promotionCodes.data[0]?.id ?? null;
+}
+
 export async function POST(req: Request) {
   try {
-    const { userId } = (await req.json()) as {
-      userId?: string;
-    };
+    const supabase = await createServerSupabaseClient();
 
-    if (!userId) {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
       return NextResponse.json(
-        { error: "Missing user ID. Please sign in and try again." },
-        { status: 400 }
+        { error: "You must be signed in to upgrade." },
+        { status: 401 }
       );
     }
+
+    let body: CheckoutRequestBody = {};
+
+    try {
+      body = (await req.json()) as CheckoutRequestBody;
+    } catch {
+      body = {};
+    }
+
+    const requestedPromoCode = normalizePromoCode(body.promoCode);
+    const shouldApplyMothersDayPromo =
+      requestedPromoCode === MOTHERS_DAY_PROMO_CODE;
 
     const stripe = getStripe();
     const appUrl = getAppUrl();
     const priceId = getProPriceId();
 
+    const discounts: Array<{ promotion_code: string }> = [];
+
+    if (shouldApplyMothersDayPromo) {
+      const promotionCodeId = await getActivePromotionCodeId(
+        stripe,
+        MOTHERS_DAY_PROMO_CODE
+      );
+
+      if (promotionCodeId) {
+        discounts.push({
+          promotion_code: promotionCodeId,
+        });
+      }
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
+      customer_email: user.email ?? undefined,
       line_items: [
         {
           price: priceId,
           quantity: 1,
         },
       ],
+      allow_promotion_codes: discounts.length === 0,
+      discounts: discounts.length > 0 ? discounts : undefined,
       success_url: `${appUrl}/account?success=true`,
       cancel_url: `${appUrl}/pricing?canceled=true`,
       metadata: {
-        userId,
+        userId: user.id,
+        promoCode: requestedPromoCode ?? "",
       },
       subscription_data: {
         metadata: {
-          userId,
+          userId: user.id,
+          promoCode: requestedPromoCode ?? "",
         },
       },
-      allow_promotion_codes: true,
     });
 
     if (!session.url) {

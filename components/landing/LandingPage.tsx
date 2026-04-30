@@ -5,6 +5,7 @@ import Header from "@/components/landing/Header";
 import Hero from "@/components/landing/Hero";
 import TrustedSection from "@/components/landing/TrustedSection";
 import UseCases from "@/components/landing/UseCases";
+import MothersDayLaunchBanner from "@/components/MothersDayLaunchBanner";
 import { BRAND } from "@/lib/branding";
 
 export default function LandingPage() {
@@ -23,6 +24,7 @@ export default function LandingPage() {
         >
           <Header />
           <Hero />
+          <MothersDayLaunchBanner />
           <FeatureGrid />
         </section>
 
