@@ -5,7 +5,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const STRIPE_API_VERSION = "2024-06-20";
+const STRIPE_API_VERSION = "2026-04-22.dahlia";
 const MOTHERS_DAY_PROMO_CODE = "MOTHERSDAY";
 
 type CheckoutRequestBody = {
