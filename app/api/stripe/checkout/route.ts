@@ -122,9 +122,8 @@ export async function POST(req: Request) {
           quantity: 1,
         },
       ],
-      ...(discounts.length > 0
-        ? { discounts }
-        : { allow_promotion_codes: true }),
+      allow_promotion_codes: false,
+      discounts: discounts.length > 0 ? discounts : undefined,
       success_url: `${appUrl}/account?success=true`,
       cancel_url: `${appUrl}/pricing?canceled=true`,
       metadata: {
