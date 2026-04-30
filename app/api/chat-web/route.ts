@@ -5,7 +5,9 @@ import { buildConversationTitle } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
-const DAILY_LIMIT = Number(process.env.DAILY_MESSAGE_LIMIT ?? 20);
+const FREE_DAILY_LIMIT = Number(process.env.FREE_DAILY_MESSAGE_LIMIT ?? 20);
+const PRO_DAILY_LIMIT = Number(process.env.PRO_DAILY_MESSAGE_LIMIT ?? 300);
+
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_RETURNED_SOURCES = 5;
@@ -103,6 +105,10 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
 
 function normalizeMessage(input: unknown): string {
   return typeof input === "string" ? input.trim() : "";
+}
+
+function getPlanLimit(plan: ProfileRow["plan"]): number {
+  return plan === "pro" ? PRO_DAILY_LIMIT : FREE_DAILY_LIMIT;
 }
 
 function sanitizeTitle(title: string, fallback: string): string {
@@ -404,12 +410,18 @@ export async function POST(req: Request) {
     }
 
     const currentCount = usageRow?.message_count ?? 0;
+    const dailyLimit = getPlanLimit(profile.plan);
 
-    if (!IS_DEV && currentCount >= DAILY_LIMIT) {
+    if (!IS_DEV && currentCount >= dailyLimit) {
       return jsonResponse(
         {
-          error: "Daily limit reached. Upgrade to continue.",
+          error:
+            profile.plan === "pro"
+              ? "Daily Pro message limit reached. Please try again tomorrow."
+              : "Daily free message limit reached. Upgrade to Pro to continue.",
           code: "LIMIT_REACHED",
+          plan: profile.plan,
+          limit: dailyLimit,
         },
         403
       );
@@ -499,6 +511,8 @@ export async function POST(req: Request) {
     if (IS_DEV) {
       console.log("🌐 WEB ROUTE ACTIVE");
       console.log("MODEL IN USE:", MODEL);
+      console.log("PLAN:", profile.plan);
+      console.log("USAGE:", `${currentCount + 1}/${dailyLimit}`);
     }
 
     const assistantResponse = await buildAssistantResponse(
