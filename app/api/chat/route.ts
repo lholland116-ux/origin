@@ -19,6 +19,8 @@ const MAX_IMAGE_NAME_LENGTH = 255;
 const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 
+const MODEL = "gpt-5.3-chat-latest";
+
 const TONE_LAYER = `
 Tone and style requirements:
 - Be warm, calm, friendly, and supportive.
@@ -30,6 +32,16 @@ Tone and style requirements:
 - When giving steps or instructions, make them feel easy and manageable.
 - When you do not know something, say so clearly and kindly.
 - Prioritize clarity, usefulness, and a positive user experience.
+`.trim();
+
+const GPT_5_LAYER = `
+Model behavior requirements:
+- You are running on GPT-5.3 via the OpenAI API.
+- Do NOT claim to be GPT-4 or any other version.
+- Do NOT speculate about model availability.
+- If asked about the model, respond:
+  "I am running on the latest OpenAI model available in this application."
+- Focus on answering the user's question instead of discussing model versions.
 `.trim();
 
 const TITLE_INSTRUCTIONS = `
@@ -90,6 +102,9 @@ type PersistableDocumentRow = {
 type ResponsesStreamEvent = {
   type: string;
   delta?: string;
+  error?: {
+    message?: string;
+  };
 };
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
@@ -180,7 +195,7 @@ function buildImageAnalysisInstruction(latestMessage: string): string {
 }
 
 function buildSystemInstructions(hasDocumentContext: boolean): string {
-  const base = [SYSTEM_PROMPT.trim(), TONE_LAYER];
+  const base = [SYSTEM_PROMPT.trim(), TONE_LAYER, GPT_5_LAYER];
 
   if (hasDocumentContext) {
     base.push(
@@ -258,7 +273,7 @@ async function createRetryResponse(params: {
   const { input, hasDocumentContext } = params;
 
   return openai.responses.create({
-    model: "gpt-4.1",
+    model: MODEL,
     instructions: buildSystemInstructions(hasDocumentContext),
     input,
     store: false,
@@ -268,7 +283,7 @@ async function createRetryResponse(params: {
 async function generateConversationTitle(message: string): Promise<string> {
   try {
     const titleResponse = await openai.responses.create({
-      model: "gpt-4.1-mini",
+      model: MODEL,
       instructions: TITLE_INSTRUCTIONS,
       input: message,
       store: false,
@@ -658,11 +673,10 @@ export async function POST(req: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          const responseStream = (await openai.responses.create({
-            model: "gpt-4.1",
+          const responseStream = (await openai.responses.stream({
+            model: MODEL,
             instructions: buildSystemInstructions(Boolean(documentContext)),
             input,
-            stream: true,
             store: false,
           } as never)) as unknown as AsyncIterable<ResponsesStreamEvent>;
 
@@ -674,6 +688,16 @@ export async function POST(req: Request) {
                 fullReply += delta;
                 controller.enqueue(encoder.encode(delta));
               }
+            }
+
+            if (event.type === "response.failed") {
+              throw new Error(
+                event.error?.message ?? "OpenAI response failed."
+              );
+            }
+
+            if (event.type === "error") {
+              throw new Error(event.error?.message ?? "OpenAI stream error.");
             }
 
             if (event.type === "response.completed") {
