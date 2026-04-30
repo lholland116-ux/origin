@@ -58,14 +58,14 @@ export async function GET() {
       .from("profiles")
       .select("plan")
       .eq("id", user.id)
-      .single<ProfileRow>();
+      .maybeSingle<ProfileRow>();
 
-    if (profileError || !profile) {
+    if (profileError) {
       console.error("GET /api/usage profile error:", profileError);
       return jsonError("Failed to load profile.", 500);
     }
 
-    const plan = normalizePlan(profile.plan);
+    const plan = normalizePlan(profile?.plan);
     const limit = getDailyLimit(plan);
 
     const today = new Date().toISOString().slice(0, 10);
