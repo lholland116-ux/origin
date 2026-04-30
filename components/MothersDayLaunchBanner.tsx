@@ -31,7 +31,7 @@ export default function MothersDayLaunchBanner() {
 
         <Link
           href={`${BRAND.routes.pricing}?promo=${PROMO_CODE}`}
-          className="inline-flex min-h-12 w-full min-w-[220px] items-center justify-center rounded-2xl bg-white px-5 py-3 text-center text-sm font-semibold text-black shadow-[0_12px_30px_rgba(255,255,255,0.12)] transition hover:bg-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] md:w-auto"
+          className="inline-flex min-h-12 w-full min-w-[240px] items-center justify-center rounded-2xl bg-blue-500 px-5 py-3 text-center text-sm font-semibold text-white shadow-[0_12px_30px_rgba(59,130,246,0.35)] transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] md:w-auto"
         >
           Claim early user pricing
         </Link>
