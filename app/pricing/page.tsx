@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
@@ -15,6 +18,59 @@ const featuresPro = [
   "Priority performance",
   "Built for serious work",
 ];
+
+function ProCheckoutButton() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleCheckout() {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          promoCode: "MOTHERSDAY",
+        }),
+      });
+
+      const data: { url?: string; error?: string } = await res.json();
+
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || "Unable to start checkout.");
+      }
+
+      window.location.assign(data.url);
+    } catch (err) {
+      console.error("Checkout error:", err);
+      setError("Unable to start checkout. Please try again.");
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="mt-8 space-y-3">
+      <button
+        type="button"
+        onClick={handleCheckout}
+        disabled={loading}
+        className="w-full rounded-2xl bg-blue-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-500/25 transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {loading ? "Opening Stripe..." : "Claim $10/month Pro"}
+      </button>
+
+      {error && (
+        <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function PricingPage() {
   return (
@@ -35,18 +91,21 @@ export default function PricingPage() {
             >
               Chat
             </Link>
+
             <Link
               href={BRAND.routes.pricing}
               className="rounded-xl bg-white/10 px-4 py-2 text-white"
             >
               Pricing
             </Link>
+
             <Link
               href="/account"
               className="rounded-xl px-4 py-2 text-zinc-200 hover:bg-white/10"
             >
               Account
             </Link>
+
             <Link
               href={BRAND.routes.login}
               className="ml-2 rounded-xl border border-white/15 px-4 py-2 text-zinc-100 hover:bg-white/10"
@@ -64,12 +123,14 @@ export default function PricingPage() {
           <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">
             Simple, transparent pricing
           </h1>
+
           <p className="mt-5 text-lg text-zinc-300">
             Start free. Upgrade when you need more power.
           </p>
+
           <p className="mt-4 text-sm text-zinc-400">
-            Built by Levi Holland to make practical AI support easier to use
-            for work, research, and everyday tasks.
+            Built by Levi Holland to make practical AI support easier to use for
+            work, research, and everyday tasks.
           </p>
         </div>
 
@@ -77,9 +138,11 @@ export default function PricingPage() {
           <p className="text-xs font-bold uppercase tracking-[0.28em] text-emerald-300">
             Mother&apos;s Day launch special applied
           </p>
+
           <h2 className="mt-3 text-xl font-bold">
             Get Pro for $10/month forever.
           </h2>
+
           <p className="mt-2 text-sm leading-6 text-zinc-300">
             Normally $15/month. First 100 first-time users only. Offer ends May
             15, 2026. The discount will apply automatically at Stripe Checkout.
@@ -89,6 +152,7 @@ export default function PricingPage() {
         <div className="mx-auto mt-10 grid max-w-5xl gap-6 md:grid-cols-2">
           <div className="rounded-3xl border border-white/15 bg-white/[0.04] p-7 shadow-2xl">
             <h2 className="text-2xl font-bold">Free</h2>
+
             <p className="mt-3 text-zinc-300">
               A simple way to get started with practical AI support.
             </p>
@@ -121,6 +185,7 @@ export default function PricingPage() {
             </div>
 
             <h2 className="text-2xl font-bold">Pro</h2>
+
             <p className="mt-3 max-w-sm text-zinc-300">
               More power, flexibility, and advanced AI capabilities.
             </p>
@@ -146,15 +211,7 @@ export default function PricingPage() {
               ))}
             </ul>
 
-            <form action="/api/stripe/checkout" method="POST" className="mt-8">
-              <input type="hidden" name="promoCode" value="MOTHERSDAY" />
-              <button
-                type="submit"
-                className="w-full rounded-2xl bg-blue-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-500/25 transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
-              >
-                Claim $10/month Pro
-              </button>
-            </form>
+            <ProCheckoutButton />
           </div>
         </div>
 
