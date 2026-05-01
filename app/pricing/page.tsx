@@ -4,6 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
+const PROMO_CODE = "MOTHERSDAY";
+const LOGIN_REDIRECT = `/login?redirect=/pricing?promo=${PROMO_CODE}`;
+
 const featuresFree = [
   "20 messages per day",
   "Standard AI mode",
@@ -34,11 +37,16 @@ function ProCheckoutButton() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          promoCode: "MOTHERSDAY",
+          promoCode: PROMO_CODE,
         }),
       });
 
       const data: { url?: string; error?: string } = await res.json();
+
+      if (res.status === 401) {
+        window.location.assign(LOGIN_REDIRECT);
+        return;
+      }
 
       if (!res.ok || !data.url) {
         throw new Error(data.error || "Unable to start checkout.");
@@ -47,7 +55,7 @@ function ProCheckoutButton() {
       window.location.assign(data.url);
     } catch (err) {
       console.error("Checkout error:", err);
-      setError("Unable to start checkout. Please try again.");
+      setError("Please create an account or sign in to claim this promotion.");
       setLoading(false);
     }
   }
@@ -63,10 +71,20 @@ function ProCheckoutButton() {
         {loading ? "Opening Stripe..." : "Claim $10/month Pro"}
       </button>
 
+      <p className="text-center text-xs text-zinc-400">
+        Sign in or create a free account to claim the Mother&apos;s Day pricing.
+      </p>
+
       {error && (
-        <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">
-          {error}
-        </p>
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <p>{error}</p>
+          <Link
+            href={LOGIN_REDIRECT}
+            className="mt-2 inline-flex font-semibold text-amber-100 underline-offset-4 hover:underline"
+          >
+            Sign in or create account
+          </Link>
+        </div>
       )}
     </div>
   );
@@ -110,7 +128,7 @@ export default function PricingPage() {
               href={BRAND.routes.login}
               className="ml-2 rounded-xl border border-white/15 px-4 py-2 text-zinc-100 hover:bg-white/10"
             >
-              Sign out
+              Sign in
             </Link>
           </nav>
         </div>
@@ -145,7 +163,8 @@ export default function PricingPage() {
 
           <p className="mt-2 text-sm leading-6 text-zinc-300">
             Normally $15/month. First 100 first-time users only. Offer ends May
-            15, 2026. The discount will apply automatically at Stripe Checkout.
+            15, 2026. Sign in or create a free account to claim the promotion at
+            Stripe Checkout.
           </p>
         </div>
 

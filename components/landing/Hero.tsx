@@ -21,7 +21,9 @@ const PREVIEW_STEPS = [
 ] as const;
 
 export default function Hero() {
-  const credibilityLine = `Built by ${BRAND.creator}, a ${BRAND.creatorSecondaryTitle?.toLowerCase() || "scientist"} with ${BRAND.creatorExperience}.`;
+  const credibilityLine = `Built by ${BRAND.creator}, a ${
+    BRAND.creatorSecondaryTitle?.toLowerCase() || "scientist"
+  } with ${BRAND.creatorExperience}.`;
 
   return (
     <section className="grid gap-10 px-5 pb-8 pt-6 md:px-8 md:pb-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:px-10 lg:pb-12 lg:pt-10">
@@ -40,6 +42,10 @@ export default function Hero() {
 
         <p className="mt-6 max-w-xl text-base leading-7 text-white/70 sm:text-lg">
           {BRAND.subheadline}
+        </p>
+
+        <p className="mt-3 max-w-xl rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium leading-6 text-emerald-200">
+          🎉 Now live — Mother&apos;s Day LVT launch special available today.
         </p>
 
         <p className="mt-6 max-w-xl text-sm leading-6 text-white/60">
@@ -84,7 +90,10 @@ export default function Hero() {
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-blue-400/60 bg-[#0B1224] text-xs font-bold text-white">
                   {BRAND.shortName}
                 </div>
-                <p className="text-sm font-semibold text-white">{BRAND.name}</p>
+
+                <p className="text-sm font-semibold text-white">
+                  {BRAND.name}
+                </p>
               </div>
 
               <button
@@ -110,19 +119,25 @@ export default function Hero() {
 
                 <div className="flex-1 rounded-2xl rounded-tl-md border border-white/10 bg-white/5 px-4 py-4 text-sm text-white/85">
                   <p className="mb-4 text-white/90">
-                    Here&apos;s a practical marketing plan tailored to your goals:
+                    Here&apos;s a practical marketing plan tailored to your
+                    goals:
                   </p>
 
                   <div className="space-y-4">
                     {PREVIEW_STEPS.map((step) => (
                       <div key={step.title} className="flex gap-3">
-                        <div className="mt-0.5 text-blue-300" aria-hidden="true">
+                        <div
+                          className="mt-0.5 text-blue-300"
+                          aria-hidden="true"
+                        >
                           ✦
                         </div>
 
                         <div>
                           <p className="font-medium text-white">{step.title}</p>
-                          <p className="mt-0.5 text-white/55">{step.subtitle}</p>
+                          <p className="mt-0.5 text-white/55">
+                            {step.subtitle}
+                          </p>
                         </div>
                       </div>
                     ))}

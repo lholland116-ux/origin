@@ -22,9 +22,15 @@ export default function Header() {
           {BRAND.shortName}
         </div>
 
-        <span className="text-lg font-semibold tracking-tight text-white">
-          {BRAND.name}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-semibold tracking-tight text-white">
+            {BRAND.name}
+          </span>
+
+          <span className="rounded-full border border-emerald-400/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300">
+            Live
+          </span>
+        </div>
       </Link>
 
       <nav
@@ -59,6 +65,13 @@ export default function Header() {
       </nav>
 
       <div className="flex items-center gap-3">
+        <Link
+          href={`${BRAND.routes.pricing}?promo=MOTHERSDAY`}
+          className="hidden rounded-full border border-pink-400/30 bg-pink-500/10 px-3 py-2 text-xs font-semibold text-pink-200 transition hover:bg-pink-500/20 focus:outline-none focus:ring-2 focus:ring-pink-300 focus:ring-offset-2 focus:ring-offset-[#020817] sm:inline-flex"
+        >
+          Mother&apos;s Day Launch
+        </Link>
+
         <Link
           href={BRAND.routes.login}
           className="rounded-xl bg-[linear-gradient(90deg,#3B82F6,#4F8CFF)] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(59,130,246,0.35)] transition hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
