@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, Suspense } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -16,6 +17,8 @@ type ProfileRow = {
   current_period_end: string | null;
 };
 
+type MessageType = "success" | "error" | "info";
+
 function AccountContent() {
   const supabase = createBrowserSupabaseClient();
   const router = useRouter();
@@ -30,41 +33,49 @@ function AccountContent() {
   const [currentPeriodEnd, setCurrentPeriodEnd] = useState<string | null>(null);
 
   const [billingLoading, setBillingLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [passwordLoading, setPasswordLoading] = useState(false);
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  const [pageLoading, setPageLoading] = useState(true);
-  const [passwordLoading, setPasswordLoading] = useState(false);
-
   const [message, setMessage] = useState<string | null>(null);
-  const [messageType, setMessageType] = useState<
-    "success" | "error" | "info" | null
-  >(null);
+  const [messageType, setMessageType] = useState<MessageType>("info");
 
   const isPro = plan === "pro";
-
   const isPasswordLongEnough = password.length >= MIN_PASSWORD_LENGTH;
   const passwordsMatch = password === confirmPassword;
 
   const canSubmit =
     !passwordLoading &&
-    password &&
-    confirmPassword &&
+    password.length > 0 &&
+    confirmPassword.length > 0 &&
     isPasswordLongEnough &&
     passwordsMatch;
 
   const passwordHint = useMemo(() => {
     if (!password && !confirmPassword) return null;
+
     if (!isPasswordLongEnough) {
-      return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+      return {
+        text: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+        className: "text-amber-300",
+      };
     }
+
     if (!passwordsMatch) {
-      return "Passwords do not match.";
+      return {
+        text: "Passwords do not match.",
+        className: "text-red-300",
+      };
     }
-    return "Password looks good.";
+
+    return {
+      text: "Password looks good.",
+      className: "text-emerald-300",
+    };
   }, [password, confirmPassword, isPasswordLongEnough, passwordsMatch]);
 
   const renewalText = useMemo(() => {
@@ -97,20 +108,30 @@ function AccountContent() {
           return;
         }
 
-        const { data: profile } = await supabase
+        const { data: profile, error: profileError } = await supabase
           .from("profiles")
           .select("plan, subscription_status, current_period_end")
           .eq("id", user.id)
           .maybeSingle<ProfileRow>();
 
+        if (profileError) {
+          console.error("Profile load error:", profileError);
+        }
+
+        if (!mounted) return;
+
         setPlan(profile?.plan === "pro" ? "pro" : "free");
         setSubscriptionStatus(profile?.subscription_status ?? null);
         setCurrentPeriodEnd(profile?.current_period_end ?? null);
-
         setPageLoading(false);
       } catch (err) {
         console.error("Account load error:", err);
-        router.replace(BRAND.routes.login);
+
+        if (mounted) {
+          setMessage("Unable to load your account. Please sign in again.");
+          setMessageType("error");
+          setPageLoading(false);
+        }
       }
     }
 
@@ -123,7 +144,7 @@ function AccountContent() {
 
   useEffect(() => {
     if (success) {
-      setMessage("🎉 You're now on Pro. Early user pricing applied.");
+      setMessage("You're now on Pro. Early user pricing applied.");
       setMessageType("success");
     }
   }, [success]);
@@ -133,22 +154,29 @@ function AccountContent() {
     setMessage(null);
 
     try {
-      const res = await fetch("/api/stripe/portal", { method: "POST" });
-      const data = await res.json();
+      const res = await fetch("/api/stripe/portal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      const data: { url?: string; error?: string } = await res.json();
 
       if (!res.ok || !data.url) {
         throw new Error(data.error || "Unable to open billing portal.");
       }
 
-      window.location.href = data.url;
+      window.location.assign(data.url);
     } catch (err) {
-      setMessage("Unable to open billing portal.");
+      console.error("Billing portal error:", err);
+      setMessage("Unable to open billing portal. Please try again.");
       setMessageType("error");
       setBillingLoading(false);
     }
   }
 
-  async function handleChangePassword(e: React.FormEvent) {
+  async function handleChangePassword(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMessage(null);
 
@@ -173,11 +201,14 @@ function AccountContent() {
 
       setPassword("");
       setConfirmPassword("");
+      setShowPassword(false);
+      setShowConfirmPassword(false);
 
       setMessage("Password updated successfully.");
       setMessageType("success");
     } catch (err) {
-      setMessage("Failed to update password.");
+      console.error("Password update error:", err);
+      setMessage("Failed to update password. Please try again.");
       setMessageType("error");
     } finally {
       setPasswordLoading(false);
@@ -186,8 +217,10 @@ function AccountContent() {
 
   if (pageLoading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
-        Loading account...
+      <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4 text-zinc-400">
+        <div className="rounded-3xl border border-zinc-800 bg-zinc-900 px-6 py-5 text-sm shadow-2xl">
+          Loading account...
+        </div>
       </main>
     );
   }
@@ -195,43 +228,77 @@ function AccountContent() {
   return (
     <main className="min-h-screen bg-zinc-950 px-4 py-10 text-zinc-100">
       <div className="mx-auto max-w-2xl space-y-6">
-        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6">
-          <h1 className="text-2xl font-semibold">Account</h1>
-          <p className="text-sm text-zinc-400">
+        <div>
+          <Link
+            href={BRAND.routes.app ?? "/chat"}
+            className="inline-flex items-center rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-100 shadow-sm transition hover:border-zinc-600 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+          >
+            ← Back to Chat
+          </Link>
+        </div>
+
+        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+          <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
+          <p className="mt-1 text-sm text-zinc-400">
             Manage your plan, billing, and password.
           </p>
         </section>
 
-        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6">
-          <h2 className="text-xl font-semibold">
-            {isPro ? "Pro Plan" : "Free Plan"}
-          </h2>
+        {message && (
+          <div
+            role="status"
+            className={`rounded-2xl border px-4 py-3 text-sm ${
+              messageType === "success"
+                ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                : messageType === "error"
+                  ? "border-red-500/20 bg-red-500/10 text-red-300"
+                  : "border-blue-500/20 bg-blue-500/10 text-blue-300"
+            }`}
+          >
+            {message}
+          </div>
+        )}
+
+        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-xl font-semibold">
+              {isPro ? "Pro Plan" : "Free Plan"}
+            </h2>
+
+            {subscriptionStatus && (
+              <p className="text-sm capitalize text-zinc-400">
+                Status: {subscriptionStatus.replace(/_/g, " ")}
+              </p>
+            )}
+          </div>
 
           {isPro && (
-            <div className="mt-3 rounded-xl bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+            <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
               You are on early user pricing.
             </div>
           )}
 
           {renewalText && (
-            <p className="mt-2 text-sm text-zinc-400">
+            <p className="mt-3 text-sm text-zinc-400">
               Renews on {renewalText}
             </p>
           )}
 
-          <div className="mt-4">
+          <div className="mt-5">
             {isPro ? (
               <button
+                type="button"
                 onClick={handleManageBilling}
                 disabled={billingLoading}
-                className="rounded-xl bg-blue-500 px-4 py-2"
+                className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {billingLoading ? "Opening..." : "Manage Billing"}
               </button>
             ) : (
               <button
-                onClick={() => router.push("/pricing")}
-                className="rounded-xl bg-white px-4 py-2 text-black"
+                type="button"
+                onClick={() => router.push(BRAND.routes.pricing ?? "/pricing")}
+                className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black transition hover:bg-zinc-200 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-zinc-900"
               >
                 Upgrade to Pro
               </button>
@@ -239,51 +306,93 @@ function AccountContent() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6">
+        <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
           <h2 className="text-xl font-semibold">Change Password</h2>
 
           <form onSubmit={handleChangePassword} className="mt-4 space-y-4">
-            <input
-              type={showPassword ? "text" : "password"}
-              placeholder="New password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl bg-zinc-800 px-3 py-2"
-            />
+            <div>
+              <label
+                htmlFor="new-password"
+                className="mb-2 block text-sm font-medium text-zinc-300"
+              >
+                New password
+              </label>
 
-            <input
-              type={showConfirmPassword ? "text" : "password"}
-              placeholder="Confirm password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full rounded-xl bg-zinc-800 px-3 py-2"
-            />
+              <div className="relative">
+                <input
+                  id="new-password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Enter new password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="new-password"
+                  className="w-full rounded-xl border border-zinc-700 bg-zinc-800 px-3 py-2 pr-11 text-zinc-100 placeholder:text-zinc-500 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="absolute inset-y-0 right-2 inline-flex items-center rounded-lg px-2 text-zinc-400 transition hover:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="confirm-password"
+                className="mb-2 block text-sm font-medium text-zinc-300"
+              >
+                Confirm password
+              </label>
+
+              <div className="relative">
+                <input
+                  id="confirm-password"
+                  type={showConfirmPassword ? "text" : "password"}
+                  placeholder="Confirm new password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  className="w-full rounded-xl border border-zinc-700 bg-zinc-800 px-3 py-2 pr-11 text-zinc-100 placeholder:text-zinc-500 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((value) => !value)}
+                  className="absolute inset-y-0 right-2 inline-flex items-center rounded-lg px-2 text-zinc-400 transition hover:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  aria-label={
+                    showConfirmPassword
+                      ? "Hide confirm password"
+                      : "Show confirm password"
+                  }
+                >
+                  {showConfirmPassword ? (
+                    <EyeOff size={18} />
+                  ) : (
+                    <Eye size={18} />
+                  )}
+                </button>
+              </div>
+            </div>
 
             {passwordHint && (
-              <p className="text-sm text-yellow-400">{passwordHint}</p>
+              <p className={`text-sm ${passwordHint.className}`}>
+                {passwordHint.text}
+              </p>
             )}
 
             <button
               type="submit"
               disabled={!canSubmit}
-              className="rounded-xl bg-white px-4 py-2 text-black"
+              className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black transition hover:bg-zinc-200 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {passwordLoading ? "Saving..." : "Update Password"}
             </button>
           </form>
         </section>
-
-        {message && (
-          <div
-            className={`rounded-xl px-4 py-2 text-sm ${
-              messageType === "success"
-                ? "bg-green-500/10 text-green-300"
-                : "bg-red-500/10 text-red-300"
-            }`}
-          >
-            {message}
-          </div>
-        )}
       </div>
     </main>
   );
@@ -291,7 +400,15 @@ function AccountContent() {
 
 export default function AccountPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-white">Loading...</div>}>
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4 text-zinc-400">
+          <div className="rounded-3xl border border-zinc-800 bg-zinc-900 px-6 py-5 text-sm shadow-2xl">
+            Loading account...
+          </div>
+        </main>
+      }
+    >
       <AccountContent />
     </Suspense>
   );
