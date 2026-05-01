@@ -1,216 +1,167 @@
-"use client";
-
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
 import { BRAND } from "@/lib/branding";
-import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
-const MOTHERS_DAY_PROMO_CODE = "MOTHERSDAY";
+const featuresFree = [
+  "20 messages per day",
+  "Standard AI mode",
+  "Core chat experience",
+  "Great for everyday use",
+];
 
-const PLANS = [
-  {
-    name: BRAND.pricing.freePlanName,
-    price: "$0",
-    cadence: "/ month",
-    description: "A simple way to get started with practical AI support.",
-    features: [
-      `${BRAND.pricing.freeDailyMessageLimit} messages per day`,
-      "Standard AI mode",
-      "Core chat experience",
-      "Great for everyday use",
-    ],
-    cta: "Get Started",
-    href: BRAND.routes.login,
-    highlight: false,
-  },
-  {
-    name: BRAND.pricing.proPlanName,
-    price: `$${BRAND.pricing.proMonthlyPrice}`,
-    cadence: "/ month",
-    description: "More power, flexibility, and advanced AI capabilities.",
-    features: [
-      `${BRAND.pricing.proDailyMessageLimit} messages per day`,
-      "Web search with real-time answers",
-      "File uploads for PDF, DOCX, and XLSX",
-      "Priority performance",
-      "Built for serious work",
-    ],
-    cta: "Upgrade to Pro",
-    href: null,
-    highlight: true,
-  },
-] as const;
-
-function normalizePromoCode(value: string | null): string | null {
-  const cleaned = value?.trim().toUpperCase();
-  return cleaned === MOTHERS_DAY_PROMO_CODE ? cleaned : null;
-}
-
-function PricingPageContent() {
-  const searchParams = useSearchParams();
-
-  const [mounted, setMounted] = useState(false);
-  const [isUpgrading, setIsUpgrading] = useState(false);
-  const [checkoutError, setCheckoutError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  const promoCode = useMemo(
-    () => normalizePromoCode(searchParams.get("promo")),
-    [searchParams]
-  );
-
-  const hasMothersDayPromo =
-    mounted && promoCode === MOTHERS_DAY_PROMO_CODE;
-
-  async function handleUpgradeToPro() {
-    setIsUpgrading(true);
-    setCheckoutError(null);
-
-    try {
-      const supabase = createBrowserSupabaseClient();
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        window.location.href = hasMothersDayPromo
-          ? `${BRAND.routes.login}?redirectTo=${encodeURIComponent(
-              `${BRAND.routes.pricing}?promo=${MOTHERS_DAY_PROMO_CODE}`
-            )}`
-          : BRAND.routes.login;
-        return;
-      }
-
-      const response = await fetch("/api/stripe/checkout", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          promoCode,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (response.status === 401) {
-        window.location.href = BRAND.routes.login;
-        return;
-      }
-
-      if (!response.ok || !data.url) {
-        throw new Error(data.error || "Unable to start checkout.");
-      }
-
-      window.location.href = data.url;
-    } catch (error) {
-      console.error("Stripe checkout failed:", error);
-      setCheckoutError(
-        error instanceof Error
-          ? error.message
-          : "Unable to start checkout. Please sign in and try again."
-      );
-      setIsUpgrading(false);
-    }
-  }
-
-  return (
-    <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
-      <div className="mx-auto mb-8 max-w-5xl">
-        <Link
-          href={BRAND.routes.home}
-          className="inline-flex text-sm text-white/60 transition hover:text-white"
-        >
-          ← Back to Home
-        </Link>
-      </div>
-
-      <section className="mx-auto max-w-3xl text-center">
-        <p className="text-xs uppercase tracking-[0.2em] text-blue-300">
-          Pricing
-        </p>
-
-        <h1 className="mt-4 text-4xl font-semibold sm:text-5xl">
-          Simple, transparent pricing
-        </h1>
-
-        <p className="mt-4 text-lg text-white/70">
-          Start free. Upgrade when you need more power.
-        </p>
-
-        <p className="mt-4 text-sm text-white/60">
-          Built by Levi Holland to make practical AI support easier to use.
-        </p>
-
-        {mounted && hasMothersDayPromo && (
-          <div className="mx-auto mt-6 max-w-2xl rounded-3xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-left">
-            <p className="text-xs text-emerald-300">
-              Mother&apos;s Day Launch Special Applied
-            </p>
-            <p className="mt-2 text-lg font-semibold">
-              Get Pro for $10/month forever.
-            </p>
-          </div>
-        )}
-      </section>
-
-      <section className="mx-auto mt-14 grid max-w-5xl gap-6 md:grid-cols-2">
-        {PLANS.map((plan) => (
-          <article key={plan.name} className="rounded-3xl border p-6">
-            <h2 className="text-xl font-semibold">{plan.name}</h2>
-
-            <div className="mt-6">
-              {plan.highlight && mounted && hasMothersDayPromo ? (
-                <>
-                  <span className="text-3xl font-semibold">$10</span>
-                  <span className="line-through ml-2 text-white/50">
-                    {plan.price}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="text-3xl font-semibold">{plan.price}</span>
-                  <span className="text-white/60">{plan.cadence}</span>
-                </>
-              )}
-            </div>
-
-            {plan.highlight ? (
-              <button
-                onClick={handleUpgradeToPro}
-                disabled={isUpgrading}
-                className="mt-8 w-full rounded-2xl bg-blue-600 px-5 py-3"
-              >
-                {isUpgrading ? "Redirecting..." : plan.cta}
-              </button>
-            ) : (
-              <Link href={plan.href} className="mt-8 block text-center">
-                {plan.cta}
-              </Link>
-            )}
-          </article>
-        ))}
-      </section>
-
-      {checkoutError && (
-        <div className="mt-6 text-center text-red-400">
-          {checkoutError}
-        </div>
-      )}
-    </main>
-  );
-}
+const featuresPro = [
+  "300 messages per day",
+  "Web search with real-time answers",
+  "File uploads for PDF, DOCX, and XLSX",
+  "Priority performance",
+  "Built for serious work",
+];
 
 export default function PricingPage() {
   return (
-    <Suspense fallback={<div>Loading pricing...</div>}>
-      <PricingPageContent />
-    </Suspense>
+    <main className="min-h-screen bg-[#020817] text-white">
+      <header className="border-b border-white/10 bg-[#020817]/80 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <Link href="/" className="flex items-center gap-2 font-semibold">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-sm">
+              💬
+            </span>
+            <span>{BRAND.name}</span>
+          </Link>
+
+          <nav className="flex items-center gap-2 text-sm font-medium">
+            <Link
+              href={BRAND.routes.app}
+              className="rounded-xl px-4 py-2 text-zinc-200 hover:bg-white/10"
+            >
+              Chat
+            </Link>
+            <Link
+              href={BRAND.routes.pricing}
+              className="rounded-xl bg-white/10 px-4 py-2 text-white"
+            >
+              Pricing
+            </Link>
+            <Link
+              href="/account"
+              className="rounded-xl px-4 py-2 text-zinc-200 hover:bg-white/10"
+            >
+              Account
+            </Link>
+            <Link
+              href={BRAND.routes.login}
+              className="ml-2 rounded-xl border border-white/15 px-4 py-2 text-zinc-100 hover:bg-white/10"
+            >
+              Sign out
+            </Link>
+          </nav>
+        </div>
+      </header>
+
+      <section className="relative overflow-hidden px-6 py-14">
+        <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.22),transparent_35%),radial-gradient(circle_at_center,rgba(16,185,129,0.08),transparent_35%)]" />
+
+        <div className="mx-auto max-w-5xl text-center">
+          <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">
+            Simple, transparent pricing
+          </h1>
+          <p className="mt-5 text-lg text-zinc-300">
+            Start free. Upgrade when you need more power.
+          </p>
+          <p className="mt-4 text-sm text-zinc-400">
+            Built by Levi Holland to make practical AI support easier to use
+            for work, research, and everyday tasks.
+          </p>
+        </div>
+
+        <div className="mx-auto mt-8 max-w-3xl rounded-3xl border border-emerald-500/40 bg-emerald-950/30 p-6 shadow-[0_0_50px_rgba(16,185,129,0.12)]">
+          <p className="text-xs font-bold uppercase tracking-[0.28em] text-emerald-300">
+            Mother&apos;s Day launch special applied
+          </p>
+          <h2 className="mt-3 text-xl font-bold">
+            Get Pro for $10/month forever.
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-zinc-300">
+            Normally $15/month. First 100 first-time users only. Offer ends May
+            15, 2026. The discount will apply automatically at Stripe Checkout.
+          </p>
+        </div>
+
+        <div className="mx-auto mt-10 grid max-w-5xl gap-6 md:grid-cols-2">
+          <div className="rounded-3xl border border-white/15 bg-white/[0.04] p-7 shadow-2xl">
+            <h2 className="text-2xl font-bold">Free</h2>
+            <p className="mt-3 text-zinc-300">
+              A simple way to get started with practical AI support.
+            </p>
+
+            <div className="mt-8 flex items-end gap-2">
+              <span className="text-4xl font-bold">$0</span>
+              <span className="pb-1 text-zinc-400">/ month</span>
+            </div>
+
+            <ul className="mt-8 space-y-4 text-sm text-zinc-200">
+              {featuresFree.map((feature) => (
+                <li key={feature} className="flex gap-3">
+                  <span className="text-emerald-400">✓</span>
+                  <span>{feature}</span>
+                </li>
+              ))}
+            </ul>
+
+            <Link
+              href={BRAND.routes.login}
+              className="mt-16 flex w-full items-center justify-center rounded-2xl border border-white/20 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+            >
+              Get Started
+            </Link>
+          </div>
+
+          <div className="relative rounded-3xl border border-blue-500/70 bg-blue-950/20 p-7 shadow-[0_0_60px_rgba(59,130,246,0.22)]">
+            <div className="absolute right-6 top-6 rounded-full border border-blue-400/50 bg-blue-500/15 px-3 py-1 text-xs text-blue-200">
+              Most Popular
+            </div>
+
+            <h2 className="text-2xl font-bold">Pro</h2>
+            <p className="mt-3 max-w-sm text-zinc-300">
+              More power, flexibility, and advanced AI capabilities.
+            </p>
+
+            <div className="mt-8 flex items-end gap-3">
+              <span className="text-4xl font-bold">$10</span>
+              <span className="pb-1 text-sm text-zinc-500 line-through">
+                $15
+              </span>
+              <span className="pb-1 text-zinc-400">/ month</span>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
+              ✓ Mother&apos;s Day early user pricing: $5 off forever.
+            </div>
+
+            <ul className="mt-6 space-y-4 text-sm text-zinc-200">
+              {featuresPro.map((feature) => (
+                <li key={feature} className="flex gap-3">
+                  <span className="text-emerald-400">✓</span>
+                  <span>{feature}</span>
+                </li>
+              ))}
+            </ul>
+
+            <form action="/api/stripe/checkout" method="POST" className="mt-8">
+              <input type="hidden" name="promoCode" value="MOTHERSDAY" />
+              <button
+                type="submit"
+                className="w-full rounded-2xl bg-blue-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-500/25 transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
+              >
+                Claim $10/month Pro
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <p className="mt-8 text-center text-sm text-zinc-400">
+          No credit card required for the free plan • Cancel anytime
+        </p>
+      </section>
+    </main>
   );
 }
