@@ -5,27 +5,58 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2026-04-22.dahlia",
-});
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  }
-);
+const STRIPE_API_VERSION = "2026-04-22.dahlia";
 
 type SubscriptionWithPeriod = Stripe.Subscription & {
   current_period_end?: number | null;
 };
 
+type SubscriptionStatus = Stripe.Subscription.Status | string | null | undefined;
+
+function requiredEnv(name: string) {
+  const value = process.env[name]?.trim();
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+
+  return value;
+}
+
+function getStripe() {
+  return new Stripe(requiredEnv("STRIPE_SECRET_KEY"), {
+    apiVersion: STRIPE_API_VERSION,
+  });
+}
+
+function getSupabaseAdmin() {
+  return createClient(
+    requiredEnv("NEXT_PUBLIC_SUPABASE_URL"),
+    requiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
+    {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    }
+  );
+}
+
+function getCustomerId(
+  customer: string | Stripe.Customer | Stripe.DeletedCustomer | null
+) {
+  if (!customer) return null;
+  return typeof customer === "string" ? customer : customer.id;
+}
+
+function getSubscriptionId(subscription: string | Stripe.Subscription | null) {
+  if (!subscription) return null;
+  return typeof subscription === "string" ? subscription : subscription.id;
+}
+
 function getCurrentPeriodEnd(subscription: Stripe.Subscription): number | null {
-  const directValue = (subscription as SubscriptionWithPeriod).current_period_end;
+  const directValue = (subscription as SubscriptionWithPeriod)
+    .current_period_end;
 
   if (typeof directValue === "number") {
     return directValue;
@@ -40,7 +71,7 @@ function getCurrentPeriodEnd(subscription: Stripe.Subscription): number | null {
     : null;
 }
 
-function isActiveProStatus(status: Stripe.Subscription.Status) {
+function isActiveProStatus(status: SubscriptionStatus) {
   return status === "active" || status === "trialing";
 }
 
@@ -48,7 +79,7 @@ async function updateUserSubscription(params: {
   userId?: string | null;
   stripeCustomerId?: string | null;
   stripeSubscriptionId?: string | null;
-  subscriptionStatus?: Stripe.Subscription.Status | string | null;
+  subscriptionStatus?: SubscriptionStatus;
   currentPeriodEnd?: number | null;
 }) {
   const {
@@ -59,11 +90,8 @@ async function updateUserSubscription(params: {
     currentPeriodEnd,
   } = params;
 
-  const plan =
-    subscriptionStatus &&
-    isActiveProStatus(subscriptionStatus as Stripe.Subscription.Status)
-      ? "pro"
-      : "free";
+  const supabaseAdmin = getSupabaseAdmin();
+  const plan = isActiveProStatus(subscriptionStatus) ? "pro" : "free";
 
   const updatePayload = {
     plan,
@@ -73,9 +101,10 @@ async function updateUserSubscription(params: {
     current_period_end: currentPeriodEnd
       ? new Date(currentPeriodEnd * 1000).toISOString()
       : null,
+    updated_at: new Date().toISOString(),
   };
 
-  let query = supabaseAdmin.from("profiles").update(updatePayload);
+  let query = supabaseAdmin.from("profiles").update(updatePayload).select("id");
 
   if (userId) {
     query = query.eq("id", userId);
@@ -85,31 +114,38 @@ async function updateUserSubscription(params: {
     query = query.eq("stripe_customer_id", stripeCustomerId);
   } else {
     throw new Error(
-      "No userId, stripeSubscriptionId, or stripeCustomerId available."
+      "Cannot update subscription because no userId, Stripe subscription ID, or Stripe customer ID was available."
     );
   }
 
-  const { error } = await query;
+  const { data, error } = await query;
 
   if (error) {
-    throw error;
+    throw new Error(`Supabase profile update failed: ${error.message}`);
   }
-}
 
-function getCustomerId(customer: string | Stripe.Customer | Stripe.DeletedCustomer | null) {
-  if (!customer) return null;
-  return typeof customer === "string" ? customer : customer.id;
-}
+  if (!data || data.length === 0) {
+    throw new Error(
+      `No Supabase profile was updated. userId=${userId ?? "null"}, stripeCustomerId=${
+        stripeCustomerId ?? "null"
+      }, stripeSubscriptionId=${stripeSubscriptionId ?? "null"}`
+    );
+  }
 
-function getSubscriptionId(
-  subscription: string | Stripe.Subscription | null
-) {
-  if (!subscription) return null;
-  return typeof subscription === "string" ? subscription : subscription.id;
+  return data[0];
 }
 
 export async function POST(req: Request) {
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  let stripe: Stripe;
+
+  try {
+    stripe = getStripe();
+  } catch (error) {
+    console.error(error);
+    return new NextResponse("Stripe is not configured.", { status: 500 });
+  }
+
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
 
   if (!webhookSecret) {
     console.error("Missing STRIPE_WEBHOOK_SECRET.");
@@ -148,6 +184,12 @@ export async function POST(req: Request) {
         const stripeCustomerId = getCustomerId(session.customer);
         const stripeSubscriptionId = getSubscriptionId(session.subscription);
 
+        if (!userId) {
+          throw new Error(
+            "Missing userId in checkout.session.completed metadata."
+          );
+        }
+
         if (!stripeSubscriptionId) {
           throw new Error(
             "Missing subscription ID on checkout.session.completed."
@@ -174,6 +216,7 @@ export async function POST(req: Request) {
         const subscription = event.data.object as Stripe.Subscription;
 
         await updateUserSubscription({
+          userId: subscription.metadata?.userId ?? null,
           stripeCustomerId: getCustomerId(subscription.customer),
           stripeSubscriptionId: subscription.id,
           subscriptionStatus: subscription.status,
@@ -194,8 +237,9 @@ export async function POST(req: Request) {
         break;
       }
 
-      default:
+      default: {
         console.log(`Unhandled Stripe event: ${event.type}`);
+      }
     }
 
     return NextResponse.json({ received: true });
