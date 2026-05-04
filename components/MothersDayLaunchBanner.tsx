@@ -1,11 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
-
-const TOTAL_LAUNCH_SPOTS = 100;
-const CLAIMED_LAUNCH_SPOTS = 17;
 
 function getTimeRemaining(endDate: string) {
   const total = new Date(endDate).getTime() - Date.now();
@@ -34,11 +31,6 @@ export default function MothersDayLaunchBanner() {
 
   const [timeLeft, setTimeLeft] = useState(() =>
     getTimeRemaining(BRAND.launch.promoEnds)
-  );
-
-  const spotsLeft = useMemo(
-    () => Math.max(TOTAL_LAUNCH_SPOTS - CLAIMED_LAUNCH_SPOTS, 0),
-    []
   );
 
   useEffect(() => {
@@ -71,9 +63,9 @@ export default function MothersDayLaunchBanner() {
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-white/75">
-              Today is a huge day for LVT. To celebrate launch day and
-              Mother&apos;s Day, the first {TOTAL_LAUNCH_SPOTS} first-time users
-              can lock in early user pricing.
+              Today is a huge day for LVTChat. To celebrate launch day and
+              Mother&apos;s Day, first-time users can lock in special early
+              user pricing.
             </p>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -91,11 +83,11 @@ export default function MothersDayLaunchBanner() {
 
               <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3">
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">
-                  Launch spots left
+                  Mother&apos;s Day special
                 </p>
 
                 <p className="mt-1 text-lg font-bold text-emerald-300">
-                  Only {spotsLeft} spots left
+                  Limited-time launch offer
                 </p>
               </div>
             </div>
