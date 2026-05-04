@@ -2575,6 +2575,22 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   )}
                 </form>
 
+                <p className={cx("mt-2 text-center text-xs", activeTheme.mutedText)}>
+                  By using {BRAND.name}, you agree to{" "}
+                  <Link href="/privacy" className="underline transition hover:text-white">
+                    Privacy Policy
+                  </Link>{" "}
+                  and{" "}
+                  <Link href="/terms" className="underline transition hover:text-white">
+                    Terms of Service
+                  </Link>
+                  .
+                </p>
+
+                <p className={cx("mt-1 text-center text-[11px]", activeTheme.mutedText)}>
+                  Do not share sensitive personal, financial, or confidential information.
+                </p>
+
                 <div className="flex items-center justify-between gap-3 px-1">
                   <div className={cx("text-[11px]", activeTheme.mutedText)}>
                     {MAX_INPUT_LENGTH - input.length} characters remaining
