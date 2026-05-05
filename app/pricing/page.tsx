@@ -19,6 +19,7 @@ const featuresPro = [
   "Web search with real-time answers",
   "File uploads for PDF, DOCX, and XLSX",
   "Priority performance",
+  "Custom AI Agents",
   "Built for serious work",
 ];
 
@@ -87,6 +88,24 @@ function ProCheckoutButton() {
         </div>
       )}
     </div>
+  );
+}
+
+function FeatureItem({ feature }: { feature: string }) {
+  const isComingSoon = feature === "Custom AI Agents";
+
+  return (
+    <li className="flex gap-3">
+      <span className="mt-0.5 text-emerald-400">✓</span>
+      <span>
+        {feature}
+        {isComingSoon && (
+          <span className="ml-2 rounded-full border border-blue-400/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-200">
+            Pro — Coming Soon
+          </span>
+        )}
+      </span>
+    </li>
   );
 }
 
@@ -183,10 +202,7 @@ export default function PricingPage() {
 
             <ul className="mt-8 space-y-4 text-sm text-zinc-200">
               {featuresFree.map((feature) => (
-                <li key={feature} className="flex gap-3">
-                  <span className="text-emerald-400">✓</span>
-                  <span>{feature}</span>
-                </li>
+                <FeatureItem key={feature} feature={feature} />
               ))}
             </ul>
 
@@ -221,12 +237,19 @@ export default function PricingPage() {
               ✓ Mother&apos;s Day early user pricing: $5 off forever.
             </div>
 
+            <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3">
+              <p className="text-sm font-semibold text-blue-100">
+                Custom AI Agents are coming soon.
+              </p>
+              <p className="mt-1 text-xs leading-5 text-zinc-300">
+                Create specialized AI assistants for work, research, planning,
+                productivity, and real-world workflows.
+              </p>
+            </div>
+
             <ul className="mt-6 space-y-4 text-sm text-zinc-200">
               {featuresPro.map((feature) => (
-                <li key={feature} className="flex gap-3">
-                  <span className="text-emerald-400">✓</span>
-                  <span>{feature}</span>
-                </li>
+                <FeatureItem key={feature} feature={feature} />
               ))}
             </ul>
 
