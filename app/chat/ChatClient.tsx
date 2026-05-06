@@ -2245,19 +2245,33 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     </div>
 
                     <div className={cx("mt-4 rounded-2xl border p-4", activeTheme.panelBg, activeTheme.panelBorder)}>
-                      <div className={cx("text-[11px] uppercase tracking-wide", activeTheme.mutedText)}>
-                        App information
-                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+                        <p className="text-xs uppercase tracking-wide text-white/40">
+                          Trust & Safety
+                        </p>
 
-                      <div className="mt-2 text-sm text-white">
-                        <span className="font-medium">App Developer:</span> Levi Holland
-                      </div>
+                        <p className="mt-3 text-sm leading-6 text-white/80">
+                          By using LVTChat, you agree to the{" "}
+                          <a
+                            href="/privacy"
+                            className="text-blue-300 hover:text-blue-200 transition"
+                          >
+                            Privacy Policy
+                          </a>{" "}
+                          and{" "}
+                          <a
+                            href="/terms"
+                            className="text-blue-300 hover:text-blue-200 transition"
+                          >
+                            Terms of Service
+                          </a>
+                          .
+                        </p>
 
-                      <div className={cx("mt-1 text-sm", activeTheme.mutedText)}>
-                        <span className="font-medium text-white/80">Questions or support:</span>{" "}
-                        <a href={`mailto:${BRAND.supportEmail}`} className="underline transition hover:text-white">
-                          {BRAND.supportEmail}
-                        </a>
+                        <p className="mt-3 text-sm leading-6 text-white/60">
+                          Please do not share sensitive personal, financial, medical, or confidential
+                          information.
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -2574,23 +2588,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     </Tooltip>
                   )}
                 </form>
-
-                <p className={cx("mt-2 text-center text-xs", activeTheme.mutedText)}>
-                  By using {BRAND.name}, you agree to{" "}
-                  <Link href="/privacy" className="underline transition hover:text-white">
-                    Privacy Policy
-                  </Link>{" "}
-                  and{" "}
-                  <Link href="/terms" className="underline transition hover:text-white">
-                    Terms of Service
-                  </Link>
-                  .
-                </p>
-
-                <p className={cx("mt-1 text-center text-[11px]", activeTheme.mutedText)}>
-                  Do not share sensitive personal, financial, or confidential information.
-                </p>
-
+             
                 <div className="flex items-center justify-between gap-3 px-1">
                   <div className={cx("text-[11px]", activeTheme.mutedText)}>
                     {MAX_INPUT_LENGTH - input.length} characters remaining
