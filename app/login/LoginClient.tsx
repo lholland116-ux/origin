@@ -94,7 +94,9 @@ export default function LoginClient() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${getAppUrl()}${BRAND.routes.app}`,
+          redirectTo: `${getAppUrl()}/auth/callback?next=${encodeURIComponent(
+            BRAND.routes.app
+          )}`,
         },
       });
 
