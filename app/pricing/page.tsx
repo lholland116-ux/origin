@@ -165,10 +165,6 @@ export default function PricingPage() {
             Start free. Upgrade when you need more power.
           </p>
 
-          <p className="mt-4 text-sm text-zinc-400">
-            Built by Levi Holland to make practical AI support easier to use for
-            work, research, and everyday tasks.
-          </p>
         </div>
 
         <div className="mx-auto mt-8 max-w-3xl rounded-3xl border border-emerald-500/40 bg-emerald-950/30 p-6 shadow-[0_0_50px_rgba(16,185,129,0.12)]">
