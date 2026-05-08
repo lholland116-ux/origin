@@ -68,13 +68,6 @@ export default function Hero() {
           </a>
         </div>
 
-        <div className="mt-7 flex flex-wrap items-center gap-3 text-sm text-white/60">
-          <span>🛡️ Built by {BRAND.creator}</span>
-          <span>•</span>
-          <span>Trusted AI</span>
-          <span>•</span>
-          <span>Real Results</span>
-        </div>
       </div>
 
       <div className="mx-auto w-full max-w-[470px]">
