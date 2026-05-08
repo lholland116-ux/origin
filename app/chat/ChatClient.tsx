@@ -110,10 +110,13 @@ type UploadedDocument = {
   conversation_id: string | null;
 };
 
+type MessageFeedbackRating = "up" | "down";
+
 type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  feedback?: MessageFeedbackRating | null;
   sources?: SourceItem[];
   sourceCount?: number;
   widget?: MessageWidget | null;
@@ -1155,6 +1158,51 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       }, 1500);
     } catch {
       setUiError("Failed to copy message.");
+    }
+  }
+
+  async function handleMessageFeedback(
+    messageId: string,
+    rating: MessageFeedbackRating
+  ): Promise<void> {
+    if (!conversationId) {
+      setUiError("Missing conversationId.");
+      return;
+    }
+
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId ? { ...message, feedback: rating } : message
+      )
+    );
+
+    try {
+      const res = await fetch("/api/message-feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messageId,
+          conversationId,
+          rating,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to save feedback.");
+      }
+
+      setUiError("");
+    } catch (error) {
+      setUiError(
+        error instanceof Error ? error.message : "Failed to save feedback."
+      );
+
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === messageId ? { ...message, feedback: null } : message
+        )
+      );
     }
   }
 
@@ -2377,6 +2425,43 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           )}
 
                           {isStreamingAssistant ? <span className="ml-1 inline-block animate-pulse">▍</span> : null}
+                          {message.role === "assistant" && message.content.trim() && !isStreamingAssistant ? (
+                            <div className="mt-4 flex items-center gap-2 border-t border-white/10 pt-3">
+                              <span className="text-xs opacity-60">Was this helpful?</span>
+
+                              <button
+                                type="button"
+                                onClick={() => handleMessageFeedback(message.id, "up")}
+                                className={cx(
+                                  "rounded-full border px-2.5 py-1 text-xs transition",
+                                  message.feedback === "up"
+                                    ? "border-green-400/50 bg-green-500/15 text-green-200"
+                                    : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                                )}
+                                aria-label="Mark assistant response as helpful"
+                              >
+                                👍
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleMessageFeedback(message.id, "down")}
+                                className={cx(
+                                  "rounded-full border px-2.5 py-1 text-xs transition",
+                                  message.feedback === "down"
+                                    ? "border-red-400/50 bg-red-500/15 text-red-200"
+                                    : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                                )}
+                                aria-label="Mark assistant response as not helpful"
+                              >
+                                👎
+                              </button>
+
+                              {message.feedback ? (
+                                <span className="text-xs text-white/50">Thanks for the feedback.</span>
+                              ) : null}
+                            </div>
+                          ) : null}
                         </div>
 
                         {sources.length > 0 && (
