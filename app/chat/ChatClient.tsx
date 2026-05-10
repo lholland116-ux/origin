@@ -828,6 +828,7 @@ export default function ChatClient({
     normalizeInitialMessages(initialMessages)
   );
   const [input, setInput] = useState("");
+  const [isTypingFocused, setIsTypingFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -2558,6 +2559,16 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
                 )}
 
+            <div
+              className={cx(
+                "sticky bottom-0 z-30 border-t backdrop-blur-xl",
+                "pb-[calc(env(safe-area-inset-bottom)+12px)]",
+                activeTheme.panelBg,
+                activeTheme.panelBorder
+              )}
+            >
+              <div className={`${CONTENT_RAIL_CLASS} py-3`}>
+
                 <form onSubmit={handleSubmit} className="flex items-end gap-2">
                   {!useWebSearch && (
                     <div className="flex gap-2">
@@ -2606,18 +2617,17 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   )}
 
                   <div className={cx("relative flex-1 rounded-2xl border shadow-[0_10px_30px_rgba(0,0,0,0.25)] focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]", activeTheme.inputBg, activeTheme.inputBorder)}>
-                    <input
+                    <textarea
                       value={input}
                       onChange={(event) => {
                         setInput(event.target.value);
+
                         if (uiError) setUiError("");
                         if (documentError) setDocumentError("");
                         if (speechError) setSpeechError(null);
                       }}
-                      className={cx(
-                        "w-full rounded-2xl bg-transparent px-4 py-3.5 pr-14 outline-none placeholder:text-white/40",
-                        activeTheme.inputText
-                      )}
+                      onFocus={() => setIsTypingFocused(true)}
+                      onBlur={() => setIsTypingFocused(false)}
                       placeholder={
                         useWebSearch
                           ? isListening
@@ -2633,8 +2643,21 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 ? "Listening… tap mic to stop."
                                 : "Ask something..."
                       }
+                      rows={isTypingFocused ? 4 : 1}
                       maxLength={MAX_INPUT_LENGTH}
                       disabled={composerDisabled}
+                      className={cx(
+                        "w-full resize-none rounded-2xl border bg-transparent px-4 py-3.5 pr-14 outline-none transition-all duration-200",
+                        "min-h-[52px]",
+                        "max-h-[220px]",
+                        "overflow-y-auto",
+                        "leading-6",
+                        "focus:min-h-[120px]",
+                        "sm:focus:min-h-[52px]",
+                        activeTheme.panelBorder,
+                        activeTheme.inputText,
+                        "placeholder:text-white/40"
+                      )}
                     />
 
                     <Tooltip content={TOOLTIP_TEXT.mic}>
@@ -2673,6 +2696,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     </Tooltip>
                   )}
                 </form>
+              </div>
+            </div>
              
                 <div className="flex items-center justify-between gap-3 px-1">
                   <div className={cx("text-[11px]", activeTheme.mutedText)}>
