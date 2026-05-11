@@ -1,7 +1,10 @@
+import Image from "next/image";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 const SUPPORT_EMAIL = BRAND.contact?.email || "support@lvtchat.com";
+
+const FOUNDER_IMAGE_SRC = "/images/founder/levi-holland.jpg";
 
 const stats = [
   { label: "Years in regulated industries", value: "25+" },
@@ -69,8 +72,8 @@ export default function AboutPage() {
 
             <p>
               Levi has completed 30+ AI certifications from Vanderbilt
-              University and IBM, with training focused on generative AI,
-              AI agents, automation, data analysis, and building practical AI
+              University and IBM, with training focused on generative AI, AI
+              agents, automation, data analysis, and building practical AI
               systems for real-world use.
             </p>
 
@@ -108,12 +111,17 @@ export default function AboutPage() {
           ))}
         </section>
 
-        <section className="mt-12 grid gap-8 rounded-3xl border border-white/10 bg-white/[0.04] p-8 shadow-2xl md:grid-cols-[220px_1fr]">
-          <div
-            aria-label="Levi Holland initials"
-            className="flex aspect-square items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-br from-blue-500/20 to-purple-500/20 text-5xl font-semibold text-white shadow-inner"
-          >
-            LH
+        <section className="mt-12 grid gap-8 rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-2xl sm:p-8 md:grid-cols-[280px_1fr]">
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] shadow-2xl">
+            <Image
+              src={FOUNDER_IMAGE_SRC}
+              alt="Levi Holland, Founder of LVTChat"
+              width={560}
+              height={700}
+              priority
+              sizes="(min-width: 768px) 280px, 100vw"
+              className="aspect-[4/5] h-full w-full object-cover object-center"
+            />
           </div>
 
           <div>
