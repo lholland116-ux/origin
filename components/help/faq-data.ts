@@ -64,7 +64,7 @@ export const FAQ_ITEMS: FaqItem[] = [
     category: "Tips",
     question: "How do I get better answers?",
     answer:
-      "Be specific, include useful context, and ask follow-up questions. For example, instead of saying 'help me with business,' say 'help me write a business plan for an AI chatbot startup in Georgia.'",
+      "Be specific, include useful context, and ask follow-up questions. For example, instead of saying 'help me with business,' say 'help me write a business plan for a Home Healthcare startup in Georgia.'",
     keywords: [...FAQ_SEARCH_KEYWORDS.prompts],
   },
   {
