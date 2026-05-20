@@ -44,8 +44,9 @@ export default function Hero() {
           {BRAND.subheadline}
         </p>
 
-        <p className="mt-3 max-w-xl rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium leading-6 text-emerald-200">
-          🎉 Now live — Mother&apos;s Day LVT launch special available today.
+        <p className="mt-3 max-w-xl rounded-2xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm font-medium leading-6 text-blue-200">
+          🎉 Now live — practical AI for work, research, planning, and everyday
+          decisions.
         </p>
 
         <p className="mt-6 max-w-xl text-sm leading-6 text-white/60">
@@ -67,7 +68,6 @@ export default function Hero() {
             {BRAND.ctaSecondary}
           </a>
         </div>
-
       </div>
 
       <div className="mx-auto w-full max-w-[470px]">

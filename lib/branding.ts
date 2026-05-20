@@ -32,21 +32,19 @@ export const BRAND = {
     "LVTChat helps individuals and businesses solve problems faster, think more clearly, and move forward with confidence.",
   tagline: "Smart AI help for work, research, and everyday tasks",
 
-  // 🚀 Launch Configuration (NEW)
+  // Launch / Promotion Configuration
   launch: {
     isLive: true,
-    name: "Mother's Day Launch",
+    name: "LVTChat Launch",
     date: "May 1, 2026",
-    message:
-      "🎉 LVTChat is officially live — Mother's Day launch special available.",
-    highlight:
-      "Get Pro for $10/month forever — first 100 users only.",
-    promoCode: "MOTHERSDAY",
-    promoEnds: "May 15, 2026",
+    message: "🎉 LVTChat is officially live — practical AI you can actually use.",
+    highlight: "Clear answers. Better decisions. Less time wasted.",
+    promoCode: "",
+    promoEnds: "",
     pricing: {
       original: 15,
-      discounted: 10,
-      discountAmount: 5,
+      discounted: 15,
+      discountAmount: 0,
     },
   },
 

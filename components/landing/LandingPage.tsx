@@ -5,7 +5,6 @@ import Header from "@/components/landing/Header";
 import Hero from "@/components/landing/Hero";
 import TrustedSection from "@/components/landing/TrustedSection";
 import UseCases from "@/components/landing/UseCases";
-import MothersDayLaunchBanner from "@/components/MothersDayLaunchBanner";
 import { BRAND } from "@/lib/branding";
 
 export default function LandingPage() {
@@ -27,7 +26,6 @@ export default function LandingPage() {
         >
           <Header />
           <Hero />
-          <MothersDayLaunchBanner />
           <FeatureGrid />
         </section>
 
@@ -43,7 +41,7 @@ export default function LandingPage() {
 function LaunchDayBanner() {
   return (
     <section
-      aria-label={`${BRAND.name} launch day announcement`}
+      aria-label={`${BRAND.name} launch announcement`}
       className="relative overflow-hidden rounded-[28px] border border-blue-400/30 bg-[linear-gradient(90deg,rgba(30,64,175,0.35),rgba(88,28,135,0.35),rgba(15,23,42,0.8))] px-5 py-5 text-center shadow-[0_0_70px_rgba(59,130,246,0.18)]"
     >
       <div className="pointer-events-none absolute inset-0 opacity-40">
@@ -57,7 +55,7 @@ function LaunchDayBanner() {
 
       <div className="relative">
         <p className="text-xs font-bold uppercase tracking-[0.28em] text-blue-200">
-          Official LVTChat Launch Day
+          Official LVTChat Launch
         </p>
 
         <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-white sm:text-4xl">
@@ -65,9 +63,8 @@ function LaunchDayBanner() {
         </h1>
 
         <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-zinc-200 sm:text-base">
-          Happy Mother&apos;s Day. Today is a huge day for LVT, and we&apos;re
-          celebrating with early user pricing for the first customers who join
-          us at the beginning.
+          Practical AI built to help individuals and businesses get clear
+          answers, make better decisions, and move forward with confidence.
         </p>
       </div>
     </section>

@@ -4,8 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
-const PROMO_CODE = "MOTHERSDAY";
-const LOGIN_REDIRECT = `/login?redirect=/pricing?promo=${PROMO_CODE}`;
+const LOGIN_REDIRECT = "/login?redirect=/pricing";
 
 const featuresFree = [
   "20 messages per day",
@@ -37,9 +36,6 @@ function ProCheckoutButton() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          promoCode: PROMO_CODE,
-        }),
       });
 
       const data: { url?: string; error?: string } = await res.json();
@@ -56,7 +52,7 @@ function ProCheckoutButton() {
       window.location.assign(data.url);
     } catch (err) {
       console.error("Checkout error:", err);
-      setError("Please create an account or sign in to claim this promotion.");
+      setError("Please create an account or sign in to continue.");
       setLoading(false);
     }
   }
@@ -69,11 +65,11 @@ function ProCheckoutButton() {
         disabled={loading}
         className="w-full rounded-2xl bg-blue-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-500/25 transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {loading ? "Opening Stripe..." : "Claim $10/month Pro"}
+        {loading ? "Opening Stripe..." : "Upgrade to Pro"}
       </button>
 
       <p className="text-center text-xs text-zinc-400">
-        Sign in or create a free account to claim the Mother&apos;s Day pricing.
+        Sign in or create a free account to upgrade securely through Stripe.
       </p>
 
       {error && (
@@ -158,34 +154,18 @@ export default function PricingPage() {
 
         <div className="mx-auto max-w-5xl text-center">
           <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">
-            Simple, transparent pricing
+            Clear pricing for practical AI support
           </h1>
 
           <p className="mt-5 text-lg text-zinc-300">
-            Start free. Upgrade when you need more power.
-          </p>
-
-        </div>
-
-        <div className="mx-auto mt-8 max-w-3xl rounded-3xl border border-emerald-500/40 bg-emerald-950/30 p-6 shadow-[0_0_50px_rgba(16,185,129,0.12)]">
-          <p className="text-xs font-bold uppercase tracking-[0.28em] text-emerald-300">
-            Mother&apos;s Day launch special applied
-          </p>
-
-          <h2 className="mt-3 text-xl font-bold">
-            Get Pro for $10/month forever.
-          </h2>
-
-          <p className="mt-2 text-sm leading-6 text-zinc-300">
-            Normally $15/month. First 100 first-time users only. Offer ends May
-            15, 2026. Sign in or create a free account to claim the promotion at
-            Stripe Checkout.
+            Start free. Upgrade when you need more power, current answers, and
+            document support.
           </p>
         </div>
 
         <div className="mx-auto mt-10 grid max-w-5xl gap-6 md:grid-cols-2">
           <div className="rounded-3xl border border-white/15 bg-white/[0.04] p-7 shadow-2xl">
-            <h2 className="text-2xl font-bold">Free</h2>
+            <h2 className="text-2xl font-bold">{BRAND.pricing.freePlanName}</h2>
 
             <p className="mt-3 text-zinc-300">
               A simple way to get started with practical AI support.
@@ -215,22 +195,23 @@ export default function PricingPage() {
               Most Popular
             </div>
 
-            <h2 className="text-2xl font-bold">Pro</h2>
+            <h2 className="text-2xl font-bold">{BRAND.pricing.proPlanName}</h2>
 
             <p className="mt-3 max-w-sm text-zinc-300">
-              More power, flexibility, and advanced AI capabilities.
+              More power, flexibility, and advanced AI capabilities for serious
+              work.
             </p>
 
-            <div className="mt-8 flex items-end gap-3">
-              <span className="text-4xl font-bold">$10</span>
-              <span className="pb-1 text-sm text-zinc-500 line-through">
-                $15
+            <div className="mt-8 flex items-end gap-2">
+              <span className="text-4xl font-bold">
+                {BRAND.pricing.currencySymbol}
+                {BRAND.pricing.proMonthlyPrice}
               </span>
               <span className="pb-1 text-zinc-400">/ month</span>
             </div>
 
-            <div className="mt-5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
-              ✓ Mother&apos;s Day early user pricing: $5 off forever.
+            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-300">
+              Less than $0.50/day for faster answers and better decisions.
             </div>
 
             <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3">

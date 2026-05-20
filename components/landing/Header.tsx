@@ -66,10 +66,10 @@ export default function Header() {
 
       <div className="flex items-center gap-3">
         <Link
-          href={`${BRAND.routes.pricing}?promo=MOTHERSDAY`}
-          className="hidden rounded-full border border-pink-400/30 bg-pink-500/10 px-3 py-2 text-xs font-semibold text-pink-200 transition hover:bg-pink-500/20 focus:outline-none focus:ring-2 focus:ring-pink-300 focus:ring-offset-2 focus:ring-offset-[#020817] sm:inline-flex"
+          href={BRAND.routes.pricing}
+          className="hidden rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-white/85 transition hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817] sm:inline-flex"
         >
-          Mother&apos;s Day Launch
+          View Pricing
         </Link>
 
         <Link

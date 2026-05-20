@@ -6,11 +6,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const STRIPE_API_VERSION = "2026-04-22.dahlia";
-const MOTHERS_DAY_PROMO_CODE = "MOTHERSDAY";
-
-type CheckoutRequestBody = {
-  promoCode?: string;
-};
 
 function jsonError(message: string, status: number) {
   return NextResponse.json(
@@ -64,35 +59,6 @@ function getProPriceId() {
   return priceId;
 }
 
-function getOptionalMothersDayPromotionCodeId() {
-  const promotionCodeId =
-    process.env.STRIPE_MOTHERSDAY_PROMOTION_CODE_ID?.trim();
-
-  if (!promotionCodeId) {
-    return null;
-  }
-
-  if (!promotionCodeId.startsWith("promo_")) {
-    throw new Error(
-      "STRIPE_MOTHERSDAY_PROMOTION_CODE_ID must start with promo_."
-    );
-  }
-
-  return promotionCodeId;
-}
-
-function normalizePromoCode(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-
-  const cleaned = value.trim().toUpperCase();
-
-  if (!cleaned) return null;
-
-  if (!/^[A-Z0-9_-]{3,40}$/.test(cleaned)) return null;
-
-  return cleaned;
-}
-
 function getStripeErrorMessage(error: unknown): string {
   if (error instanceof Stripe.errors.StripeError) {
     return error.message || "Stripe checkout failed.";
@@ -105,7 +71,7 @@ function getStripeErrorMessage(error: unknown): string {
   return "Unable to start checkout.";
 }
 
-export async function POST(req: Request) {
+export async function POST() {
   try {
     const supabase = await createServerSupabaseClient();
 
@@ -117,21 +83,6 @@ export async function POST(req: Request) {
     if (userError || !user) {
       return jsonError("You must be signed in to upgrade.", 401);
     }
-
-    let body: CheckoutRequestBody = {};
-
-    try {
-      body = (await req.json()) as CheckoutRequestBody;
-    } catch {
-      body = {};
-    }
-
-    const requestedPromoCode = normalizePromoCode(body.promoCode);
-    const mothersDayPromotionCodeId = getOptionalMothersDayPromotionCodeId();
-
-    const shouldApplyMothersDayPromo =
-      requestedPromoCode === MOTHERS_DAY_PROMO_CODE &&
-      Boolean(mothersDayPromotionCodeId);
 
     const stripe = getStripe();
     const appUrl = getAppUrl();
@@ -147,27 +98,15 @@ export async function POST(req: Request) {
           quantity: 1,
         },
       ],
-      ...(shouldApplyMothersDayPromo && mothersDayPromotionCodeId
-        ? {
-            discounts: [
-              {
-                promotion_code: mothersDayPromotionCodeId,
-              },
-            ],
-          }
-        : {
-            allow_promotion_codes: true,
-          }),
+      allow_promotion_codes: true,
       success_url: `${appUrl}/account?success=true`,
       cancel_url: `${appUrl}/pricing?canceled=true`,
       metadata: {
         userId: user.id,
-        promoCode: requestedPromoCode ?? "",
       },
       subscription_data: {
         metadata: {
           userId: user.id,
-          promoCode: requestedPromoCode ?? "",
         },
       },
     });
