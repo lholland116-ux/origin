@@ -22,6 +22,11 @@ const featuresPro = [
   "Built for serious work",
 ];
 
+type CheckoutResponse = {
+  url?: string;
+  error?: string;
+};
+
 function isPromoActive(startsAt: string, endsAt: string) {
   const now = Date.now();
   const start = new Date(startsAt).getTime();
@@ -32,6 +37,14 @@ function isPromoActive(startsAt: string, endsAt: string) {
   }
 
   return now >= start && now <= end;
+}
+
+async function readCheckoutResponse(res: Response): Promise<CheckoutResponse> {
+  try {
+    return (await res.json()) as CheckoutResponse;
+  } catch {
+    return {};
+  }
 }
 
 function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
@@ -45,6 +58,7 @@ function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
     try {
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -53,7 +67,7 @@ function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
         }),
       });
 
-      const data: { url?: string; error?: string } = await res.json();
+      const data = await readCheckoutResponse(res);
 
       if (res.status === 401) {
         window.location.assign(LOGIN_REDIRECT);
@@ -67,7 +81,13 @@ function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
       window.location.assign(data.url);
     } catch (err) {
       console.error("Checkout error:", err);
-      setError("Please create an account or sign in to continue.");
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to start checkout. Please try again."
+      );
+
       setLoading(false);
     }
   }
@@ -90,12 +110,15 @@ function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
       {error && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           <p>{error}</p>
-          <Link
-            href={LOGIN_REDIRECT}
-            className="mt-2 inline-flex font-semibold text-amber-100 underline-offset-4 hover:underline"
-          >
-            Sign in or create account
-          </Link>
+
+          {error.toLowerCase().includes("signed in") && (
+            <Link
+              href={LOGIN_REDIRECT}
+              className="mt-2 inline-flex font-semibold text-amber-100 underline-offset-4 hover:underline"
+            >
+              Sign in or create account
+            </Link>
+          )}
         </div>
       )}
     </div>
@@ -217,7 +240,7 @@ export default function PricingPage() {
 
             <Link
               href={BRAND.routes.login}
-              className="mt-16 flex w-full items-center justify-center rounded-2xl border border-white/20 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+              className="mt-10 flex w-full items-center justify-center rounded-2xl border border-white/20 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
             >
               Get Started
             </Link>
@@ -253,7 +276,7 @@ export default function PricingPage() {
 
             {promoActive && (
               <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-                Memorial Day Early Access Special applied with code{" "}
+                Memorial Day Special applied with code{" "}
                 <span className="font-bold">{promo.promoCode}</span>.
               </div>
             )}
@@ -278,7 +301,9 @@ export default function PricingPage() {
               ))}
             </ul>
 
-            <ProCheckoutButton promoCode={promoActive ? promo.promoCode : undefined} />
+            <ProCheckoutButton
+              promoCode={promoActive ? promo.promoCode : undefined}
+            />
           </div>
         </div>
 
