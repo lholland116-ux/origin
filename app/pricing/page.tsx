@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
@@ -22,7 +22,19 @@ const featuresPro = [
   "Built for serious work",
 ];
 
-function ProCheckoutButton() {
+function isPromoActive(startsAt: string, endsAt: string) {
+  const now = Date.now();
+  const start = new Date(startsAt).getTime();
+  const end = new Date(endsAt).getTime();
+
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    return false;
+  }
+
+  return now >= start && now <= end;
+}
+
+function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,6 +48,9 @@ function ProCheckoutButton() {
         headers: {
           "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+          promoCode: promoCode || undefined,
+        }),
       });
 
       const data: { url?: string; error?: string } = await res.json();
@@ -106,6 +121,17 @@ function FeatureItem({ feature }: { feature: string }) {
 }
 
 export default function PricingPage() {
+  const promo = BRAND.promotions.memorialDay;
+
+  const promoActive = useMemo(
+    () => promo.enabled && isPromoActive(promo.startsAt, promo.endsAt),
+    [promo.enabled, promo.startsAt, promo.endsAt]
+  );
+
+  const proPrice = promoActive
+    ? promo.discountedPrice
+    : BRAND.pricing.proMonthlyPrice;
+
   return (
     <main className="min-h-screen bg-[#020817] text-white">
       <header className="border-b border-white/10 bg-[#020817]/80 backdrop-blur">
@@ -153,6 +179,13 @@ export default function PricingPage() {
         <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.22),transparent_35%),radial-gradient(circle_at_center,rgba(16,185,129,0.08),transparent_35%)]" />
 
         <div className="mx-auto max-w-5xl text-center">
+          {promoActive && (
+            <div className="mx-auto mb-6 inline-flex rounded-full border border-sky-400/40 bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-200">
+              Memorial Day Special: Pro for ${promo.discountedPrice}/month with
+              code {promo.promoCode}
+            </div>
+          )}
+
           <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">
             Clear pricing for practical AI support
           </h1>
@@ -203,12 +236,27 @@ export default function PricingPage() {
             </p>
 
             <div className="mt-8 flex items-end gap-2">
+              {promoActive && (
+                <span className="pb-1 text-xl font-semibold text-zinc-500 line-through">
+                  {BRAND.pricing.currencySymbol}
+                  {BRAND.pricing.proMonthlyPrice}
+                </span>
+              )}
+
               <span className="text-4xl font-bold">
                 {BRAND.pricing.currencySymbol}
-                {BRAND.pricing.proMonthlyPrice}
+                {proPrice}
               </span>
+
               <span className="pb-1 text-zinc-400">/ month</span>
             </div>
+
+            {promoActive && (
+              <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                Memorial Day Early Access Special applied with code{" "}
+                <span className="font-bold">{promo.promoCode}</span>.
+              </div>
+            )}
 
             <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-300">
               Less than $0.50/day for faster answers and better decisions.
@@ -230,7 +278,7 @@ export default function PricingPage() {
               ))}
             </ul>
 
-            <ProCheckoutButton />
+            <ProCheckoutButton promoCode={promoActive ? promo.promoCode : undefined} />
           </div>
         </div>
 

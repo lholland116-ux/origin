@@ -1,3 +1,4 @@
+import MemorialDayBanner from "@/components/MemorialDayBanner";
 import CTASection from "@/components/landing/CTASection";
 import FeatureGrid from "@/components/landing/FeatureGrid";
 import Footer from "@/components/landing/Footer";
@@ -15,10 +16,9 @@ export default function LandingPage() {
       aria-label={`${BRAND.name} landing page`}
     >
       <BackgroundGlow />
-      <LaunchCelebration />
 
       <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-5 sm:px-6 lg:px-8">
-        <LaunchDayBanner />
+        <MemorialDayBanner />
 
         <section
           className="overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(4,10,25,0.98),rgba(3,8,20,0.98))] shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_30px_80px_rgba(0,0,0,0.45)]"
@@ -35,67 +35,6 @@ export default function LandingPage() {
         <Footer />
       </div>
     </main>
-  );
-}
-
-function LaunchDayBanner() {
-  return (
-    <section
-      aria-label={`${BRAND.name} launch announcement`}
-      className="relative overflow-hidden rounded-[28px] border border-blue-400/30 bg-[linear-gradient(90deg,rgba(30,64,175,0.35),rgba(88,28,135,0.35),rgba(15,23,42,0.8))] px-5 py-5 text-center shadow-[0_0_70px_rgba(59,130,246,0.18)]"
-    >
-      <div className="pointer-events-none absolute inset-0 opacity-40">
-        <div className="absolute left-6 top-4 text-xl">🎉</div>
-        <div className="absolute right-8 top-5 text-xl">🎉</div>
-        <div className="absolute bottom-4 left-10 text-sm text-red-300">✦</div>
-        <div className="absolute bottom-5 right-14 text-sm text-blue-300">
-          ✦
-        </div>
-      </div>
-
-      <div className="relative">
-        <p className="text-xs font-bold uppercase tracking-[0.28em] text-blue-200">
-          Official LVTChat Launch
-        </p>
-
-        <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-white sm:text-4xl">
-          🎉 LVTChat is officially live! 🎉
-        </h1>
-
-        <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-zinc-200 sm:text-base">
-          Practical AI built to help individuals and businesses get clear
-          answers, make better decisions, and move forward with confidence.
-        </p>
-      </div>
-    </section>
-  );
-}
-
-function LaunchCelebration() {
-  return (
-    <div
-      className="pointer-events-none absolute inset-0 overflow-hidden"
-      aria-hidden="true"
-    >
-      <div className="absolute left-[4%] top-[9%] text-2xl text-red-400 opacity-70">
-        ✦
-      </div>
-      <div className="absolute left-[12%] top-[34%] text-sm text-blue-300 opacity-70">
-        ◆
-      </div>
-      <div className="absolute right-[8%] top-[18%] text-xl text-white opacity-70">
-        ✦
-      </div>
-      <div className="absolute right-[14%] top-[48%] text-sm text-red-300 opacity-70">
-        ◆
-      </div>
-      <div className="absolute left-[48%] top-[7%] text-sm text-blue-200 opacity-70">
-        ✦
-      </div>
-      <div className="absolute bottom-[18%] right-[5%] text-2xl text-blue-400 opacity-60">
-        ✦
-      </div>
-    </div>
   );
 }
 

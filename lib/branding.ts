@@ -32,19 +32,37 @@ export const BRAND = {
     "LVTChat helps individuals and businesses solve problems faster, think more clearly, and move forward with confidence.",
   tagline: "Smart AI help for work, research, and everyday tasks",
 
-  // Launch / Promotion Configuration
+  // Launch / Active Promotion Configuration
   launch: {
     isLive: true,
-    name: "LVTChat Launch",
-    date: "May 1, 2026",
-    message: "🎉 LVTChat is officially live — practical AI you can actually use.",
-    highlight: "Clear answers. Better decisions. Less time wasted.",
-    promoCode: "",
-    promoEnds: "",
+    name: "Memorial Day Early Access Special",
+    date: "May 21, 2026",
+    message:
+      "Memorial Day Early Access Special — get LVTChat Pro for $10/month for a limited time.",
+    highlight: "Clear answers. Better decisions. Practical AI for work, research, and everyday tasks.",
+    promoCode: "MEMORIALDAY",
+    promoEnds: "2026-05-25T23:59:59-04:00",
     pricing: {
       original: 15,
-      discounted: 15,
-      discountAmount: 0,
+      discounted: 10,
+      discountAmount: 5,
+    },
+  },
+
+  // Reusable Promotion Metadata
+  promotions: {
+    memorialDay: {
+      enabled: true,
+      name: "Memorial Day Early Access Special",
+      promoCode: "MEMORIALDAY",
+      startsAt: "2026-05-21T00:00:00-04:00",
+      endsAt: "2026-05-25T23:59:59-04:00",
+      originalPrice: 15,
+      discountedPrice: 10,
+      headline: "Memorial Day Early Access Special",
+      subheadline:
+        "Upgrade to LVTChat Pro for $10/month and get practical AI support for work, research, planning, and everyday decisions.",
+      ctaLabel: "Get Pro for $10/month",
     },
   },
 
