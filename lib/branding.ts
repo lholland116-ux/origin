@@ -41,7 +41,7 @@ export const BRAND = {
       "Memorial Day Early Access Special — get LVTChat Pro for $10/month for a limited time.",
     highlight: "Clear answers. Better decisions. Practical AI for work, research, and everyday tasks.",
     promoCode: "MEMORIALDAY",
-    promoEnds: "2026-05-25T23:59:59-04:00",
+    promoEnds: "2026-05-31T23:59:59-04:00",
     pricing: {
       original: 15,
       discounted: 10,
@@ -56,7 +56,7 @@ export const BRAND = {
       name: "Memorial Day Early Access Special",
       promoCode: "MEMORIALDAY",
       startsAt: "2026-05-21T00:00:00-04:00",
-      endsAt: "2026-05-25T23:59:59-04:00",
+      endsAt: "2026-05-31T23:59:59-04:00",
       originalPrice: 15,
       discountedPrice: 10,
       headline: "Memorial Day Early Access Special",
