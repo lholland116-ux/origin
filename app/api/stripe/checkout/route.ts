@@ -6,15 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const STRIPE_API_VERSION = "2026-04-22.dahlia";
-const MEMORIAL_DAY_PROMO_CODE = "MEMORIALDAY";
-
-type CheckoutRequestBody = {
-  promoCode?: string;
-};
-
-type CheckoutDiscount = {
-  promotion_code: string;
-};
+const EARLY_ADOPTER_PRICE_LABEL = "early-adopter-5.99";
 
 function jsonError(message: string, status: number) {
   return NextResponse.json(
@@ -68,40 +60,6 @@ function getProPriceId() {
   return priceId;
 }
 
-function getMemorialDayPromotionCodeId() {
-  const promotionCodeId =
-    process.env.STRIPE_MEMORIALDAY_PROMOTION_CODE_ID?.trim();
-
-  if (!promotionCodeId) {
-    throw new Error("Missing STRIPE_MEMORIALDAY_PROMOTION_CODE_ID.");
-  }
-
-  if (!promotionCodeId.startsWith("promo_")) {
-    throw new Error(
-      "STRIPE_MEMORIALDAY_PROMOTION_CODE_ID must start with promo_."
-    );
-  }
-
-  return promotionCodeId;
-}
-
-function normalizePromoCode(promoCode: unknown) {
-  if (typeof promoCode !== "string") {
-    return "";
-  }
-
-  return promoCode.trim().toUpperCase();
-}
-
-async function parseCheckoutBody(req: Request): Promise<CheckoutRequestBody> {
-  try {
-    const body = (await req.json()) as CheckoutRequestBody;
-    return body ?? {};
-  } catch {
-    return {};
-  }
-}
-
 function getStripeErrorMessage(error: unknown): string {
   if (error instanceof Stripe.errors.StripeError) {
     return error.message || "Stripe checkout failed.";
@@ -114,11 +72,8 @@ function getStripeErrorMessage(error: unknown): string {
   return "Unable to start checkout.";
 }
 
-export async function POST(req: Request) {
+export async function POST() {
   try {
-    const body = await parseCheckoutBody(req);
-    const requestedPromoCode = normalizePromoCode(body.promoCode);
-
     const supabase = await createServerSupabaseClient();
 
     const {
@@ -134,16 +89,6 @@ export async function POST(req: Request) {
     const appUrl = getAppUrl();
     const priceId = getProPriceId();
 
-    const discounts: CheckoutDiscount[] = [];
-
-    if (requestedPromoCode === MEMORIAL_DAY_PROMO_CODE) {
-      discounts.push({
-        promotion_code: getMemorialDayPromotionCodeId(),
-      });
-    } else if (requestedPromoCode) {
-      return jsonError("This promo code is not currently available.", 400);
-    }
-
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
@@ -154,17 +99,16 @@ export async function POST(req: Request) {
           quantity: 1,
         },
       ],
-      discounts: discounts.length > 0 ? discounts : undefined,
       success_url: `${appUrl}/account?success=true`,
       cancel_url: `${appUrl}/pricing?canceled=true`,
       metadata: {
         userId: user.id,
-        promoCode: requestedPromoCode || "NONE",
+        pricing: EARLY_ADOPTER_PRICE_LABEL,
       },
       subscription_data: {
         metadata: {
           userId: user.id,
-          promoCode: requestedPromoCode || "NONE",
+          pricing: EARLY_ADOPTER_PRICE_LABEL,
         },
       },
     });

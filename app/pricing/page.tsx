@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
@@ -27,18 +27,6 @@ type CheckoutResponse = {
   error?: string;
 };
 
-function isPromoActive(startsAt: string, endsAt: string) {
-  const now = Date.now();
-  const start = new Date(startsAt).getTime();
-  const end = new Date(endsAt).getTime();
-
-  if (Number.isNaN(start) || Number.isNaN(end)) {
-    return false;
-  }
-
-  return now >= start && now <= end;
-}
-
 async function readCheckoutResponse(res: Response): Promise<CheckoutResponse> {
   try {
     return (await res.json()) as CheckoutResponse;
@@ -47,7 +35,11 @@ async function readCheckoutResponse(res: Response): Promise<CheckoutResponse> {
   }
 }
 
-function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
+function formatPrice(price: number) {
+  return Number.isInteger(price) ? price.toString() : price.toFixed(2);
+}
+
+function ProCheckoutButton() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,9 +54,6 @@ function ProCheckoutButton({ promoCode }: { promoCode?: string }) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          promoCode: promoCode || undefined,
-        }),
       });
 
       const data = await readCheckoutResponse(res);
@@ -144,16 +133,9 @@ function FeatureItem({ feature }: { feature: string }) {
 }
 
 export default function PricingPage() {
-  const promo = BRAND.promotions.memorialDay;
-
-  const promoActive = useMemo(
-    () => promo.enabled && isPromoActive(promo.startsAt, promo.endsAt),
-    [promo.enabled, promo.startsAt, promo.endsAt]
-  );
-
-  const proPrice = promoActive
-    ? promo.discountedPrice
-    : BRAND.pricing.proMonthlyPrice;
+  const earlyAdopter = BRAND.promotions.earlyAdopter;
+  const proPrice = BRAND.pricing.proMonthlyPrice;
+  const standardPrice = BRAND.pricing.standardProMonthlyPrice;
 
   return (
     <main className="min-h-screen bg-[#020817] text-white">
@@ -202,10 +184,10 @@ export default function PricingPage() {
         <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.22),transparent_35%),radial-gradient(circle_at_center,rgba(16,185,129,0.08),transparent_35%)]" />
 
         <div className="mx-auto max-w-5xl text-center">
-          {promoActive && (
-            <div className="mx-auto mb-6 inline-flex rounded-full border border-sky-400/40 bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-200">
-              Memorial Day Special: Pro for ${promo.discountedPrice}/month with
-              code {promo.promoCode}
+          {earlyAdopter.enabled && (
+            <div className="mx-auto mb-6 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">
+              Early Adopter Pricing: Lock in Pro for $
+              {formatPrice(proPrice)}/month
             </div>
           )}
 
@@ -248,7 +230,7 @@ export default function PricingPage() {
 
           <div className="relative rounded-3xl border border-blue-500/70 bg-blue-950/20 p-7 shadow-[0_0_60px_rgba(59,130,246,0.22)]">
             <div className="absolute right-6 top-6 rounded-full border border-blue-400/50 bg-blue-500/15 px-3 py-1 text-xs text-blue-200">
-              Most Popular
+              Early Adopter
             </div>
 
             <h2 className="text-2xl font-bold">{BRAND.pricing.proPlanName}</h2>
@@ -259,30 +241,27 @@ export default function PricingPage() {
             </p>
 
             <div className="mt-8 flex items-end gap-2">
-              {promoActive && (
-                <span className="pb-1 text-xl font-semibold text-zinc-500 line-through">
-                  {BRAND.pricing.currencySymbol}
-                  {BRAND.pricing.proMonthlyPrice}
-                </span>
-              )}
+              <span className="pb-1 text-xl font-semibold text-zinc-500 line-through">
+                {BRAND.pricing.currencySymbol}
+                {formatPrice(standardPrice)}
+              </span>
 
               <span className="text-4xl font-bold">
                 {BRAND.pricing.currencySymbol}
-                {proPrice}
+                {formatPrice(proPrice)}
               </span>
 
               <span className="pb-1 text-zinc-400">/ month</span>
             </div>
 
-            {promoActive && (
-              <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-                Memorial Day Special applied with code{" "}
-                <span className="font-bold">{promo.promoCode}</span>.
-              </div>
-            )}
+            <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+              Early Adopter Pricing — lock in ${formatPrice(proPrice)}/month
+              before future price increases.
+            </div>
 
             <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-300">
-              Less than $0.50/day for faster answers and better decisions.
+              Future subscribers will pay higher rates as new features are
+              released. Early adopters keep their discounted rate.
             </div>
 
             <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3">
@@ -301,9 +280,7 @@ export default function PricingPage() {
               ))}
             </ul>
 
-            <ProCheckoutButton
-              promoCode={promoActive ? promo.promoCode : undefined}
-            />
+            <ProCheckoutButton />
           </div>
         </div>
 

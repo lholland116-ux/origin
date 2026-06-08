@@ -1,4 +1,3 @@
-import MemorialDayBanner from "@/components/MemorialDayBanner";
 import CTASection from "@/components/landing/CTASection";
 import FeatureGrid from "@/components/landing/FeatureGrid";
 import Footer from "@/components/landing/Footer";
@@ -18,8 +17,6 @@ export default function LandingPage() {
       <BackgroundGlow />
 
       <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-5 sm:px-6 lg:px-8">
-        <MemorialDayBanner />
-
         <section
           className="overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(4,10,25,0.98),rgba(3,8,20,0.98))] shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_30px_80px_rgba(0,0,0,0.45)]"
           aria-label={`${BRAND.name} hero section`}

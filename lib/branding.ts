@@ -32,27 +32,38 @@ export const BRAND = {
     "LVTChat helps individuals and businesses solve problems faster, think more clearly, and move forward with confidence.",
   tagline: "Smart AI help for work, research, and everyday tasks",
 
-  // Launch / Active Promotion Configuration
+  // Launch Configuration
   launch: {
     isLive: true,
-    name: "Memorial Day Early Access Special",
-    date: "May 21, 2026",
-    message:
-      "Memorial Day Early Access Special — get LVTChat Pro for $10/month for a limited time.",
-    highlight: "Clear answers. Better decisions. Practical AI for work, research, and everyday tasks.",
-    promoCode: "MEMORIALDAY",
-    promoEnds: "2026-05-31T23:59:59-04:00",
+    name: "LVTChat Launch",
+    date: "May 1, 2026",
+    message: "🎉 LVTChat is officially live — practical AI you can actually use.",
+    highlight: "Clear answers. Better decisions. Less time wasted.",
+    promoCode: "",
+    promoEnds: "",
     pricing: {
       original: 15,
-      discounted: 10,
-      discountAmount: 5,
+      discounted: 5.99,
+      discountAmount: 9.01,
     },
   },
 
   // Reusable Promotion Metadata
   promotions: {
-    memorialDay: {
+    earlyAdopter: {
       enabled: true,
+      name: "Early Adopter Pricing",
+      price: 5.99,
+      standardPrice: 15,
+      headline: "Early Adopter Pricing",
+      subheadline:
+        "Lock in LVTChat Pro for $5.99/month before future price increases.",
+      ctaLabel: "Get Pro for $5.99/month",
+      note: "Future subscribers will pay higher rates as new features are released. Early adopters keep their discounted rate.",
+    },
+
+    memorialDay: {
+      enabled: false,
       name: "Memorial Day Early Access Special",
       promoCode: "MEMORIALDAY",
       startsAt: "2026-05-21T00:00:00-04:00",
@@ -95,8 +106,9 @@ export const BRAND = {
   pricing: {
     currencySymbol: "$",
     freePlanName: "Free",
-    proPlanName: "Pro",
-    proMonthlyPrice: 15,
+    proPlanName: "Pro Early Adopter",
+    proMonthlyPrice: 5.99,
+    standardProMonthlyPrice: 15,
     freeDailyMessageLimit: 20,
     proDailyMessageLimit: 300,
   },
