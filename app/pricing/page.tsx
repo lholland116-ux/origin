@@ -186,8 +186,7 @@ export default function PricingPage() {
         <div className="mx-auto max-w-5xl text-center">
           {earlyAdopter.enabled && (
             <div className="mx-auto mb-6 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">
-              Early Adopter Pricing: Lock in Pro for $
-              {formatPrice(proPrice)}/month
+              🔥 Early Adopter Pricing — ${formatPrice(proPrice)}/month
             </div>
           )}
 
@@ -254,14 +253,18 @@ export default function PricingPage() {
               <span className="pb-1 text-zinc-400">/ month</span>
             </div>
 
+            <p className="mt-2 text-sm text-zinc-400">
+              Less than $0.20/day for practical AI support.
+            </p>
+
             <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
               Early Adopter Pricing — lock in ${formatPrice(proPrice)}/month
               before future price increases.
             </div>
 
             <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-300">
-              Future subscribers will pay higher rates as new features are
-              released. Early adopters keep their discounted rate.
+              Lock in ${formatPrice(proPrice)}/month today. Your rate stays the
+              same even when future pricing increases.
             </div>
 
             <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3">
