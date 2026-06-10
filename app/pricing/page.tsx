@@ -5,6 +5,7 @@ import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 const LOGIN_REDIRECT = "/login?redirect=/pricing";
+const MOBILE_APPS_FEATURE = BRAND.mobile.message;
 
 const featuresFree = [
   "20 messages per day",
@@ -19,6 +20,7 @@ const featuresPro = [
   "File uploads for PDF, DOCX, and XLSX",
   "Priority performance",
   "Custom AI Agents",
+  MOBILE_APPS_FEATURE,
   "Built for serious work",
 ];
 
@@ -115,16 +117,22 @@ function ProCheckoutButton() {
 }
 
 function FeatureItem({ feature }: { feature: string }) {
-  const isComingSoon = feature === "Custom AI Agents";
+  const isCustomAgents = feature === "Custom AI Agents";
+  const isMobileApps = feature === MOBILE_APPS_FEATURE;
 
   return (
     <li className="flex gap-3">
       <span className="mt-0.5 text-emerald-400">✓</span>
       <span>
         {feature}
-        {isComingSoon && (
+        {isCustomAgents && (
           <span className="ml-2 rounded-full border border-blue-400/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-200">
             Pro — Coming Soon
+          </span>
+        )}
+        {isMobileApps && (
+          <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
+            Included with Pro
           </span>
         )}
       </span>
@@ -269,11 +277,10 @@ export default function PricingPage() {
 
             <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3">
               <p className="text-sm font-semibold text-blue-100">
-                Custom AI Agents are coming soon.
+                Custom AI Agents and mobile apps are coming soon.
               </p>
               <p className="mt-1 text-xs leading-5 text-zinc-300">
-                Create specialized AI assistants for work, research, planning,
-                productivity, and real-world workflows.
+                {BRAND.mobile.proMessage}
               </p>
             </div>
 

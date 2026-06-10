@@ -20,7 +20,12 @@ const PREVIEW_STEPS = [
   },
 ] as const;
 
+function formatPrice(price: number) {
+  return Number.isInteger(price) ? price.toString() : price.toFixed(2);
+}
+
 export default function Hero() {
+  const earlyAdopter = BRAND.promotions.earlyAdopter;
   const credibilityLine = `Built by ${BRAND.creator}, a ${
     BRAND.creatorSecondaryTitle?.toLowerCase() || "scientist"
   } with ${BRAND.creatorExperience}.`;
@@ -44,10 +49,19 @@ export default function Hero() {
           {BRAND.subheadline}
         </p>
 
-        <p className="mt-3 max-w-xl rounded-2xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm font-medium leading-6 text-blue-200">
-          🎉 Now live — practical AI for work, research, planning, and everyday
-          decisions.
-        </p>
+        <div className="mt-3 grid max-w-xl gap-3">
+          <p className="rounded-2xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm font-medium leading-6 text-blue-200">
+            🎉 Now live — practical AI for work, research, planning, and
+            everyday decisions.
+          </p>
+
+          {earlyAdopter.enabled && (
+            <p className="rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 text-sm font-semibold leading-6 text-emerald-200">
+              🔥 Early Adopter Pricing Available — Pro starts at just $
+              {formatPrice(BRAND.pricing.proMonthlyPrice)}/month.
+            </p>
+          )}
+        </div>
 
         <p className="mt-6 max-w-xl text-sm leading-6 text-white/60">
           {credibilityLine}
@@ -61,12 +75,12 @@ export default function Hero() {
             {BRAND.ctaPrimary}
           </Link>
 
-          <a
-            href="#features"
-            className="rounded-2xl border border-white/15 bg-white/5 px-6 py-3 text-sm font-semibold text-white/90 backdrop-blur transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+          <Link
+            href={BRAND.routes.pricing}
+            className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-6 py-3 text-sm font-semibold text-emerald-100 backdrop-blur transition hover:bg-emerald-500/15 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
-            {BRAND.ctaSecondary}
-          </a>
+            View Early Adopter Pricing
+          </Link>
         </div>
       </div>
 

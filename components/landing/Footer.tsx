@@ -37,6 +37,12 @@ export default function Footer() {
             {BRAND.tagline}
           </p>
 
+          {(BRAND.mobile.androidComingSoon || BRAND.mobile.iosComingSoon) && (
+            <p className="mt-4 max-w-xs rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium leading-6 text-emerald-200">
+              📱 {BRAND.mobile.message}
+            </p>
+          )}
+
           <div
             className="mt-5 flex items-center gap-4 text-white/65"
             aria-label="Social links"

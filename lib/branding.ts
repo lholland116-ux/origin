@@ -77,6 +77,15 @@ export const BRAND = {
     },
   },
 
+  // Mobile App Messaging
+  mobile: {
+    androidComingSoon: true,
+    iosComingSoon: true,
+    message: "Android & iPhone apps coming soon.",
+    proMessage:
+      "Pro users will get access to upcoming Android and iPhone app experiences as they roll out.",
+  },
+
   // Founder / Authority
   creator: "Levi Holland",
   creatorTitle: "AI Engineer",
