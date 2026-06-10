@@ -81,9 +81,12 @@ export const BRAND = {
   mobile: {
     androidComingSoon: true,
     iosComingSoon: true,
-    message: "Android & iPhone apps coming soon.",
+    message:
+      "Android & iPhone apps coming soon. Available for Free and Pro users.",
+    pricingFeature: "Android & iPhone apps coming soon",
+    availabilityLabel: "Available for Free and Pro",
     proMessage:
-      "Pro users will get access to upcoming Android and iPhone app experiences as they roll out.",
+      "Mobile apps will be available for both Free and Pro users as they roll out.",
   },
 
   // Founder / Authority

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 const LOGIN_REDIRECT = "/login?redirect=/pricing";
-const MOBILE_APPS_FEATURE = BRAND.mobile.message;
+const MOBILE_APPS_FEATURE = BRAND.mobile.pricingFeature;
 
 const featuresFree = [
   "20 messages per day",
@@ -132,7 +132,7 @@ function FeatureItem({ feature }: { feature: string }) {
         )}
         {isMobileApps && (
           <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
-            Included with Pro
+            {BRAND.mobile.availabilityLabel}
           </span>
         )}
       </span>
