@@ -83,6 +83,11 @@ declare global {
   interface Window {
     SpeechRecognition?: AppSpeechRecognitionConstructor;
     webkitSpeechRecognition?: AppSpeechRecognitionConstructor;
+    gtag?: (
+      command: string,
+      eventName: string,
+      params?: Record<string, unknown>
+    ) => void;
   }
 }
 
@@ -224,6 +229,14 @@ function debugLog(...args: unknown[]): void {
   if (ENABLE_UPLOAD_DEBUG) {
     console.log(...args);
   }
+}
+
+function trackGaEvent(eventName: string, params?: Record<string, unknown>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.gtag?.("event", eventName, params);
 }
 
 function extractErrorMessage(data: unknown): string | null {
@@ -1884,6 +1897,13 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       await refreshConversations(conversationId);
       await fetchUsage();
+
+      trackGaEvent("chat_message_sent", {
+        plan,
+        mode: useWebSearch ? "web_search" : "standard",
+        has_image: hasImage,
+        has_documents: hasReadyDocuments,
+      });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         updateAssistantMessage(assistantId, (msg) => ({

@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const STRIPE_API_VERSION = "2026-04-22.dahlia";
+const PRO_UPGRADE_VALUE = 5.99;
 
 type SubscriptionWithPeriod = Stripe.Subscription & {
   current_period_end?: number | null;
@@ -75,6 +76,52 @@ function isActiveProStatus(status: SubscriptionStatus) {
   return status === "active" || status === "trialing";
 }
 
+async function trackProUpgrade(params: {
+  userId: string;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+}) {
+  const measurementId =
+    process.env.GA_MEASUREMENT_ID?.trim() ||
+    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID?.trim();
+
+  const apiSecret = process.env.GA_API_SECRET?.trim();
+
+  if (!measurementId || !apiSecret) {
+    return;
+  }
+
+  try {
+    await fetch(
+      `https://www.google-analytics.com/mp/collect?measurement_id=${measurementId}&api_secret=${apiSecret}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: params.userId,
+          user_id: params.userId,
+          events: [
+            {
+              name: "pro_upgrade",
+              params: {
+                value: PRO_UPGRADE_VALUE,
+                currency: "USD",
+                stripe_customer_id: params.stripeCustomerId ?? "unknown",
+                stripe_subscription_id:
+                  params.stripeSubscriptionId ?? "unknown",
+              },
+            },
+          ],
+        }),
+      }
+    );
+  } catch (error) {
+    console.warn("GA4 pro_upgrade tracking failed:", error);
+  }
+}
+
 async function updateUserSubscription(params: {
   userId?: string | null;
   stripeCustomerId?: string | null;
@@ -95,6 +142,8 @@ async function updateUserSubscription(params: {
 
   const updatePayload = {
     plan,
+    plan_source: plan === "pro" ? "stripe" : "manual",
+    lifetime_pro: false,
     stripe_customer_id: stripeCustomerId ?? null,
     stripe_subscription_id: stripeSubscriptionId ?? null,
     subscription_status: subscriptionStatus ?? null,
@@ -206,6 +255,14 @@ export async function POST(req: Request) {
           subscriptionStatus: subscription.status,
           currentPeriodEnd: getCurrentPeriodEnd(subscription),
         });
+
+        if (isActiveProStatus(subscription.status)) {
+          await trackProUpgrade({
+            userId,
+            stripeCustomerId,
+            stripeSubscriptionId,
+          });
+        }
 
         break;
       }

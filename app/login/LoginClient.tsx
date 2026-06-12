@@ -7,6 +7,16 @@ import { Eye, EyeOff } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BRAND } from "@/lib/branding";
 
+declare global {
+  interface Window {
+    gtag?: (
+      command: string,
+      eventName: string,
+      params?: Record<string, unknown>
+    ) => void;
+  }
+}
+
 const MIN_PASSWORD_LENGTH = 8;
 
 type AuthMode = "signin" | "signup";
@@ -26,6 +36,14 @@ const SECONDARY_BUTTON_CLASS =
 
 const TEXT_BUTTON_CLASS =
   "text-sm text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200 disabled:opacity-50";
+
+function trackGaEvent(eventName: string, params?: Record<string, unknown>) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.gtag?.("event", eventName, params);
+}
 
 function getFeedbackClassName(messageType: FeedbackType): string {
   if (messageType === "success") {
@@ -59,7 +77,6 @@ export default function LoginClient() {
   const [messageType, setMessageType] = useState<FeedbackType>(null);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
-
   const redirectTo = searchParams.get("redirectTo") || BRAND.routes.app;
 
   const isBusy = loading || googleLoading || resetLoading;
@@ -91,6 +108,11 @@ export default function LoginClient() {
     clearFeedback();
 
     try {
+      trackGaEvent("login", {
+        method: "google",
+        auth_action: "oauth_started",
+      });
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
@@ -140,6 +162,10 @@ export default function LoginClient() {
 
         if (error) throw error;
 
+        trackGaEvent("sign_up", {
+          method: "email",
+        });
+
         setFeedback(
           "Account created. Please check your email to confirm your account.",
           "success"
@@ -154,6 +180,10 @@ export default function LoginClient() {
       });
 
       if (error) throw error;
+
+      trackGaEvent("login", {
+        method: "email",
+      });
 
       router.replace(redirectTo);
       router.refresh();
