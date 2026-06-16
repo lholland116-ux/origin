@@ -2188,7 +2188,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
           <section className="flex h-full flex-1 flex-col bg-transparent">
             <div className={cx("sticky top-0 z-20 border-b backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
-              <div className={`${CONTENT_RAIL_CLASS} py-3`}>
+              <div className={`${CONTENT_RAIL_CLASS} py-2`}>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex min-w-0 items-start gap-3">
                     <button
@@ -2587,9 +2587,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 activeTheme.panelBorder
               )}
             >
-              <div className={`${CONTENT_RAIL_CLASS} py-3`}>
+              <div className={`${CONTENT_RAIL_CLASS} py-2`}>
 
-                <form onSubmit={handleSubmit} className="space-y-3">
+                <form onSubmit={handleSubmit} className="space-y-2">
                   <div
                     className={cx(
                       "relative w-full rounded-2xl border shadow-[0_10px_30px_rgba(0,0,0,0.25)] focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]",
@@ -2628,11 +2628,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       disabled={composerDisabled}
                       className={cx(
                         "w-full resize-none rounded-2xl border bg-transparent px-4 py-3.5 outline-none transition-all duration-200",
-                        "min-h-[96px] sm:min-h-[52px]",
+                        "min-h-[76px] sm:min-h-[52px]",
                         "max-h-[220px]",
                         "overflow-y-auto",
                         "leading-6",
-                        "focus:min-h-[120px]",
+                        "focus:min-h-[104px]",
                         "sm:focus:min-h-[52px]",
                         activeTheme.panelBorder,
                         activeTheme.inputText,
