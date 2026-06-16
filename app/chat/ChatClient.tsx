@@ -2589,54 +2589,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             >
               <div className={`${CONTENT_RAIL_CLASS} py-3`}>
 
-                <form onSubmit={handleSubmit} className="grid gap-3 sm:flex sm:items-end sm:gap-2">
-                  {!useWebSearch && (
-                    <div className="flex gap-2 sm:order-none order-2">
-                      {plan === "pro" ? (
-                      <DocumentUploadButton
-                       disabled={composerDisabled}
-                        onFilesSelected={handleFilesSelected}
-                      />
-                    ) : (
-                      <Tooltip content="File uploads are a Pro feature">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openUpgradeModal(
-                              "File uploads are a Pro feature",
-                              "Upgrade to Pro to upload and analyze PDF, DOCX, XLSX, CSV, and text files."
-                            )
-                          }
-                          disabled={loading}
-                          className={cx(
-                            "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
-                            getSecondaryButtonClass(activeTheme)
-                          )}
-                          aria-label="Upgrade to upload files"
-                        >
-                          +
-                        </button>
-                      </Tooltip>
+                <form onSubmit={handleSubmit} className="space-y-3">
+                  <div
+                    className={cx(
+                      "relative w-full rounded-2xl border shadow-[0_10px_30px_rgba(0,0,0,0.25)] focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]",
+                      activeTheme.inputBg,
+                      activeTheme.inputBorder
                     )}
-
-                      <Tooltip content={TOOLTIP_TEXT.image}>
-                        <button
-                          type="button"
-                          onClick={handleOpenImagePicker}
-                          disabled={composerDisabled}
-                          className={cx(
-                            "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
-                            getSecondaryButtonClass(activeTheme)
-                          )}
-                          aria-label="Attach image"
-                        >
-                          🖼️
-                        </button>
-                      </Tooltip>
-                    </div>
-                  )}
-
-                  <div className={cx("relative order-1 w-full rounded-2xl border shadow-[0_10px_30px_rgba(0,0,0,0.25)] focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)] sm:order-none sm:flex-1", activeTheme.inputBg, activeTheme.inputBorder)}>
+                  >
                     <textarea
                       value={input}
                       onChange={(event) => {
@@ -2663,22 +2623,70 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 ? "Listening… tap mic to stop."
                                 : "Ask something..."
                       }
-                      rows={isTypingFocused ? 4 : 1}
+                      rows={isTypingFocused ? 4 : 2}
                       maxLength={MAX_INPUT_LENGTH}
                       disabled={composerDisabled}
                       className={cx(
-                        "w-full resize-none rounded-2xl border bg-transparent px-4 py-3.5 pr-4 outline-none transition-all duration-200 sm:pr-14",
-                         "min-h-[96px] sm:min-h-[52px]",
-                         "max-h-[220px]",
-                         "overflow-y-auto",
-                         "leading-6",
-                         "focus:min-h-[120px]",
-                         "sm:focus:min-h-[52px]",
+                        "w-full resize-none rounded-2xl border bg-transparent px-4 py-3.5 outline-none transition-all duration-200",
+                        "min-h-[96px] sm:min-h-[52px]",
+                        "max-h-[220px]",
+                        "overflow-y-auto",
+                        "leading-6",
+                        "focus:min-h-[120px]",
+                        "sm:focus:min-h-[52px]",
                         activeTheme.panelBorder,
                         activeTheme.inputText,
                         "placeholder:text-white/40"
                       )}
                     />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {!useWebSearch && (
+                      <>
+                        {plan === "pro" ? (
+                          <DocumentUploadButton
+                            disabled={composerDisabled}
+                            onFilesSelected={handleFilesSelected}
+                          />
+                        ) : (
+                          <Tooltip content="File uploads are a Pro feature">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openUpgradeModal(
+                                  "File uploads are a Pro feature",
+                                  "Upgrade to Pro to upload and analyze PDF, DOCX, XLSX, CSV, and text files."
+                                )
+                              }
+                              disabled={loading}
+                              className={cx(
+                                "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
+                                getSecondaryButtonClass(activeTheme)
+                              )}
+                              aria-label="Upgrade to upload files"
+                            >
+                              +
+                            </button>
+                          </Tooltip>
+                        )}
+
+                        <Tooltip content={TOOLTIP_TEXT.image}>
+                          <button
+                            type="button"
+                            onClick={handleOpenImagePicker}
+                            disabled={composerDisabled}
+                            className={cx(
+                              "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
+                              getSecondaryButtonClass(activeTheme)
+                            )}
+                            aria-label="Attach image"
+                          >
+                            🖼️
+                          </button>
+                        </Tooltip>
+                      </>
+                    )}
 
                     <Tooltip content={TOOLTIP_TEXT.mic}>
                       <button
@@ -2687,7 +2695,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         disabled={micDisabled}
                         aria-label={isListening ? "Stop voice input" : "Start voice input"}
                         className={cx(
-                          "absolute right-2 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-50 sm:inline-flex",
+                          "flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border transition disabled:cursor-not-allowed disabled:opacity-50",
                           isListening
                             ? "border-red-500 bg-red-500/15 text-red-400 shadow-[0_0_0_6px_rgba(239,68,68,0.12)] animate-pulse"
                             : "border-white/10 bg-white/5 text-white hover:bg-white/10"
@@ -2696,25 +2704,37 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                       </button>
                     </Tooltip>
-                  </div>
 
-                  {loading ? (
-                    <Tooltip content={TOOLTIP_TEXT.stop}>
-                      <button type="button" onClick={handleStop} className="order-3 h-[52px] rounded-2xl border border-red-700 px-5 py-3.5 text-white transition hover:bg-red-900/30 sm:order-none">
-                        Stop
-                      </button>
-                    </Tooltip>
-                  ) : (
-                    <Tooltip content={TOOLTIP_TEXT.send}>
-                      <button
-                        type="submit"
-                        disabled={composerDisabled || (!input.trim() && !imageBase64 && readyDocumentIds.length === 0)}
-                        className={cx("order-3 h-[52px] rounded-2xl px-5 py-3.5 text-white transition disabled:cursor-not-allowed disabled:opacity-50 sm:order-none", activeTheme.buttonPrimary)}
-                      >
-                        Send
-                      </button>
-                    </Tooltip>
-                  )}
+                    <div className="ml-auto">
+                      {loading ? (
+                        <Tooltip content={TOOLTIP_TEXT.stop}>
+                          <button
+                            type="button"
+                            onClick={handleStop}
+                            className="h-[52px] rounded-2xl border border-red-700 px-5 py-3.5 text-white transition hover:bg-red-900/30"
+                          >
+                            Stop
+                          </button>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip content={TOOLTIP_TEXT.send}>
+                          <button
+                            type="submit"
+                            disabled={
+                              composerDisabled ||
+                              (!input.trim() && !imageBase64 && readyDocumentIds.length === 0)
+                            }
+                            className={cx(
+                              "h-[52px] rounded-2xl px-5 py-3.5 text-white transition disabled:cursor-not-allowed disabled:opacity-50",
+                              activeTheme.buttonPrimary
+                            )}
+                          >
+                            Send
+                          </button>
+                        </Tooltip>
+                      )}
+                    </div>
+                  </div>
                 </form>
               </div>
             </div>
