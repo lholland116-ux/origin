@@ -182,13 +182,8 @@ const ALLOWED_DOCUMENT_MIME_TYPES = [
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ] as const;
 
-const PRODUCT_DESCRIPTION =
-  "A multimodal AI workspace for chat, image understanding, document analysis, and web-assisted answers with saved conversation history.";
-
 const CONVERSATION_STARTERS = [
-  "Summarize this image for me",
-  "Summarize this document for me",
-  "Help me brainstorm a SaaS feature",
+  "Summarize this image or document for me",
   "Explain something step by step",
 ] as const;
 
@@ -2203,9 +2198,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <div className="min-w-0">
                       <p className={cx("text-[11px]", activeTheme.mutedText)}>{BRAND.name}</p>
                       <h1 className={cx("text-lg font-semibold", activeTheme.titleText)}>AI Assistant</h1>
-                      <p className={cx("mt-1 line-clamp-2 max-w-2xl text-sm", activeTheme.mutedText)}>
-                        {PRODUCT_DESCRIPTION}
-                      </p>
                     </div>
                   </div>
 
