@@ -266,8 +266,8 @@ export default function LoginClient() {
           </h1>
 
           <p className="mt-3 text-sm leading-6 text-zinc-400">
-            Access your AI workspace with chat history, image analysis, file
-            uploads, and web search.
+            Practical AI for chat, web search,
+            documents, images, and everyday problem solving.
           </p>
         </div>
 
