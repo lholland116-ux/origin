@@ -2308,29 +2308,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <div className={cx("mt-4 rounded-2xl border p-4", activeTheme.panelBg, activeTheme.panelBorder)}>
                       <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
                         <p className="text-xs uppercase tracking-wide text-white/40">
-                          Privacy & Safety
-                        </p>
-
-                        <p className="mt-3 text-sm leading-6 text-white/80">
-                          By using LVTChat, you agree to the{" "}
-                          <a
-                            href="/privacy"
-                            className="text-blue-300 hover:text-blue-200 transition"
-                          >
-                            Privacy Policy
-                          </a>{" "}
-                          and{" "}
-                          <a
-                            href="/terms"
-                            className="text-blue-300 hover:text-blue-200 transition"
-                          >
-                            Terms of Service
-                          </a>
-                          .
+                          Safety
                         </p>
 
                         <p className="mt-3 text-sm leading-6 text-white/60">
-                          Please do not share sensitive personal, financial, medical, or confidential
+                          Do not share sensitive personal, financial, medical, or confidential
                           information.
                         </p>
                       </div>
