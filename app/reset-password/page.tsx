@@ -40,12 +40,11 @@ export default function ResetPasswordPage() {
           if (!mounted) return;
 
           if (exchangeError) {
-            setError(
-              "This reset link may be invalid or expired. Please request a new one."
-            );
-            setIsReady(false);
-            return;
-          }
+          console.error("Password reset exchange error:", exchangeError);
+          setError(`Reset error: ${exchangeError.message}`);
+          setIsReady(false);
+          return;
+        }
 
           hasHandledRecoveryRef.current = true;
           setIsReady(true);
