@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 const MIN_PASSWORD_LENGTH = 8;
-const INVALID_LINK_TIMEOUT_MS = 12000; // ⬅️ increased for reliability
 const SUCCESS_REDIRECT_DELAY_MS = 1500;
 
 export default function ResetPasswordPage() {
@@ -17,6 +16,7 @@ export default function ResetPasswordPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
+  const [isValidating, setIsValidating] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const hasHandledRecoveryRef = useRef(false);
@@ -25,35 +25,59 @@ export default function ResetPasswordPage() {
     let mounted = true;
 
     async function initializeRecovery() {
+      setIsValidating(true);
+      setError(null);
+
       try {
         const url = new URL(window.location.href);
-
-        const hasCode = url.searchParams.has("code");
+        const code = url.searchParams.get("code");
         const hasAccessToken = url.hash.includes("access_token");
 
-        // 🔍 Check session
+        if (code) {
+          const { error: exchangeError } =
+            await supabase.auth.exchangeCodeForSession(code);
+
+          if (!mounted) return;
+
+          if (exchangeError) {
+            setError(
+              "This reset link may be invalid or expired. Please request a new one."
+            );
+            setIsReady(false);
+            return;
+          }
+
+          hasHandledRecoveryRef.current = true;
+          setIsReady(true);
+          setError(null);
+
+          window.history.replaceState({}, document.title, "/reset-password");
+          return;
+        }
+
         const {
           data: { session },
         } = await supabase.auth.getSession();
 
         if (!mounted) return;
 
-        if (session) {
+        if (session || hasAccessToken) {
           hasHandledRecoveryRef.current = true;
           setIsReady(true);
           setError(null);
           return;
         }
 
-        // ⛔ Only mark invalid if NO recovery indicators at all
-        if (!hasCode && !hasAccessToken) {
-          setError("Invalid reset link.");
-        }
-
-        // Otherwise → wait for Supabase event
+        setIsReady(false);
+        setError("Invalid reset link. Please request a new password reset email.");
       } catch {
         if (!mounted) return;
-        setError("Unable to validate this reset link.");
+        setIsReady(false);
+        setError("Unable to validate this reset link. Please try again.");
+      } finally {
+        if (mounted) {
+          setIsValidating(false);
+        }
       }
     }
 
@@ -66,35 +90,26 @@ export default function ResetPasswordPage() {
         hasHandledRecoveryRef.current = true;
         setIsReady(true);
         setError(null);
+        setIsValidating(false);
       }
     });
 
     void initializeRecovery();
 
-    const timer = window.setTimeout(() => {
-      if (!mounted) return;
-
-      if (!hasHandledRecoveryRef.current) {
-        setError(
-          "This reset link may be invalid or expired. Please request a new one."
-        );
-      }
-    }, INVALID_LINK_TIMEOUT_MS);
-
     return () => {
       mounted = false;
-      window.clearTimeout(timer);
       subscription.unsubscribe();
     };
   }, [supabase]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
     setStatus(null);
     setError(null);
 
-    if (!isReady) {
-      setError("This reset link is still being validated. Please wait.");
+    if (!isReady || !hasHandledRecoveryRef.current) {
+      setError("This reset link is not ready. Please request a new password reset email.");
       return;
     }
 
@@ -120,7 +135,7 @@ export default function ResetPasswordPage() {
         return;
       }
 
-      setStatus("Your password has been updated successfully.");
+      setStatus("Your password has been updated successfully. Redirecting to sign in...");
       setPassword("");
       setConfirmPassword("");
 
@@ -130,67 +145,96 @@ export default function ResetPasswordPage() {
         router.push("/login?reset=success");
       }, SUCCESS_REDIRECT_DELAY_MS);
     } catch {
-      setError("Unable to reset password right now.");
+      setError("Unable to reset password right now. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
   }
 
   return (
-    <main className="mx-auto max-w-md px-6 py-12">
-      <h1 className="text-2xl font-semibold">Reset password</h1>
-
-      {!isReady && !error && (
-        <p className="mt-4 text-sm text-gray-600">
-          Validating reset link... (this can take a few seconds)
+    <main className="min-h-screen bg-slate-950 px-6 py-12 text-white">
+      <section className="mx-auto max-w-md rounded-2xl border border-white/10 bg-white/[0.03] p-6 shadow-2xl">
+        <p className="text-xs uppercase tracking-[0.3em] text-blue-300">
+          LVTChat
         </p>
-      )}
 
-      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+        <h1 className="mt-3 text-2xl font-semibold">Reset password</h1>
 
-      {isReady && (
-        <form onSubmit={onSubmit} className="mt-6 space-y-4">
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium">
-              New password
-            </label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="new-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-md border px-3 py-2"
-            />
+        {isValidating && (
+          <p className="mt-4 text-sm leading-6 text-white/60">
+            Validating your reset link...
+          </p>
+        )}
+
+        {error && (
+          <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm leading-6 text-red-200">
+            {error}
           </div>
+        )}
 
-          <div>
-            <label htmlFor="confirmPassword" className="block text-sm font-medium">
-              Confirm new password
-            </label>
-            <input
-              id="confirmPassword"
-              type="password"
-              autoComplete="new-password"
-              required
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="mt-1 w-full rounded-md border px-3 py-2"
-            />
+        {isReady && (
+          <form onSubmit={onSubmit} className="mt-6 space-y-4">
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-white/80">
+                New password
+              </label>
+              <input
+                id="password"
+                type="password"
+                autoComplete="new-password"
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none transition placeholder:text-white/40 focus:border-blue-400"
+                placeholder="Enter new password"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="confirmPassword"
+                className="block text-sm font-medium text-white/80"
+              >
+                Confirm new password
+              </label>
+              <input
+                id="confirmPassword"
+                type="password"
+                autoComplete="new-password"
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none transition placeholder:text-white/40 focus:border-blue-400"
+                placeholder="Confirm new password"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSubmitting ? "Updating..." : "Update password"}
+            </button>
+          </form>
+        )}
+
+        {status && (
+          <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm leading-6 text-emerald-200">
+            {status}
           </div>
+        )}
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="rounded-md border px-4 py-2 disabled:opacity-50"
-          >
-            {isSubmitting ? "Updating..." : "Update password"}
-          </button>
-        </form>
-      )}
-
-      {status && <p className="mt-4 text-sm text-green-700">{status}</p>}
+        <button
+          type="button"
+          onClick={() => router.push("/login")}
+          className="mt-5 text-sm text-blue-300 underline-offset-4 hover:underline"
+        >
+          Back to sign in
+        </button>
+      </section>
     </main>
   );
 }
