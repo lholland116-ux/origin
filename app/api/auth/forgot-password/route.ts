@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       return successResponse();
     }
 
-    const redirectTo = `${appUrl}/reset-password`;
+    const redirectTo = `${appUrl}/auth/callback?next=/reset-password`;
 
     console.log("Forgot password redirectTo:", redirectTo);
 
