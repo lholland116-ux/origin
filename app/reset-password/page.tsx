@@ -19,7 +19,7 @@ export default function ResetPasswordPage() {
   const [isValidating, setIsValidating] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const hasHandledRecoveryRef = useRef(false);
+  const hasSessionRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -29,46 +29,28 @@ export default function ResetPasswordPage() {
       setError(null);
 
       try {
-        const url = new URL(window.location.href);
-        const code = url.searchParams.get("code");
-        const hasAccessToken = url.hash.includes("access_token");
-
-        if (code) {
-          const { error: exchangeError } =
-            await supabase.auth.exchangeCodeForSession(code);
-
-          if (!mounted) return;
-
-          if (exchangeError) {
-          console.error("Password reset exchange error:", exchangeError);
-          setError(`Reset error: ${exchangeError.message}`);
-          setIsReady(false);
-          return;
-        }
-
-          hasHandledRecoveryRef.current = true;
-          setIsReady(true);
-          setError(null);
-
-          window.history.replaceState({}, document.title, "/reset-password");
-          return;
-        }
-
         const {
           data: { session },
+          error: sessionError,
         } = await supabase.auth.getSession();
 
         if (!mounted) return;
 
-        if (session || hasAccessToken) {
-          hasHandledRecoveryRef.current = true;
-          setIsReady(true);
-          setError(null);
+        if (sessionError) {
+          setIsReady(false);
+          setError("Unable to validate this reset link. Please request a new one.");
           return;
         }
 
-        setIsReady(false);
-        setError("Invalid reset link. Please request a new password reset email.");
+        if (!session) {
+          setIsReady(false);
+          setError("Invalid or expired reset link. Please request a new password reset email.");
+          return;
+        }
+
+        hasSessionRef.current = true;
+        setIsReady(true);
+        setError(null);
       } catch {
         if (!mounted) return;
         setIsReady(false);
@@ -82,11 +64,11 @@ export default function ResetPasswordPage() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
 
-      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
-        hasHandledRecoveryRef.current = true;
+      if ((event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") && session) {
+        hasSessionRef.current = true;
         setIsReady(true);
         setError(null);
         setIsValidating(false);
@@ -107,7 +89,7 @@ export default function ResetPasswordPage() {
     setStatus(null);
     setError(null);
 
-    if (!isReady || !hasHandledRecoveryRef.current) {
+    if (!isReady || !hasSessionRef.current) {
       setError("This reset link is not ready. Please request a new password reset email.");
       return;
     }
