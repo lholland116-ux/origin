@@ -580,7 +580,7 @@ function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
 
 function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
   return cx(
-    "rounded-2xl border p-4 whitespace-pre-wrap break-words shadow-[0_10px_30px_rgba(0,0,0,0.22)]",
+    "max-w-full overflow-hidden rounded-2xl border p-4 whitespace-pre-wrap break-words [overflow-wrap:anywhere] shadow-[0_10px_30px_rgba(0,0,0,0.22)]",
     role === "user" ? theme.userBubble : theme.assistantBubble,
     role === "user" ? theme.userText : theme.assistantText,
     theme.panelBorder
