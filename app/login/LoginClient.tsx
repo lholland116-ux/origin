@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Eye, EyeOff } from "lucide-react";
@@ -18,6 +18,7 @@ declare global {
 }
 
 const MIN_PASSWORD_LENGTH = 8;
+const GOOGLE_LOGIN_TIMEOUT_MS = 20_000;
 
 type AuthMode = "signin" | "signup";
 type FeedbackType = "success" | "error" | null;
@@ -38,10 +39,7 @@ const TEXT_BUTTON_CLASS =
   "text-sm text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200 disabled:opacity-50";
 
 function trackGaEvent(eventName: string, params?: Record<string, unknown>) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
+  if (typeof window === "undefined") return;
   window.gtag?.("event", eventName, params);
 }
 
@@ -57,8 +55,15 @@ function getFeedbackClassName(messageType: FeedbackType): string {
   return "text-sm text-zinc-400";
 }
 
-function getAppUrl() {
+function getAppUrl(): string {
+  if (typeof window === "undefined") return "";
   return process.env.NEXT_PUBLIC_APP_URL?.trim() || window.location.origin;
+}
+
+function getSafeRedirectTo(value: string | null): string {
+  if (!value) return BRAND.routes.app;
+  if (!value.startsWith("/") || value.startsWith("//")) return BRAND.routes.app;
+  return value;
 }
 
 export default function LoginClient() {
@@ -77,8 +82,7 @@ export default function LoginClient() {
   const [messageType, setMessageType] = useState<FeedbackType>(null);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
-  const redirectTo = searchParams.get("redirectTo") || BRAND.routes.app;
-
+  const redirectTo = getSafeRedirectTo(searchParams.get("redirectTo"));
   const isBusy = loading || googleLoading || resetLoading;
 
   const canSubmit =
@@ -86,20 +90,59 @@ export default function LoginClient() {
     password.length >= (mode === "signup" ? MIN_PASSWORD_LENGTH : 1) &&
     !isBusy;
 
+  const setFeedback = useCallback(
+    (nextMessage: string | null, nextType: FeedbackType) => {
+      setMessage(nextMessage);
+      setMessageType(nextType);
+    },
+    []
+  );
+
+  const clearFeedback = useCallback(() => {
+    setFeedback(null, null);
+  }, [setFeedback]);
+
+  const resetGoogleLoadingOnResume = useCallback(() => {
+    setGoogleLoading(false);
+  }, []);
+
   useEffect(() => {
     if (searchParams.get("reset") === "success") {
       setFeedback("Password reset successful. Please sign in.", "success");
     }
-  }, [searchParams]);
+  }, [searchParams, setFeedback]);
 
-  function setFeedback(nextMessage: string | null, nextType: FeedbackType) {
-    setMessage(nextMessage);
-    setMessageType(nextType);
-  }
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        resetGoogleLoadingOnResume();
+      }
+    }
 
-  function clearFeedback() {
-    setFeedback(null, null);
-  }
+    window.addEventListener("focus", resetGoogleLoadingOnResume);
+    window.addEventListener("pageshow", resetGoogleLoadingOnResume);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", resetGoogleLoadingOnResume);
+      window.removeEventListener("pageshow", resetGoogleLoadingOnResume);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [resetGoogleLoadingOnResume]);
+
+  useEffect(() => {
+    if (!googleLoading) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setGoogleLoading(false);
+      setFeedback(
+        "Google sign-in did not finish. Please try again.",
+        "error"
+      );
+    }, GOOGLE_LOGIN_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [googleLoading, setFeedback]);
 
   async function handleGoogleSignIn() {
     if (isBusy) return;
@@ -113,18 +156,18 @@ export default function LoginClient() {
         auth_action: "oauth_started",
       });
 
+      const appUrl = getAppUrl();
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${getAppUrl()}/auth/callback?next=${encodeURIComponent(
+          redirectTo: `${appUrl}/auth/callback?next=${encodeURIComponent(
             BRAND.routes.app
           )}`,
         },
       });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
     } catch (error) {
       setFeedback(
         error instanceof Error
@@ -240,7 +283,7 @@ export default function LoginClient() {
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#020817] px-4 py-10 text-zinc-100">
+    <main className="relative flex min-h-dvh items-center justify-center overflow-x-hidden bg-[#020817] px-4 py-10 text-zinc-100">
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute left-[-8%] top-[6%] h-[360px] w-[360px] rounded-full bg-blue-600/10 blur-3xl" />
         <div className="absolute right-[4%] top-[10%] h-[320px] w-[320px] rounded-full bg-violet-500/10 blur-3xl" />
@@ -266,8 +309,8 @@ export default function LoginClient() {
           </h1>
 
           <p className="mt-3 text-sm leading-6 text-zinc-400">
-            Practical AI for chat, web search,
-            documents, images, and everyday problem solving.
+            Practical AI for chat, web search, documents, images, and everyday
+            problem solving.
           </p>
         </div>
 
