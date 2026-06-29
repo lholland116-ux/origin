@@ -30,6 +30,8 @@ import {
   setStoredChatThemeId,
 } from "@/lib/chat-theme-storage";
 import UpgradeModal from "@/components/UpgradeModal";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -204,9 +206,9 @@ const TOOLTIP_TEXT = {
   theme: "Choose chat colors",
 } as const;
 
-const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4";
-const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl";
-const USER_BUBBLE_CLASS = "w-full max-w-2xl";
+const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-3 sm:px-4 min-w-0 overflow-x-hidden";
+const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl min-w-0";
+const USER_BUBBLE_CLASS = "w-full max-w-2xl min-w-0";
 
 function cx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -580,7 +582,7 @@ function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
 
 function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
   return cx(
-    "max-w-full overflow-hidden rounded-2xl border p-4 whitespace-pre-wrap break-words [overflow-wrap:anywhere] shadow-[0_10px_30px_rgba(0,0,0,0.22)]",
+    "max-w-full rounded-2xl border p-4 break-words [overflow-wrap:anywhere] shadow-[0_10px_30px_rgba(0,0,0,0.22)]",
     role === "user" ? theme.userBubble : theme.assistantBubble,
     role === "user" ? theme.userText : theme.assistantText,
     theme.panelBorder
@@ -2145,7 +2147,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           </div>
         )}
 
-        <div className="flex h-[100dvh] overflow-hidden">
+        <div className="flex h-full overflow-hidden">
           <aside className={cx("hidden h-full w-80 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
             <div className={cx("sticky top-0 border-b p-4 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               <div className="truncate text-sm font-semibold">{userEmail}</div>
@@ -2181,7 +2183,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             </div>
           </aside>
 
-          <section className="flex h-full flex-1 flex-col bg-transparent">
+          <section className="flex h-full min-w-0 flex-1 flex-col overflow-x-hidden bg-transparent">
             <div className={cx("sticky top-0 z-20 border-b backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               <div className={`${CONTENT_RAIL_CLASS} py-2`}>
                 <div className="flex items-start justify-between gap-4">
@@ -2322,7 +2324,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
               <div className={`${CONTENT_RAIL_CLASS} py-5`}>
                 {uiError && (
                   <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
@@ -2381,7 +2383,37 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                           <MessageWidgetRenderer widget={message.widget} theme={activeTheme} />
 
-                          {message.content}
+                          <div
+                            className="
+                              prose
+                              prose-invert
+                              max-w-none
+                              min-w-0
+                              overflow-x-hidden
+                              break-words
+                              [overflow-wrap:anywhere]
+                              [&_*]:max-w-full
+                              prose-headings:text-white
+                              prose-p:text-white
+                              prose-p:break-words
+                              prose-p:[overflow-wrap:anywhere]
+                              prose-strong:text-white
+                              prose-code:text-white
+                              prose-code:break-words
+                              prose-code:[overflow-wrap:anywhere]
+                              prose-a:text-blue-300
+                              prose-a:break-all
+                              prose-ul:pl-6
+                              prose-ol:pl-6
+                              prose-li:text-white
+                              prose-li:break-words
+                              prose-li:[overflow-wrap:anywhere]
+                            "
+                          >
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {message.content || (isStreamingAssistant ? "Thinking..." : "")}
+                            </ReactMarkdown>
+                          </div>
 
                           {message.image_url && (
                             <div className="mt-3">
