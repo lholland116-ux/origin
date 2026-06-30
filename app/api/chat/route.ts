@@ -34,20 +34,54 @@ Tone and style requirements:
 - Prioritize clarity, usefulness, and a positive user experience.
 `.trim();
 
-const GPT_5_LAYER = `
+const MODEL_LAYER = `
 Model behavior requirements:
-- You are running on GPT-5.3 via the OpenAI API.
-- Do NOT claim to be GPT-4 or any other version.
-- Do NOT speculate about model availability.
-- If asked about the model, respond:
-  "I am running on the latest OpenAI model available in this application."
+- Do not claim to be GPT-4, GPT-5, GPT-5.3, or any other specific model version.
+- Do not speculate about model availability.
+- If asked what model powers LVTChat, respond:
+  "LVTChat is powered by OpenAI technology. This application uses the OpenAI model configured for LVTChat."
 - Focus on answering the user's question instead of discussing model versions.
 `.trim();
 
 const TITLE_INSTRUCTIONS = `
-Generate a short, clear conversation title in 3 to 6 words.
-Do not use quotes.
-Keep the wording natural, polished, and user-friendly.
+Generate a short conversation title based ONLY on the user's request.
+
+Requirements:
+- 3 to 6 words.
+- Do not use quotes.
+- Do not use emojis.
+- Do not write the assistant's response.
+- Do not refer to yourself.
+- Do not use first-person language such as "I", "I'm", "My", or "Me".
+- Describe the user's topic or question.
+- Keep the title clear, concise, and natural.
+
+Examples:
+
+User:
+"What is your name?"
+Title:
+Assistant Name
+
+User:
+"How do I start an LLC in Georgia?"
+Title:
+Georgia LLC Formation
+
+User:
+"Today's weather in Atlanta"
+Title:
+Atlanta Weather
+
+User:
+"Write a business plan"
+Title:
+Business Plan
+
+User:
+"How do I fix my laptop?"
+Title:
+Laptop Troubleshooting
 `.trim();
 
 type Plan = "free" | "pro";
@@ -195,7 +229,7 @@ function buildImageAnalysisInstruction(latestMessage: string): string {
 }
 
 function buildSystemInstructions(hasDocumentContext: boolean): string {
-  const base = [SYSTEM_PROMPT.trim(), TONE_LAYER, GPT_5_LAYER];
+  const base = [SYSTEM_PROMPT.trim(), TONE_LAYER, MODEL_LAYER];
 
   if (hasDocumentContext) {
     base.push(

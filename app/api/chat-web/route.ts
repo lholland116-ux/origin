@@ -52,9 +52,54 @@ Model behavior requirements:
 `.trim();
 
 const TITLE_INSTRUCTIONS = `
-Generate a short, clear conversation title in 3 to 6 words.
-Do not use quotes.
-Keep the wording natural, polished, and user-friendly.
+Generate a short conversation title based ONLY on the user's request.
+
+Requirements:
+- 3 to 6 words.
+- Do not use quotes.
+- Do not use emojis.
+- Do not write the assistant's response.
+- Do not refer to yourself.
+- Do not use first-person language such as "I", "I'm", "My", or "Me".
+- Describe the user's topic or question.
+- Keep the title clear, concise, and natural.
+
+Examples:
+
+User:
+"What is your name?"
+Title:
+Assistant Name
+
+User:
+"Who are you?"
+Title:
+Assistant Identity
+
+User:
+"What should I call you?"
+Title:
+Assistant Name Question
+
+User:
+"How do I start an LLC in Georgia?"
+Title:
+Georgia LLC Formation
+
+User:
+"Today's weather in Atlanta"
+Title:
+Atlanta Weather
+
+User:
+"Write a business plan"
+Title:
+Business Plan
+
+User:
+"How do I fix my laptop?"
+Title:
+Laptop Troubleshooting
 `.trim();
 
 type ChatRequestBody = {
