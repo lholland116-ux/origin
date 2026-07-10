@@ -252,14 +252,17 @@ export default function LoginClient() {
     clearFeedback();
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(
-        normalizedEmail,
-        {
-          redirectTo: `${getAppUrl()}/reset-password`,
-        }
-      );
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
 
-      if (error) throw error;
+      if (!response.ok) {
+        throw new Error("Failed to send reset email.");
+      }
 
       setFeedback(
         "Password reset email sent. Check your inbox and spam folder.",
