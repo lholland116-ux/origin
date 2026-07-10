@@ -54,6 +54,10 @@ export default function ForgotPasswordPage() {
         Enter your email address and we&apos;ll send you a reset link.
       </p>
 
+      <p className="mt-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+        For best results, open the password reset email on the same device where you requested it.
+      </p>
+
       <form onSubmit={onSubmit} className="mt-6 space-y-4">
         <div>
           <label htmlFor="email" className="block text-sm font-medium">

@@ -44,13 +44,48 @@ export default function Footer() {
           )}
 
           <div
-            className="mt-5 flex items-center gap-4 text-white/65"
+            className="mt-5 flex items-center gap-4 text-sm font-semibold text-white/65"
             aria-label="Social links"
           >
-            <span aria-hidden="true">𝕏</span>
-            <span aria-hidden="true">in</span>
-            <span aria-hidden="true">▶</span>
-            <span aria-hidden="true">◎</span>
+            <a
+              href="https://x.com/lvtchat"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Follow LVTChat on X"
+              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            >
+              𝕏
+            </a>
+
+            <a
+              href="https://www.linkedin.com/company/lvtchat"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Follow LVTChat on LinkedIn"
+              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            >
+              in
+            </a>
+
+            <a
+              href="https://www.youtube.com/@LVTChat"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Subscribe to LVTChat on YouTube"
+              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            >
+              ▶
+            </a>
+
+            <a
+              href="https://www.facebook.com/LVTChat"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Follow LVTChat on Facebook"
+              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            >
+              f
+            </a>
           </div>
         </div>
 

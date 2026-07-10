@@ -265,7 +265,7 @@ export default function LoginClient() {
       }
 
       setFeedback(
-        "Password reset email sent. Check your inbox and spam folder.",
+        "Password reset email sent. Check your inbox and spam folder. For best results, open the reset email on the same device where you requested it.",
         "success"
       );
     } catch (error) {
