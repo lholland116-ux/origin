@@ -7,20 +7,22 @@ import { BRAND } from "@/lib/branding";
 const LOGIN_REDIRECT = "/login?redirect=/pricing";
 const MOBILE_APPS_FEATURE = BRAND.mobile.pricingFeature;
 
-const featuresFree = [
+const FEATURES_FREE = [
   "20 messages per day",
   "Standard AI mode",
   "Core chat experience",
   "Conversation history",
+  "Analyze one image per prompt",
   "Android app access",
   "Great for everyday use",
 ] as const;
 
-const featuresPro = [
+const FEATURES_PRO = [
   "300 messages per day",
   "Web search with current information",
-  "File uploads for PDF, DOCX, XLSX, CSV, and TXT",
-  "Up to 3 files per upload",
+  "Upload up to 3 documents at once",
+  "Analyze PDF, DOCX, XLSX, CSV, and TXT files",
+  "Analyze one image per prompt",
   "Priority performance",
   "Custom AI Agents",
   MOBILE_APPS_FEATURE,
@@ -50,8 +52,10 @@ function ProCheckoutButton() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleCheckout() {
-    if (loading) return;
+  async function handleCheckout(): Promise<void> {
+    if (loading) {
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -74,18 +78,18 @@ function ProCheckoutButton() {
 
       if (!response.ok || !data.url) {
         throw new Error(
-          data.error ||
+          data.error ??
             "Unable to start checkout. Please try again in a moment."
         );
       }
 
       window.location.assign(data.url);
-    } catch (error) {
-      console.error("Checkout error:", error);
+    } catch (caughtError) {
+      console.error("Checkout error:", caughtError);
 
       setError(
-        error instanceof Error
-          ? error.message
+        caughtError instanceof Error
+          ? caughtError.message
           : "Unable to start checkout. Please try again."
       );
 
@@ -109,23 +113,23 @@ function ProCheckoutButton() {
         Sign in or create a free account to upgrade securely through Stripe.
       </p>
 
-      {error && (
+      {error ? (
         <div
           role="alert"
           className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
         >
           <p>{error}</p>
 
-          {error.toLowerCase().includes("signed in") && (
+          {error.toLowerCase().includes("signed in") ? (
             <Link
               href={LOGIN_REDIRECT}
-              className="mt-2 inline-flex font-semibold text-amber-100 underline-offset-4 hover:underline"
+              className="mt-2 inline-flex font-semibold text-amber-100 underline-offset-4 hover:underline focus:outline-none focus:ring-2 focus:ring-amber-200 focus:ring-offset-2 focus:ring-offset-[#020817]"
             >
               Sign in or create an account
             </Link>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -143,17 +147,17 @@ function FeatureItem({ feature }: { feature: string }) {
       <span>
         {feature}
 
-        {isCustomAgents && (
+        {isCustomAgents ? (
           <span className="ml-2 inline-flex rounded-full border border-blue-400/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-200">
             Pro — Coming Soon
           </span>
-        )}
+        ) : null}
 
-        {isMobileApps && (
+        {isMobileApps ? (
           <span className="ml-2 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
             {BRAND.mobile.availabilityLabel}
           </span>
-        )}
+        ) : null}
       </span>
     </li>
   );
@@ -174,7 +178,10 @@ export default function PricingPage() {
             aria-label={`${BRAND.name} home`}
             className="flex items-center gap-2 rounded-xl font-semibold focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-sm">
+            <span
+              aria-hidden="true"
+              className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-sm"
+            >
               💬
             </span>
 
@@ -217,18 +224,27 @@ export default function PricingPage() {
         </div>
       </header>
 
-      <section className="relative overflow-hidden px-6 py-14 sm:py-16">
-        <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.22),transparent_35%),radial-gradient(circle_at_center,rgba(16,185,129,0.08),transparent_35%)]" />
+      <section
+        aria-labelledby="pricing-heading"
+        className="relative overflow-hidden px-6 py-14 sm:py-16"
+      >
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.22),transparent_35%),radial-gradient(circle_at_center,rgba(16,185,129,0.08),transparent_35%)]"
+        />
 
         <div className="mx-auto max-w-5xl text-center">
-          {earlyAdopter.enabled && (
+          {earlyAdopter.enabled ? (
             <div className="mx-auto mb-6 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">
-              🔥 {earlyAdopter.headline} — $
-              {formatPrice(proPrice)}/month
+              <span aria-hidden="true">🔥&nbsp;</span>
+              {earlyAdopter.headline} — ${formatPrice(proPrice)}/month
             </div>
-          )}
+          ) : null}
 
-          <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">
+          <h1
+            id="pricing-heading"
+            className="text-4xl font-bold tracking-tight sm:text-6xl"
+          >
             Clear pricing for practical AI support
           </h1>
 
@@ -254,7 +270,7 @@ export default function PricingPage() {
             </div>
 
             <ul className="mt-8 space-y-4 text-sm text-zinc-200">
-              {featuresFree.map((feature) => (
+              {FEATURES_FREE.map((feature) => (
                 <FeatureItem key={feature} feature={feature} />
               ))}
             </ul>
@@ -281,7 +297,7 @@ export default function PricingPage() {
               professional and business use.
             </p>
 
-            <div className="mt-8 flex items-end gap-2">
+            <div className="mt-8 flex flex-wrap items-end gap-2">
               <span className="pb-1 text-xl font-semibold text-zinc-500 line-through">
                 {BRAND.pricing.currencySymbol}
                 {formatPrice(standardPrice)}
@@ -299,13 +315,17 @@ export default function PricingPage() {
               About ${dailyCost.toFixed(2)}/day for practical AI support.
             </p>
 
-            <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-              {earlyAdopter.subheadline}
-            </div>
+            {earlyAdopter.enabled ? (
+              <>
+                <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                  {earlyAdopter.subheadline}
+                </div>
 
-            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm leading-6 text-zinc-300">
-              {earlyAdopter.note}
-            </div>
+                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm leading-6 text-zinc-300">
+                  {earlyAdopter.note}
+                </div>
+              </>
+            ) : null}
 
             <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-4">
               <p className="text-sm font-semibold text-blue-100">
@@ -327,7 +347,7 @@ export default function PricingPage() {
             </div>
 
             <ul className="mt-6 space-y-4 text-sm text-zinc-200">
-              {featuresPro.map((feature) => (
+              {FEATURES_PRO.map((feature) => (
                 <FeatureItem key={feature} feature={feature} />
               ))}
             </ul>
