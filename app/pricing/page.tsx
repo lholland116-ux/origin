@@ -11,33 +11,38 @@ const featuresFree = [
   "20 messages per day",
   "Standard AI mode",
   "Core chat experience",
+  "Conversation history",
+  "Android app access",
   "Great for everyday use",
-];
+] as const;
 
 const featuresPro = [
   "300 messages per day",
-  "Web search with real-time answers",
-  "File uploads for PDF, DOCX, and XLSX",
+  "Web search with current information",
+  "File uploads for PDF, DOCX, XLSX, CSV, and TXT",
+  "Up to 3 files per upload",
   "Priority performance",
   "Custom AI Agents",
   MOBILE_APPS_FEATURE,
   "Built for serious work",
-];
+] as const;
 
 type CheckoutResponse = {
   url?: string;
   error?: string;
 };
 
-async function readCheckoutResponse(res: Response): Promise<CheckoutResponse> {
+async function readCheckoutResponse(
+  response: Response
+): Promise<CheckoutResponse> {
   try {
-    return (await res.json()) as CheckoutResponse;
+    return (await response.json()) as CheckoutResponse;
   } catch {
     return {};
   }
 }
 
-function formatPrice(price: number) {
+function formatPrice(price: number): string {
   return Number.isInteger(price) ? price.toString() : price.toFixed(2);
 }
 
@@ -46,11 +51,13 @@ function ProCheckoutButton() {
   const [error, setError] = useState<string | null>(null);
 
   async function handleCheckout() {
+    if (loading) return;
+
     setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch("/api/stripe/checkout", {
+      const response = await fetch("/api/stripe/checkout", {
         method: "POST",
         credentials: "include",
         headers: {
@@ -58,24 +65,27 @@ function ProCheckoutButton() {
         },
       });
 
-      const data = await readCheckoutResponse(res);
+      const data = await readCheckoutResponse(response);
 
-      if (res.status === 401) {
+      if (response.status === 401) {
         window.location.assign(LOGIN_REDIRECT);
         return;
       }
 
-      if (!res.ok || !data.url) {
-        throw new Error(data.error || "Unable to start checkout.");
+      if (!response.ok || !data.url) {
+        throw new Error(
+          data.error ||
+            "Unable to start checkout. Please try again in a moment."
+        );
       }
 
       window.location.assign(data.url);
-    } catch (err) {
-      console.error("Checkout error:", err);
+    } catch (error) {
+      console.error("Checkout error:", error);
 
       setError(
-        err instanceof Error
-          ? err.message
+        error instanceof Error
+          ? error.message
           : "Unable to start checkout. Please try again."
       );
 
@@ -89,17 +99,21 @@ function ProCheckoutButton() {
         type="button"
         onClick={handleCheckout}
         disabled={loading}
+        aria-busy={loading}
         className="w-full rounded-2xl bg-blue-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-500/25 transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {loading ? "Opening Stripe..." : "Upgrade to Pro"}
+        {loading ? "Opening secure checkout..." : "Upgrade to Pro"}
       </button>
 
-      <p className="text-center text-xs text-zinc-400">
+      <p className="text-center text-xs leading-5 text-zinc-400">
         Sign in or create a free account to upgrade securely through Stripe.
       </p>
 
       {error && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+        >
           <p>{error}</p>
 
           {error.toLowerCase().includes("signed in") && (
@@ -107,7 +121,7 @@ function ProCheckoutButton() {
               href={LOGIN_REDIRECT}
               className="mt-2 inline-flex font-semibold text-amber-100 underline-offset-4 hover:underline"
             >
-              Sign in or create account
+              Sign in or create an account
             </Link>
           )}
         </div>
@@ -122,16 +136,21 @@ function FeatureItem({ feature }: { feature: string }) {
 
   return (
     <li className="flex gap-3">
-      <span className="mt-0.5 text-emerald-400">✓</span>
+      <span aria-hidden="true" className="mt-0.5 text-emerald-400">
+        ✓
+      </span>
+
       <span>
         {feature}
+
         {isCustomAgents && (
-          <span className="ml-2 rounded-full border border-blue-400/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-200">
+          <span className="ml-2 inline-flex rounded-full border border-blue-400/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-200">
             Pro — Coming Soon
           </span>
         )}
+
         {isMobileApps && (
-          <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
+          <span className="ml-2 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
             {BRAND.mobile.availabilityLabel}
           </span>
         )}
@@ -144,43 +163,53 @@ export default function PricingPage() {
   const earlyAdopter = BRAND.promotions.earlyAdopter;
   const proPrice = BRAND.pricing.proMonthlyPrice;
   const standardPrice = BRAND.pricing.standardProMonthlyPrice;
+  const dailyCost = proPrice / 30;
 
   return (
     <main className="min-h-screen bg-[#020817] text-white">
-      <header className="border-b border-white/10 bg-[#020817]/80 backdrop-blur">
+      <header className="border-b border-white/10 bg-[#020817]/90 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <Link href="/" className="flex items-center gap-2 font-semibold">
+          <Link
+            href={BRAND.routes.home}
+            aria-label={`${BRAND.name} home`}
+            className="flex items-center gap-2 rounded-xl font-semibold focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
+          >
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-sm">
               💬
             </span>
+
             <span>{BRAND.name}</span>
           </Link>
 
-          <nav className="flex items-center gap-2 text-sm font-medium">
+          <nav
+            aria-label="Pricing page navigation"
+            className="flex items-center gap-1 text-sm font-medium sm:gap-2"
+          >
             <Link
               href={BRAND.routes.app}
-              className="rounded-xl px-4 py-2 text-zinc-200 hover:bg-white/10"
+              className="rounded-xl px-3 py-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 sm:px-4"
             >
               Chat
             </Link>
 
             <Link
               href={BRAND.routes.pricing}
-              className="rounded-xl bg-white/10 px-4 py-2 text-white"
+              aria-current="page"
+              className="rounded-xl bg-white/10 px-3 py-2 text-white sm:px-4"
             >
               Pricing
             </Link>
 
             <Link
               href="/account"
-              className="rounded-xl px-4 py-2 text-zinc-200 hover:bg-white/10"
+              className="hidden rounded-xl px-4 py-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 sm:inline-flex"
             >
               Account
             </Link>
 
             <Link
               href={BRAND.routes.login}
-              className="ml-2 rounded-xl border border-white/15 px-4 py-2 text-zinc-100 hover:bg-white/10"
+              className="ml-1 rounded-xl border border-white/15 px-3 py-2 text-zinc-100 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 sm:ml-2 sm:px-4"
             >
               Sign in
             </Link>
@@ -188,13 +217,14 @@ export default function PricingPage() {
         </div>
       </header>
 
-      <section className="relative overflow-hidden px-6 py-14">
+      <section className="relative overflow-hidden px-6 py-14 sm:py-16">
         <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.22),transparent_35%),radial-gradient(circle_at_center,rgba(16,185,129,0.08),transparent_35%)]" />
 
         <div className="mx-auto max-w-5xl text-center">
           {earlyAdopter.enabled && (
             <div className="mx-auto mb-6 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">
-              🔥 Early Adopter Pricing — ${formatPrice(proPrice)}/month
+              🔥 {earlyAdopter.headline} — $
+              {formatPrice(proPrice)}/month
             </div>
           )}
 
@@ -202,15 +232,17 @@ export default function PricingPage() {
             Clear pricing for practical AI support
           </h1>
 
-          <p className="mt-5 text-lg text-zinc-300">
-            Start free. Upgrade when you need more power, current answers, and
-            document support.
+          <p className="mx-auto mt-5 max-w-3xl text-lg leading-8 text-zinc-300">
+            Start free. Upgrade when you need more messages, current web
+            information, document analysis, and advanced productivity tools.
           </p>
         </div>
 
         <div className="mx-auto mt-10 grid max-w-5xl gap-6 md:grid-cols-2">
-          <div className="rounded-3xl border border-white/15 bg-white/[0.04] p-7 shadow-2xl">
-            <h2 className="text-2xl font-bold">{BRAND.pricing.freePlanName}</h2>
+          <article className="rounded-3xl border border-white/15 bg-white/[0.04] p-7 shadow-2xl">
+            <h2 className="text-2xl font-bold">
+              {BRAND.pricing.freePlanName}
+            </h2>
 
             <p className="mt-3 text-zinc-300">
               A simple way to get started with practical AI support.
@@ -229,22 +261,24 @@ export default function PricingPage() {
 
             <Link
               href={BRAND.routes.login}
-              className="mt-10 flex w-full items-center justify-center rounded-2xl border border-white/20 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+              className="mt-10 flex w-full items-center justify-center rounded-2xl border border-white/20 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
             >
-              Get Started
+              Get Started Free
             </Link>
-          </div>
+          </article>
 
-          <div className="relative rounded-3xl border border-blue-500/70 bg-blue-950/20 p-7 shadow-[0_0_60px_rgba(59,130,246,0.22)]">
-            <div className="absolute right-6 top-6 rounded-full border border-blue-400/50 bg-blue-500/15 px-3 py-1 text-xs text-blue-200">
+          <article className="relative rounded-3xl border border-blue-500/70 bg-blue-950/20 p-7 shadow-[0_0_60px_rgba(59,130,246,0.22)]">
+            <div className="absolute right-6 top-6 rounded-full border border-blue-400/50 bg-blue-500/15 px-3 py-1 text-xs font-semibold text-blue-200">
               Early Adopter
             </div>
 
-            <h2 className="text-2xl font-bold">{BRAND.pricing.proPlanName}</h2>
+            <h2 className="pr-28 text-2xl font-bold">
+              {BRAND.pricing.proPlanName}
+            </h2>
 
             <p className="mt-3 max-w-sm text-zinc-300">
-              More power, flexibility, and advanced AI capabilities for serious
-              work.
+              More power, flexibility, and advanced AI capabilities for
+              professional and business use.
             </p>
 
             <div className="mt-8 flex items-end gap-2">
@@ -262,26 +296,34 @@ export default function PricingPage() {
             </div>
 
             <p className="mt-2 text-sm text-zinc-400">
-              Less than $0.20/day for practical AI support.
+              About ${dailyCost.toFixed(2)}/day for practical AI support.
             </p>
 
             <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-              Early Adopter Pricing — lock in ${formatPrice(proPrice)}/month
-              before future price increases.
+              {earlyAdopter.subheadline}
             </div>
 
-            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-300">
-              Lock in ${formatPrice(proPrice)}/month today. Your rate stays the
-              same even when future pricing increases.
+            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm leading-6 text-zinc-300">
+              {earlyAdopter.note}
             </div>
 
-            <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3">
+            <div className="mt-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-4">
               <p className="text-sm font-semibold text-blue-100">
-                Custom AI Agents and mobile apps are coming soon.
+                Android app now available on Google Play.
               </p>
+
               <p className="mt-1 text-xs leading-5 text-zinc-300">
                 {BRAND.mobile.proMessage}
               </p>
+
+              <a
+                href={BRAND.mobile.androidPlayStoreUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex items-center justify-center rounded-xl border border-blue-300/30 bg-blue-500/20 px-4 py-2 text-xs font-semibold text-blue-50 transition hover:bg-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
+              >
+                {BRAND.mobile.downloadLabel}
+              </a>
             </div>
 
             <ul className="mt-6 space-y-4 text-sm text-zinc-200">
@@ -291,11 +333,11 @@ export default function PricingPage() {
             </ul>
 
             <ProCheckoutButton />
-          </div>
+          </article>
         </div>
 
         <p className="mt-8 text-center text-sm text-zinc-400">
-          No credit card required for the free plan • Cancel anytime
+          No credit card required for the free plan • Cancel Pro anytime
         </p>
       </section>
     </main>

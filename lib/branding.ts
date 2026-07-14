@@ -1,14 +1,14 @@
 export const BRAND = {
-  // Core Identity
+  // Core identity
   name: "LVTChat",
   shortName: "LVT",
   legalName: "LVTChat LLC",
 
-  // Domain / URLs
+  // Domain and canonical URL
   domain: "lvtchat.com",
   url: "https://lvtchat.com",
 
-  // Centralized routes
+  // Centralized application routes
   routes: {
     home: "/",
     login: "/login",
@@ -25,19 +25,20 @@ export const BRAND = {
   loginPath: "/login",
   appPath: "/chat",
 
-  // Messaging
+  // Core messaging
   slogan: "Practical AI you can actually use.",
   headline: "Clear answers. Better decisions.",
   subheadline:
     "LVTChat helps individuals and businesses solve problems faster, think more clearly, and move forward with confidence.",
   tagline: "Smart AI help for work, research, and everyday tasks",
 
-  // Launch Configuration
+  // Public launch configuration
   launch: {
     isLive: true,
-    name: "LVTChat Launch",
-    date: "May 1, 2026",
-    message: "🎉 LVTChat is officially live — practical AI you can actually use.",
+    name: "LVTChat Android Launch",
+    date: "July 13, 2026",
+    message:
+      "🎉 LVTChat is now available on Google Play — practical AI you can actually use.",
     highlight: "Clear answers. Better decisions. Less time wasted.",
     promoCode: "",
     promoEnds: "",
@@ -48,7 +49,7 @@ export const BRAND = {
     },
   },
 
-  // Reusable Promotion Metadata
+  // Reusable promotion metadata
   promotions: {
     earlyAdopter: {
       enabled: true,
@@ -59,7 +60,8 @@ export const BRAND = {
       subheadline:
         "Lock in LVTChat Pro for $5.99/month before future price increases.",
       ctaLabel: "Get Pro for $5.99/month",
-      note: "Future subscribers will pay higher rates as new features are released. Early adopters keep their discounted rate.",
+      note:
+        "Future subscribers may pay higher rates as new features are released. Early adopters keep their discounted rate while their subscription remains active.",
     },
 
     memorialDay: {
@@ -77,27 +79,40 @@ export const BRAND = {
     },
   },
 
-  // Mobile App Messaging
+  // Mobile application availability and messaging
   mobile: {
-    androidComingSoon: true,
+    androidAvailable: true,
+    androidComingSoon: false,
+    iosAvailable: false,
     iosComingSoon: true,
+
+    androidPlayStoreUrl:
+      "https://play.google.com/store/apps/details?id=com.lvtchat.app",
+
     message:
-      "Android & iPhone apps coming soon. Available for Free and Pro users.",
-    pricingFeature: "Android & iPhone apps coming soon",
-    availabilityLabel: "Available for Free and Pro",
+      "The LVTChat Android app is available now on Google Play for Free and Pro users. The iPhone app is coming soon.",
+
+    pricingFeature:
+      "Android app available now • iPhone app coming soon",
+
+    availabilityLabel: "Available for Free and Pro users",
+
     proMessage:
-      "Mobile apps will be available for both Free and Pro users as they roll out.",
+      "The Android app is available now for both Free and Pro users. The iPhone app and Custom AI Agents are coming soon.",
+
+    downloadLabel: "Download on Google Play",
   },
 
-  // Founder / Authority
+  // Founder and professional authority
   creator: "Levi Holland",
   creatorTitle: "AI Engineer",
   creatorSecondaryTitle: "Scientist",
   creatorExperience:
     "25+ years of experience in pharmaceutical, biotech, cosmetic, and medical device industries",
 
-  // Contact
+  // Contact information
   supportEmail: "support@lvtchat.com",
+
   contact: {
     email: "support@lvtchat.com",
     address: {
@@ -110,11 +125,11 @@ export const BRAND = {
     },
   },
 
-  // UI Labels
+  // Primary interface labels
   ctaPrimary: "Try LVTChat Free",
   ctaSecondary: "See How It Works",
 
-  // Pricing Defaults
+  // Pricing defaults
   pricing: {
     currencySymbol: "$",
     freePlanName: "Free",
@@ -125,28 +140,31 @@ export const BRAND = {
     proDailyMessageLimit: 300,
   },
 
-  // SEO Defaults
+  // Default search-engine metadata
   seo: {
     title: "LVTChat – Practical AI you can actually use",
     description:
-      "Clear answers. Better decisions. LVTChat is an AI assistant designed to help individuals and businesses solve problems faster with practical, real-world intelligence.",
+      "Clear answers. Better decisions. LVTChat is an AI assistant for work, research, business, and everyday tasks, available on the web and Google Play.",
     keywords: [
       "AI assistant",
-      "chatbot",
+      "Android AI app",
+      "AI chatbot",
       "AI productivity",
+      "document analysis",
+      "web search AI",
       "business AI tools",
       "AI for decision making",
       "LVTChat",
     ] as const,
   },
 
-  // Social / Open Graph
+  // Social and Open Graph defaults
   social: {
     ogImage: "/logos/logo-primary.svg",
     twitterHandle: "@lvtchat",
   },
 
-  // Legal / Compliance
+  // Legal and compliance information
   legal: {
     company: "LVTChat LLC",
     jurisdiction: "Georgia, United States",
@@ -155,13 +173,18 @@ export const BRAND = {
     termsPath: "/terms",
   },
 
-  // Product Metadata
+  // Product metadata
   product: {
     category: "AI Assistant",
-    availability: "Web",
+    availability: "Web and Android",
+    platforms: {
+      web: true,
+      android: true,
+      ios: false,
+    },
   },
 
-  // Feature Flags
+  // Product feature flags
   features: {
     enableWebSearch: true,
     enableUploads: true,
