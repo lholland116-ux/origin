@@ -20,24 +20,31 @@ const PREVIEW_STEPS = [
   },
 ] as const;
 
-function formatPrice(price: number) {
+const CREDIBILITY_LINE =
+  "Built to make practical AI simple, useful, and accessible.";
+
+function formatPrice(price: number): string {
   return Number.isInteger(price) ? price.toString() : price.toFixed(2);
 }
 
 export default function Hero() {
   const earlyAdopter = BRAND.promotions.earlyAdopter;
-  const credibilityLine = `Built by ${BRAND.creator}, a ${
-    BRAND.creatorSecondaryTitle?.toLowerCase() || "scientist"
-  } with ${BRAND.creatorExperience}.`;
+  const proMonthlyPrice = formatPrice(BRAND.pricing.proMonthlyPrice);
 
   return (
-    <section className="grid gap-10 px-5 pb-8 pt-6 md:px-8 md:pb-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:px-10 lg:pb-12 lg:pt-10">
+    <section
+      aria-labelledby="hero-heading"
+      className="grid gap-10 px-5 pb-8 pt-6 md:px-8 md:pb-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:px-10 lg:pb-12 lg:pt-10"
+    >
       <div className="max-w-2xl">
-        <div className="inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-blue-300">
+        <p className="inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-blue-300">
           AI assistant, built for real life
-        </div>
+        </p>
 
-        <h1 className="mt-6 text-4xl font-semibold tracking-tight text-white sm:text-5xl lg:text-6xl">
+        <h1
+          id="hero-heading"
+          className="mt-6 text-4xl font-semibold tracking-tight text-white sm:text-5xl lg:text-6xl"
+        >
           {BRAND.headline}
           <br />
           <span className="bg-[linear-gradient(90deg,#3B82F6_0%,#6A8DFF_45%,#8B5CF6_100%)] bg-clip-text text-transparent">
@@ -51,20 +58,22 @@ export default function Hero() {
 
         <div className="mt-3 grid max-w-xl gap-3">
           <p className="rounded-2xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm font-medium leading-6 text-blue-200">
-            🎉 Now live — practical AI for work, research, planning, and
-            everyday decisions.
+            <span aria-hidden="true">🎉 </span>
+            Now live — practical AI for work, research, planning, and everyday
+            decisions.
           </p>
 
           {earlyAdopter.enabled && (
             <p className="rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 text-sm font-semibold leading-6 text-emerald-200">
-              🔥 Early Adopter Pricing Available — Pro starts at just $
-              {formatPrice(BRAND.pricing.proMonthlyPrice)}/month.
+              <span aria-hidden="true">🔥 </span>
+              Early Adopter Pricing Available — Pro starts at just $
+              {proMonthlyPrice}/month.
             </p>
           )}
         </div>
 
         <p className="mt-6 max-w-xl text-sm leading-6 text-white/60">
-          {credibilityLine}
+          {CREDIBILITY_LINE}
         </p>
 
         <div className="mt-8 flex flex-wrap gap-4">
@@ -85,10 +94,14 @@ export default function Hero() {
       </div>
 
       <div className="mx-auto w-full max-w-[470px]">
-        <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(10,16,32,0.96),rgba(5,10,24,0.94))] p-4 shadow-[0_25px_90px_rgba(0,0,0,0.55)]">
+        <div
+          role="img"
+          aria-label="Preview of LVTChat creating a practical marketing plan"
+          className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(10,16,32,0.96),rgba(5,10,24,0.94))] p-4 shadow-[0_25px_90px_rgba(0,0,0,0.55)]"
+        >
           <div
-            className="absolute inset-x-0 bottom-[-35%] mx-auto h-48 w-72 rounded-full bg-blue-500/20 blur-3xl"
             aria-hidden="true"
+            className="absolute inset-x-0 bottom-[-35%] mx-auto h-48 w-72 rounded-full bg-blue-500/20 blur-3xl"
           />
 
           <div className="relative rounded-[22px] border border-white/10 bg-[#050B17] p-4">
@@ -103,13 +116,9 @@ export default function Hero() {
                 </p>
               </div>
 
-              <button
-                type="button"
-                aria-label="Close preview"
-                className="text-white/50 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#050B17]"
-              >
+              <span aria-hidden="true" className="text-white/50">
                 ✕
-              </button>
+              </span>
             </div>
 
             <div className="space-y-4">
@@ -133,12 +142,12 @@ export default function Hero() {
                   <div className="space-y-4">
                     {PREVIEW_STEPS.map((step) => (
                       <div key={step.title} className="flex gap-3">
-                        <div
-                          className="mt-0.5 text-blue-300"
+                        <span
                           aria-hidden="true"
+                          className="mt-0.5 text-blue-300"
                         >
                           ✦
-                        </div>
+                        </span>
 
                         <div>
                           <p className="font-medium text-white">{step.title}</p>
@@ -156,13 +165,12 @@ export default function Hero() {
             <div className="mt-5 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white/45">
               <span className="flex-1">Ask {BRAND.name} anything...</span>
 
-              <button
-                type="button"
-                aria-label="Send prompt"
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-[linear-gradient(90deg,#2563EB,#3B82F6)] text-white shadow-[0_8px_25px_rgba(37,99,235,0.35)] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#050B17]"
+              <span
+                aria-hidden="true"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-[linear-gradient(90deg,#2563EB,#3B82F6)] text-white shadow-[0_8px_25px_rgba(37,99,235,0.35)]"
               >
                 ↑
-              </button>
+              </span>
             </div>
           </div>
         </div>

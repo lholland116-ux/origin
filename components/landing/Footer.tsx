@@ -2,7 +2,7 @@ import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 import { footerColumns } from "@/lib/landing-content";
 
-const FOOTER_ROUTES: Record<string, string> = {
+const FOOTER_ROUTES: Readonly<Record<string, string>> = {
   Features: "#features",
   Pricing: BRAND.routes.pricing,
   About: BRAND.routes.about,
@@ -11,9 +11,42 @@ const FOOTER_ROUTES: Record<string, string> = {
   "Help Center": BRAND.routes.help,
 };
 
+const SOCIAL_LINKS = [
+  {
+    name: "X",
+    href: "https://x.com/lvtchat",
+    label: "Follow LVTChat on X",
+    icon: "𝕏",
+  },
+  {
+    name: "LinkedIn",
+    href: "https://www.linkedin.com/company/lvtchat",
+    label: "Follow LVTChat on LinkedIn",
+    icon: "in",
+  },
+  {
+    name: "YouTube",
+    href: "https://www.youtube.com/@LVTChat",
+    label: "Subscribe to LVTChat on YouTube",
+    icon: "▶",
+  },
+  {
+    name: "Facebook",
+    href: "https://www.facebook.com/LVTChat",
+    label: "Follow LVTChat on Facebook",
+    icon: "f",
+  },
+] as const;
+
+function isInternalRoute(href: string): boolean {
+  return href.startsWith("/");
+}
+
 export default function Footer() {
   const currentYear = new Date().getFullYear();
   const address = BRAND.contact.address;
+  const showMobileMessage =
+    BRAND.mobile.androidComingSoon || BRAND.mobile.iosComingSoon;
 
   return (
     <footer className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(5,10,22,0.98),rgba(3,7,18,0.98))] px-5 py-8 md:px-8 lg:px-10">
@@ -24,9 +57,12 @@ export default function Footer() {
             aria-label={`${BRAND.name} home`}
             className="inline-flex items-center gap-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-blue-400/60 bg-[linear-gradient(180deg,#0A1328,#101C39)] text-sm font-bold tracking-wide text-white">
+            <span
+              aria-hidden="true"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-blue-400/60 bg-[linear-gradient(180deg,#0A1328,#101C39)] text-sm font-bold tracking-wide text-white"
+            >
               {BRAND.shortName}
-            </div>
+            </span>
 
             <span className="text-lg font-semibold text-white">
               {BRAND.name}
@@ -37,114 +73,95 @@ export default function Footer() {
             {BRAND.tagline}
           </p>
 
-          {(BRAND.mobile.androidComingSoon || BRAND.mobile.iosComingSoon) && (
+          {showMobileMessage && (
             <p className="mt-4 max-w-xs rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium leading-6 text-emerald-200">
-              📱 {BRAND.mobile.message}
+              <span aria-hidden="true">📱 </span>
+              {BRAND.mobile.message}
             </p>
           )}
 
-          <div
-            className="mt-5 flex items-center gap-4 text-sm font-semibold text-white/65"
-            aria-label="Social links"
-          >
-            <a
-              href="https://x.com/lvtchat"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Follow LVTChat on X"
-              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-            >
-              𝕏
-            </a>
-
-            <a
-              href="https://www.linkedin.com/company/lvtchat"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Follow LVTChat on LinkedIn"
-              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-            >
-              in
-            </a>
-
-            <a
-              href="https://www.youtube.com/@LVTChat"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Subscribe to LVTChat on YouTube"
-              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-            >
-              ▶
-            </a>
-
-            <a
-              href="https://www.facebook.com/LVTChat"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Follow LVTChat on Facebook"
-              className="rounded-md transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-            >
-              f
-            </a>
-          </div>
+          <nav className="mt-5" aria-label="LVTChat social media">
+            <ul className="flex items-center gap-4">
+              {SOCIAL_LINKS.map((social) => (
+                <li key={social.name}>
+                  <a
+                    href={social.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={social.label}
+                    title={social.name}
+                    className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-2 text-sm font-semibold text-white/65 transition hover:border-white/20 hover:bg-white/[0.07] hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                  >
+                    <span aria-hidden="true">{social.icon}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
         </div>
 
         {footerColumns.map((column) => (
-          <div key={column.title}>
+          <nav key={column.title} aria-label={column.title}>
             <p className="text-sm font-semibold text-white">{column.title}</p>
 
             <ul className="mt-4 space-y-3 text-sm text-white/60">
               {column.links.map((link) => {
                 const href = FOOTER_ROUTES[link] ?? "#";
 
-                if (href.startsWith("/")) {
-                  return (
-                    <li key={link}>
+                return (
+                  <li key={link}>
+                    {isInternalRoute(href) ? (
                       <Link
                         href={href}
                         className="rounded-md transition hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
                       >
                         {link}
                       </Link>
-                    </li>
-                  );
-                }
-
-                return (
-                  <li key={link}>
-                    <a
-                      href={href}
-                      className="rounded-md transition hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-                    >
-                      {link}
-                    </a>
+                    ) : (
+                      <a
+                        href={href}
+                        className="rounded-md transition hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                      >
+                        {link}
+                      </a>
+                    )}
                   </li>
                 );
               })}
             </ul>
-          </div>
+          </nav>
         ))}
 
         <div>
-          <p className="text-sm font-semibold text-white">Built by</p>
-
-          <p className="mt-4 text-2xl font-semibold tracking-tight text-white">
-            {BRAND.creator}
+          <p className="text-sm font-semibold text-white">
+            Company Information
           </p>
 
-          <p className="mt-2 text-sm text-white/60">
-            AI Engineer • Scientist
+          <p className="mt-4 text-xl font-semibold tracking-tight text-white">
+            {BRAND.legalName}
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-white/60">
+            Practical AI for work, research, and everyday tasks.
           </p>
 
           <div className="mt-4 text-sm text-white/60">
-            <p>{BRAND.contact.email}</p>
+            <a
+              href={`mailto:${BRAND.contact.email}`}
+              className="rounded-md transition hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            >
+              {BRAND.contact.email}
+            </a>
 
             <address className="mt-3 not-italic leading-6 text-white/60">
               <div>{address.line1}</div>
+
               {address.line2 ? <div>{address.line2}</div> : null}
+
               <div>
                 {address.city}, {address.state} {address.postalCode}
               </div>
+
               <div>{address.country}</div>
             </address>
           </div>
@@ -156,21 +173,27 @@ export default function Footer() {
           © {currentYear} {BRAND.legalName}. {BRAND.legal.rightsText}
         </p>
 
-        <div className="flex gap-5">
-          <Link
-            href={BRAND.routes.privacy}
-            className="rounded-md transition hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-          >
-            Privacy
-          </Link>
+        <nav aria-label="Legal">
+          <ul className="flex gap-5">
+            <li>
+              <Link
+                href={BRAND.routes.privacy}
+                className="rounded-md transition hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+              >
+                Privacy
+              </Link>
+            </li>
 
-          <Link
-            href={BRAND.routes.terms}
-            className="rounded-md transition hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-          >
-            Terms
-          </Link>
-        </div>
+            <li>
+              <Link
+                href={BRAND.routes.terms}
+                className="rounded-md transition hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+              >
+                Terms
+              </Link>
+            </li>
+          </ul>
+        </nav>
       </div>
     </footer>
   );
