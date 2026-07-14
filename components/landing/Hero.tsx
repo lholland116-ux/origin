@@ -21,7 +21,7 @@ const PREVIEW_STEPS = [
 ] as const;
 
 const CREDIBILITY_LINE =
-  "Built to make practical AI simple, useful, and accessible.";
+  "Built to help people and businesses use AI with confidence.";
 
 function formatPrice(price: number): string {
   return Number.isInteger(price) ? price.toString() : price.toFixed(2);

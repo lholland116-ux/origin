@@ -80,7 +80,7 @@ export default function Footer() {
             </p>
           )}
 
-          <nav className="mt-5" aria-label="LVTChat social media">
+          <nav className="mt-5" aria-label={`${BRAND.name} social media`}>
             <ul className="flex items-center gap-4">
               {SOCIAL_LINKS.map((social) => (
                 <li key={social.name}>
@@ -132,16 +132,15 @@ export default function Footer() {
           </nav>
         ))}
 
-        <div>
-          <p className="text-sm font-semibold text-white">
-            Company Information
-          </p>
-
-          <p className="mt-4 text-xl font-semibold tracking-tight text-white">
+        <section aria-labelledby="footer-company-heading">
+          <h2
+            id="footer-company-heading"
+            className="text-sm font-semibold text-white"
+          >
             {BRAND.legalName}
-          </p>
+          </h2>
 
-          <p className="mt-2 text-sm leading-6 text-white/60">
+          <p className="mt-4 text-sm leading-6 text-white/60">
             Practical AI for work, research, and everyday tasks.
           </p>
 
@@ -165,7 +164,7 @@ export default function Footer() {
               <div>{address.country}</div>
             </address>
           </div>
-        </div>
+        </section>
       </div>
 
       <div className="mt-8 flex flex-col gap-4 border-t border-white/10 pt-5 text-sm text-white/45 sm:flex-row sm:items-center sm:justify-between">

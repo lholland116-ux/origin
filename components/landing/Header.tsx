@@ -25,11 +25,7 @@ export default function Header() {
         <div className="flex items-center gap-2">
           <span className="text-lg font-semibold tracking-tight text-white">
             {BRAND.name}
-          </span>
-
-          <span className="rounded-full border border-emerald-400/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300">
-            Live
-          </span>
+          </span>        
         </div>
       </Link>
 
