@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
-const LOGIN_REDIRECT = "/login?redirect=/pricing";
+const LOGIN_REDIRECT = "/login?redirectTo=/pricing";
 const MOBILE_APPS_FEATURE = BRAND.mobile.pricingFeature;
 
 const FEATURES_FREE = [

@@ -1,11 +1,21 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
-import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { App } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { BRAND } from "@/lib/branding";
+import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 declare global {
   interface Window {
@@ -18,7 +28,8 @@ declare global {
 }
 
 const MIN_PASSWORD_LENGTH = 8;
-const GOOGLE_LOGIN_TIMEOUT_MS = 20_000;
+const GOOGLE_LOGIN_TIMEOUT_MS = 120_000;
+const NATIVE_AUTH_CALLBACK = "com.lvtchat.app://auth/callback";
 
 type AuthMode = "signin" | "signup";
 type FeedbackType = "success" | "error" | null;
@@ -33,13 +44,19 @@ const PRIMARY_BUTTON_CLASS =
   "w-full rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-4 py-3 font-medium text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.01] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
 
 const SECONDARY_BUTTON_CLASS =
-  "flex w-full items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white px-4 py-3 font-medium text-slate-950 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60";
+  "flex w-full items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white px-4 py-3 font-medium text-slate-950 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] disabled:cursor-not-allowed disabled:opacity-60";
 
 const TEXT_BUTTON_CLASS =
-  "text-sm text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200 disabled:opacity-50";
+  "rounded-md text-sm text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817] disabled:opacity-50";
 
-function trackGaEvent(eventName: string, params?: Record<string, unknown>) {
-  if (typeof window === "undefined") return;
+function trackGaEvent(
+  eventName: string,
+  params?: Record<string, unknown>
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   window.gtag?.("event", eventName, params);
 }
 
@@ -56,20 +73,42 @@ function getFeedbackClassName(messageType: FeedbackType): string {
 }
 
 function getAppUrl(): string {
-  if (typeof window === "undefined") return "";
+  if (typeof window === "undefined") {
+    return "";
+  }
+
   return process.env.NEXT_PUBLIC_APP_URL?.trim() || window.location.origin;
 }
 
 function getSafeRedirectTo(value: string | null): string {
-  if (!value) return BRAND.routes.app;
-  if (!value.startsWith("/") || value.startsWith("//")) return BRAND.routes.app;
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return BRAND.routes.app;
+  }
+
   return value;
+}
+
+function isNativeAuthCallback(url: string): boolean {
+  try {
+    const parsedUrl = new URL(url);
+
+    return (
+      parsedUrl.protocol === "com.lvtchat.app:" &&
+      parsedUrl.hostname === "auth" &&
+      parsedUrl.pathname === "/callback"
+    );
+  } catch {
+    return false;
+  }
 }
 
 export default function LoginClient() {
   const supabase = useMemo(() => createBrowserSupabaseClient(), []);
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  const processingNativeCallbackRef = useRef(false);
+  const processedNativeCodeRef = useRef<string | null>(null);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -83,6 +122,7 @@ export default function LoginClient() {
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
   const redirectTo = getSafeRedirectTo(searchParams.get("redirectTo"));
+  const isNativeApp = Capacitor.isNativePlatform();
   const isBusy = loading || googleLoading || resetLoading;
 
   const canSubmit =
@@ -91,20 +131,92 @@ export default function LoginClient() {
     !isBusy;
 
   const setFeedback = useCallback(
-    (nextMessage: string | null, nextType: FeedbackType) => {
+    (nextMessage: string | null, nextType: FeedbackType): void => {
       setMessage(nextMessage);
       setMessageType(nextType);
     },
     []
   );
 
-  const clearFeedback = useCallback(() => {
+  const clearFeedback = useCallback((): void => {
     setFeedback(null, null);
   }, [setFeedback]);
 
-  const resetGoogleLoadingOnResume = useCallback(() => {
-    setGoogleLoading(false);
-  }, []);
+  const completeNativeGoogleSignIn = useCallback(
+    async (callbackUrl: string): Promise<void> => {
+      if (
+        processingNativeCallbackRef.current ||
+        !isNativeAuthCallback(callbackUrl)
+      ) {
+        return;
+      }
+
+      const parsedUrl = new URL(callbackUrl);
+      const code = parsedUrl.searchParams.get("code");
+
+      if (code && processedNativeCodeRef.current === code) {
+        return;
+      }
+
+      processingNativeCallbackRef.current = true;
+      setGoogleLoading(true);
+      clearFeedback();
+
+      try {
+        const oauthError =
+          parsedUrl.searchParams.get("error_description") ||
+          parsedUrl.searchParams.get("error");
+
+        if (oauthError) {
+          throw new Error(decodeURIComponent(oauthError.replace(/\+/g, " ")));
+        }
+
+        if (!code) {
+          throw new Error(
+            "Google sign-in returned without an authorization code."
+          );
+        }
+
+        processedNativeCodeRef.current = code;
+
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+        if (error) {
+          throw error;
+        }
+
+        try {
+          await Browser.close();
+        } catch {
+          // Android may already have closed the browser after reopening the app.
+        }
+
+        trackGaEvent("login", {
+          method: "google",
+          auth_action: "oauth_completed",
+          platform: "android",
+        });
+
+        router.replace(redirectTo);
+        router.refresh();
+      } catch (caughtError) {
+        console.error("Native Google callback error:", caughtError);
+
+        processedNativeCodeRef.current = null;
+
+        setFeedback(
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Google sign-in could not be completed.",
+          "error"
+        );
+      } finally {
+        processingNativeCallbackRef.current = false;
+        setGoogleLoading(false);
+      }
+    },
+    [clearFeedback, redirectTo, router, setFeedback, supabase]
+  );
 
   useEffect(() => {
     if (searchParams.get("reset") === "success") {
@@ -113,27 +225,60 @@ export default function LoginClient() {
   }, [searchParams, setFeedback]);
 
   useEffect(() => {
-    function handleVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        resetGoogleLoadingOnResume();
+    if (!isNativeApp) {
+      return;
+    }
+
+    let cancelled = false;
+    let listenerHandle: PluginListenerHandle | undefined;
+
+    async function registerNativeAuthListener(): Promise<void> {
+      try {
+        listenerHandle = await App.addListener("appUrlOpen", ({ url }) => {
+          void completeNativeGoogleSignIn(url);
+        });
+
+        const launchData = await App.getLaunchUrl();
+
+        if (!cancelled && launchData?.url) {
+          void completeNativeGoogleSignIn(launchData.url);
+        }
+      } catch (caughtError) {
+        console.error(
+          "Unable to register native authentication listener:",
+          caughtError
+        );
+
+        if (!cancelled) {
+          setFeedback(
+            "The Android sign-in listener could not be initialized. Please close and reopen the app.",
+            "error"
+          );
+        }
       }
     }
 
-    window.addEventListener("focus", resetGoogleLoadingOnResume);
-    window.addEventListener("pageshow", resetGoogleLoadingOnResume);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    void registerNativeAuthListener();
 
     return () => {
-      window.removeEventListener("focus", resetGoogleLoadingOnResume);
-      window.removeEventListener("pageshow", resetGoogleLoadingOnResume);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      cancelled = true;
+
+      if (listenerHandle) {
+        void listenerHandle.remove();
+      }
     };
-  }, [resetGoogleLoadingOnResume]);
+  }, [completeNativeGoogleSignIn, isNativeApp, setFeedback]);
 
   useEffect(() => {
-    if (!googleLoading) return;
+    if (!googleLoading) {
+      return;
+    }
 
     const timeoutId = window.setTimeout(() => {
+      if (processingNativeCallbackRef.current) {
+        return;
+      }
+
       setGoogleLoading(false);
       setFeedback(
         "Google sign-in did not finish. Please try again.",
@@ -141,20 +286,51 @@ export default function LoginClient() {
       );
     }, GOOGLE_LOGIN_TIMEOUT_MS);
 
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [googleLoading, setFeedback]);
 
-  async function handleGoogleSignIn() {
-    if (isBusy) return;
+  async function handleGoogleSignIn(): Promise<void> {
+    if (isBusy) {
+      return;
+    }
 
     setGoogleLoading(true);
     clearFeedback();
+    processedNativeCodeRef.current = null;
 
     try {
       trackGaEvent("login", {
         method: "google",
         auth_action: "oauth_started",
+        platform: isNativeApp ? "android" : "web",
       });
+
+      if (isNativeApp) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: NATIVE_AUTH_CALLBACK,
+            skipBrowserRedirect: true,
+          },
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        if (!data.url) {
+          throw new Error("Google sign-in URL was not returned.");
+        }
+
+        await Browser.open({
+          url: data.url,
+          toolbarColor: "#020817",
+        });
+
+        return;
+      }
 
       const appUrl = getAppUrl();
 
@@ -162,27 +338,36 @@ export default function LoginClient() {
         provider: "google",
         options: {
           redirectTo: `${appUrl}/auth/callback?next=${encodeURIComponent(
-            BRAND.routes.app
+            redirectTo
           )}`,
         },
       });
 
-      if (error) throw error;
-    } catch (error) {
+      if (error) {
+        throw error;
+      }
+    } catch (caughtError) {
+      console.error("Google sign-in error:", caughtError);
+
       setFeedback(
-        error instanceof Error
-          ? error.message
+        caughtError instanceof Error
+          ? caughtError.message
           : "Google sign-in failed. Please try again.",
         "error"
       );
+
       setGoogleLoading(false);
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>
+  ): Promise<void> {
     event.preventDefault();
 
-    if (!canSubmit) return;
+    if (!canSubmit) {
+      return;
+    }
 
     setLoading(true);
     clearFeedback();
@@ -203,7 +388,9 @@ export default function LoginClient() {
           },
         });
 
-        if (error) throw error;
+        if (error) {
+          throw error;
+        }
 
         trackGaEvent("sign_up", {
           method: "email",
@@ -213,6 +400,7 @@ export default function LoginClient() {
           "Account created. Please check your email to confirm your account.",
           "success"
         );
+
         setPassword("");
         return;
       }
@@ -222,7 +410,9 @@ export default function LoginClient() {
         password,
       });
 
-      if (error) throw error;
+      if (error) {
+        throw error;
+      }
 
       trackGaEvent("login", {
         method: "email",
@@ -230,9 +420,11 @@ export default function LoginClient() {
 
       router.replace(redirectTo);
       router.refresh();
-    } catch (error) {
+    } catch (caughtError) {
       setFeedback(
-        error instanceof Error ? error.message : "Authentication failed.",
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Authentication failed.",
         "error"
       );
     } finally {
@@ -240,13 +432,18 @@ export default function LoginClient() {
     }
   }
 
-  async function handleForgotPassword() {
+  async function handleForgotPassword(): Promise<void> {
     if (!normalizedEmail) {
-      setFeedback("Enter your email first, then click Forgot password.", "error");
+      setFeedback(
+        "Enter your email first, then click Forgot password.",
+        "error"
+      );
       return;
     }
 
-    if (isBusy) return;
+    if (isBusy) {
+      return;
+    }
 
     setResetLoading(true);
     clearFeedback();
@@ -268,9 +465,11 @@ export default function LoginClient() {
         "Password reset email sent. Check your inbox and spam folder. For best results, open the reset email on the same device where you requested it.",
         "success"
       );
-    } catch (error) {
+    } catch (caughtError) {
       setFeedback(
-        error instanceof Error ? error.message : "Failed to send reset email.",
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Failed to send reset email.",
         "error"
       );
     } finally {
@@ -278,7 +477,7 @@ export default function LoginClient() {
     }
   }
 
-  function toggleMode() {
+  function toggleMode(): void {
     setMode((previous) => (previous === "signin" ? "signup" : "signin"));
     setPassword("");
     setShowPassword(false);
@@ -287,7 +486,7 @@ export default function LoginClient() {
 
   return (
     <main className="relative flex min-h-dvh items-center justify-center overflow-x-hidden bg-[#020817] px-4 py-10 text-zinc-100">
-      <div className="pointer-events-none absolute inset-0">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0">
         <div className="absolute left-[-8%] top-[6%] h-[360px] w-[360px] rounded-full bg-blue-600/10 blur-3xl" />
         <div className="absolute right-[4%] top-[10%] h-[320px] w-[320px] rounded-full bg-violet-500/10 blur-3xl" />
         <div className="absolute bottom-[8%] left-[18%] h-[240px] w-[380px] rounded-full bg-cyan-500/10 blur-3xl" />
@@ -297,7 +496,7 @@ export default function LoginClient() {
         <div className="text-center">
           <Link
             href={BRAND.routes.home}
-            className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold text-white shadow-lg shadow-blue-500/25"
+            className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold text-white shadow-lg shadow-blue-500/25 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
             aria-label={`${BRAND.name} home`}
           >
             {BRAND.shortName}
@@ -307,7 +506,10 @@ export default function LoginClient() {
             {BRAND.name}
           </p>
 
-          <h1 id="login-heading" className="mt-3 text-2xl font-semibold text-white">
+          <h1
+            id="login-heading"
+            className="mt-3 text-2xl font-semibold text-white"
+          >
             {mode === "signin" ? "Sign in" : "Create account"}
           </h1>
 
@@ -322,29 +524,42 @@ export default function LoginClient() {
             type="button"
             onClick={handleGoogleSignIn}
             disabled={isBusy}
+            aria-busy={googleLoading}
             className={SECONDARY_BUTTON_CLASS}
           >
-            <span className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 text-xs font-bold text-blue-600">
+            <span
+              aria-hidden="true"
+              className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 text-xs font-bold text-blue-600"
+            >
               G
             </span>
+
             {googleLoading ? "Connecting to Google..." : "Continue with Google"}
           </button>
         </div>
 
         <div className="my-6 flex items-center gap-3">
-          <div className="h-px flex-1 bg-white/10" />
+          <div aria-hidden="true" className="h-px flex-1 bg-white/10" />
           <span className="text-xs text-zinc-500">or use email</span>
-          <div className="h-px flex-1 bg-white/10" />
+          <div aria-hidden="true" className="h-px flex-1 bg-white/10" />
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <label className="sr-only" htmlFor="email">
+            Email
+          </label>
+
           <input
+            id="email"
             type="email"
             placeholder="Email"
             value={email}
             onChange={(event) => {
               setEmail(event.target.value);
-              if (message) clearFeedback();
+
+              if (message) {
+                clearFeedback();
+              }
             }}
             className={INPUT_CLASS}
             autoComplete="email"
@@ -353,36 +568,47 @@ export default function LoginClient() {
           />
 
           <div className="relative">
+            <label className="sr-only" htmlFor="password">
+              Password
+            </label>
+
             <input
+              id="password"
               type={showPassword ? "text" : "password"}
               placeholder="Password"
               value={password}
               onChange={(event) => {
                 setPassword(event.target.value);
-                if (message) clearFeedback();
+
+                if (message) {
+                  clearFeedback();
+                }
               }}
               className={`${INPUT_CLASS} pr-12`}
-              autoComplete={mode === "signin" ? "current-password" : "new-password"}
+              autoComplete={
+                mode === "signin" ? "current-password" : "new-password"
+              }
+              minLength={mode === "signup" ? MIN_PASSWORD_LENGTH : undefined}
               required
             />
 
             <button
               type="button"
               onClick={() => setShowPassword((previous) => !previous)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-zinc-400 transition hover:text-zinc-100"
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-zinc-400 transition hover:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-white/40"
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
 
-          {mode === "signup" && (
+          {mode === "signup" ? (
             <p className="text-xs text-zinc-500">
               Use at least {MIN_PASSWORD_LENGTH} characters.
             </p>
-          )}
+          ) : null}
 
-          {mode === "signin" && (
+          {mode === "signin" ? (
             <button
               type="button"
               onClick={handleForgotPassword}
@@ -391,9 +617,14 @@ export default function LoginClient() {
             >
               {resetLoading ? "Sending reset email..." : "Forgot password?"}
             </button>
-          )}
+          ) : null}
 
-          <button type="submit" disabled={!canSubmit} className={PRIMARY_BUTTON_CLASS}>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            aria-busy={loading}
+            className={PRIMARY_BUTTON_CLASS}
+          >
             {loading
               ? "Please wait..."
               : mode === "signin"
@@ -402,11 +633,14 @@ export default function LoginClient() {
           </button>
         </form>
 
-        {message && (
-          <p className={`mt-4 ${getFeedbackClassName(messageType)}`}>
+        {message ? (
+          <p
+            role={messageType === "error" ? "alert" : "status"}
+            className={`mt-4 ${getFeedbackClassName(messageType)}`}
+          >
             {message}
           </p>
-        )}
+        ) : null}
 
         <button
           type="button"
@@ -421,11 +655,17 @@ export default function LoginClient() {
 
         <p className="mt-6 text-center text-xs leading-5 text-zinc-500">
           By using {BRAND.name}, you agree to the{" "}
-          <Link href={BRAND.routes.privacy} className="underline hover:text-zinc-300">
+          <Link
+            href={BRAND.routes.privacy}
+            className="rounded-sm underline hover:text-zinc-300 focus:outline-none focus:ring-2 focus:ring-white/40"
+          >
             Privacy Policy
           </Link>{" "}
           and{" "}
-          <Link href={BRAND.routes.terms} className="underline hover:text-zinc-300">
+          <Link
+            href={BRAND.routes.terms}
+            className="rounded-sm underline hover:text-zinc-300 focus:outline-none focus:ring-2 focus:ring-white/40"
+          >
             Terms of Service
           </Link>
           .
