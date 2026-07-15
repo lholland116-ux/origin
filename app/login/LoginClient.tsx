@@ -41,7 +41,7 @@ const INPUT_CLASS =
   "w-full rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(7,13,28,0.94),rgba(4,8,20,0.98))] px-4 py-3 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-blue-400/40 focus:shadow-[0_0_0_1px_rgba(59,130,246,0.35),0_0_20px_rgba(59,130,246,0.15)]";
 
 const PRIMARY_BUTTON_CLASS =
-  "w-full rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-4 py-3 font-medium text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.01] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50";
+  "w-full rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-4 py-3 font-medium text-white shadow-[0_12px_30px_rgba(37,99,235,0.35)] transition hover:scale-[1.01] hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] disabled:cursor-not-allowed disabled:opacity-50";
 
 const SECONDARY_BUTTON_CLASS =
   "flex w-full items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white px-4 py-3 font-medium text-slate-950 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817] disabled:cursor-not-allowed disabled:opacity-60";
@@ -168,7 +168,7 @@ export default function LoginClient() {
           parsedUrl.searchParams.get("error");
 
         if (oauthError) {
-          throw new Error(decodeURIComponent(oauthError.replace(/\+/g, " ")));
+          throw new Error(oauthError);
         }
 
         if (!code) {
@@ -313,6 +313,9 @@ export default function LoginClient() {
           options: {
             redirectTo: NATIVE_AUTH_CALLBACK,
             skipBrowserRedirect: true,
+            queryParams: {
+              prompt: "select_account",
+            },
           },
         });
 
@@ -340,6 +343,9 @@ export default function LoginClient() {
           redirectTo: `${appUrl}/auth/callback?next=${encodeURIComponent(
             redirectTo
           )}`,
+          queryParams: {
+            prompt: "select_account",
+          },
         },
       });
 
