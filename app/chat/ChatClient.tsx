@@ -32,6 +32,8 @@ import {
 import UpgradeModal from "@/components/UpgradeModal";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -875,8 +877,11 @@ export default function ChatClient({
   const activeDocumentPollRef = useRef(0);
   const recognitionRef = useRef<AppSpeechRecognition | null>(null);
   const speechSessionBaseRef = useRef<string>("");
-  const lastAppliedTranscriptRef = useRef<string>("");
 
+  const lastAppliedTranscriptRef = useRef<string>("");
+  const nativeSpeechListenerRef = useRef<PluginListenerHandle | null>(null);
+  const nativeSpeechAvailableRef = useRef(false);
+  const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
 
   const readyComposerDocuments = useMemo(
@@ -990,6 +995,63 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }, [conversationId]);
 
   useEffect(() => {
+  let cancelled = false;
+
+  async function initializeSpeechRecognition(): Promise<void> {
+    if (isNativeApp) {
+      try {
+        const availability = await SpeechRecognition.available();
+
+        if (cancelled) return;
+
+        nativeSpeechAvailableRef.current = availability.available;
+        setSpeechSupported(availability.available);
+
+        if (!availability.available) {
+          setSpeechError(
+            "Voice input is not available on this Android device."
+          );
+          return;
+        }
+
+        nativeSpeechListenerRef.current =
+          await SpeechRecognition.addListener(
+            "partialResults",
+            (event) => {
+              const transcript = event.matches?.[0]?.trim() ?? "";
+
+              if (!transcript) return;
+
+              const sessionBase = speechSessionBaseRef.current.trim();
+              lastAppliedTranscriptRef.current = transcript;
+
+              setInput(
+                sessionBase ? `${sessionBase} ${transcript}` : transcript
+              );
+
+              setUiError("");
+              setSpeechError(null);
+            }
+          );
+
+        return;
+      } catch (error) {
+        console.error(
+          "Native speech recognition initialization failed:",
+          error
+        );
+
+        if (!cancelled) {
+          setSpeechSupported(false);
+          setSpeechError(
+            "Voice input could not be initialized on this device."
+          );
+        }
+
+        return;
+      }
+    }
+
     if (typeof window === "undefined") return;
 
     const SpeechRecognitionConstructor =
@@ -1001,6 +1063,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
 
     const recognition = new SpeechRecognitionConstructor();
+
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = "en-US";
@@ -1011,6 +1074,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       for (let i = 0; i < event.results.length; i += 1) {
         const transcript = event.results[i][0]?.transcript ?? "";
+
         if (event.results[i].isFinal) {
           finalTranscript += transcript;
         } else {
@@ -1018,13 +1082,21 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         }
       }
 
-      const transcriptToApply = (finalTranscript || interimTranscript).trim();
+      const transcriptToApply = (
+        finalTranscript || interimTranscript
+      ).trim();
+
       if (!transcriptToApply) return;
 
       const sessionBase = speechSessionBaseRef.current.trim();
       lastAppliedTranscriptRef.current = transcriptToApply;
 
-      setInput(sessionBase ? `${sessionBase} ${transcriptToApply}` : transcriptToApply);
+      setInput(
+        sessionBase
+          ? `${sessionBase} ${transcriptToApply}`
+          : transcriptToApply
+      );
+
       setUiError("");
       setSpeechError(null);
     };
@@ -1056,21 +1128,53 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     };
 
     recognitionRef.current = recognition;
+  }
 
-    return () => {
-      recognition.abort();
-      recognitionRef.current = null;
-    };
-  }, []);
+  void initializeSpeechRecognition();
+
+  return () => {
+    cancelled = true;
+
+    recognitionRef.current?.abort();
+    recognitionRef.current = null;
+
+    if (nativeSpeechListenerRef.current) {
+      void nativeSpeechListenerRef.current.remove();
+      nativeSpeechListenerRef.current = null;
+    }
+
+    if (isNativeApp) {
+      void SpeechRecognition.forceStop().catch(() => {
+        // Native recognition may already be stopped.
+      });
+    }
+  };
+}, [isNativeApp]);
 
   useEffect(() => {
-    if (loading || isUploadingDocuments || uploadingImage) {
-      if (isListening) {
-        recognitionRef.current?.stop();
-        setIsListening(false);
-      }
-    }
-  }, [loading, isUploadingDocuments, uploadingImage, isListening]);
+  if (
+    !isListening ||
+    (!loading && !isUploadingDocuments && !uploadingImage)
+  ) {
+    return;
+  }
+
+  if (isNativeApp) {
+    void SpeechRecognition.stop().catch((error) => {
+      console.error("Could not stop native voice input:", error);
+    });
+  } else {
+    recognitionRef.current?.stop();
+  }
+
+  setIsListening(false);
+}, [
+  isNativeApp,
+  isListening,
+  isUploadingDocuments,
+  loading,
+  uploadingImage,
+]);
 
   useEffect(() => {
     if (!conversationId || !hasPendingDocuments) return;
@@ -1231,8 +1335,51 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     imageInputRef.current?.click();
   }
 
-  function handleStartListening(): void {
-    if (loading || uploadingImage || isUploadingDocuments || isLimitReached || hasPendingDocuments) {
+  async function handleStartListening(): Promise<void> {
+  if (
+    loading ||
+    uploadingImage ||
+    isUploadingDocuments ||
+    isLimitReached ||
+    hasPendingDocuments
+  ) {
+    return;
+  }
+
+  clearTransientErrors();
+  speechSessionBaseRef.current = input.trim();
+  lastAppliedTranscriptRef.current = "";
+
+  try {
+    if (isNativeApp) {
+      if (!nativeSpeechAvailableRef.current) {
+        setSpeechSupported(false);
+        setSpeechError(
+          "Voice input is not available on this Android device."
+        );
+        return;
+      }
+
+      const permissions = await SpeechRecognition.checkPermissions();
+
+      if (permissions.speechRecognition !== "granted") {
+        const requested =
+          await SpeechRecognition.requestPermissions();
+
+        if (requested.speechRecognition !== "granted") {
+          setSpeechError("Microphone access was denied.");
+          return;
+        }
+      }
+
+      setIsListening(true);
+
+      await SpeechRecognition.start({
+        language: "en-US",
+        maxResults: 3,
+        partialResults: true,
+      });
+
       return;
     }
 
@@ -1241,27 +1388,30 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    clearTransientErrors();
-    speechSessionBaseRef.current = input.trim();
-    lastAppliedTranscriptRef.current = "";
+    setIsListening(true);
+    recognitionRef.current.start();
+  } catch (error) {
+    console.error("Could not start voice input:", error);
 
-    try {
-      setIsListening(true);
-      recognitionRef.current.start();
-    } catch {
-      setIsListening(false);
-      setSpeechError("Could not start microphone input.");
-    }
+    setIsListening(false);
+    setSpeechError("Could not start microphone input.");
   }
+}
 
-  function handleStopListening(): void {
-    try {
+  async function handleStopListening(): Promise<void> {
+  try {
+    if (isNativeApp) {
+      await SpeechRecognition.stop();
+    } else {
       recognitionRef.current?.stop();
-    } finally {
-      setIsListening(false);
-      lastAppliedTranscriptRef.current = "";
     }
+  } catch (error) {
+    console.error("Could not stop voice input:", error);
+  } finally {
+    setIsListening(false);
+    lastAppliedTranscriptRef.current = "";
   }
+}
 
   async function fetchUsage() {
     try {
