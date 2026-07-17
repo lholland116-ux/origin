@@ -880,6 +880,8 @@ export default function ChatClient({
 
   const lastAppliedTranscriptRef = useRef<string>("");
   const nativeSpeechListenerRef = useRef<PluginListenerHandle | null>(null);
+  const nativeListeningStateListenerRef =
+    useRef<PluginListenerHandle | null>(null);
   const nativeSpeechAvailableRef = useRef(false);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
@@ -1034,6 +1036,30 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             }
           );
 
+        nativeListeningStateListenerRef.current =
+          await SpeechRecognition.addListener(
+            "listeningState",
+            (event) => {
+              const state = event.state ?? event.status;
+
+              if (state === "startingListening" || state === "started") {
+                setIsListening(true);
+                return;
+              }
+
+              if (state === "stoppingListening" || state === "stopped") {
+                setIsListening(false);
+                lastAppliedTranscriptRef.current = "";
+
+                if (event.reason === "error") {
+                  setSpeechError(
+                    "Voice input stopped unexpectedly. Please try again."
+                  );
+                }
+              }
+            }
+          );
+
         return;
       } catch (error) {
         console.error(
@@ -1142,7 +1168,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       void nativeSpeechListenerRef.current.remove();
       nativeSpeechListenerRef.current = null;
     }
-
+    if (nativeListeningStateListenerRef.current) {
+      void nativeListeningStateListenerRef.current.remove();
+      nativeListeningStateListenerRef.current = null;
+    }
     if (isNativeApp) {
       void SpeechRecognition.forceStop().catch(() => {
         // Native recognition may already be stopped.
@@ -1363,16 +1392,13 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       const permissions = await SpeechRecognition.checkPermissions();
 
       if (permissions.speechRecognition !== "granted") {
-        const requested =
-          await SpeechRecognition.requestPermissions();
+        const requested = await SpeechRecognition.requestPermissions();
 
         if (requested.speechRecognition !== "granted") {
           setSpeechError("Microphone access was denied.");
           return;
         }
       }
-
-      setIsListening(true);
 
       await SpeechRecognition.start({
         language: "en-US",
@@ -1394,24 +1420,28 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     console.error("Could not start voice input:", error);
 
     setIsListening(false);
+    lastAppliedTranscriptRef.current = "";
     setSpeechError("Could not start microphone input.");
   }
 }
 
   async function handleStopListening(): Promise<void> {
-  try {
-    if (isNativeApp) {
-      await SpeechRecognition.stop();
-    } else {
+    try {
+      if (isNativeApp) {
+        await SpeechRecognition.stop();
+        return;
+      }
+
       recognitionRef.current?.stop();
+      setIsListening(false);
+      lastAppliedTranscriptRef.current = "";
+    } catch (error) {
+      console.error("Could not stop voice input:", error);
+
+      setIsListening(false);
+      lastAppliedTranscriptRef.current = "";
     }
-  } catch (error) {
-    console.error("Could not stop voice input:", error);
-  } finally {
-    setIsListening(false);
-    lastAppliedTranscriptRef.current = "";
   }
-}
 
   async function fetchUsage() {
     try {
