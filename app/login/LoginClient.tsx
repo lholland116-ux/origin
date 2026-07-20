@@ -102,6 +102,43 @@ function isNativeAuthCallback(url: string): boolean {
   }
 }
 
+function NativeSignInTransition() {
+  return (
+    <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#020817] px-4 text-zinc-100">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[-8%] top-[6%] h-[360px] w-[360px] rounded-full bg-blue-600/10 blur-3xl" />
+        <div className="absolute right-[4%] top-[10%] h-[320px] w-[320px] rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="absolute bottom-[8%] left-[18%] h-[240px] w-[380px] rounded-full bg-cyan-500/10 blur-3xl" />
+      </div>
+
+      <section
+        className="relative w-full max-w-sm rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(12,22,48,0.94),rgba(7,13,30,0.97))] p-8 text-center shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur"
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-xl font-bold text-white shadow-lg shadow-blue-500/25">
+          {BRAND.shortName}
+        </div>
+
+        <h1 className="mt-6 text-xl font-semibold text-white">
+          Signing you in
+        </h1>
+
+        <p className="mt-3 text-sm leading-6 text-zinc-400">
+          Connecting securely to your {BRAND.name} account...
+        </p>
+
+        <div
+          className="mx-auto mt-6 h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-blue-400"
+          aria-hidden="true"
+        />
+
+        <span className="sr-only">Authentication is in progress.</span>
+      </section>
+    </main>
+  );
+}
+
 export default function LoginClient() {
   const supabase = useMemo(() => createBrowserSupabaseClient(), []);
   const router = useRouter();
@@ -162,6 +199,8 @@ export default function LoginClient() {
       setGoogleLoading(true);
       clearFeedback();
 
+      let navigationStarted = false;
+
       try {
         const oauthError =
           parsedUrl.searchParams.get("error_description") ||
@@ -179,10 +218,17 @@ export default function LoginClient() {
 
         processedNativeCodeRef.current = code;
 
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        const { data, error } =
+          await supabase.auth.exchangeCodeForSession(code);
 
         if (error) {
           throw error;
+        }
+
+        if (!data.session?.user) {
+          throw new Error(
+            "Google sign-in completed, but the authenticated session was not established."
+          );
         }
 
         try {
@@ -197,8 +243,8 @@ export default function LoginClient() {
           platform: "android",
         });
 
+        navigationStarted = true;
         router.replace(redirectTo);
-        router.refresh();
       } catch (caughtError) {
         console.error("Native Google callback error:", caughtError);
 
@@ -212,7 +258,13 @@ export default function LoginClient() {
         );
       } finally {
         processingNativeCallbackRef.current = false;
-        setGoogleLoading(false);
+
+        // Keep the transition screen mounted while Next.js replaces /login
+        // with the authenticated destination. Clearing this state too early
+        // causes the full login form to flash a second time on Android.
+        if (!navigationStarted) {
+          setGoogleLoading(false);
+        }
       }
     },
     [clearFeedback, redirectTo, router, setFeedback, supabase]
@@ -425,7 +477,6 @@ export default function LoginClient() {
       });
 
       router.replace(redirectTo);
-      router.refresh();
     } catch (caughtError) {
       setFeedback(
         caughtError instanceof Error
@@ -488,6 +539,10 @@ export default function LoginClient() {
     setPassword("");
     setShowPassword(false);
     clearFeedback();
+  }
+
+  if (isNativeApp && googleLoading) {
+    return <NativeSignInTransition />;
   }
 
   return (
