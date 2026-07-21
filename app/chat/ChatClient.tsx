@@ -872,6 +872,29 @@ export default function ChatClient({
   );
 
   const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function hydrateInitialMessageImages(): Promise<void> {
+      try {
+        const hydratedMessages =
+          await hydrateMessagesWithImageUrls(initialMessages);
+
+        if (!cancelled) {
+          setMessages(hydratedMessages);
+        }
+      } catch (error) {
+        console.error("Failed to load initial message images:", error);
+      }
+    }
+
+    void hydrateInitialMessageImages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialMessages]);
+  
   const endRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeDocumentPollRef = useRef(0);
@@ -1516,6 +1539,48 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     return data.signedUrl;
   }
 
+  async function hydrateMessagesWithImageUrls(
+    rawMessages: Message[]
+  ): Promise<Message[]> {
+    return Promise.all(
+      rawMessages.map(async (message) => {
+        const sources = Array.isArray(message.sources)
+          ? dedupeSources(message.sources)
+          : [];
+
+        const normalizedMessage: Message = {
+          ...message,
+          sources,
+          sourceCount:
+            typeof message.sourceCount === "number"
+              ? message.sourceCount
+              : sources.length,
+          widget: normalizeWidget(message.widget),
+          documents: Array.isArray(message.documents)
+            ? cloneDocuments(message.documents)
+            : [],
+          image_url:
+            typeof message.image_url === "string" && message.image_url.trim()
+              ? message.image_url
+              : null,
+        };
+
+        if (!normalizedMessage.image_path) {
+          return normalizedMessage;
+        }
+
+        const signedImageUrl = await getSignedImageUrl(
+          normalizedMessage.image_path
+        );
+
+        return {
+          ...normalizedMessage,
+          image_url: signedImageUrl,
+        };
+      })
+    );
+  }
+
   async function uploadImageToStorage(file: File): Promise<{
     path: string;
     name: string;
@@ -1708,29 +1773,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       const data = await res.json();
       const rawMessages = Array.isArray(data?.messages) ? data.messages : [];
 
-      const nextMessages = await Promise.all(
-        rawMessages.map(async (msg: Message) => {
-          const normalizedMessage: Message = {
-            ...msg,
-            sources: Array.isArray(msg.sources) ? dedupeSources(msg.sources) : [],
-            sourceCount:
-              typeof msg.sourceCount === "number"
-                ? msg.sourceCount
-                : Array.isArray(msg.sources)
-                  ? dedupeSources(msg.sources).length
-                  : 0,
-            widget: normalizeWidget(msg.widget),
-            documents: Array.isArray(msg.documents) ? cloneDocuments(msg.documents) : [],
-          };
-
-          if (normalizedMessage.image_path) {
-            const imageUrl = await getSignedImageUrl(normalizedMessage.image_path);
-            return { ...normalizedMessage, image_url: imageUrl };
-          }
-
-          return normalizedMessage;
-        })
-      );
+      const nextMessages = await hydrateMessagesWithImageUrls(rawMessages);
 
       setConversationId(nextConversationId);
       setMessages(nextMessages);
