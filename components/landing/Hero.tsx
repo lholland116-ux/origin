@@ -47,6 +47,7 @@ export default function Hero() {
         >
           {BRAND.headline}
           <br />
+
           <span className="bg-[linear-gradient(90deg,#3B82F6_0%,#6A8DFF_45%,#8B5CF6_100%)] bg-clip-text text-transparent">
             {BRAND.slogan}
           </span>
@@ -79,14 +80,22 @@ export default function Hero() {
         <div className="mt-8 flex flex-wrap gap-4">
           <Link
             href={BRAND.routes.login}
-            className="rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-6 py-3 text-sm font-semibold text-white shadow-[0_14px_35px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            className="inline-flex items-center justify-center rounded-2xl bg-[linear-gradient(90deg,#2563EB,#4F8CFF)] px-6 py-3 text-sm font-semibold text-white shadow-[0_14px_35px_rgba(37,99,235,0.35)] transition hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
             {BRAND.ctaPrimary}
           </Link>
 
+          <a
+            href="#official-demo"
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-blue-400/30 bg-blue-500/10 px-6 py-3 text-sm font-semibold text-blue-100 backdrop-blur transition hover:border-blue-300/40 hover:bg-blue-500/15 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
+          >
+            <span aria-hidden="true">▶</span>
+            Watch Official Demo
+          </a>
+
           <Link
             href={BRAND.routes.pricing}
-            className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-6 py-3 text-sm font-semibold text-emerald-100 backdrop-blur transition hover:bg-emerald-500/15 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            className="inline-flex items-center justify-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-6 py-3 text-sm font-semibold text-emerald-100 backdrop-blur transition hover:border-emerald-300/40 hover:bg-emerald-500/15 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
           >
             View Early Adopter Pricing
           </Link>
@@ -151,6 +160,7 @@ export default function Hero() {
 
                         <div>
                           <p className="font-medium text-white">{step.title}</p>
+
                           <p className="mt-0.5 text-white/55">
                             {step.subtitle}
                           </p>
