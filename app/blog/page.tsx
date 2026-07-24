@@ -5,10 +5,18 @@ import { BRAND } from "@/lib/branding";
 export const metadata: Metadata = {
   title: `Blog | ${BRAND.name}`,
   description:
-    "News, product updates, practical AI guidance, and insights from LVTChat.",
+    "News, product updates, practical AI guidance, demonstrations, and insights from LVTChat.",
 };
 
 const posts = [
+  {
+    title: "Watch the Official LVTChat Demo",
+    description:
+      "See LVTChat in action and discover practical AI for research, web search, document analysis, business planning, and everyday tasks.",
+    date: "July 24, 2026",
+    href: "/blog/watch-the-official-lvtchat-demo",
+    category: "Product Demo",
+  },
   {
     title: "LVTChat Is Now Available on Google Play",
     description:
@@ -20,10 +28,10 @@ const posts = [
 ] as const;
 
 const upcomingTopics = [
-  "Practical AI for everyday work",
-  "How to use AI more effectively",
-  "Productivity, planning, and decision support",
-  "Building useful AI tools for real-world needs",
+  "How to create a business plan with AI",
+  "Practical web research with LVTChat",
+  "How to analyze documents with AI",
+  "Using AI for everyday planning and decisions",
 ] as const;
 
 export default function BlogPage() {
@@ -37,7 +45,7 @@ export default function BlogPage() {
           ← Back to Home
         </Link>
 
-        <section className="mt-10 text-center">
+        <header className="mt-10 text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
             Blog
           </p>
@@ -47,12 +55,16 @@ export default function BlogPage() {
           </h1>
 
           <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-white/70 sm:text-lg">
-            Product updates, practical AI guidance, and ideas for working
-            smarter with artificial intelligence.
+            Product updates, demonstrations, practical AI guidance, and ideas
+            for working smarter with artificial intelligence.
           </p>
-        </section>
+        </header>
 
-        <section className="mt-12">
+        <section aria-labelledby="latest-articles-heading" className="mt-12">
+          <h2 id="latest-articles-heading" className="sr-only">
+            Latest articles
+          </h2>
+
           <div className="grid gap-6">
             {posts.map((post) => (
               <article
@@ -63,7 +75,8 @@ export default function BlogPage() {
                   <span className="rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1 text-blue-200">
                     {post.category}
                   </span>
-                  <span>{post.date}</span>
+
+                  <time>{post.date}</time>
                 </div>
 
                 <h2 className="mt-5 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
@@ -76,6 +89,7 @@ export default function BlogPage() {
 
                 <Link
                   href={post.href}
+                  aria-label={`Read: ${post.title}`}
                   className="mt-6 inline-flex rounded-2xl border border-blue-400/30 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100 transition hover:bg-blue-500/20 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
                 >
                   Read article →
@@ -89,8 +103,8 @@ export default function BlogPage() {
           <h2 className="text-2xl font-semibold text-white">Coming next</h2>
 
           <p className="mt-3 max-w-2xl text-sm leading-7 text-white/65 sm:text-base">
-            More practical articles are on the way to help you get better
-            results from AI.
+            More practical articles and demonstrations are on the way to help
+            you get better results from AI.
           </p>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
