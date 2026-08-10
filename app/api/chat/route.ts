@@ -19,7 +19,7 @@ const MAX_IMAGE_NAME_LENGTH = 255;
 const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 
-const MODEL = "gpt-5.3-chat-latest";
+const MODEL = "gpt-5.6";
 
 const TONE_LAYER = `
 Tone and style requirements:

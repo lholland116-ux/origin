@@ -13,7 +13,7 @@ const MAX_HISTORY_MESSAGES = 12;
 const MAX_RETURNED_SOURCES = 5;
 const IS_DEV = process.env.NODE_ENV === "development";
 
-const MODEL = "gpt-5.3-chat-latest";
+const MODEL = "gpt-5.6";
 
 const WEB_IDENTITY_GUARDRAIL = `
 Web search identity requirements:
