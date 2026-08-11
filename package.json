@@ -6,13 +6,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",
     "@capacitor/app": "^8.1.1",
     "@capacitor/browser": "^8.0.4",
-    "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
     "@capgo/capacitor-speech-recognition": "^8.1.10",
     "@napi-rs/canvas": "^0.1.97",
@@ -21,7 +23,7 @@
     "exceljs": "^4.4.0",
     "lucide-react": "^1.8.0",
     "mammoth": "^1.12.0",
-    "next": "^16.2.3",
+    "next": "16.3.0",
     "openai": "^6.34.0",
     "pdf-parse": "^2.4.5",
     "react": "19.2.3",
@@ -31,15 +33,18 @@
     "stripe": "^22.1.0"
   },
   "devDependencies": {
-    "@capacitor/assets": "^3.0.5",
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.4.1",
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/typography": "^0.5.19",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "4.1.10",
     "eslint": "^9",
-    "eslint-config-next": "^16.2.3",
+    "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "4.1.10"
   }
 }
