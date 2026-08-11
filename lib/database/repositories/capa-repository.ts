@@ -5,6 +5,8 @@ import type {
   CapaCaseStatus,
   CapaCaseVersion,
   CapaCaseVersionId,
+  CapaSectionVersion,
+  CapaSectionVersionId,
   IsoDateTime,
   OrganizationId,
 } from "../../capa/domain/capa-types";
@@ -19,6 +21,11 @@ import type {
  * Primary source:
  * Document #8 — LVT CAPA Data Model and Audit-Trail Specification
  *
+ * Supporting sources:
+ * Document #4 — LVT CAPA Workflow and State Specification
+ * Document #9 — LVT CAPA Security, Privacy, and Access-Control
+ * Specification
+ *
  * Traceability:
  * DM-COM-001 through DM-COM-009
  * VER-001 through VER-007
@@ -27,15 +34,22 @@ import type {
  *
  * Every read and write is organization-scoped. This interface exposes no
  * unscoped lookup and no destructive delete operation.
+ *
+ * The interface does not select a database, ORM, event store, outbox or
+ * physical transaction implementation. Those remain open under DEC-003.
  */
 
+/**
+ * Controlled input for advancing a CAPA aggregate to a new immutable
+ * current version.
+ */
 export interface AdvanceCapaVersionInput {
   readonly organization_id: OrganizationId;
   readonly capa_case_id: CapaCaseId;
 
   /**
-   * Optimistic-concurrency expectations obtained from the version the
-   * authorized user actually reviewed.
+   * Optimistic-concurrency expectations obtained from the exact version
+   * the authorized actor reviewed.
    */
   readonly expected_record_version: number;
   readonly expected_current_version_id:
@@ -49,6 +63,12 @@ export interface AdvanceCapaVersionInput {
   readonly updated_by: ActorReference;
 }
 
+/**
+ * Result of an optimistic current-version update.
+ *
+ * Conflict responses deliberately avoid revealing whether a case exists
+ * outside the authorized organization boundary.
+ */
 export type AdvanceCapaVersionResult =
   | {
       readonly status: "updated";
@@ -75,7 +95,7 @@ export interface CapaRepository {
   ): Promise<CapaCase | null>;
 
   /**
-   * Tenant- and parent-case-scoped immutable version lookup.
+   * Tenant- and parent-case-scoped immutable case-version lookup.
    */
   findCaseVersionById(
     organizationId: OrganizationId,
@@ -84,7 +104,23 @@ export interface CapaRepository {
   ): Promise<CapaCaseVersion | null>;
 
   /**
-   * Checks organization-local readable case-number uniqueness.
+   * Tenant- and parent-case-scoped immutable section-version lookup.
+   */
+  findSectionVersionById(
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sectionVersionId: CapaSectionVersionId,
+  ): Promise<CapaSectionVersion | null>;
+
+  /**
+   * Checks organization-local case-number availability.
+   *
+   * This method supports user feedback and case-number generation, but it
+   * is not sufficient to guarantee uniqueness because another transaction
+   * may insert the same value afterward.
+   *
+   * The physical data model must also enforce a unique organization_id
+   * plus case_number constraint or equivalent atomic guarantee.
    */
   caseNumberExists(
     organizationId: OrganizationId,
@@ -92,10 +128,10 @@ export interface CapaRepository {
   ): Promise<boolean>;
 
   /**
-   * Inserts the stable case aggregate.
+   * Inserts the stable CAPA aggregate.
    *
-   * Must execute inside the same transaction as the initial immutable
-   * version and required audit event.
+   * Initial creation must execute inside the same transaction as the
+   * initial section version, case version and required audit event.
    */
   insertCase(
     transaction: TransactionContext,
@@ -103,9 +139,22 @@ export interface CapaRepository {
   ): Promise<void>;
 
   /**
-   * Inserts an immutable material case version.
+   * Inserts an immutable controlled CAPA section version.
    *
-   * Implementations must not overwrite an existing version identity.
+   * Implementations must not overwrite an existing section-version
+   * identity. A material section change creates a new version.
+   */
+  insertSectionVersion(
+    transaction: TransactionContext,
+    sectionVersion: CapaSectionVersion,
+  ): Promise<void>;
+
+  /**
+   * Inserts an immutable material CAPA case version.
+   *
+   * Implementations must not overwrite an existing case-version identity.
+   * Referenced section-version identities must belong to the same
+   * organization and CAPA case.
    */
   insertCaseVersion(
     transaction: TransactionContext,
@@ -116,8 +165,15 @@ export interface CapaRepository {
    * Advances the aggregate's current-version pointer using optimistic
    * concurrency.
    *
-   * The update must succeed only when both expected_record_version and
-   * expected_current_version_id still match the authoritative record.
+   * The update succeeds only when:
+   *
+   * - organization_id and capa_case_id match an authorized record;
+   * - expected_record_version matches the authoritative record;
+   * - expected_current_version_id matches the authoritative pointer;
+   * - next_current_version_id identifies a valid immutable version for
+   *   the same organization and CAPA case.
+   *
+   * The update and its required audit event must commit atomically.
    */
   advanceCurrentVersion(
     transaction: TransactionContext,
