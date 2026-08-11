@@ -15,7 +15,10 @@ export default defineConfig({
        * capa-types.ts contains compile-time-only declarations and therefore
        * has no executable runtime statements to measure.
        */
-      include: ["lib/capa/**/*.ts"],
+      include: [
+        "lib/capa/**/*.ts",
+        "lib/security/**/*.ts",
+      ],
       exclude: [
         "lib/capa/**/*.d.ts",
         "lib/capa/domain/capa-types.ts",
