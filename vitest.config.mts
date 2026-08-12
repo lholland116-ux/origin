@@ -14,7 +14,7 @@ export default defineConfig({
     restoreMocks: true,
 
     /**
-     * Fail tests that exceed the controlled execution limit.
+     * Fail tests and hooks that exceed the controlled execution limit.
      */
     testTimeout: 10_000,
     hookTimeout: 10_000,
@@ -23,32 +23,33 @@ export default defineConfig({
       provider: "v8",
       reportsDirectory: "coverage/capa",
       reporter: ["text", "json", "html", "lcov"],
+      clean: true,
 
       /**
-       * Include executable CAPA and security modules.
+       * Measure executable CAPA, security and in-memory persistence code.
        *
-       * Provider interfaces under lib/database contain no runtime code and
-       * are verified by TypeScript compilation and adapter integration
-       * tests rather than executable line coverage.
+       * The in-memory adapter is part of the controlled integration-test
+       * infrastructure and must have its commit, rollback, isolation,
+       * concurrency and integrity behavior verified.
        */
       include: [
         "lib/capa/**/*.ts",
         "lib/security/**/*.ts",
+        "lib/database/in-memory/**/*.ts",
       ],
 
       /**
-       * Exclude compile-time-only declarations and provider contracts that
-       * contain no executable statements.
+       * Exclude compile-time declarations and provider-neutral contracts
+       * that contain no executable runtime behavior.
        */
       exclude: [
-        "lib/capa/**/*.d.ts",
+        "lib/**/*.d.ts",
         "lib/capa/domain/capa-types.ts",
         "lib/capa/authorization/capa-policy.ts",
       ],
 
       /**
-       * Release-blocking coverage thresholds for the current controlled
-       * CAPA and security implementation.
+       * Release-blocking thresholds for executable controlled modules.
        */
       thresholds: {
         statements: 100,
