@@ -1,0 +1,1410 @@
+"use client";
+
+import Link from "next/link";
+import {
+  type FormEvent,
+  useMemo,
+  useState,
+} from "react";
+
+const INPUT_LIMITS = {
+  initiatingEvent: 4_000,
+  sourceType: 64,
+  sourceReference: 500,
+  organizationReference: 100,
+} as const;
+
+const CONTROLLED_CODE_PATTERN =
+  /^[A-Za-z][A-Za-z0-9._:-]*$/;
+
+type WorkflowStep =
+  | "edit"
+  | "review"
+  | "created";
+
+interface CapaIntakeClientProps {
+  readonly userEmail: string;
+}
+
+interface IntakeFields {
+  readonly initiatingEvent: string;
+  readonly sourceType: string;
+  readonly sourceReference: string;
+  readonly organizationReference: string;
+}
+
+type FieldName = keyof IntakeFields;
+
+type FieldErrors = Partial<
+  Record<FieldName, string>
+>;
+
+interface CreatedCapaSummary {
+  readonly capaCaseId: string;
+  readonly caseNumber: string;
+  readonly status: string;
+  readonly recordVersion: number;
+  readonly currentVersionId: string;
+  readonly sectionVersionId: string;
+  readonly createdAt: string;
+  readonly initiatingEvent: string;
+  readonly sourceType: string;
+  readonly sourceReference?: string;
+  readonly organizationReference?: string;
+  readonly correlationId: string;
+  readonly retrievalVerified: boolean;
+}
+
+interface ApiIssue {
+  readonly path: string;
+  readonly message: string;
+}
+
+interface ApiErrorBody {
+  readonly error?: {
+    readonly code?: string;
+    readonly message?: string;
+    readonly correlation_id?: string;
+    readonly issues?: readonly ApiIssue[];
+  };
+}
+
+interface CreateCapaResponse {
+  readonly capa?: {
+    readonly capa_case_id?: string;
+    readonly case_number?: string;
+    readonly status?: string;
+    readonly record_version?: number;
+    readonly current_version_id?: string;
+    readonly section_version_id?: string;
+    readonly created_at?: string;
+  };
+  readonly correlation_id?: string;
+}
+
+interface RetrievedCapaResponse {
+  readonly capa?: {
+    readonly capa_case_id?: string;
+    readonly case_number?: string;
+    readonly status?: string;
+    readonly record_version?: number;
+    readonly current_version_id?: string;
+    readonly created_at?: string;
+    readonly sections?: readonly {
+      readonly section_version_id?: string;
+      readonly content?: {
+        readonly initiating_event?: string;
+        readonly source?: {
+          readonly source_type?: string;
+          readonly source_reference?: string;
+        };
+        readonly organization_reference?: string;
+      };
+    }[];
+  };
+  readonly correlation_id?: string;
+}
+
+const EMPTY_FIELDS: IntakeFields = {
+  initiatingEvent: "",
+  sourceType: "",
+  sourceReference: "",
+  organizationReference: "",
+};
+
+function createTraceId(): string {
+  return crypto.randomUUID();
+}
+
+async function readJson(
+  response: Response,
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null
+  );
+}
+
+function apiErrorMessage(
+  value: unknown,
+  fallback: string,
+): string {
+  if (!isRecord(value)) {
+    return fallback;
+  }
+
+  const error = value.error;
+
+  if (!isRecord(error)) {
+    return fallback;
+  }
+
+  return typeof error.message === "string"
+    ? error.message
+    : fallback;
+}
+
+function apiIssues(
+  value: unknown,
+): readonly ApiIssue[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const error = value.error;
+
+  if (
+    !isRecord(error) ||
+    !Array.isArray(error.issues)
+  ) {
+    return [];
+  }
+
+  return error.issues.filter(
+    (issue): issue is ApiIssue =>
+      isRecord(issue) &&
+      typeof issue.path === "string" &&
+      typeof issue.message === "string",
+  );
+}
+
+function normalizedFields(
+  fields: IntakeFields,
+): IntakeFields {
+  return {
+    initiatingEvent:
+      fields.initiatingEvent.trim(),
+    sourceType:
+      fields.sourceType.trim(),
+    sourceReference:
+      fields.sourceReference.trim(),
+    organizationReference:
+      fields.organizationReference.trim(),
+  };
+}
+
+function validateFields(
+  fields: IntakeFields,
+): FieldErrors {
+  const values = normalizedFields(fields);
+  const errors: FieldErrors = {};
+
+  if (!values.initiatingEvent) {
+    errors.initiatingEvent =
+      "Initiating event is required.";
+  } else if (
+    values.initiatingEvent.length >
+    INPUT_LIMITS.initiatingEvent
+  ) {
+    errors.initiatingEvent =
+      "Initiating event exceeds 4,000 characters.";
+  }
+
+  if (!values.sourceType) {
+    errors.sourceType =
+      "Source type is required.";
+  } else if (
+    values.sourceType.length >
+    INPUT_LIMITS.sourceType
+  ) {
+    errors.sourceType =
+      "Source type exceeds 64 characters.";
+  } else if (
+    !CONTROLLED_CODE_PATTERN.test(
+      values.sourceType,
+    )
+  ) {
+    errors.sourceType =
+      "Use a controlled code such as NONCONFORMANCE or AUDIT_FINDING.";
+  }
+
+  if (
+    values.sourceReference.length >
+    INPUT_LIMITS.sourceReference
+  ) {
+    errors.sourceReference =
+      "Source reference exceeds 500 characters.";
+  }
+
+  if (
+    values.organizationReference.length >
+    INPUT_LIMITS.organizationReference
+  ) {
+    errors.organizationReference =
+      "Organization reference exceeds 100 characters.";
+  }
+
+  return errors;
+}
+
+function mapApiIssues(
+  issues: readonly ApiIssue[],
+): FieldErrors {
+  const errors: FieldErrors = {};
+
+  for (const issue of issues) {
+    if (
+      issue.path === "initiating_event"
+    ) {
+      errors.initiatingEvent =
+        issue.message;
+    } else if (
+      issue.path === "source.source_type"
+    ) {
+      errors.sourceType =
+        issue.message;
+    } else if (
+      issue.path ===
+      "source.source_reference"
+    ) {
+      errors.sourceReference =
+        issue.message;
+    } else if (
+      issue.path ===
+      "organization_reference"
+    ) {
+      errors.organizationReference =
+        issue.message;
+    }
+  }
+
+  return errors;
+}
+
+function formattedDate(
+  value: string,
+): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(
+    "en-US",
+    {
+      dateStyle: "medium",
+      timeStyle: "short",
+    },
+  ).format(date);
+}
+
+function statusName(
+  status: string,
+): string {
+  return status === "S00"
+    ? "Draft Intake"
+    : status;
+}
+
+export default function CapaIntakeClient({
+  userEmail,
+}: CapaIntakeClientProps) {
+  const [step, setStep] =
+    useState<WorkflowStep>("edit");
+
+  const [fields, setFields] =
+    useState<IntakeFields>(
+      EMPTY_FIELDS,
+    );
+
+  const [errors, setErrors] =
+    useState<FieldErrors>({});
+
+  const [submitError, setSubmitError] =
+    useState<string | null>(null);
+
+  const [isSubmitting, setIsSubmitting] =
+    useState(false);
+
+  const [createdCapa, setCreatedCapa] =
+    useState<CreatedCapaSummary | null>(
+      null,
+    );
+
+  const charactersRemaining =
+    INPUT_LIMITS.initiatingEvent -
+    fields.initiatingEvent.length;
+
+  const canReview = useMemo(
+    () =>
+      fields.initiatingEvent.trim()
+        .length > 0 &&
+      fields.sourceType.trim().length > 0,
+    [
+      fields.initiatingEvent,
+      fields.sourceType,
+    ],
+  );
+
+  function updateField(
+    field: FieldName,
+    value: string,
+  ) {
+    setFields((current) => ({
+      ...current,
+      [field]: value,
+    }));
+
+    setErrors((current) => {
+      if (current[field] === undefined) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+
+    setSubmitError(null);
+  }
+
+  function proceedToReview(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    const validationErrors =
+      validateFields(fields);
+
+    setErrors(validationErrors);
+    setSubmitError(null);
+
+    if (
+      Object.keys(validationErrors)
+        .length > 0
+    ) {
+      return;
+    }
+
+    setFields(normalizedFields(fields));
+    setStep("review");
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  async function submitCapa() {
+    if (isSubmitting) {
+      return;
+    }
+
+    const validationErrors =
+      validateFields(fields);
+
+    if (
+      Object.keys(validationErrors)
+        .length > 0
+    ) {
+      setErrors(validationErrors);
+      setStep("edit");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    const requestId = createTraceId();
+    const correlationId = createTraceId();
+    const idempotencyKey =
+      createTraceId();
+
+    const values =
+      normalizedFields(fields);
+
+    const requestBody = {
+      initiating_event:
+        values.initiatingEvent,
+
+      source: {
+        source_type:
+          values.sourceType,
+
+        ...(values.sourceReference
+          ? {
+              source_reference:
+                values.sourceReference,
+            }
+          : {}),
+      },
+
+      ...(values.organizationReference
+        ? {
+            organization_reference:
+              values.organizationReference,
+          }
+        : {}),
+    };
+
+    try {
+      const createResponse = await fetch(
+        "/api/capa",
+        {
+          method: "POST",
+          headers: {
+            "content-type":
+              "application/json",
+            "x-request-id": requestId,
+            "x-correlation-id":
+              correlationId,
+            "idempotency-key":
+              idempotencyKey,
+          },
+          body: JSON.stringify(
+            requestBody,
+          ),
+        },
+      );
+
+      const createBody =
+        await readJson(createResponse);
+
+      if (!createResponse.ok) {
+        const issues =
+          apiIssues(createBody);
+
+        if (issues.length > 0) {
+          setErrors(
+            mapApiIssues(issues),
+          );
+          setStep("edit");
+        }
+
+        throw new Error(
+          apiErrorMessage(
+            createBody,
+            "The CAPA draft could not be created.",
+          ),
+        );
+      }
+
+      const created =
+        createBody as
+          CreateCapaResponse;
+
+      const capa = created.capa;
+
+      if (
+        capa === undefined ||
+        typeof capa.capa_case_id !==
+          "string" ||
+        typeof capa.case_number !==
+          "string" ||
+        typeof capa.status !==
+          "string" ||
+        typeof capa.record_version !==
+          "number" ||
+        typeof capa.current_version_id !==
+          "string" ||
+        typeof capa.section_version_id !==
+          "string" ||
+        typeof capa.created_at !==
+          "string"
+      ) {
+        throw new Error(
+          "The server returned an incomplete CAPA creation response.",
+        );
+      }
+
+      let retrievalVerified = false;
+      let verifiedInitiatingEvent =
+        values.initiatingEvent;
+
+      let verifiedSourceType =
+        values.sourceType;
+
+      let verifiedSourceReference =
+        values.sourceReference ||
+        undefined;
+
+      let verifiedOrganizationReference =
+        values.organizationReference ||
+        undefined;
+
+      const retrievalResponse =
+        await fetch(
+          `/api/capa?id=${encodeURIComponent(
+            capa.capa_case_id,
+          )}`,
+          {
+            method: "GET",
+            headers: {
+              "x-request-id":
+                createTraceId(),
+              "x-correlation-id":
+                correlationId,
+            },
+            cache: "no-store",
+          },
+        );
+
+      if (retrievalResponse.ok) {
+        const retrievalBody =
+          (await readJson(
+            retrievalResponse,
+          )) as RetrievedCapaResponse;
+
+        const retrieved =
+          retrievalBody.capa;
+
+        const intakeSection =
+          retrieved?.sections?.[0];
+
+        if (
+          retrieved?.capa_case_id ===
+            capa.capa_case_id &&
+          intakeSection?.content
+            ?.initiating_event
+        ) {
+          retrievalVerified = true;
+
+          verifiedInitiatingEvent =
+            intakeSection.content
+              .initiating_event;
+
+          verifiedSourceType =
+            intakeSection.content.source
+              ?.source_type ??
+            values.sourceType;
+
+          verifiedSourceReference =
+            intakeSection.content.source
+              ?.source_reference;
+
+          verifiedOrganizationReference =
+            intakeSection.content
+              .organization_reference;
+        }
+      }
+
+      setCreatedCapa({
+        capaCaseId:
+          capa.capa_case_id,
+        caseNumber:
+          capa.case_number,
+        status:
+          capa.status,
+        recordVersion:
+          capa.record_version,
+        currentVersionId:
+          capa.current_version_id,
+        sectionVersionId:
+          capa.section_version_id,
+        createdAt:
+          capa.created_at,
+        initiatingEvent:
+          verifiedInitiatingEvent,
+        sourceType:
+          verifiedSourceType,
+        sourceReference:
+          verifiedSourceReference,
+        organizationReference:
+          verifiedOrganizationReference,
+        correlationId:
+          created.correlation_id ??
+          correlationId,
+        retrievalVerified,
+      });
+
+      setStep("created");
+
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "The CAPA draft could not be created.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function createAnother() {
+    setFields(EMPTY_FIELDS);
+    setErrors({});
+    setSubmitError(null);
+    setCreatedCapa(null);
+    setStep("edit");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  return (
+    <div className="mx-auto min-h-screen max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+      <header className="mb-8 flex flex-col gap-5 border-b border-white/10 pb-7 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-medium uppercase tracking-[0.22em] text-blue-300">
+            Controlled Quality Workflow
+          </p>
+
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+            LVT CAPA Assistant
+          </h1>
+
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-base">
+            Create and review the initiating
+            information for a corrective and
+            preventive action record.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href="/chat"
+            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            Back to Chat
+          </Link>
+        </div>
+      </header>
+
+      <div className="mb-6 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+        <span className="font-semibold">
+          Development testing:
+        </span>{" "}
+        CAPA records are temporarily stored
+        in memory and will be erased when the
+        development server restarts.
+      </div>
+
+      <div className="mb-8 grid gap-3 sm:grid-cols-3">
+        {[
+          ["1", "Enter intake", "edit"],
+          ["2", "Human review", "review"],
+          ["3", "Draft created", "created"],
+        ].map(
+          ([
+            number,
+            label,
+            itemStep,
+          ]) => {
+            const steps: WorkflowStep[] = [
+              "edit",
+              "review",
+              "created",
+            ];
+
+            const activeIndex =
+              steps.indexOf(step);
+
+            const itemIndex =
+              steps.indexOf(
+                itemStep as WorkflowStep,
+              );
+
+            const isCurrent =
+              activeIndex === itemIndex;
+
+            const isComplete =
+              activeIndex > itemIndex;
+
+            return (
+              <div
+                key={itemStep}
+                className={`rounded-2xl border px-4 py-3 ${
+                  isCurrent
+                    ? "border-blue-400/50 bg-blue-500/15"
+                    : isComplete
+                      ? "border-emerald-400/30 bg-emerald-500/10"
+                      : "border-zinc-800 bg-zinc-900/60"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
+                      isCurrent
+                        ? "bg-blue-500 text-white"
+                        : isComplete
+                          ? "bg-emerald-500 text-white"
+                          : "bg-zinc-800 text-zinc-400"
+                    }`}
+                  >
+                    {isComplete
+                      ? "✓"
+                      : number}
+                  </span>
+
+                  <span className="text-sm font-medium">
+                    {label}
+                  </span>
+                </div>
+              </div>
+            );
+          },
+        )}
+      </div>
+
+      {submitError ? (
+        <div
+          role="alert"
+          className="mb-6 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-200"
+        >
+          {submitError}
+        </div>
+      ) : null}
+
+      {step === "edit" ? (
+        <form
+          onSubmit={proceedToReview}
+          noValidate
+          className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]"
+        >
+          <section className="rounded-3xl border border-zinc-800 bg-zinc-900/85 p-5 shadow-2xl backdrop-blur sm:p-7">
+            <div className="border-b border-zinc-800 pb-5">
+              <h2 className="text-xl font-semibold">
+                CAPA intake
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-zinc-400">
+                Describe the event that may
+                require investigation and
+                corrective or preventive
+                action.
+              </p>
+            </div>
+
+            <div className="mt-6 space-y-6">
+              <div>
+                <div className="flex items-end justify-between gap-4">
+                  <label
+                    htmlFor="initiating-event"
+                    className="text-sm font-medium text-zinc-100"
+                  >
+                    Initiating event{" "}
+                    <span className="text-red-300">
+                      *
+                    </span>
+                  </label>
+
+                  <span
+                    className={`text-xs ${
+                      charactersRemaining < 0
+                        ? "text-red-300"
+                        : "text-zinc-500"
+                    }`}
+                  >
+                    {charactersRemaining.toLocaleString()}{" "}
+                    remaining
+                  </span>
+                </div>
+
+                <textarea
+                  id="initiating-event"
+                  name="initiating_event"
+                  rows={9}
+                  maxLength={
+                    INPUT_LIMITS.initiatingEvent +
+                    1
+                  }
+                  value={
+                    fields.initiatingEvent
+                  }
+                  onChange={(event) =>
+                    updateField(
+                      "initiatingEvent",
+                      event.target.value,
+                    )
+                  }
+                  aria-invalid={
+                    errors.initiatingEvent
+                      ? true
+                      : undefined
+                  }
+                  aria-describedby={
+                    errors.initiatingEvent
+                      ? "initiating-event-error"
+                      : "initiating-event-help"
+                  }
+                  placeholder="Describe what occurred, where it occurred, how it was detected, and why it may require CAPA evaluation."
+                  className="mt-2 min-h-48 w-full resize-y rounded-2xl border border-zinc-700 bg-zinc-950/80 px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                />
+
+                {errors.initiatingEvent ? (
+                  <p
+                    id="initiating-event-error"
+                    className="mt-2 text-sm text-red-300"
+                  >
+                    {
+                      errors.initiatingEvent
+                    }
+                  </p>
+                ) : (
+                  <p
+                    id="initiating-event-help"
+                    className="mt-2 text-xs leading-5 text-zinc-500"
+                  >
+                    Do not include passwords,
+                    authentication tokens, or
+                    unnecessary personal
+                    information.
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="source-type"
+                    className="text-sm font-medium text-zinc-100"
+                  >
+                    Source type{" "}
+                    <span className="text-red-300">
+                      *
+                    </span>
+                  </label>
+
+                  <input
+                    id="source-type"
+                    name="source_type"
+                    type="text"
+                    maxLength={
+                      INPUT_LIMITS.sourceType
+                    }
+                    value={fields.sourceType}
+                    onChange={(event) =>
+                      updateField(
+                        "sourceType",
+                        event.target.value,
+                      )
+                    }
+                    aria-invalid={
+                      errors.sourceType
+                        ? true
+                        : undefined
+                    }
+                    aria-describedby={
+                      errors.sourceType
+                        ? "source-type-error"
+                        : "source-type-help"
+                    }
+                    placeholder="NONCONFORMANCE"
+                    autoCapitalize="characters"
+                    className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950/80 px-4 py-2.5 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                  />
+
+                  {errors.sourceType ? (
+                    <p
+                      id="source-type-error"
+                      className="mt-2 text-sm text-red-300"
+                    >
+                      {errors.sourceType}
+                    </p>
+                  ) : (
+                    <p
+                      id="source-type-help"
+                      className="mt-2 text-xs leading-5 text-zinc-500"
+                    >
+                      Examples:
+                      NONCONFORMANCE,
+                      COMPLAINT,
+                      AUDIT_FINDING.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="source-reference"
+                    className="text-sm font-medium text-zinc-100"
+                  >
+                    Source reference
+                  </label>
+
+                  <input
+                    id="source-reference"
+                    name="source_reference"
+                    type="text"
+                    maxLength={
+                      INPUT_LIMITS.sourceReference
+                    }
+                    value={
+                      fields.sourceReference
+                    }
+                    onChange={(event) =>
+                      updateField(
+                        "sourceReference",
+                        event.target.value,
+                      )
+                    }
+                    aria-invalid={
+                      errors.sourceReference
+                        ? true
+                        : undefined
+                    }
+                    placeholder="NCR-2026-0042"
+                    className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950/80 px-4 py-2.5 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                  />
+
+                  {errors.sourceReference ? (
+                    <p className="mt-2 text-sm text-red-300">
+                      {
+                        errors.sourceReference
+                      }
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs leading-5 text-zinc-500">
+                      Optional source record or
+                      document identifier.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="organization-reference"
+                  className="text-sm font-medium text-zinc-100"
+                >
+                  Organization reference
+                </label>
+
+                <input
+                  id="organization-reference"
+                  name="organization_reference"
+                  type="text"
+                  maxLength={
+                    INPUT_LIMITS.organizationReference
+                  }
+                  value={
+                    fields.organizationReference
+                  }
+                  onChange={(event) =>
+                    updateField(
+                      "organizationReference",
+                      event.target.value,
+                    )
+                  }
+                  aria-invalid={
+                    errors.organizationReference
+                      ? true
+                      : undefined
+                  }
+                  placeholder="CAPA-LOCAL-19"
+                  className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950/80 px-4 py-2.5 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                />
+
+                {errors.organizationReference ? (
+                  <p className="mt-2 text-sm text-red-300">
+                    {
+                      errors.organizationReference
+                    }
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs leading-5 text-zinc-500">
+                    Optional internal reference
+                    used by your organization.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-8 flex flex-col-reverse gap-3 border-t border-zinc-800 pt-6 sm:flex-row sm:justify-end">
+              <Link
+                href="/chat"
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                Cancel
+              </Link>
+
+              <button
+                type="submit"
+                disabled={!canReview}
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+              >
+                Review CAPA draft
+              </button>
+            </div>
+          </section>
+
+          <aside className="space-y-5">
+            <section className="rounded-3xl border border-zinc-800 bg-zinc-900/75 p-5">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-300">
+                Human review
+              </h2>
+
+              <p className="mt-3 text-sm leading-6 text-zinc-400">
+                You will review the entered
+                information before the draft
+                is created. The assistant
+                does not approve or advance
+                the CAPA.
+              </p>
+            </section>
+
+            <section className="rounded-3xl border border-zinc-800 bg-zinc-900/75 p-5">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-300">
+                Signed-in user
+              </h2>
+
+              <p className="mt-3 break-all text-sm text-zinc-400">
+                {userEmail ||
+                  "Authenticated user"}
+              </p>
+            </section>
+
+            <section className="rounded-3xl border border-blue-400/20 bg-blue-500/10 p-5">
+              <h2 className="text-sm font-semibold text-blue-200">
+                Initial workflow state
+              </h2>
+
+              <p className="mt-2 text-lg font-semibold">
+                S00 — Draft Intake
+              </p>
+
+              <p className="mt-2 text-sm leading-6 text-blue-100/75">
+                This is a working state and
+                is not an approval or final
+                CAPA determination.
+              </p>
+            </section>
+          </aside>
+        </form>
+      ) : null}
+
+      {step === "review" ? (
+        <section className="mx-auto max-w-4xl rounded-3xl border border-zinc-800 bg-zinc-900/85 p-5 shadow-2xl sm:p-8">
+          <div className="border-b border-zinc-800 pb-6">
+            <p className="text-sm font-medium uppercase tracking-[0.18em] text-blue-300">
+              Human confirmation required
+            </p>
+
+            <h2 className="mt-2 text-2xl font-semibold">
+              Review the CAPA draft
+            </h2>
+
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              Confirm that this information
+              accurately represents the
+              initiating event. Submission
+              creates an auditable S00 draft.
+            </p>
+          </div>
+
+          <dl className="mt-6 divide-y divide-zinc-800 rounded-2xl border border-zinc-800">
+            <ReviewItem
+              label="Initiating event"
+              value={
+                fields.initiatingEvent
+              }
+              preserveWhitespace
+            />
+
+            <ReviewItem
+              label="Source type"
+              value={fields.sourceType}
+            />
+
+            <ReviewItem
+              label="Source reference"
+              value={
+                fields.sourceReference ||
+                "Not provided"
+              }
+            />
+
+            <ReviewItem
+              label="Organization reference"
+              value={
+                fields.organizationReference ||
+                "Not provided"
+              }
+            />
+
+            <ReviewItem
+              label="Initial state"
+              value="S00 — Draft Intake"
+            />
+          </dl>
+
+          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-700 bg-zinc-950/60 p-4">
+            <input
+              required
+              type="checkbox"
+              className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-blue-600 focus:ring-blue-500"
+              onChange={(event) => {
+                const checked =
+                  event.target.checked;
+
+                event.currentTarget.dataset.checked =
+                  String(checked);
+              }}
+              id="human-confirmation"
+            />
+
+            <span>
+              <span className="block text-sm font-medium text-zinc-100">
+                I reviewed this information.
+              </span>
+
+              <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                I understand this action
+                creates a controlled draft
+                record and audit event.
+              </span>
+            </span>
+          </label>
+
+          <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() =>
+                setStep("edit")
+              }
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            >
+              Return to edit
+            </button>
+
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => {
+                const confirmation =
+                  document.getElementById(
+                    "human-confirmation",
+                  ) as
+                    | HTMLInputElement
+                    | null;
+
+                if (
+                  !confirmation?.checked
+                ) {
+                  setSubmitError(
+                    "Confirm that you reviewed the CAPA information before creating the draft.",
+                  );
+                  return;
+                }
+
+                void submitCapa();
+              }}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:cursor-wait disabled:bg-blue-800"
+            >
+              {isSubmitting
+                ? "Creating controlled draft..."
+                : "Confirm and create draft"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {step === "created" &&
+      createdCapa ? (
+        <section className="mx-auto max-w-4xl space-y-6">
+          <div className="rounded-3xl border border-emerald-400/25 bg-emerald-500/10 p-6 sm:p-8">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-300">
+                  CAPA draft created
+                </p>
+
+                <h2 className="mt-2 text-3xl font-semibold">
+                  {
+                    createdCapa.caseNumber
+                  }
+                </h2>
+
+                <p className="mt-3 text-sm text-emerald-100/80">
+                  The record and its audit
+                  event were committed
+                  atomically.
+                </p>
+              </div>
+
+              <span className="inline-flex w-fit rounded-full border border-blue-300/30 bg-blue-500/15 px-4 py-2 text-sm font-semibold text-blue-200">
+                {createdCapa.status} —{" "}
+                {statusName(
+                  createdCapa.status,
+                )}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <section className="rounded-3xl border border-zinc-800 bg-zinc-900/85 p-5 sm:p-7">
+              <h3 className="text-lg font-semibold">
+                Controlled intake record
+              </h3>
+
+              <dl className="mt-5 divide-y divide-zinc-800 rounded-2xl border border-zinc-800">
+                <ReviewItem
+                  label="Initiating event"
+                  value={
+                    createdCapa.initiatingEvent
+                  }
+                  preserveWhitespace
+                />
+
+                <ReviewItem
+                  label="Source type"
+                  value={
+                    createdCapa.sourceType
+                  }
+                />
+
+                <ReviewItem
+                  label="Source reference"
+                  value={
+                    createdCapa.sourceReference ||
+                    "Not provided"
+                  }
+                />
+
+                <ReviewItem
+                  label="Organization reference"
+                  value={
+                    createdCapa.organizationReference ||
+                    "Not provided"
+                  }
+                />
+
+                <ReviewItem
+                  label="Created"
+                  value={formattedDate(
+                    createdCapa.createdAt,
+                  )}
+                />
+              </dl>
+            </section>
+
+            <aside className="space-y-5">
+              <section className="rounded-3xl border border-zinc-800 bg-zinc-900/75 p-5">
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-zinc-300">
+                  Verification
+                </h3>
+
+                <p
+                  className={`mt-3 text-sm leading-6 ${
+                    createdCapa.retrievalVerified
+                      ? "text-emerald-300"
+                      : "text-amber-300"
+                  }`}
+                >
+                  {createdCapa.retrievalVerified
+                    ? "✓ Created record was retrieved and verified."
+                    : "Draft was created, but retrieval verification was unavailable."}
+                </p>
+              </section>
+
+              <section className="rounded-3xl border border-zinc-800 bg-zinc-900/75 p-5">
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-zinc-300">
+                  Record details
+                </h3>
+
+                <dl className="mt-3 space-y-3 text-xs">
+                  <IdentifierItem
+                    label="Record version"
+                    value={String(
+                      createdCapa.recordVersion,
+                    )}
+                  />
+
+                  <IdentifierItem
+                    label="CAPA case ID"
+                    value={
+                      createdCapa.capaCaseId
+                    }
+                  />
+
+                  <IdentifierItem
+                    label="Correlation ID"
+                    value={
+                      createdCapa.correlationId
+                    }
+                  />
+                </dl>
+              </section>
+            </aside>
+          </div>
+
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <Link
+              href="/chat"
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              Back to Chat
+            </Link>
+
+            <button
+              type="button"
+              onClick={createAnother}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              Create another CAPA
+            </button>
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+interface ReviewItemProps {
+  readonly label: string;
+  readonly value: string;
+  readonly preserveWhitespace?: boolean;
+}
+
+function ReviewItem({
+  label,
+  value,
+  preserveWhitespace = false,
+}: ReviewItemProps) {
+  return (
+    <div className="grid gap-2 px-4 py-4 sm:grid-cols-[180px_minmax(0,1fr)]">
+      <dt className="text-sm font-medium text-zinc-400">
+        {label}
+      </dt>
+
+      <dd
+        className={`break-words text-sm leading-6 text-zinc-100 ${
+          preserveWhitespace
+            ? "whitespace-pre-wrap"
+            : ""
+        }`}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+interface IdentifierItemProps {
+  readonly label: string;
+  readonly value: string;
+}
+
+function IdentifierItem({
+  label,
+  value,
+}: IdentifierItemProps) {
+  return (
+    <div>
+      <dt className="text-zinc-500">
+        {label}
+      </dt>
+
+      <dd className="mt-1 break-all font-mono text-zinc-300">
+        {value}
+      </dd>
+    </div>
+  );
+}
