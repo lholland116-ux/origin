@@ -25,18 +25,20 @@ export default defineConfig({
       reporter: ["text", "json", "html", "lcov"],
       clean: true,
 
-      /**
-       * Measure executable CAPA, security and in-memory persistence code.
-       *
-       * The in-memory adapter is part of the controlled integration-test
-       * infrastructure and must have its commit, rollback, isolation,
-       * concurrency and integrity behavior verified.
-       */
-      include: [
-        "lib/capa/**/*.ts",
-        "lib/security/**/*.ts",
-        "lib/database/in-memory/**/*.ts",
-      ],
+        /**
+         * Measure executable CAPA, security, in-memory persistence and durable
+         * Supabase persistence code.
+         *
+         * Both persistence adapters are controlled implementations. Their
+         * transaction, rollback, isolation, concurrency and integrity behavior
+         * must remain covered by release-blocking tests.
+         */
+        include: [
+          "lib/capa/**/*.ts",
+          "lib/security/**/*.ts",
+          "lib/database/in-memory/**/*.ts",
+          "lib/database/supabase/**/*.ts",
+        ],
 
       /**
        * Exclude compile-time declarations and provider-neutral contracts
