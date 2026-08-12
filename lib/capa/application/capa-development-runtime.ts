@@ -1,0 +1,310 @@
+import { randomUUID } from "node:crypto";
+
+import type {
+  AuditEventId,
+  CapaCaseId,
+  CapaCaseVersionId,
+  CapaSectionVersionId,
+  ControlledCode,
+  OrganizationId,
+  RoleId,
+} from "../domain/capa-types";
+
+import type {
+  CapaAuthorizationPolicy,
+  CapaPolicyDecision,
+  CapaPolicyEvaluationRequest,
+} from "../authorization/capa-policy";
+
+import type {
+  CreateCapaDependencies,
+  CreateCapaIdGenerator,
+} from "./create-capa";
+
+import {
+  getActiveRoleAssignments,
+} from "../../security/tenant-context";
+
+import {
+  InMemoryCapaDatabase,
+} from "../../database/in-memory/in-memory-capa-database";
+
+import type {
+  TransactionId,
+} from "../../database/transactions";
+
+/**
+ * Development-only CAPA runtime.
+ *
+ * This module assembles the temporary in-memory persistence adapter,
+ * development authorization policy, trusted server clock, identifier
+ * generators and controlled configuration used by the first browser
+ * workflow.
+ *
+ * It is not approved for production CAPA data storage or authorization.
+ */
+
+const DEVELOPMENT_POLICY_VERSION =
+  "development-policy-1.0.0";
+
+const DEVELOPMENT_ROLE_ID =
+  "CAPA_DEVELOPMENT_USER" as RoleId;
+
+export interface CapaDevelopmentRuntime {
+  readonly database: InMemoryCapaDatabase;
+  readonly dependencies: CreateCapaDependencies;
+}
+
+export interface CapaDevelopmentRuntimeOptions {
+  readonly environment?: string;
+  readonly now?: () => Date;
+  readonly generate_uuid?: () => string;
+}
+
+export class CapaDevelopmentRuntimeDisabledError
+  extends Error {
+  constructor() {
+    super(
+      "The in-memory CAPA development runtime is disabled in production.",
+    );
+
+    this.name =
+      "CapaDevelopmentRuntimeDisabledError";
+  }
+}
+
+function controlled(
+  value: string,
+): ControlledCode {
+  return value as ControlledCode;
+}
+
+function assertDevelopmentRuntimeAllowed(
+  environment: string | undefined,
+): void {
+  if (environment === "production") {
+    throw new CapaDevelopmentRuntimeDisabledError();
+  }
+}
+
+function developmentAuthorizationPolicy():
+  CapaAuthorizationPolicy {
+  return {
+    async evaluate(
+      request:
+        CapaPolicyEvaluationRequest,
+    ): Promise<CapaPolicyDecision> {
+      const activeAssignments =
+        getActiveRoleAssignments(
+          request.tenant,
+          request.trusted_now,
+        );
+
+      const developmentAssignment =
+        activeAssignments.find(
+          (assignment) =>
+            assignment.role_id ===
+              DEVELOPMENT_ROLE_ID &&
+            assignment.scope ===
+              "ORGANIZATION",
+        );
+
+      const tenantIsDevelopmentScoped =
+        request.tenant.access_path ===
+        "DEVELOPMENT_SINGLE_USER_TENANT";
+
+      const organizationMatches =
+        request.resource.organization_id ===
+        request.tenant.organization_id;
+
+      const operationIsSupported =
+        request.operation === "create_case";
+
+      if (
+        !tenantIsDevelopmentScoped ||
+        !organizationMatches ||
+        !operationIsSupported ||
+        developmentAssignment === undefined
+      ) {
+        return {
+          decision: "deny",
+          reason_code: controlled(
+            "DEVELOPMENT_POLICY_DENIED",
+          ),
+          policy_version:
+            DEVELOPMENT_POLICY_VERSION,
+          evaluated_at:
+            request.trusted_now.toISOString() as
+              CapaPolicyDecision["evaluated_at"],
+        };
+      }
+
+      return {
+        decision: "allow",
+        reason_code: controlled(
+          "DEVELOPMENT_CREATE_ALLOWED",
+        ),
+        policy_version:
+          DEVELOPMENT_POLICY_VERSION,
+        evaluated_at:
+          request.trusted_now.toISOString() as
+            CapaPolicyDecision["evaluated_at"],
+        relied_on_role_assignment_ids: [
+          developmentAssignment.role_assignment_id,
+        ],
+      };
+    },
+  };
+}
+
+function createIdGenerator(
+  generateUuid: () => string,
+): CreateCapaIdGenerator {
+  let caseNumberSequence = 0;
+
+  return {
+    generateCapaCaseId() {
+      return generateUuid() as CapaCaseId;
+    },
+
+    generateCaseVersionId() {
+      return generateUuid() as CapaCaseVersionId;
+    },
+
+    generateSectionVersionId() {
+      return generateUuid() as CapaSectionVersionId;
+    },
+
+    generateAuditEventId() {
+      return generateUuid() as AuditEventId;
+    },
+
+    async generateCaseNumber(
+      _organizationId: OrganizationId,
+    ) {
+      caseNumberSequence += 1;
+
+      return `CAPA-DEV-${String(
+        caseNumberSequence,
+      ).padStart(6, "0")}`;
+    },
+  };
+}
+
+/**
+ * Creates an isolated development runtime.
+ *
+ * Tests should use this factory so their state does not leak between
+ * cases. The API route uses getCapaDevelopmentRuntime() to share one
+ * in-memory database for the current development-server process.
+ */
+export function createCapaDevelopmentRuntime(
+  options:
+    CapaDevelopmentRuntimeOptions = {},
+): CapaDevelopmentRuntime {
+  assertDevelopmentRuntimeAllowed(
+    options.environment ??
+      process.env.NODE_ENV,
+  );
+
+  const now =
+    options.now ??
+    (() => new Date());
+
+  const generateUuid =
+    options.generate_uuid ??
+    randomUUID;
+
+  const database =
+    new InMemoryCapaDatabase({
+      generate_transaction_id() {
+        return generateUuid() as TransactionId;
+      },
+
+      now,
+    });
+
+  const dependencies:
+    CreateCapaDependencies = {
+    transaction_manager: database,
+    capa_repository: database,
+    audit_repository: database,
+    authorization_policy:
+      developmentAuthorizationPolicy(),
+
+    id_generator:
+      createIdGenerator(generateUuid),
+
+    clock: {
+      now,
+    },
+
+    configuration: {
+      workflow_version:
+        "workflow-development-1.0.0",
+
+      intake_schema_version:
+        "intake-schema-1.0.0",
+
+      audit_schema_version:
+        "audit-schema-1.0.0",
+
+      intake_section_type:
+        controlled("CAPA.INTAKE"),
+
+      default_confidentiality:
+        controlled(
+          "CUSTOMER_CONFIDENTIAL",
+        ),
+
+      authorization_purpose:
+        controlled(
+          "CAPA_CASE_CREATION",
+        ),
+    },
+  };
+
+  return {
+    database,
+    dependencies,
+  };
+}
+
+type DevelopmentRuntimeGlobal =
+  typeof globalThis & {
+    __lvt_capa_development_runtime__?:
+      CapaDevelopmentRuntime;
+  };
+
+/**
+ * Returns the process-shared development runtime.
+ *
+ * Storing the runtime on globalThis preserves in-memory records across
+ * ordinary Next.js development module reloads. Data still disappears
+ * when the server process restarts.
+ */
+export function getCapaDevelopmentRuntime():
+  CapaDevelopmentRuntime {
+  assertDevelopmentRuntimeAllowed(
+    process.env.NODE_ENV,
+  );
+
+  const developmentGlobal =
+    globalThis as DevelopmentRuntimeGlobal;
+
+  if (
+    developmentGlobal
+      .__lvt_capa_development_runtime__ ===
+    undefined
+  ) {
+    developmentGlobal
+      .__lvt_capa_development_runtime__ =
+      createCapaDevelopmentRuntime({
+        environment:
+          process.env.NODE_ENV,
+      });
+  }
+
+  return developmentGlobal
+    .__lvt_capa_development_runtime__;
+}
