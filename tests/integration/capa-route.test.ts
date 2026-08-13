@@ -26,8 +26,9 @@ import {
   type CapaApiHandlerDependencies,
 } from "../../lib/capa/api/capa-route-handler";
 
-import type {
-  SupabaseCapaSessionFacts,
+import {
+  resolveDevelopmentCapaRequestContext,
+  type SupabaseCapaSessionFacts,
 } from "../../lib/security/supabase-capa-context";
 
 const NOW =
@@ -156,6 +157,9 @@ function harness(
           ? validSessionFacts()
           : options.session_facts;
       },
+
+      resolve_context:
+        resolveDevelopmentCapaRequestContext,
 
       get_runtime() {
         if (

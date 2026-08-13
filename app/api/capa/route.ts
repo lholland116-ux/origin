@@ -10,8 +10,9 @@ import {
   getCapaDevelopmentRuntime,
 } from "@/lib/capa/application/capa-development-runtime";
 
-import type {
-  SupabaseCapaSessionFacts,
+import {
+  resolveDevelopmentCapaRequestContext,
+  type SupabaseCapaSessionFacts,
 } from "@/lib/security/supabase-capa-context";
 
 import {
@@ -19,8 +20,8 @@ import {
 } from "@/lib/supabase/server";
 
 /**
- * The in-memory CAPA adapter and cryptographic UUID generation require
- * the Node.js runtime.
+ * The CAPA runtime, server-side Supabase authentication, and
+ * cryptographic UUID generation require the Node.js runtime.
  */
 export const runtime = "nodejs";
 
@@ -30,6 +31,13 @@ export const runtime = "nodejs";
  */
 export const dynamic = "force-dynamic";
 
+/**
+ * Returns minimized, server-verified authentication facts.
+ *
+ * Raw access tokens, refresh tokens, provider tokens, passwords, user
+ * metadata, and browser-supplied authorization values are deliberately
+ * excluded from the CAPA application boundary.
+ */
 async function getVerifiedSessionFacts():
   Promise<
     SupabaseCapaSessionFacts | null
@@ -38,8 +46,8 @@ async function getVerifiedSessionFacts():
     await createServerSupabaseClient();
 
   /*
-   * getUser() validates the authentication token with Supabase and is the
-   * authoritative source for the user identity.
+   * getUser() verifies the authentication token with Supabase and is the
+   * authoritative source for the authenticated user identity.
    */
   const {
     data: { user },
@@ -55,7 +63,7 @@ async function getVerifiedSessionFacts():
 
   /*
    * The session is read only to obtain minimized expiry information.
-   * Tokens and provider credentials are never passed into CAPA code.
+   * Credentials and provider data are never passed into CAPA code.
    */
   const {
     data: { session },
@@ -73,19 +81,33 @@ async function getVerifiedSessionFacts():
   }
 
   return {
-    verified_user_id: user.id,
+    verified_user_id:
+      user.id,
+
     authenticated_at:
       user.last_sign_in_at,
+
     expires_at_epoch_seconds:
       session.expires_at,
   };
 }
 
+/**
+ * Assembles the current CAPA API dependencies.
+ *
+ * The development resolver and in-memory runtime remain explicit here
+ * during the controlled transition to durable persistence. Both fail
+ * closed in production and will be replaced together by the durable
+ * runtime and database-backed tenant resolver.
+ */
 function dependencies():
   CapaApiHandlerDependencies {
   return {
     get_session_facts:
       getVerifiedSessionFacts,
+
+    resolve_context:
+      resolveDevelopmentCapaRequestContext,
 
     get_runtime:
       getCapaDevelopmentRuntime,
@@ -99,7 +121,10 @@ function dependencies():
 
     logger: {
       error(message, metadata) {
-        console.error(message, metadata);
+        console.error(
+          message,
+          metadata,
+        );
       },
     },
   };

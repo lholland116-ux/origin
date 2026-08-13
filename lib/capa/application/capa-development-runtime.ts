@@ -21,6 +21,10 @@ import type {
   CreateCapaIdGenerator,
 } from "./create-capa";
 
+import type {
+  CapaRuntime,
+} from "./capa-runtime";
+
 import {
   getActiveRoleAssignments,
 } from "../../security/tenant-context";
@@ -43,14 +47,20 @@ import type {
  *
  * It is not approved for production CAPA data storage or authorization.
  */
-
 const DEVELOPMENT_POLICY_VERSION =
   "development-policy-1.0.0";
 
 const DEVELOPMENT_ROLE_ID =
   "CAPA_DEVELOPMENT_USER" as RoleId;
 
-export interface CapaDevelopmentRuntime {
+/**
+ * Development implementation of the provider-neutral CAPA runtime.
+ *
+ * The concrete database remains exposed to development and test code that
+ * verifies in-memory persistence behavior.
+ */
+export interface CapaDevelopmentRuntime
+  extends CapaRuntime {
   readonly database: InMemoryCapaDatabase;
   readonly dependencies: CreateCapaDependencies;
 }
@@ -226,43 +236,43 @@ export function createCapaDevelopmentRuntime(
 
   const dependencies:
     CreateCapaDependencies = {
-    transaction_manager: database,
-    capa_repository: database,
-    audit_repository: database,
-    authorization_policy:
-      developmentAuthorizationPolicy(),
+      transaction_manager: database,
+      capa_repository: database,
+      audit_repository: database,
+      authorization_policy:
+        developmentAuthorizationPolicy(),
 
-    id_generator:
-      createIdGenerator(generateUuid),
+      id_generator:
+        createIdGenerator(generateUuid),
 
-    clock: {
-      now,
-    },
+      clock: {
+        now,
+      },
 
-    configuration: {
-      workflow_version:
-        "workflow-development-1.0.0",
+      configuration: {
+        workflow_version:
+          "workflow-development-1.0.0",
 
-      intake_schema_version:
-        "intake-schema-1.0.0",
+        intake_schema_version:
+          "intake-schema-1.0.0",
 
-      audit_schema_version:
-        "audit-schema-1.0.0",
+        audit_schema_version:
+          "audit-schema-1.0.0",
 
-      intake_section_type:
-        controlled("CAPA.INTAKE"),
+        intake_section_type:
+          controlled("CAPA.INTAKE"),
 
-      default_confidentiality:
-        controlled(
-          "CUSTOMER_CONFIDENTIAL",
-        ),
+        default_confidentiality:
+          controlled(
+            "CUSTOMER_CONFIDENTIAL",
+          ),
 
-      authorization_purpose:
-        controlled(
-          "CAPA_CASE_CREATION",
-        ),
-    },
-  };
+        authorization_purpose:
+          controlled(
+            "CAPA_CASE_CREATION",
+          ),
+      },
+    };
 
   return {
     database,

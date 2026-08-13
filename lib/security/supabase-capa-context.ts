@@ -18,7 +18,8 @@ import type {
 } from "./tenant-context";
 
 /**
- * Development-only Supabase-to-CAPA context adapter.
+ * Supabase-to-CAPA authenticated-context contracts and development
+ * resolver.
  *
  * Primary source:
  * Document #9 — LVT CAPA Security, Privacy, and Access-Control
@@ -29,20 +30,25 @@ import type {
  * AUTH-001 through AUTH-010
  * TEN-001 through TEN-010
  *
- * This adapter supports development testing before the permanent
- * organization-membership and role-assignment tables are implemented.
+ * The provider-neutral contracts in this module are shared by development
+ * and durable resolvers. The development resolver remains explicitly
+ * temporary and must not be selected for production CAPA operations.
  *
- * It must not receive or retain access tokens, refresh tokens, provider
- * tokens, passwords, MFA secrets, user_metadata or browser-supplied
- * authorization fields.
+ * This module must not receive or retain access tokens, refresh tokens,
+ * provider tokens, passwords, MFA secrets, user_metadata, or
+ * browser-supplied authorization fields.
  */
-
 const DEVELOPMENT_POLICY_VERSION =
   "development-policy-1.0.0";
 
 const DEVELOPMENT_ROLE_ID =
   "CAPA_DEVELOPMENT_USER" as RoleId;
 
+/**
+ * Minimal identity and session facts verified by trusted server code.
+ *
+ * Raw credentials and authentication tokens are deliberately excluded.
+ */
 export interface SupabaseCapaSessionFacts {
   /**
    * Identity returned by server-side supabase.auth.getUser().
@@ -60,11 +66,37 @@ export interface SupabaseCapaSessionFacts {
   readonly expires_at_epoch_seconds: number;
 }
 
-export interface DevelopmentCapaRequestContext {
+/**
+ * Provider-neutral trusted context used by CAPA application commands.
+ *
+ * Implementations may resolve this context from development fixtures or
+ * durable organization membership and role-assignment records.
+ */
+export interface CapaRequestContext {
   readonly authentication: AuthenticationContext;
   readonly tenant: TenantContext;
   readonly owner_user_id: UserId;
 }
+
+/**
+ * Context-resolver contract used by the CAPA API boundary.
+ *
+ * A resolver must use server-verified identity facts and trusted server
+ * time. Browser-supplied organization, owner, role, or authorization
+ * fields must never be treated as authoritative.
+ */
+export type SupabaseCapaContextResolver = (
+  facts: SupabaseCapaSessionFacts,
+  trustedNow: Date,
+) =>
+  | CapaRequestContext
+  | Promise<CapaRequestContext>;
+
+/**
+ * Compatibility alias for development-specific callers.
+ */
+export type DevelopmentCapaRequestContext =
+  CapaRequestContext;
 
 export type SupabaseCapaContextFailureReason =
   | "INVALID_USER_ID"
@@ -142,9 +174,14 @@ function parseExpiration(
     );
   }
 
-  const expirationMilliseconds = value * 1_000;
+  const expirationMilliseconds =
+    value * 1_000;
 
-  if (!Number.isFinite(expirationMilliseconds)) {
+  if (
+    !Number.isFinite(
+      expirationMilliseconds,
+    )
+  ) {
     throw new SupabaseCapaContextError(
       "INVALID_SESSION_EXPIRATION",
     );
@@ -159,24 +196,32 @@ function parseExpiration(
     );
   }
 
-  return new Date(expirationMilliseconds);
+  return new Date(
+    expirationMilliseconds,
+  );
 }
 
 /**
  * Resolves a temporary single-user development tenant.
  *
- * Until organization membership exists, the server-verified Supabase
- * user identity is also used as the development organization identity.
- * This provides deterministic per-user isolation without trusting a
- * tenant identifier sent by the browser.
+ * The server-verified Supabase user identity is also used as the
+ * development organization identity. This provides deterministic
+ * per-user isolation without trusting a tenant identifier supplied by
+ * the browser.
  *
- * This mapping must be replaced before production CAPA deployment.
+ * This resolver must never be selected for production CAPA operations.
+ * Production requires durable organization membership, role assignment,
+ * organization status, and policy-version resolution.
  */
 export function resolveDevelopmentCapaRequestContext(
   facts: SupabaseCapaSessionFacts,
   trustedNow: Date,
-): DevelopmentCapaRequestContext {
-  if (!Number.isFinite(trustedNow.getTime())) {
+): CapaRequestContext {
+  if (
+    !Number.isFinite(
+      trustedNow.getTime(),
+    )
+  ) {
     throw new SupabaseCapaContextError(
       "INVALID_AUTHENTICATED_AT",
     );
@@ -205,7 +250,8 @@ export function resolveDevelopmentCapaRequestContext(
   const organizationId =
     verifiedUserId as OrganizationId;
 
-  const authentication: AuthenticationContext = {
+  const authentication:
+    AuthenticationContext = {
     principal: {
       principal_type: "human",
       user_id: userId,
@@ -213,10 +259,11 @@ export function resolveDevelopmentCapaRequestContext(
 
     /*
      * This is a non-secret internal reference. It is not the Supabase
-     * access token, refresh token or provider token.
+     * access token, refresh token, or provider token.
      */
     session_id:
-      `supabase:${verifiedUserId}:${facts.expires_at_epoch_seconds}` as SessionId,
+      `supabase:${verifiedUserId}:${facts.expires_at_epoch_seconds}` as
+        SessionId,
 
     authentication_method:
       controlled("SUPABASE_SESSION"),
@@ -236,10 +283,12 @@ export function resolveDevelopmentCapaRequestContext(
   };
 
   const tenant: TenantContext = {
-    organization_id: organizationId,
+    organization_id:
+      organizationId,
 
     access_grant_id:
-      `development-access:${verifiedUserId}` as TenantAccessGrantId,
+      `development-access:${verifiedUserId}` as
+        TenantAccessGrantId,
 
     access_path:
       controlled(
@@ -249,14 +298,17 @@ export function resolveDevelopmentCapaRequestContext(
     authorization_policy_version:
       DEVELOPMENT_POLICY_VERSION,
 
-    resolved_at: iso(trustedNow),
+    resolved_at:
+      iso(trustedNow),
 
     role_assignments: [
       {
         role_assignment_id:
-          `development-role:${verifiedUserId}` as RoleAssignmentId,
+          `development-role:${verifiedUserId}` as
+            RoleAssignmentId,
 
-        role_id: DEVELOPMENT_ROLE_ID,
+        role_id:
+          DEVELOPMENT_ROLE_ID,
 
         scope:
           controlled("ORGANIZATION"),

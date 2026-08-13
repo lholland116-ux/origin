@@ -11,21 +11,24 @@ import {
 } from "../application/create-capa";
 
 import type {
-  CapaDevelopmentRuntime,
-} from "../application/capa-development-runtime";
+  CapaRuntime,
+} from "../application/capa-runtime";
 
 import {
-  resolveDevelopmentCapaRequestContext,
   SupabaseCapaContextError,
+  type CapaRequestContext,
+  type SupabaseCapaContextResolver,
   type SupabaseCapaSessionFacts,
 } from "../../security/supabase-capa-context";
 
 /**
- * Framework-neutral HTTP handler for the first CAPA development API.
+ * Framework-neutral HTTP handler for the CAPA API.
  *
- * The Next.js route supplies server-verified Supabase session facts.
+ * The hosting route supplies server-verified Supabase session facts,
+ * an authoritative context resolver, and a provider-neutral CAPA runtime.
+ *
  * This module owns request tracing, safe request parsing, application
- * orchestration and controlled response mapping.
+ * orchestration, tenant-scoped retrieval, and controlled response mapping.
  */
 
 const UUID_PATTERN =
@@ -49,8 +52,18 @@ export interface CapaApiHandlerDependencies {
         SupabaseCapaSessionFacts | null
       >;
 
+  /**
+   * Resolves authentication, tenant membership, owner identity, and role
+   * assignments from trusted server-side facts.
+   */
+  readonly resolve_context:
+    SupabaseCapaContextResolver;
+
+  /**
+   * Returns the configured provider-neutral CAPA runtime.
+   */
   readonly get_runtime:
-    () => CapaDevelopmentRuntime;
+    () => CapaRuntime;
 
   readonly now: () => Date;
   readonly generate_uuid: () => string;
@@ -175,13 +188,7 @@ function errorResponse(
 async function authenticatedContext(
   dependencies:
     CapaApiHandlerDependencies,
-):
-  Promise<
-    | ReturnType<
-        typeof resolveDevelopmentCapaRequestContext
-      >
-    | null
-  > {
+): Promise<CapaRequestContext | null> {
   const sessionFacts =
     await dependencies.get_session_facts();
 
@@ -189,7 +196,7 @@ async function authenticatedContext(
     return null;
   }
 
-  return resolveDevelopmentCapaRequestContext(
+  return dependencies.resolve_context(
     sessionFacts,
     dependencies.now(),
   );
