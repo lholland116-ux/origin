@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveDevelopmentCapaRequestContext,
+  resolveSupabaseAuthenticationContext,
   SupabaseCapaContextError,
   type SupabaseCapaContextFailureReason,
   type SupabaseCapaSessionFacts,
@@ -62,6 +63,41 @@ async function expectContextFailure(
     );
   }
 }
+
+describe(
+  "resolveSupabaseAuthenticationContext",
+  () => {
+    it(
+      "creates minimized provider-neutral authentication",
+      () => {
+        expect(
+          resolveSupabaseAuthenticationContext(
+            validFacts(),
+            NOW,
+          ),
+        ).toEqual({
+          user_id: USER_ID,
+          authentication: {
+            principal: {
+              principal_type: "human",
+              user_id: USER_ID,
+            },
+            session_id:
+              `supabase:${USER_ID}:${VALID_EXPIRATION_SECONDS}`,
+            authentication_method:
+              "SUPABASE_SESSION",
+            assurance_level:
+              "SINGLE_FACTOR",
+            authenticated_at:
+              "2026-08-12T13:00:00.000Z",
+            expires_at:
+              "2026-08-12T15:00:00.000Z",
+          },
+        });
+      },
+    );
+  },
+);
 
 describe(
   "resolveDevelopmentCapaRequestContext",
@@ -198,18 +234,24 @@ describe(
     );
 
     it(
-      "rejects an empty verified user identity",
+      "rejects empty and malformed verified user identities",
       async () => {
-        await expectContextFailure(
-          () =>
-            resolveDevelopmentCapaRequestContext(
-              validFacts({
-                verified_user_id: "   ",
-              }),
-              NOW,
-            ),
-          "INVALID_USER_ID",
-        );
+        for (
+          const invalidUserId
+          of ["   ", "not-a-uuid"]
+        ) {
+          await expectContextFailure(
+            () =>
+              resolveDevelopmentCapaRequestContext(
+                validFacts({
+                  verified_user_id:
+                    invalidUserId,
+                }),
+                NOW,
+              ),
+            "INVALID_USER_ID",
+          );
+        }
       },
     );
 

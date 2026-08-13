@@ -22,7 +22,7 @@ import type {
  * resolver.
  *
  * Primary source:
- * Document #9 — LVT CAPA Security, Privacy, and Access-Control
+ * Document #9 â€” LVT CAPA Security, Privacy, and Access-Control
  * Specification
  *
  * Traceability:
@@ -30,9 +30,10 @@ import type {
  * AUTH-001 through AUTH-010
  * TEN-001 through TEN-010
  *
- * The provider-neutral contracts in this module are shared by development
- * and durable resolvers. The development resolver remains explicitly
- * temporary and must not be selected for production CAPA operations.
+ * The provider-neutral contracts and authentication resolver are shared
+ * by development and durable context resolvers. The development tenant
+ * mapping remains explicitly temporary and must never be selected for
+ * production CAPA operations.
  *
  * This module must not receive or retain access tokens, refresh tokens,
  * provider tokens, passwords, MFA secrets, user_metadata, or
@@ -43,6 +44,9 @@ const DEVELOPMENT_POLICY_VERSION =
 
 const DEVELOPMENT_ROLE_ID =
   "CAPA_DEVELOPMENT_USER" as RoleId;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Minimal identity and session facts verified by trusted server code.
@@ -76,6 +80,15 @@ export interface CapaRequestContext {
   readonly authentication: AuthenticationContext;
   readonly tenant: TenantContext;
   readonly owner_user_id: UserId;
+}
+
+/**
+ * Validated identity shared by development and durable CAPA context
+ * resolvers.
+ */
+export interface SupabaseAuthenticationResolution {
+  readonly authentication: AuthenticationContext;
+  readonly user_id: UserId;
 }
 
 /**
@@ -131,16 +144,19 @@ function iso(
 
 function requireVerifiedUserId(
   value: string,
-): string {
+): UserId {
   const normalized = value.trim();
 
-  if (normalized.length === 0) {
+  if (
+    normalized.length === 0 ||
+    !UUID_PATTERN.test(normalized)
+  ) {
     throw new SupabaseCapaContextError(
       "INVALID_USER_ID",
     );
   }
 
-  return normalized;
+  return normalized as UserId;
 }
 
 function parseAuthenticatedAt(
@@ -202,21 +218,17 @@ function parseExpiration(
 }
 
 /**
- * Resolves a temporary single-user development tenant.
+ * Validates minimized server-verified Supabase session facts and creates
+ * a provider-neutral authentication context.
  *
- * The server-verified Supabase user identity is also used as the
- * development organization identity. This provides deterministic
- * per-user isolation without trusting a tenant identifier supplied by
- * the browser.
- *
- * This resolver must never be selected for production CAPA operations.
- * Production requires durable organization membership, role assignment,
- * organization status, and policy-version resolution.
+ * Tenant membership and authorization are deliberately not resolved
+ * here. Development and durable resolvers perform those operations
+ * separately.
  */
-export function resolveDevelopmentCapaRequestContext(
+export function resolveSupabaseAuthenticationContext(
   facts: SupabaseCapaSessionFacts,
   trustedNow: Date,
-): CapaRequestContext {
+): SupabaseAuthenticationResolution {
   if (
     !Number.isFinite(
       trustedNow.getTime(),
@@ -227,7 +239,7 @@ export function resolveDevelopmentCapaRequestContext(
     );
   }
 
-  const verifiedUserId =
+  const userId =
     requireVerifiedUserId(
       facts.verified_user_id,
     );
@@ -244,50 +256,79 @@ export function resolveDevelopmentCapaRequestContext(
       trustedNow,
     );
 
-  const userId =
-    verifiedUserId as UserId;
+  return {
+    user_id: userId,
 
-  const organizationId =
-    verifiedUserId as OrganizationId;
+    authentication: {
+      principal: {
+        principal_type: "human",
+        user_id: userId,
+      },
 
-  const authentication:
-    AuthenticationContext = {
-    principal: {
-      principal_type: "human",
-      user_id: userId,
+      /*
+       * This is a non-secret internal reference. It is not the Supabase
+       * access token, refresh token, or provider token.
+       */
+      session_id:
+        `supabase:${userId}:${facts.expires_at_epoch_seconds}` as
+          SessionId,
+
+      authentication_method:
+        controlled("SUPABASE_SESSION"),
+
+      /*
+       * Do not claim MFA or step-up assurance unless Supabase AMR/AAL
+       * evidence is explicitly verified in a future implementation.
+       */
+      assurance_level:
+        controlled("SINGLE_FACTOR"),
+
+      authenticated_at:
+        iso(authenticatedAt),
+
+      expires_at:
+        iso(expiresAt),
     },
-
-    /*
-     * This is a non-secret internal reference. It is not the Supabase
-     * access token, refresh token, or provider token.
-     */
-    session_id:
-      `supabase:${verifiedUserId}:${facts.expires_at_epoch_seconds}` as
-        SessionId,
-
-    authentication_method:
-      controlled("SUPABASE_SESSION"),
-
-    /*
-     * Do not claim MFA or step-up assurance unless Supabase AMR/AAL
-     * evidence is explicitly verified in a future implementation.
-     */
-    assurance_level:
-      controlled("SINGLE_FACTOR"),
-
-    authenticated_at:
-      iso(authenticatedAt),
-
-    expires_at:
-      iso(expiresAt),
   };
+}
+
+/**
+ * Resolves a temporary single-user development tenant.
+ *
+ * The server-verified Supabase user identity is also used as the
+ * development organization identity. This provides deterministic
+ * per-user isolation without trusting a tenant identifier supplied by
+ * the browser.
+ *
+ * This resolver must never be selected for production CAPA operations.
+ * Production requires durable organization membership, role assignment,
+ * organization status, and policy-version resolution.
+ */
+export function resolveDevelopmentCapaRequestContext(
+  facts: SupabaseCapaSessionFacts,
+  trustedNow: Date,
+): CapaRequestContext {
+  const {
+    authentication,
+    user_id: userId,
+  } = resolveSupabaseAuthenticationContext(
+    facts,
+    trustedNow,
+  );
+
+  /*
+   * This cast is confined to the temporary development mapping. Durable
+   * resolvers obtain an independent organization UUID from membership.
+   */
+  const organizationId =
+    userId as unknown as OrganizationId;
 
   const tenant: TenantContext = {
     organization_id:
       organizationId,
 
     access_grant_id:
-      `development-access:${verifiedUserId}` as
+      `development-access:${userId}` as
         TenantAccessGrantId,
 
     access_path:
@@ -304,7 +345,7 @@ export function resolveDevelopmentCapaRequestContext(
     role_assignments: [
       {
         role_assignment_id:
-          `development-role:${verifiedUserId}` as
+          `development-role:${userId}` as
             RoleAssignmentId,
 
         role_id:
@@ -314,10 +355,10 @@ export function resolveDevelopmentCapaRequestContext(
           controlled("ORGANIZATION"),
 
         effective_at:
-          iso(authenticatedAt),
+          authentication.authenticated_at,
 
         expires_at:
-          iso(expiresAt),
+          authentication.expires_at,
       },
     ],
   };
