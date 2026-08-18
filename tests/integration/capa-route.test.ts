@@ -469,7 +469,7 @@ describe("CAPA POST handler", () => {
       expect(body).toMatchObject({
         capa: {
           case_number:
-            "CAPA-DEV-000001",
+            "CAPA-000001",
           status: "S00",
           record_version: 1,
         },
@@ -632,7 +632,7 @@ describe("CAPA GET handler", () => {
         capa: {
           capa_case_id: caseId,
           case_number:
-            "CAPA-DEV-000001",
+            "CAPA-000001",
           status: "S00",
           current_version: {
             status: "S00",

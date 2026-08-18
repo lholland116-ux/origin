@@ -26,7 +26,9 @@ import type {
 
 import {
   InMemoryAuditQueryError,
+  InMemoryCapaCaseNumberExhaustedError,
   InMemoryCapaDatabase,
+  InMemoryCapaDatabaseConfigurationError,
   InMemoryDuplicateRecordError,
   InMemoryIntegrityError,
   InMemoryTransactionConflictError,
@@ -121,7 +123,7 @@ function capaCase(
   return {
     organization_id: ORGANIZATION_ID,
     capa_case_id: CASE_ID,
-    case_number: "CAPA-2026-0001",
+    case_number: "CAPA-000001",
     current_version_id: VERSION_ID,
     status: "S00" as CapaCaseStatus,
     owner_user_id:
@@ -383,7 +385,7 @@ describe("InMemoryCapaDatabase transactions", () => {
     expect(
       await database.caseNumberExists(
         ORGANIZATION_ID,
-        "CAPA-2026-0001",
+        "CAPA-000001",
       ),
     ).toBe(false);
   });
@@ -502,6 +504,195 @@ describe("InMemoryCapaDatabase immutable inserts", () => {
     );
   });
 });
+
+describe(
+  "InMemoryCapaDatabase case-number allocation",
+  () => {
+    it.each([
+      {
+        maximum: Number.NaN,
+        description: "NaN",
+      },
+      {
+        maximum: Number.POSITIVE_INFINITY,
+        description: "infinity",
+      },
+      {
+        maximum: 0,
+        description: "zero",
+      },
+      {
+        maximum: -1,
+        description: "a negative number",
+      },
+      {
+        maximum: 1.5,
+        description: "a fractional number",
+      },
+      {
+        maximum: 1_000_000,
+        description:
+          "a number above the controlled maximum",
+      },
+    ])(
+      "rejects $description as an invalid maximum",
+      ({ maximum }) => {
+        expect(
+          () =>
+            new InMemoryCapaDatabase({
+              generate_transaction_id() {
+                return "invalid-configuration" as TransactionId;
+              },
+
+              now() {
+                return NOW;
+              },
+
+              maximum_case_number:
+                maximum,
+            }),
+        ).toThrow(
+          InMemoryCapaDatabaseConfigurationError,
+        );
+      },
+    );
+
+    it("provides stable named allocation errors", () => {
+      const configurationError =
+        new InMemoryCapaDatabaseConfigurationError();
+
+      expect(configurationError).toMatchObject({
+        name: "InMemoryCapaDatabaseConfigurationError",
+        message:
+          "The in-memory CAPA case-number maximum must be a positive safe integer no greater than 999999.",
+      });
+
+      const exhaustionError =
+        new InMemoryCapaCaseNumberExhaustedError();
+
+      expect(exhaustionError).toMatchObject({
+        name: "InMemoryCapaCaseNumberExhaustedError",
+        message:
+          "The organization has exhausted its available CAPA case numbers.",
+      });
+    });
+
+    it(
+      "allocates sequential organization-local numbers and rolls back failed allocations",
+      async () => {
+        const database = createDatabase();
+        const failure = new Error(
+          "Simulated transaction failure.",
+        );
+
+        await expect(
+          database.runInTransaction(
+            requestTrace(),
+            async (transaction) => {
+              await expect(
+                database.allocateNextCaseNumber(
+                  transaction,
+                  ORGANIZATION_ID,
+                ),
+              ).resolves.toBe("CAPA-000001");
+
+              throw failure;
+            },
+          ),
+        ).rejects.toBe(failure);
+
+        const first =
+          await database.runInTransaction(
+            requestTrace(),
+            (transaction) =>
+              database.allocateNextCaseNumber(
+                transaction,
+                ORGANIZATION_ID,
+              ),
+          );
+
+        const second =
+          await database.runInTransaction(
+            requestTrace(),
+            (transaction) =>
+              database.allocateNextCaseNumber(
+                transaction,
+                ORGANIZATION_ID,
+              ),
+          );
+
+        const otherOrganization =
+          await database.runInTransaction(
+            requestTrace(),
+            (transaction) =>
+              database.allocateNextCaseNumber(
+                transaction,
+                OTHER_ORGANIZATION_ID,
+              ),
+          );
+
+        expect(first).toBe("CAPA-000001");
+        expect(second).toBe("CAPA-000002");
+        expect(otherOrganization).toBe(
+          "CAPA-000001",
+        );
+      },
+    );
+
+    it(
+      "fails closed after an organization exhausts its controlled range",
+      async () => {
+        let transactionSequence = 0;
+
+        const database =
+          new InMemoryCapaDatabase({
+            generate_transaction_id() {
+              transactionSequence += 1;
+
+              return (
+                `limited-transaction-${transactionSequence}`
+              ) as TransactionId;
+            },
+
+            now() {
+              return NOW;
+            },
+
+            maximum_case_number: 2,
+          });
+
+        for (const expected of [
+          "CAPA-000001",
+          "CAPA-000002",
+        ]) {
+          await expect(
+            database.runInTransaction(
+              requestTrace(),
+              (transaction) =>
+                database.allocateNextCaseNumber(
+                  transaction,
+                  ORGANIZATION_ID,
+                ),
+            ),
+          ).resolves.toBe(expected);
+        }
+
+        await expect(
+          database.runInTransaction(
+            requestTrace(),
+            (transaction) =>
+              database.allocateNextCaseNumber(
+                transaction,
+                ORGANIZATION_ID,
+              ),
+          ),
+        ).rejects.toBeInstanceOf(
+          InMemoryCapaCaseNumberExhaustedError,
+        );
+      },
+    );
+  },
+);
 
 describe("InMemoryCapaDatabase optimistic concurrency", () => {
   function advanceInput(
@@ -693,124 +884,124 @@ describe("InMemoryCapaDatabase audit events", () => {
     ).toEqual(event);
   });
 
-    it("sorts and paginates matching events", async () => {
+  it("sorts and paginates matching events", async () => {
     const database = createDatabase();
 
     const firstId =
-        "00000000-0000-4000-8000-000000000001" as AuditEventId;
+      "00000000-0000-4000-8000-000000000001" as AuditEventId;
 
     const secondId =
-        "00000000-0000-4000-8000-000000000002" as AuditEventId;
+      "00000000-0000-4000-8000-000000000002" as AuditEventId;
 
     const thirdId =
-        "00000000-0000-4000-8000-000000000003" as AuditEventId;
+      "00000000-0000-4000-8000-000000000003" as AuditEventId;
 
     const otherOrganizationEventId =
-        "00000000-0000-4000-8000-000000000004" as AuditEventId;
+      "00000000-0000-4000-8000-000000000004" as AuditEventId;
 
     await database.runInTransaction(
-        requestTrace(),
-        async (transaction) => {
+      requestTrace(),
+      async (transaction) => {
         /*
-        * Insert secondId before firstId with the same timestamp to prove
-        * that equal timestamps are deterministically ordered by event ID.
-        */
+         * Insert secondId before firstId with the same timestamp to prove
+         * that equal timestamps are deterministically ordered by event ID.
+         */
         await database.appendEvent(
-            transaction,
-            auditEvent({
+          transaction,
+          auditEvent({
             event_id: secondId,
             occurred_at: iso(
-                "2026-08-12T01:00:00.000Z",
+              "2026-08-12T01:00:00.000Z",
             ),
-            }),
+          }),
         );
 
         await database.appendEvent(
-            transaction,
-            auditEvent({
+          transaction,
+          auditEvent({
             event_id: firstId,
             occurred_at: iso(
-                "2026-08-12T01:00:00.000Z",
+              "2026-08-12T01:00:00.000Z",
             ),
-            }),
+          }),
         );
 
         /*
-        * This later matching event exercises normal timestamp ordering.
-        */
+         * This later matching event exercises normal timestamp ordering.
+         */
         await database.appendEvent(
-            transaction,
-            auditEvent({
+          transaction,
+          auditEvent({
             event_id: thirdId,
             occurred_at: iso(
-                "2026-08-12T02:00:00.000Z",
+              "2026-08-12T02:00:00.000Z",
             ),
-            }),
+          }),
         );
 
         /*
-        * This event must remain outside the requested tenant boundary.
-        */
+         * This event must remain outside the requested tenant boundary.
+         */
         await database.appendEvent(
-            transaction,
-            auditEvent({
+          transaction,
+          auditEvent({
             event_id: otherOrganizationEventId,
             organization_id:
-                OTHER_ORGANIZATION_ID,
-            }),
+              OTHER_ORGANIZATION_ID,
+          }),
         );
-        },
+      },
     );
 
     const firstPage =
-        await database.listEventsForAggregate({
+      await database.listEventsForAggregate({
         organization_id: ORGANIZATION_ID,
         aggregate_type:
-            controlled("CAPA_CASE"),
+          controlled("CAPA_CASE"),
         aggregate_id: CASE_ID,
         limit: 1,
-        });
+      });
 
     expect(firstPage.events).toHaveLength(1);
     expect(firstPage.events[0].event_id).toBe(
-        firstId,
+      firstId,
     );
     expect(firstPage.next_cursor).toBe("1");
 
     const secondPage =
-        await database.listEventsForAggregate({
+      await database.listEventsForAggregate({
         organization_id: ORGANIZATION_ID,
         aggregate_type:
-            controlled("CAPA_CASE"),
+          controlled("CAPA_CASE"),
         aggregate_id: CASE_ID,
         limit: 1,
         cursor:
-            firstPage.next_cursor as AuditCursor,
-        });
+          firstPage.next_cursor as AuditCursor,
+      });
 
     expect(secondPage.events).toHaveLength(1);
     expect(secondPage.events[0].event_id).toBe(
-        secondId,
+      secondId,
     );
     expect(secondPage.next_cursor).toBe("2");
 
     const thirdPage =
-        await database.listEventsForAggregate({
+      await database.listEventsForAggregate({
         organization_id: ORGANIZATION_ID,
         aggregate_type:
-            controlled("CAPA_CASE"),
+          controlled("CAPA_CASE"),
         aggregate_id: CASE_ID,
         limit: 1,
         cursor:
-            secondPage.next_cursor as AuditCursor,
-        });
+          secondPage.next_cursor as AuditCursor,
+      });
 
     expect(thirdPage.events).toHaveLength(1);
     expect(thirdPage.events[0].event_id).toBe(
-        thirdId,
+      thirdId,
     );
     expect(thirdPage.next_cursor).toBeUndefined();
-    });
+  });
 
   it("rejects invalid limits and cursors", async () => {
     const database = createDatabase();

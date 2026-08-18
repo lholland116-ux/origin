@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+} from "vitest";
 
 import type {
   ControlledCode,
@@ -21,10 +25,16 @@ import {
 } from "../../lib/security/supabase-capa-context";
 
 const NOW =
-  new Date("2026-08-12T14:00:00.000Z");
+  new Date(
+    "2026-08-12T14:00:00.000Z",
+  );
 
 const USER_ID =
   "17e5a590-8e2c-4b08-8fb2-5a6c6fe87d23";
+
+const OTHER_ORGANIZATION_ID =
+  "8eb089a8-d26f-4662-948d-d0fb5d5e81fe" as
+    OrganizationId;
 
 function controlled(
   value: string,
@@ -41,21 +51,39 @@ function createUuidGenerator():
 
     return `00000000-0000-4000-8000-${String(
       sequence,
-    ).padStart(12, "0")}`;
+    ).padStart(
+      12,
+      "0",
+    )}`;
   };
+}
+
+function requestTrace():
+  RequestTrace {
+  return {
+    request_id:
+      "runtime-request-1",
+
+    correlation_id:
+      "runtime-correlation-1",
+  } as RequestTrace;
 }
 
 function developmentContext() {
   return resolveDevelopmentCapaRequestContext(
     {
-      verified_user_id: USER_ID,
+      verified_user_id:
+        USER_ID,
+
       authenticated_at:
         "2026-08-12T13:00:00.000Z",
+
       expires_at_epoch_seconds:
         Date.parse(
           "2026-08-12T15:00:00.000Z",
         ) / 1_000,
     },
+
     NOW,
   );
 }
@@ -64,22 +92,38 @@ function policyRequest(
   overrides:
     Partial<CapaPolicyEvaluationRequest> = {},
 ): CapaPolicyEvaluationRequest {
-  const context = developmentContext();
+  const context =
+    developmentContext();
 
   return {
     authentication:
       context.authentication,
-    tenant: context.tenant,
-    operation: "create_case",
+
+    tenant:
+      context.tenant,
+
+    operation:
+      "create_case",
+
     resource: {
       organization_id:
-        context.tenant.organization_id,
+        context.tenant
+          .organization_id,
+
       resource_type:
-        controlled("CAPA_CASE"),
+        controlled(
+          "CAPA_CASE",
+        ),
     },
+
     purpose:
-      controlled("CAPA_CASE_CREATION"),
-    trusted_now: NOW,
+      controlled(
+        "CAPA_CASE_CREATION",
+      ),
+
+    trusted_now:
+      NOW,
+
     ...overrides,
   };
 }
@@ -88,12 +132,16 @@ describe(
   "createCapaDevelopmentRuntime",
   () => {
     it(
-      "assembles one isolated in-memory CAPA runtime",
+      "assembles one isolated transaction-bound in-memory CAPA runtime",
       () => {
         const runtime =
           createCapaDevelopmentRuntime({
-            environment: "test",
-            now: () => NOW,
+            environment:
+              "test",
+
+            now:
+              () => NOW,
+
             generate_uuid:
               createUuidGenerator(),
           });
@@ -101,35 +149,58 @@ describe(
         expect(
           runtime.dependencies
             .transaction_manager,
-        ).toBe(runtime.database);
+        ).toBe(
+          runtime.database,
+        );
 
         expect(
           runtime.dependencies
             .capa_repository,
-        ).toBe(runtime.database);
+        ).toBe(
+          runtime.database,
+        );
 
         expect(
           runtime.dependencies
             .audit_repository,
-        ).toBe(runtime.database);
+        ).toBe(
+          runtime.database,
+        );
 
         expect(
-          runtime.dependencies.clock.now(),
-        ).toBe(NOW);
+          runtime.dependencies
+            .case_number_allocator,
+        ).toBe(
+          runtime.database,
+        );
 
         expect(
-          runtime.dependencies.configuration,
+          runtime.dependencies
+            .clock
+            .now(),
+        ).toBe(
+          NOW,
+        );
+
+        expect(
+          runtime.dependencies
+            .configuration,
         ).toEqual({
           workflow_version:
             "workflow-development-1.0.0",
+
           intake_schema_version:
             "intake-schema-1.0.0",
+
           audit_schema_version:
             "audit-schema-1.0.0",
+
           intake_section_type:
             "CAPA.INTAKE",
+
           default_confidentiality:
             "CUSTOMER_CONFIDENTIAL",
+
           authorization_purpose:
             "CAPA_CASE_CREATION",
         });
@@ -141,35 +212,44 @@ describe(
       () => {
         const runtime =
           createCapaDevelopmentRuntime({
-            environment: "test",
-            now: () => NOW,
+            environment:
+              "test",
+
+            now:
+              () => NOW,
+
             generate_uuid:
               createUuidGenerator(),
           });
 
         const generator =
-          runtime.dependencies.id_generator;
+          runtime.dependencies
+            .id_generator;
 
         expect(
-          generator.generateCapaCaseId(),
+          generator
+            .generateCapaCaseId(),
         ).toBe(
           "00000000-0000-4000-8000-000000000001",
         );
 
         expect(
-          generator.generateCaseVersionId(),
+          generator
+            .generateCaseVersionId(),
         ).toBe(
           "00000000-0000-4000-8000-000000000002",
         );
 
         expect(
-          generator.generateSectionVersionId(),
+          generator
+            .generateSectionVersionId(),
         ).toBe(
           "00000000-0000-4000-8000-000000000003",
         );
 
         expect(
-          generator.generateAuditEventId(),
+          generator
+            .generateAuditEventId(),
         ).toBe(
           "00000000-0000-4000-8000-000000000004",
         );
@@ -177,35 +257,125 @@ describe(
     );
 
     it(
-      "generates increasing development case numbers",
+      "allocates organization-scoped numbers with commit and rollback behavior",
       async () => {
         const runtime =
           createCapaDevelopmentRuntime({
-            environment: "test",
-            now: () => NOW,
+            environment:
+              "test",
+
+            now:
+              () => NOW,
+
             generate_uuid:
               createUuidGenerator(),
           });
 
         const organizationId =
-          USER_ID as OrganizationId;
+          USER_ID as
+            OrganizationId;
+
+        const trace =
+          requestTrace();
+
+        const rollbackFailure =
+          new Error(
+            "Simulated transaction failure",
+          );
 
         await expect(
-          runtime.dependencies.id_generator
-            .generateCaseNumber(
-              organizationId,
+          runtime.database
+            .runInTransaction(
+              trace,
+              async (
+                transaction,
+              ) => {
+                const allocated =
+                  await runtime
+                    .dependencies
+                    .case_number_allocator
+                    .allocateNextCaseNumber(
+                      transaction,
+                      organizationId,
+                    );
+
+                expect(
+                  allocated,
+                ).toBe(
+                  "CAPA-000001",
+                );
+
+                throw rollbackFailure;
+              },
             ),
-        ).resolves.toBe(
-          "CAPA-DEV-000001",
+        ).rejects.toBe(
+          rollbackFailure,
         );
 
-        await expect(
-          runtime.dependencies.id_generator
-            .generateCaseNumber(
-              organizationId,
-            ),
-        ).resolves.toBe(
-          "CAPA-DEV-000002",
+        const firstCommitted =
+          await runtime.database
+            .runInTransaction(
+              trace,
+              (
+                transaction,
+              ) =>
+                runtime
+                  .dependencies
+                  .case_number_allocator
+                  .allocateNextCaseNumber(
+                    transaction,
+                    organizationId,
+                  ),
+            );
+
+        const secondCommitted =
+          await runtime.database
+            .runInTransaction(
+              trace,
+              (
+                transaction,
+              ) =>
+                runtime
+                  .dependencies
+                  .case_number_allocator
+                  .allocateNextCaseNumber(
+                    transaction,
+                    organizationId,
+                  ),
+            );
+
+        const otherOrganization =
+          await runtime.database
+            .runInTransaction(
+              trace,
+              (
+                transaction,
+              ) =>
+                runtime
+                  .dependencies
+                  .case_number_allocator
+                  .allocateNextCaseNumber(
+                    transaction,
+                    OTHER_ORGANIZATION_ID,
+                  ),
+            );
+
+        expect(
+          firstCommitted,
+        ).toBe(
+          "CAPA-000001",
+        );
+
+        expect(
+          secondCommitted,
+        ).toBe(
+          "CAPA-000002",
+        );
+
+        expect(
+          otherOrganization,
+        ).toBe(
+          "CAPA-000001",
         );
       },
     );
@@ -215,51 +385,61 @@ describe(
       async () => {
         const runtime =
           createCapaDevelopmentRuntime({
-            environment: "test",
-            now: () => NOW,
+            environment:
+              "test",
+
+            now:
+              () => NOW,
+
             generate_uuid:
               createUuidGenerator(),
           });
 
-        const trace = {
-          request_id: "request-1",
-          correlation_id:
-            "correlation-1",
-        } as RequestTrace;
+        const trace =
+          requestTrace();
 
         const transaction =
           await runtime.database
             .runInTransaction(
               trace,
-              async (context) =>
+              async (
+                context,
+              ) =>
                 context,
             );
 
         expect(
-          transaction.transaction_id,
+          transaction
+            .transaction_id,
         ).toBe(
           "00000000-0000-4000-8000-000000000001",
         );
 
         expect(
-          transaction.started_at,
+          transaction
+            .started_at,
         ).toBe(
           "2026-08-12T14:00:00.000Z",
         );
 
         expect(
-          transaction.request_trace,
-        ).toEqual(trace);
+          transaction
+            .request_trace,
+        ).toEqual(
+          trace,
+        );
       },
     );
 
     it(
       "blocks creation in a production environment",
       () => {
-        expect(() =>
-          createCapaDevelopmentRuntime({
-            environment: "production",
-          }),
+        expect(
+          () =>
+            createCapaDevelopmentRuntime({
+              environment:
+                "production",
+            }),
         ).toThrow(
           CapaDevelopmentRuntimeDisabledError,
         );
@@ -271,15 +451,21 @@ describe(
       () => {
         const runtime =
           createCapaDevelopmentRuntime({
-            environment: "test",
+            environment:
+              "test",
           });
 
         expect(
-          runtime.dependencies.clock.now(),
-        ).toBeInstanceOf(Date);
+          runtime.dependencies
+            .clock
+            .now(),
+        ).toBeInstanceOf(
+          Date,
+        );
 
         expect(
-          runtime.dependencies.id_generator
+          runtime.dependencies
+            .id_generator
             .generateCapaCaseId(),
         ).toMatch(
           /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
@@ -290,8 +476,9 @@ describe(
     it(
       "uses NODE_ENV when no explicit environment is supplied",
       () => {
-        expect(() =>
-          createCapaDevelopmentRuntime(),
+        expect(
+          () =>
+            createCapaDevelopmentRuntime(),
         ).not.toThrow();
       },
     );
@@ -303,29 +490,42 @@ describe(
   () => {
     function createPolicy() {
       return createCapaDevelopmentRuntime({
-        environment: "test",
-        now: () => NOW,
+        environment:
+          "test",
+
+        now:
+          () => NOW,
+
         generate_uuid:
           createUuidGenerator(),
-      }).dependencies.authorization_policy;
+      }).dependencies
+        .authorization_policy;
     }
 
     it(
       "allows development CAPA creation",
       async () => {
         const decision =
-          await createPolicy().evaluate(
-            policyRequest(),
-          );
+          await createPolicy()
+            .evaluate(
+              policyRequest(),
+            );
 
-        expect(decision).toEqual({
-          decision: "allow",
+        expect(
+          decision,
+        ).toEqual({
+          decision:
+            "allow",
+
           reason_code:
             "DEVELOPMENT_CREATE_ALLOWED",
+
           policy_version:
             "development-policy-1.0.0",
+
           evaluated_at:
             "2026-08-12T14:00:00.000Z",
+
           relied_on_role_assignment_ids: [
             `development-role:${USER_ID}`,
           ],
@@ -335,15 +535,19 @@ describe(
 
     it.each([
       {
-        name: "non-development access path",
+        name:
+          "non-development access path",
+
         mutate(
           request:
             CapaPolicyEvaluationRequest,
         ): CapaPolicyEvaluationRequest {
           return {
             ...request,
+
             tenant: {
               ...request.tenant,
+
               access_path:
                 controlled(
                   "HUMAN_MEMBERSHIP",
@@ -353,86 +557,118 @@ describe(
         },
       },
       {
-        name: "organization mismatch",
+        name:
+          "organization mismatch",
+
         mutate(
           request:
             CapaPolicyEvaluationRequest,
         ): CapaPolicyEvaluationRequest {
           return {
             ...request,
+
             resource: {
               ...request.resource,
+
               organization_id:
-                "8eb089a8-d26f-4662-948d-d0fb5d5e81fe" as OrganizationId,
+                OTHER_ORGANIZATION_ID,
             },
           };
         },
       },
       {
-        name: "unsupported operation",
+        name:
+          "unsupported operation",
+
         mutate(
           request:
             CapaPolicyEvaluationRequest,
         ): CapaPolicyEvaluationRequest {
           return {
             ...request,
-            operation: "view_case",
+
+            operation:
+              "view_case",
           };
         },
       },
       {
-        name: "missing development role",
+        name:
+          "missing development role",
+
         mutate(
           request:
             CapaPolicyEvaluationRequest,
         ): CapaPolicyEvaluationRequest {
           return {
             ...request,
+
             tenant: {
               ...request.tenant,
+
               role_assignments: [],
             },
           };
         },
       },
       {
-        name: "incorrect role scope",
+        name:
+          "incorrect role scope",
+
         mutate(
           request:
             CapaPolicyEvaluationRequest,
         ): CapaPolicyEvaluationRequest {
           return {
             ...request,
+
             tenant: {
               ...request.tenant,
+
               role_assignments:
-                request.tenant.role_assignments.map(
-                  (assignment) => ({
-                    ...assignment,
-                    scope:
-                      controlled(
-                        "CASE_ONLY",
-                      ),
-                  }),
-                ),
+                request.tenant
+                  .role_assignments
+                  .map(
+                    (
+                      assignment,
+                    ) => ({
+                      ...assignment,
+
+                      scope:
+                        controlled(
+                          "CASE_ONLY",
+                        ),
+                    }),
+                  ),
             },
           };
         },
       },
     ])(
       "denies $name",
-      async ({ mutate }) => {
+      async ({
+        mutate,
+      }) => {
         const decision =
-          await createPolicy().evaluate(
-            mutate(policyRequest()),
-          );
+          await createPolicy()
+            .evaluate(
+              mutate(
+                policyRequest(),
+              ),
+            );
 
-        expect(decision).toEqual({
-          decision: "deny",
+        expect(
+          decision,
+        ).toEqual({
+          decision:
+            "deny",
+
           reason_code:
             "DEVELOPMENT_POLICY_DENIED",
+
           policy_version:
             "development-policy-1.0.0",
+
           evaluated_at:
             "2026-08-12T14:00:00.000Z",
         });
@@ -448,9 +684,11 @@ describe(
       "reuses one process-shared runtime",
       () => {
         const globalRuntime =
-          globalThis as typeof globalThis & {
-            __lvt_capa_development_runtime__?: unknown;
-          };
+          globalThis as
+            typeof globalThis & {
+              __lvt_capa_development_runtime__?:
+                unknown;
+            };
 
         delete globalRuntime
           .__lvt_capa_development_runtime__;
@@ -461,7 +699,11 @@ describe(
         const second =
           getCapaDevelopmentRuntime();
 
-        expect(second).toBe(first);
+        expect(
+          second,
+        ).toBe(
+          first,
+        );
       },
     );
   },

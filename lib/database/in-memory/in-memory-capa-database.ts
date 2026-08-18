@@ -1,4 +1,6 @@
-import { isDeepStrictEqual } from "node:util";
+import {
+  isDeepStrictEqual,
+} from "node:util";
 
 import type {
   AuditEvent,
@@ -29,6 +31,10 @@ import type {
 } from "../repositories/audit-repository";
 
 import type {
+  CapaCaseNumberAllocator,
+} from "../repositories/capa-case-number-allocator";
+
+import type {
   TransactionContext,
   TransactionId,
   TransactionManager,
@@ -44,6 +50,7 @@ import type {
  * Supported behavior:
  *
  * - atomic transaction commit and rollback;
+ * - organization-scoped CAPA case-number allocation;
  * - tenant-scoped reads and identifiers;
  * - immutable case and section versions;
  * - optimistic aggregate concurrency;
@@ -53,19 +60,50 @@ import type {
  * - commit-time referential-integrity validation;
  * - defensive cloning at persistence boundaries.
  */
+
+const DEFAULT_MAXIMUM_CASE_NUMBER =
+  999_999;
+
+const CASE_NUMBER_PREFIX =
+  "CAPA-";
+
+const CASE_NUMBER_WIDTH =
+  6;
+
 interface InMemoryState {
   readonly revision: number;
-  readonly cases: Map<string, CapaCase>;
-  readonly case_numbers: Map<string, CapaCaseId>;
-  readonly case_versions: Map<string, CapaCaseVersion>;
+
+  readonly cases:
+    Map<string, CapaCase>;
+
+  readonly case_numbers:
+    Map<string, CapaCaseId>;
+
+  /**
+   * Transaction-owned organization-local numeric sequence state.
+   *
+   * Keeping this map inside InMemoryState gives allocation the same
+   * commit and rollback behavior as the aggregate records.
+   */
+  readonly case_number_counters:
+    Map<string, number>;
+
+  readonly case_versions:
+    Map<string, CapaCaseVersion>;
+
   readonly section_versions:
     Map<string, CapaSectionVersion>;
-  readonly audit_events: Map<string, AuditEvent>;
+
+  readonly audit_events:
+    Map<string, AuditEvent>;
 }
 
 interface ActiveTransaction {
-  readonly context: TransactionContext;
-  readonly state: InMemoryState;
+  readonly context:
+    TransactionContext;
+
+  readonly state:
+    InMemoryState;
 }
 
 export interface InMemoryCapaDatabaseOptions {
@@ -73,85 +111,175 @@ export interface InMemoryCapaDatabaseOptions {
    * Must generate a unique identity for every concurrently active
    * transaction.
    */
-  readonly generate_transaction_id: () => TransactionId;
+  readonly generate_transaction_id:
+    () => TransactionId;
 
   /**
    * Returns trusted time used for transaction metadata.
    */
-  readonly now: () => Date;
+  readonly now:
+    () => Date;
+
+  /**
+   * Optional controlled test seam for exercising sequence exhaustion
+   * without allocating 999,999 records.
+   *
+   * Ordinary development runtimes must omit this option.
+   */
+  readonly maximum_case_number?:
+    number;
 }
 
-export class InMemoryTransactionConflictError extends Error {
+export class InMemoryTransactionConflictError
+  extends Error {
   constructor() {
     super(
       "The in-memory database changed before the transaction could commit.",
     );
-    this.name = "InMemoryTransactionConflictError";
+
+    this.name =
+      "InMemoryTransactionConflictError";
   }
 }
 
-export class InMemoryTransactionNotActiveError extends Error {
+export class InMemoryTransactionNotActiveError
+  extends Error {
   constructor() {
-    super("The transaction is not active.");
-    this.name = "InMemoryTransactionNotActiveError";
+    super(
+      "The transaction is not active.",
+    );
+
+    this.name =
+      "InMemoryTransactionNotActiveError";
   }
 }
 
-export class InMemoryDuplicateRecordError extends Error {
-  constructor(recordType: string) {
+export class InMemoryDuplicateRecordError
+  extends Error {
+  constructor(
+    recordType: string,
+  ) {
     super(
       `A ${recordType} record with the same identity already exists.`,
     );
-    this.name = "InMemoryDuplicateRecordError";
+
+    this.name =
+      "InMemoryDuplicateRecordError";
   }
 }
 
-export class InMemoryIntegrityError extends Error {
-  constructor(message: string) {
+export class InMemoryIntegrityError
+  extends Error {
+  constructor(
+    message: string,
+  ) {
     super(message);
-    this.name = "InMemoryIntegrityError";
+
+    this.name =
+      "InMemoryIntegrityError";
   }
 }
 
-export class InMemoryAuditQueryError extends Error {
+export class InMemoryAuditQueryError
+  extends Error {
   constructor() {
     super(
       "The audit query page parameters are invalid.",
     );
-    this.name = "InMemoryAuditQueryError";
+
+    this.name =
+      "InMemoryAuditQueryError";
   }
 }
 
-function iso(value: Date): IsoDateTime {
-  return value.toISOString() as IsoDateTime;
+export class InMemoryCapaDatabaseConfigurationError
+  extends Error {
+  constructor() {
+    super(
+      "The in-memory CAPA case-number maximum must be a positive safe integer no greater than 999999.",
+    );
+
+    this.name =
+      "InMemoryCapaDatabaseConfigurationError";
+  }
+}
+
+export class InMemoryCapaCaseNumberExhaustedError
+  extends Error {
+  constructor() {
+    super(
+      "The organization has exhausted its available CAPA case numbers.",
+    );
+
+    this.name =
+      "InMemoryCapaCaseNumberExhaustedError";
+  }
+}
+
+function iso(
+  value: Date,
+): IsoDateTime {
+  return value.toISOString() as
+    IsoDateTime;
 }
 
 function recordKey(
-  organizationId: OrganizationId,
-  recordId: string,
+  organizationId:
+    OrganizationId,
+
+  recordId:
+    string,
 ): string {
   return `${organizationId}:${recordId}`;
 }
 
 function caseNumberKey(
-  organizationId: OrganizationId,
-  caseNumber: string,
+  organizationId:
+    OrganizationId,
+
+  caseNumber:
+    string,
 ): string {
   return `${organizationId}:${caseNumber}`;
 }
 
-function cloneValue<Value>(value: Value): Value {
+function caseNumberCounterKey(
+  organizationId:
+    OrganizationId,
+): string {
+  return String(
+    organizationId,
+  );
+}
+
+function formatCaseNumber(
+  value: number,
+): string {
+  return `${CASE_NUMBER_PREFIX}${String(
+    value,
+  ).padStart(
+    CASE_NUMBER_WIDTH,
+    "0",
+  )}`;
+}
+
+function cloneValue<Value>(
+  value: Value,
+): Value {
   return structuredClone(value);
 }
 
 function cloneMap<Value>(
-  source: ReadonlyMap<string, Value>,
+  source:
+    ReadonlyMap<string, Value>,
 ): Map<string, Value> {
   return new Map(
-    [...source.entries()].map(([key, value]) => [
-      key,
-      cloneValue(value),
-    ]),
+    [...source.entries()].map(
+      ([key, value]) => [
+        key,
+        cloneValue(value),
+      ],
+    ),
   );
 }
 
@@ -159,54 +287,129 @@ function cloneState(
   state: InMemoryState,
 ): InMemoryState {
   return {
-    revision: state.revision,
-    cases: cloneMap(state.cases),
-    case_numbers: new Map(state.case_numbers),
-    case_versions: cloneMap(state.case_versions),
-    section_versions: cloneMap(
-      state.section_versions,
-    ),
-    audit_events: cloneMap(state.audit_events),
+    revision:
+      state.revision,
+
+    cases:
+      cloneMap(state.cases),
+
+    case_numbers:
+      new Map(
+        state.case_numbers,
+      ),
+
+    case_number_counters:
+      new Map(
+        state.case_number_counters,
+      ),
+
+    case_versions:
+      cloneMap(
+        state.case_versions,
+      ),
+
+    section_versions:
+      cloneMap(
+        state.section_versions,
+      ),
+
+    audit_events:
+      cloneMap(
+        state.audit_events,
+      ),
   };
 }
 
-function emptyState(): InMemoryState {
+function emptyState():
+  InMemoryState {
   return {
     revision: 0,
-    cases: new Map(),
-    case_numbers: new Map(),
-    case_versions: new Map(),
-    section_versions: new Map(),
-    audit_events: new Map(),
+
+    cases:
+      new Map(),
+
+    case_numbers:
+      new Map(),
+
+    case_number_counters:
+      new Map(),
+
+    case_versions:
+      new Map(),
+
+    section_versions:
+      new Map(),
+
+    audit_events:
+      new Map(),
   };
+}
+
+function requireMaximumCaseNumber(
+  value: number | undefined,
+): number {
+  const resolved =
+    value ??
+    DEFAULT_MAXIMUM_CASE_NUMBER;
+
+  if (
+    !Number.isSafeInteger(
+      resolved,
+    ) ||
+    resolved < 1 ||
+    resolved >
+      DEFAULT_MAXIMUM_CASE_NUMBER
+  ) {
+    throw new InMemoryCapaDatabaseConfigurationError();
+  }
+
+  return resolved;
 }
 
 export class InMemoryCapaDatabase
   implements
     TransactionManager,
     CapaRepository,
-    AuditRepository
+    AuditRepository,
+    CapaCaseNumberAllocator
 {
-  private committed_state: InMemoryState =
-    emptyState();
+  private committed_state:
+    InMemoryState =
+      emptyState();
 
   private readonly active_transactions =
-    new Map<TransactionId, ActiveTransaction>();
+    new Map<
+      TransactionId,
+      ActiveTransaction
+    >();
+
+  private readonly maximum_case_number:
+    number;
 
   constructor(
     private readonly options:
       InMemoryCapaDatabaseOptions,
-  ) {}
+  ) {
+    this.maximum_case_number =
+      requireMaximumCaseNumber(
+        options.maximum_case_number,
+      );
+  }
 
   async runInTransaction<Result>(
-    requestTrace: RequestTrace,
-    work: TransactionWork<Result>,
+    requestTrace:
+      RequestTrace,
+
+    work:
+      TransactionWork<Result>,
   ): Promise<Result> {
     const transactionId =
-      this.options.generate_transaction_id();
+      this.options
+        .generate_transaction_id();
 
     if (
-      this.active_transactions.has(transactionId)
+      this.active_transactions
+        .has(transactionId)
     ) {
       throw new InMemoryDuplicateRecordError(
         "transaction",
@@ -217,36 +420,59 @@ export class InMemoryCapaDatabase
      * A transaction operates on an isolated snapshot. Its revision is the
      * committed database revision observed when the transaction began.
      */
-    const workingState = cloneState(
-      this.committed_state,
-    );
+    const workingState =
+      cloneState(
+        this.committed_state,
+      );
 
-    const transaction: TransactionContext = {
-      transaction_id: transactionId,
-      started_at: iso(this.options.now()),
-      request_trace: cloneValue(requestTrace),
+    const transaction:
+      TransactionContext = {
+      transaction_id:
+        transactionId,
+
+      started_at:
+        iso(
+          this.options.now(),
+        ),
+
+      request_trace:
+        cloneValue(
+          requestTrace,
+        ),
     };
 
-    this.active_transactions.set(transactionId, {
-      context: transaction,
-      state: workingState,
-    });
+    this.active_transactions.set(
+      transactionId,
+      {
+        context:
+          transaction,
+
+        state:
+          workingState,
+      },
+    );
 
     try {
-      const result = await work(transaction);
+      const result =
+        await work(
+          transaction,
+        );
 
       /*
        * No state becomes visible until all controlled relationships pass
        * validation.
        */
-      this.validateState(workingState);
+      this.validateState(
+        workingState,
+      );
 
       /*
        * Reject a stale snapshot if another transaction committed after
        * this transaction began.
        */
       if (
-        this.committed_state.revision !==
+        this.committed_state
+          .revision !==
         workingState.revision
       ) {
         throw new InMemoryTransactionConflictError();
@@ -254,7 +480,9 @@ export class InMemoryCapaDatabase
 
       this.committed_state = {
         ...workingState,
-        revision: workingState.revision + 1,
+
+        revision:
+          workingState.revision + 1,
       };
 
       return result;
@@ -266,12 +494,21 @@ export class InMemoryCapaDatabase
   }
 
   async findCaseById(
-    organizationId: OrganizationId,
-    capaCaseId: CapaCaseId,
+    organizationId:
+      OrganizationId,
+
+    capaCaseId:
+      CapaCaseId,
   ): Promise<CapaCase | null> {
-    const value = this.committed_state.cases.get(
-      recordKey(organizationId, capaCaseId),
-    );
+    const value =
+      this.committed_state
+        .cases
+        .get(
+          recordKey(
+            organizationId,
+            capaCaseId,
+          ),
+        );
 
     return value === undefined
       ? null
@@ -279,21 +516,29 @@ export class InMemoryCapaDatabase
   }
 
   async findCaseVersionById(
-    organizationId: OrganizationId,
-    capaCaseId: CapaCaseId,
-    caseVersionId: CapaCaseVersionId,
+    organizationId:
+      OrganizationId,
+
+    capaCaseId:
+      CapaCaseId,
+
+    caseVersionId:
+      CapaCaseVersionId,
   ): Promise<CapaCaseVersion | null> {
     const value =
-      this.committed_state.case_versions.get(
-        recordKey(
-          organizationId,
-          caseVersionId,
-        ),
-      );
+      this.committed_state
+        .case_versions
+        .get(
+          recordKey(
+            organizationId,
+            caseVersionId,
+          ),
+        );
 
     if (
       value === undefined ||
-      value.capa_case_id !== capaCaseId
+      value.capa_case_id !==
+        capaCaseId
     ) {
       return null;
     }
@@ -302,21 +547,29 @@ export class InMemoryCapaDatabase
   }
 
   async findSectionVersionById(
-    organizationId: OrganizationId,
-    capaCaseId: CapaCaseId,
-    sectionVersionId: CapaSectionVersionId,
+    organizationId:
+      OrganizationId,
+
+    capaCaseId:
+      CapaCaseId,
+
+    sectionVersionId:
+      CapaSectionVersionId,
   ): Promise<CapaSectionVersion | null> {
     const value =
-      this.committed_state.section_versions.get(
-        recordKey(
-          organizationId,
-          sectionVersionId,
-        ),
-      );
+      this.committed_state
+        .section_versions
+        .get(
+          recordKey(
+            organizationId,
+            sectionVersionId,
+          ),
+        );
 
     if (
       value === undefined ||
-      value.capa_case_id !== capaCaseId
+      value.capa_case_id !==
+        capaCaseId
     ) {
       return null;
     }
@@ -324,42 +577,110 @@ export class InMemoryCapaDatabase
     return cloneValue(value);
   }
 
-  async caseNumberExists(
-    organizationId: OrganizationId,
-    caseNumber: string,
-  ): Promise<boolean> {
-    return this.committed_state.case_numbers.has(
-      caseNumberKey(
+  /**
+   * Allocates the next organization-local CAPA number through the active
+   * transaction snapshot.
+   *
+   * The counter is committed only if the transaction completes. A thrown
+   * error therefore makes the number available to the next transaction.
+   */
+  async allocateNextCaseNumber(
+    transaction:
+      TransactionContext,
+
+    organizationId:
+      OrganizationId,
+  ): Promise<string> {
+    const state =
+      this.transactionState(
+        transaction,
+      );
+
+    const counterKey =
+      caseNumberCounterKey(
         organizationId,
-        caseNumber,
-      ),
+      );
+
+    const current =
+      state.case_number_counters
+        .get(counterKey) ?? 0;
+
+    if (
+      current >=
+      this.maximum_case_number
+    ) {
+      throw new InMemoryCapaCaseNumberExhaustedError();
+    }
+
+    const next =
+      current + 1;
+
+    state.case_number_counters.set(
+      counterKey,
+      next,
+    );
+
+    return formatCaseNumber(
+      next,
     );
   }
 
+  async caseNumberExists(
+    organizationId:
+      OrganizationId,
+
+    caseNumber:
+      string,
+  ): Promise<boolean> {
+    return this.committed_state
+      .case_numbers
+      .has(
+        caseNumberKey(
+          organizationId,
+          caseNumber,
+        ),
+      );
+  }
+
   async insertCase(
-    transaction: TransactionContext,
-    capaCase: CapaCase,
+    transaction:
+      TransactionContext,
+
+    capaCase:
+      CapaCase,
   ): Promise<void> {
     const state =
-      this.transactionState(transaction);
+      this.transactionState(
+        transaction,
+      );
 
-    const identityKey = recordKey(
-      capaCase.organization_id,
-      capaCase.capa_case_id,
-    );
+    const identityKey =
+      recordKey(
+        capaCase.organization_id,
+        capaCase.capa_case_id,
+      );
 
-    if (state.cases.has(identityKey)) {
+    if (
+      state.cases.has(
+        identityKey,
+      )
+    ) {
       throw new InMemoryDuplicateRecordError(
         "CAPA case",
       );
     }
 
-    const numberKey = caseNumberKey(
-      capaCase.organization_id,
-      capaCase.case_number,
-    );
+    const numberKey =
+      caseNumberKey(
+        capaCase.organization_id,
+        capaCase.case_number,
+      );
 
-    if (state.case_numbers.has(numberKey)) {
+    if (
+      state.case_numbers.has(
+        numberKey,
+      )
+    ) {
       throw new InMemoryDuplicateRecordError(
         "CAPA case number",
       );
@@ -367,7 +688,9 @@ export class InMemoryCapaDatabase
 
     state.cases.set(
       identityKey,
-      cloneValue(capaCase),
+      cloneValue(
+        capaCase,
+      ),
     );
 
     state.case_numbers.set(
@@ -377,18 +700,27 @@ export class InMemoryCapaDatabase
   }
 
   async insertSectionVersion(
-    transaction: TransactionContext,
-    sectionVersion: CapaSectionVersion,
+    transaction:
+      TransactionContext,
+
+    sectionVersion:
+      CapaSectionVersion,
   ): Promise<void> {
     const state =
-      this.transactionState(transaction);
+      this.transactionState(
+        transaction,
+      );
 
-    const key = recordKey(
-      sectionVersion.organization_id,
-      sectionVersion.section_version_id,
-    );
+    const key =
+      recordKey(
+        sectionVersion.organization_id,
+        sectionVersion.section_version_id,
+      );
 
-    if (state.section_versions.has(key)) {
+    if (
+      state.section_versions
+        .has(key)
+    ) {
       throw new InMemoryDuplicateRecordError(
         "CAPA section version",
       );
@@ -396,23 +728,34 @@ export class InMemoryCapaDatabase
 
     state.section_versions.set(
       key,
-      cloneValue(sectionVersion),
+      cloneValue(
+        sectionVersion,
+      ),
     );
   }
 
   async insertCaseVersion(
-    transaction: TransactionContext,
-    caseVersion: CapaCaseVersion,
+    transaction:
+      TransactionContext,
+
+    caseVersion:
+      CapaCaseVersion,
   ): Promise<void> {
     const state =
-      this.transactionState(transaction);
+      this.transactionState(
+        transaction,
+      );
 
-    const key = recordKey(
-      caseVersion.organization_id,
-      caseVersion.case_version_id,
-    );
+    const key =
+      recordKey(
+        caseVersion.organization_id,
+        caseVersion.case_version_id,
+      );
 
-    if (state.case_versions.has(key)) {
+    if (
+      state.case_versions
+        .has(key)
+    ) {
       throw new InMemoryDuplicateRecordError(
         "CAPA case version",
       );
@@ -420,27 +763,42 @@ export class InMemoryCapaDatabase
 
     state.case_versions.set(
       key,
-      cloneValue(caseVersion),
+      cloneValue(
+        caseVersion,
+      ),
     );
   }
 
   async advanceCurrentVersion(
-    transaction: TransactionContext,
-    input: AdvanceCapaVersionInput,
+    transaction:
+      TransactionContext,
+
+    input:
+      AdvanceCapaVersionInput,
   ): Promise<AdvanceCapaVersionResult> {
     const state =
-      this.transactionState(transaction);
+      this.transactionState(
+        transaction,
+      );
 
-    const caseKey = recordKey(
-      input.organization_id,
-      input.capa_case_id,
-    );
+    const caseKey =
+      recordKey(
+        input.organization_id,
+        input.capa_case_id,
+      );
 
-    const current = state.cases.get(caseKey);
+    const current =
+      state.cases.get(
+        caseKey,
+      );
 
-    if (current === undefined) {
+    if (
+      current === undefined
+    ) {
       return {
-        status: "conflict",
+        status:
+          "conflict",
+
         reason_code:
           "CASE_NOT_FOUND_OR_NOT_AUTHORIZED",
       };
@@ -451,7 +809,9 @@ export class InMemoryCapaDatabase
       input.expected_record_version
     ) {
       return {
-        status: "conflict",
+        status:
+          "conflict",
+
         reason_code:
           "RECORD_VERSION_CONFLICT",
       };
@@ -462,7 +822,9 @@ export class InMemoryCapaDatabase
       input.expected_current_version_id
     ) {
       return {
-        status: "conflict",
+        status:
+          "conflict",
+
         reason_code:
           "CURRENT_VERSION_CONFLICT",
       };
@@ -482,62 +844,100 @@ export class InMemoryCapaDatabase
         input.capa_case_id
     ) {
       return {
-        status: "conflict",
+        status:
+          "conflict",
+
         reason_code:
           "CASE_NOT_FOUND_OR_NOT_AUTHORIZED",
       };
     }
 
-    const updated: CapaCase = {
+    const updated:
+      CapaCase = {
       ...current,
+
       current_version_id:
         input.next_current_version_id,
-      status: input.next_status,
+
+      status:
+        input.next_status,
+
       record_version:
         current.record_version + 1,
-      updated_at: input.updated_at,
-      updated_by: input.updated_by,
+
+      updated_at:
+        input.updated_at,
+
+      updated_by:
+        input.updated_by,
     };
 
     state.cases.set(
       caseKey,
-      cloneValue(updated),
+      cloneValue(
+        updated,
+      ),
     );
 
     return {
-      status: "updated",
-      capa_case: cloneValue(updated),
+      status:
+        "updated",
+
+      capa_case:
+        cloneValue(
+          updated,
+        ),
     };
   }
 
   async appendEvent(
-    transaction: TransactionContext,
-    event: AuditEvent,
+    transaction:
+      TransactionContext,
+
+    event:
+      AuditEvent,
   ): Promise<AppendAuditEventResult> {
     const state =
-      this.transactionState(transaction);
+      this.transactionState(
+        transaction,
+      );
 
-    const key = recordKey(
-      event.organization_id,
-      event.event_id,
-    );
+    const key =
+      recordKey(
+        event.organization_id,
+        event.event_id,
+      );
 
     const existing =
-      state.audit_events.get(key);
+      state.audit_events.get(
+        key,
+      );
 
-    if (existing !== undefined) {
+    if (
+      existing !== undefined
+    ) {
       if (
-        isDeepStrictEqual(existing, event)
+        isDeepStrictEqual(
+          existing,
+          event,
+        )
       ) {
         return {
-          status: "already_recorded",
-          event_id: event.event_id,
+          status:
+            "already_recorded",
+
+          event_id:
+            event.event_id,
         };
       }
 
       return {
-        status: "conflict",
-        event_id: event.event_id,
+        status:
+          "conflict",
+
+        event_id:
+          event.event_id,
+
         reason_code:
           "EVENT_ID_REUSED_WITH_DIFFERENT_CONTENT",
       };
@@ -545,23 +945,36 @@ export class InMemoryCapaDatabase
 
     state.audit_events.set(
       key,
-      cloneValue(event),
+      cloneValue(
+        event,
+      ),
     );
 
     return {
-      status: "appended",
-      event_id: event.event_id,
+      status:
+        "appended",
+
+      event_id:
+        event.event_id,
     };
   }
 
   async findEventById(
-    organizationId: OrganizationId,
-    eventId: AuditEventId,
+    organizationId:
+      OrganizationId,
+
+    eventId:
+      AuditEventId,
   ): Promise<AuditEvent | null> {
     const value =
-      this.committed_state.audit_events.get(
-        recordKey(organizationId, eventId),
-      );
+      this.committed_state
+        .audit_events
+        .get(
+          recordKey(
+            organizationId,
+            eventId,
+          ),
+        );
 
     return value === undefined
       ? null
@@ -569,10 +982,13 @@ export class InMemoryCapaDatabase
   }
 
   async listEventsForAggregate(
-    query: AuditEventQuery,
+    query:
+      AuditEventQuery,
   ): Promise<AuditEventPage> {
     if (
-      !Number.isInteger(query.limit) ||
+      !Number.isInteger(
+        query.limit,
+      ) ||
       query.limit < 1 ||
       query.limit > 100
     ) {
@@ -582,17 +998,23 @@ export class InMemoryCapaDatabase
     const offset =
       query.cursor === undefined
         ? 0
-        : Number(query.cursor);
+        : Number(
+            query.cursor,
+          );
 
     if (
-      !Number.isInteger(offset) ||
+      !Number.isInteger(
+        offset,
+      ) ||
       offset < 0
     ) {
       throw new InMemoryAuditQueryError();
     }
 
     const matching = [
-      ...this.committed_state.audit_events.values(),
+      ...this.committed_state
+        .audit_events
+        .values(),
     ]
       .filter(
         (event) =>
@@ -603,36 +1025,50 @@ export class InMemoryCapaDatabase
           event.aggregate_id ===
             query.aggregate_id,
       )
-      .sort((left, right) => {
-        const timeComparison =
-          left.occurred_at.localeCompare(
-            right.occurred_at,
-          );
+      .sort(
+        (left, right) => {
+          const timeComparison =
+            left.occurred_at
+              .localeCompare(
+                right.occurred_at,
+              );
 
-        if (timeComparison !== 0) {
-          return timeComparison;
-        }
+          if (
+            timeComparison !== 0
+          ) {
+            return timeComparison;
+          }
 
-        return left.event_id.localeCompare(
-          right.event_id,
+          return left.event_id
+            .localeCompare(
+              right.event_id,
+            );
+        },
+      );
+
+    const events =
+      matching
+        .slice(
+          offset,
+          offset + query.limit,
+        )
+        .map(
+          (event) =>
+            cloneValue(event),
         );
-      });
-
-    const events = matching
-      .slice(
-        offset,
-        offset + query.limit,
-      )
-      .map((event) => cloneValue(event));
 
     const nextOffset =
       offset + events.length;
 
     return {
       events,
+
       next_cursor:
-        nextOffset < matching.length
-          ? String(nextOffset) as AuditCursor
+        nextOffset <
+        matching.length
+          ? String(
+              nextOffset,
+            ) as AuditCursor
           : undefined,
     };
   }
@@ -644,7 +1080,8 @@ export class InMemoryCapaDatabase
    * manufacturing another context containing an active transaction ID.
    */
   private transactionState(
-    transaction: TransactionContext,
+    transaction:
+      TransactionContext,
   ): InMemoryState {
     const active =
       this.active_transactions.get(
@@ -653,7 +1090,8 @@ export class InMemoryCapaDatabase
 
     if (
       active === undefined ||
-      active.context !== transaction
+      active.context !==
+        transaction
     ) {
       throw new InMemoryTransactionNotActiveError();
     }
@@ -666,7 +1104,8 @@ export class InMemoryCapaDatabase
    * ordinarily protect with composite keys and foreign-key constraints.
    */
   private validateState(
-    state: InMemoryState,
+    state:
+      InMemoryState,
   ): void {
     for (
       const capaCase
@@ -695,14 +1134,17 @@ export class InMemoryCapaDatabase
       const sectionVersion
       of state.section_versions.values()
     ) {
-      const parentCase = state.cases.get(
-        recordKey(
-          sectionVersion.organization_id,
-          sectionVersion.capa_case_id,
-        ),
-      );
+      const parentCase =
+        state.cases.get(
+          recordKey(
+            sectionVersion.organization_id,
+            sectionVersion.capa_case_id,
+          ),
+        );
 
-      if (parentCase === undefined) {
+      if (
+        parentCase === undefined
+      ) {
         throw new InMemoryIntegrityError(
           "A CAPA section version references an invalid case.",
         );
@@ -713,14 +1155,17 @@ export class InMemoryCapaDatabase
       const caseVersion
       of state.case_versions.values()
     ) {
-      const parentCase = state.cases.get(
-        recordKey(
-          caseVersion.organization_id,
-          caseVersion.capa_case_id,
-        ),
-      );
+      const parentCase =
+        state.cases.get(
+          recordKey(
+            caseVersion.organization_id,
+            caseVersion.capa_case_id,
+          ),
+        );
 
-      if (parentCase === undefined) {
+      if (
+        parentCase === undefined
+      ) {
         throw new InMemoryIntegrityError(
           "A CAPA case version references an invalid case.",
         );
@@ -739,8 +1184,10 @@ export class InMemoryCapaDatabase
           );
 
         if (
-          referencedSection === undefined ||
-          referencedSection.capa_case_id !==
+          referencedSection ===
+            undefined ||
+          referencedSection
+            .capa_case_id !==
             caseVersion.capa_case_id
         ) {
           throw new InMemoryIntegrityError(
