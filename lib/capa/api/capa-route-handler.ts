@@ -21,6 +21,10 @@ import {
   type SupabaseCapaSessionFacts,
 } from "../../security/supabase-capa-context";
 
+import {
+  SupabaseCapaTenantAccessError,
+} from "../../security/supabase-capa-durable-context";
+
 /**
  * Framework-neutral HTTP handler for the CAPA API.
  *
@@ -252,6 +256,59 @@ function safeUnexpectedError(
   );
 }
 
+/**
+ * Maps trusted context-resolution failures without disclosing tenant,
+ * membership, organization, role, or policy existence to the browser.
+ *
+ * Authentication failures remain 401 responses. A server-verified user
+ * without one unambiguous active CAPA tenant receives a tenant-safe 403.
+ * Controlled tenant failure reasons are retained only in server logs.
+ */
+function contextResolutionErrorResponse(
+  dependencies:
+    CapaApiHandlerDependencies,
+  trace: RequestTrace,
+  error: unknown,
+): Response | null {
+  if (
+    error instanceof
+    SupabaseCapaContextError
+  ) {
+    return errorResponse(
+      trace,
+      401,
+      "INVALID_SESSION_CONTEXT",
+      "The authenticated session is not valid for this request.",
+    );
+  }
+
+  if (
+    error instanceof
+    SupabaseCapaTenantAccessError
+  ) {
+    dependencies.logger.error(
+      "CAPA API tenant context resolution denied.",
+      {
+        correlation_id:
+          trace.correlation_id,
+        error_name:
+          error.name,
+        reason_code:
+          error.reason_code,
+      },
+    );
+
+    return errorResponse(
+      trace,
+      403,
+      "CAPA_TENANT_ACCESS_DENIED",
+      "The authenticated user is not authorized to access a CAPA organization.",
+    );
+  }
+
+  return null;
+}
+
 export async function handleCapaPost(
   request: Request,
   dependencies:
@@ -368,16 +425,17 @@ export async function handleCapaPost(
       201,
     );
   } catch (error) {
-    if (
-      error instanceof
-      SupabaseCapaContextError
-    ) {
-      return errorResponse(
+    const contextErrorResponse =
+      contextResolutionErrorResponse(
+        dependencies,
         trace,
-        401,
-        "INVALID_SESSION_CONTEXT",
-        "The authenticated session is not valid for this request.",
+        error,
       );
+
+    if (
+      contextErrorResponse !== null
+    ) {
+      return contextErrorResponse;
     }
 
     return safeUnexpectedError(
@@ -501,16 +559,17 @@ export async function handleCapaGet(
       200,
     );
   } catch (error) {
-    if (
-      error instanceof
-      SupabaseCapaContextError
-    ) {
-      return errorResponse(
+    const contextErrorResponse =
+      contextResolutionErrorResponse(
+        dependencies,
         trace,
-        401,
-        "INVALID_SESSION_CONTEXT",
-        "The authenticated session is not valid for this request.",
+        error,
       );
+
+    if (
+      contextErrorResponse !== null
+    ) {
+      return contextErrorResponse;
     }
 
     return safeUnexpectedError(

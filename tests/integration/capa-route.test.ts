@@ -31,6 +31,10 @@ import {
   type SupabaseCapaSessionFacts,
 } from "../../lib/security/supabase-capa-context";
 
+import {
+  SupabaseCapaTenantAccessError,
+} from "../../lib/security/supabase-capa-durable-context";
+
 const NOW =
   new Date("2026-08-12T14:00:00.000Z");
 
@@ -136,6 +140,8 @@ function harness(
     readonly runtime?:
       CapaDevelopmentRuntime;
     readonly get_runtime_error?: unknown;
+    readonly resolve_context_error?:
+      unknown;
   } = {},
 ): Harness {
   const selectedRuntime =
@@ -158,8 +164,23 @@ function harness(
           : options.session_facts;
       },
 
-      resolve_context:
-        resolveDevelopmentCapaRequestContext,
+      async resolve_context(
+        facts,
+        trustedNow,
+      ) {
+        if (
+          "resolve_context_error" in
+          options
+        ) {
+          throw options
+            .resolve_context_error;
+        }
+
+        return resolveDevelopmentCapaRequestContext(
+          facts,
+          trustedNow,
+        );
+      },
 
       get_runtime() {
         if (
@@ -308,6 +329,56 @@ describe("CAPA POST handler", () => {
         error: {
           code:
             "INVALID_SESSION_CONTEXT",
+        },
+      });
+    },
+  );
+
+  it(
+    "returns tenant-safe 403 when durable membership cannot be resolved",
+    async () => {
+      const testHarness = harness({
+        resolve_context_error:
+          new SupabaseCapaTenantAccessError(
+            "NO_ACTIVE_MEMBERSHIP",
+          ),
+      });
+
+      const response =
+        await handleCapaPost(
+          postRequest(validBody()),
+          testHarness.dependencies,
+        );
+
+      expect(response.status).toBe(403);
+
+      expect(
+        await responseBody(response),
+      ).toMatchObject({
+        error: {
+          code:
+            "CAPA_TENANT_ACCESS_DENIED",
+          message:
+            "The authenticated user is not authorized to access a CAPA organization.",
+        },
+      });
+
+      expect(
+        testHarness.errors,
+      ).toHaveLength(1);
+
+      expect(
+        testHarness.errors[0],
+      ).toMatchObject({
+        message:
+          "CAPA API tenant context resolution denied.",
+        metadata: {
+          correlation_id:
+            expect.any(String),
+          error_name:
+            "SupabaseCapaTenantAccessError",
+          reason_code:
+            "NO_ACTIVE_MEMBERSHIP",
         },
       });
     },
@@ -691,6 +762,56 @@ describe("CAPA GET handler", () => {
         error: {
           code:
             "INVALID_SESSION_CONTEXT",
+        },
+      });
+    },
+  );
+
+  it(
+    "returns tenant-safe 403 when durable tenant access is ambiguous",
+    async () => {
+      const testHarness = harness({
+        resolve_context_error:
+          new SupabaseCapaTenantAccessError(
+            "AMBIGUOUS_ACTIVE_MEMBERSHIP",
+          ),
+      });
+
+      const response =
+        await handleCapaGet(
+          getRequest(REQUEST_ID),
+          testHarness.dependencies,
+        );
+
+      expect(response.status).toBe(403);
+
+      expect(
+        await responseBody(response),
+      ).toMatchObject({
+        error: {
+          code:
+            "CAPA_TENANT_ACCESS_DENIED",
+          message:
+            "The authenticated user is not authorized to access a CAPA organization.",
+        },
+      });
+
+      expect(
+        testHarness.errors,
+      ).toHaveLength(1);
+
+      expect(
+        testHarness.errors[0],
+      ).toMatchObject({
+        message:
+          "CAPA API tenant context resolution denied.",
+        metadata: {
+          correlation_id:
+            expect.any(String),
+          error_name:
+            "SupabaseCapaTenantAccessError",
+          reason_code:
+            "AMBIGUOUS_ACTIVE_MEMBERSHIP",
         },
       });
     },
