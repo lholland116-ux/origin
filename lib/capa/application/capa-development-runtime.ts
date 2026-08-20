@@ -43,8 +43,7 @@ import type {
  *
  * This module assembles the temporary in-memory persistence adapter,
  * development authorization policy, trusted server clock, identifier
- * generators and controlled configuration used by the first browser
- * workflow.
+ * generators and controlled configuration used by the browser workflow.
  *
  * It is not approved for production CAPA data storage or authorization.
  */
@@ -68,14 +67,9 @@ export interface CapaDevelopmentRuntime
 }
 
 export interface CapaDevelopmentRuntimeOptions {
-  readonly environment?:
-    string;
-
-  readonly now?:
-    () => Date;
-
-  readonly generate_uuid?:
-    () => string;
+  readonly environment?: string;
+  readonly now?: () => Date;
+  readonly generate_uuid?: () => string;
 }
 
 export class CapaDevelopmentRuntimeDisabledError
@@ -100,10 +94,7 @@ function assertDevelopmentRuntimeAllowed(
   environment:
     string | undefined,
 ): void {
-  if (
-    environment ===
-    "production"
-  ) {
+  if (environment === "production") {
     throw new CapaDevelopmentRuntimeDisabledError();
   }
 }
@@ -140,7 +131,9 @@ function developmentAuthorizationPolicy():
 
       const operationIsSupported =
         request.operation ===
-        "create_case";
+          "create_case" ||
+        request.operation ===
+          "view_case";
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -149,17 +142,13 @@ function developmentAuthorizationPolicy():
         developmentAssignment === undefined
       ) {
         return {
-          decision:
-            "deny",
-
+          decision: "deny",
           reason_code:
             controlled(
               "DEVELOPMENT_POLICY_DENIED",
             ),
-
           policy_version:
             DEVELOPMENT_POLICY_VERSION,
-
           evaluated_at:
             request.trusted_now
               .toISOString() as
@@ -170,24 +159,22 @@ function developmentAuthorizationPolicy():
       }
 
       return {
-        decision:
-          "allow",
-
+        decision: "allow",
         reason_code:
           controlled(
-            "DEVELOPMENT_CREATE_ALLOWED",
+            request.operation ===
+              "create_case"
+              ? "DEVELOPMENT_CREATE_ALLOWED"
+              : "DEVELOPMENT_VIEW_ALLOWED",
           ),
-
         policy_version:
           DEVELOPMENT_POLICY_VERSION,
-
         evaluated_at:
           request.trusted_now
             .toISOString() as
               CapaPolicyDecision[
                 "evaluated_at"
               ],
-
         relied_on_role_assignment_ids: [
           developmentAssignment
             .role_assignment_id,
@@ -198,8 +185,7 @@ function developmentAuthorizationPolicy():
 }
 
 function createIdGenerator(
-  generateUuid:
-    () => string,
+  generateUuid: () => string,
 ): CreateCapaIdGenerator {
   return {
     generateCapaCaseId() {
@@ -262,10 +248,8 @@ export function createCapaDevelopmentRuntime(
     CreateCapaDependencies = {
     transaction_manager:
       database,
-
     capa_repository:
       database,
-
     audit_repository:
       database,
 
@@ -291,23 +275,18 @@ export function createCapaDevelopmentRuntime(
     configuration: {
       workflow_version:
         "workflow-development-1.0.0",
-
       intake_schema_version:
         "intake-schema-1.0.0",
-
       audit_schema_version:
         "audit-schema-1.0.0",
-
       intake_section_type:
         controlled(
           "CAPA.INTAKE",
         ),
-
       default_confidentiality:
         controlled(
           "CUSTOMER_CONFIDENTIAL",
         ),
-
       authorization_purpose:
         controlled(
           "CAPA_CASE_CREATION",

@@ -3,6 +3,8 @@
 import Link from "next/link";
 import {
   type FormEvent,
+  useCallback,
+  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -16,6 +18,8 @@ const INPUT_LIMITS = {
 
 const CONTROLLED_CODE_PATTERN =
   /^[A-Za-z][A-Za-z0-9._:-]*$/;
+
+const CASE_LIST_LIMIT = 10;
 
 type WorkflowStep =
   | "edit"
@@ -105,6 +109,28 @@ interface RetrievedCapaResponse {
   readonly correlation_id?: string;
 }
 
+interface CapaListItem {
+  readonly capaCaseId: string;
+  readonly caseNumber: string;
+  readonly status: string;
+  readonly recordVersion: number;
+  readonly currentVersionId: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+interface CapaListCursor {
+  readonly createdAt: string;
+  readonly capaCaseId: string;
+}
+
+interface ParsedCapaListPage {
+  readonly cases:
+    readonly CapaListItem[];
+  readonly nextCursor?:
+    CapaListCursor;
+}
+
 const EMPTY_FIELDS: IntakeFields = {
   initiatingEvent: "",
   sourceType: "",
@@ -176,6 +202,91 @@ function apiIssues(
       typeof issue.path === "string" &&
       typeof issue.message === "string",
   );
+}
+
+function parsedCapaListPage(
+  value: unknown,
+): ParsedCapaListPage | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(
+      value.capa_cases,
+    )
+  ) {
+    return null;
+  }
+
+  const cases:
+    CapaListItem[] = [];
+
+  for (const item of
+    value.capa_cases) {
+    if (
+      !isRecord(item) ||
+      typeof item.capa_case_id !==
+        "string" ||
+      typeof item.case_number !==
+        "string" ||
+      typeof item.status !==
+        "string" ||
+      typeof item.record_version !==
+        "number" ||
+      typeof item.current_version_id !==
+        "string" ||
+      typeof item.created_at !==
+        "string" ||
+      typeof item.updated_at !==
+        "string"
+    ) {
+      return null;
+    }
+
+    cases.push({
+      capaCaseId:
+        item.capa_case_id,
+      caseNumber:
+        item.case_number,
+      status:
+        item.status,
+      recordVersion:
+        item.record_version,
+      currentVersionId:
+        item.current_version_id,
+      createdAt:
+        item.created_at,
+      updatedAt:
+        item.updated_at,
+    });
+  }
+
+  if (
+    value.next_cursor ===
+    undefined
+  ) {
+    return { cases };
+  }
+
+  if (
+    !isRecord(value.next_cursor) ||
+    typeof value.next_cursor
+      .created_at !== "string" ||
+    typeof value.next_cursor
+      .capa_case_id !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    cases,
+    nextCursor: {
+      createdAt:
+        value.next_cursor
+          .created_at,
+      capaCaseId:
+        value.next_cursor
+          .capa_case_id,
+    },
+  };
 }
 
 function normalizedFields(
@@ -331,6 +442,140 @@ export default function CapaIntakeClient({
     useState<CreatedCapaSummary | null>(
       null,
     );
+
+  const [listedCases, setListedCases] =
+    useState<readonly CapaListItem[]>(
+      [],
+    );
+
+  const [nextListCursor, setNextListCursor] =
+    useState<CapaListCursor | null>(
+      null,
+    );
+
+  const [isLoadingCases, setIsLoadingCases] =
+    useState(true);
+
+  const [isLoadingMoreCases, setIsLoadingMoreCases] =
+    useState(false);
+
+  const [caseListError, setCaseListError] =
+    useState<string | null>(null);
+
+  const loadCases = useCallback(
+    async (
+      mode: "replace" | "append",
+      cursor?: CapaListCursor,
+    ) => {
+      if (mode === "replace") {
+        setIsLoadingCases(true);
+      } else {
+        setIsLoadingMoreCases(true);
+      }
+
+      setCaseListError(null);
+
+      try {
+        const parameters =
+          new URLSearchParams({
+            limit:
+              String(CASE_LIST_LIMIT),
+          });
+
+        if (cursor !== undefined) {
+          parameters.set(
+            "cursor_created_at",
+            cursor.createdAt,
+          );
+          parameters.set(
+            "cursor_case_id",
+            cursor.capaCaseId,
+          );
+        }
+
+        const response = await fetch(
+          `/api/capa?${parameters.toString()}`,
+          {
+            method: "GET",
+            headers: {
+              "x-request-id":
+                createTraceId(),
+              "x-correlation-id":
+                createTraceId(),
+            },
+            cache: "no-store",
+          },
+        );
+
+        const body =
+          await readJson(response);
+
+        if (!response.ok) {
+          throw new Error(
+            apiErrorMessage(
+              body,
+              "The CAPA workspace could not be loaded.",
+            ),
+          );
+        }
+
+        const page =
+          parsedCapaListPage(body);
+
+        if (page === null) {
+          throw new Error(
+            "The server returned an incomplete CAPA case list.",
+          );
+        }
+
+        setListedCases((current) => {
+          if (mode === "replace") {
+            return page.cases;
+          }
+
+          const combined = new Map(
+            current.map((item) => [
+              item.capaCaseId,
+              item,
+            ]),
+          );
+
+          for (const item of
+            page.cases) {
+            combined.set(
+              item.capaCaseId,
+              item,
+            );
+          }
+
+          return [
+            ...combined.values(),
+          ];
+        });
+
+        setNextListCursor(
+          page.nextCursor ?? null,
+        );
+      } catch (error) {
+        setCaseListError(
+          error instanceof Error
+            ? error.message
+            : "The CAPA workspace could not be loaded.",
+        );
+      } finally {
+        if (mode === "replace") {
+          setIsLoadingCases(false);
+        } else {
+          setIsLoadingMoreCases(false);
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    void loadCases("replace");
+  }, [loadCases]);
 
   const charactersRemaining =
     INPUT_LIMITS.initiatingEvent -
@@ -619,6 +864,8 @@ export default function CapaIntakeClient({
 
       setStep("created");
 
+      void loadCases("replace");
+
       window.scrollTo({
         top: 0,
         behavior: "smooth",
@@ -676,14 +923,188 @@ export default function CapaIntakeClient({
         </div>
       </header>
 
-      <div className="mb-6 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+      <div className="mb-6 rounded-2xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm leading-6 text-blue-100">
         <span className="font-semibold">
-          Development testing:
+          Organization-scoped workspace:
         </span>{" "}
-        CAPA records are temporarily stored
-        in memory and will be erased when the
-        development server restarts.
+        Only CAPA records authorized for your
+        active organization are shown. Draft
+        creation does not approve or advance
+        a CAPA.
       </div>
+
+      <section
+        aria-labelledby="capa-workspace-heading"
+        className="mb-8 rounded-3xl border border-zinc-800 bg-zinc-900/80 p-5 shadow-2xl backdrop-blur sm:p-7"
+      >
+        <div className="flex flex-col gap-4 border-b border-zinc-800 pb-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+              Durable records
+            </p>
+
+            <h2
+              id="capa-workspace-heading"
+              className="mt-2 text-xl font-semibold"
+            >
+              CAPA workspace
+            </h2>
+
+            <p className="mt-2 text-sm leading-6 text-zinc-400">
+              Review the most recently created
+              CAPA drafts for your organization.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              void loadCases("replace")
+            }
+            disabled={isLoadingCases}
+            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-950/70 px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-wait disabled:text-zinc-500"
+          >
+            {isLoadingCases
+              ? "Refreshing\u2026"
+              : "Refresh cases"}
+          </button>
+        </div>
+
+        {caseListError ? (
+          <div
+            role="alert"
+            className="mt-5 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-200"
+          >
+            <p>{caseListError}</p>
+
+            <button
+              type="button"
+              onClick={() =>
+                void loadCases("replace")
+              }
+              className="mt-3 font-semibold text-red-100 underline decoration-red-300/50 underline-offset-4 hover:text-white"
+            >
+              Try loading the workspace again
+            </button>
+          </div>
+        ) : null}
+
+        {isLoadingCases &&
+        listedCases.length === 0 ? (
+          <div
+            role="status"
+            className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-950/50 px-4 py-8 text-center text-sm text-zinc-400"
+          >
+            Loading CAPA cases{"\u2026"}
+          </div>
+        ) : null}
+
+        {!isLoadingCases &&
+        caseListError === null &&
+        listedCases.length === 0 ? (
+          <div className="mt-5 rounded-2xl border border-dashed border-zinc-700 bg-zinc-950/40 px-5 py-8 text-center">
+            <h3 className="font-semibold text-zinc-100">
+              No CAPA drafts yet
+            </h3>
+
+            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-zinc-400">
+              Complete the controlled intake
+              below to create the first CAPA
+              record for this organization.
+            </p>
+          </div>
+        ) : null}
+
+        {listedCases.length > 0 ? (
+          <div className="mt-5 space-y-3">
+            {listedCases.map(
+              (capaCase) => (
+                <article
+                  key={
+                    capaCase.capaCaseId
+                  }
+                  className="grid gap-4 rounded-2xl border border-zinc-800 bg-zinc-950/55 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-mono text-sm font-semibold text-blue-200">
+                        {
+                          capaCase.caseNumber
+                        }
+                      </h3>
+
+                      <span className="rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
+                        {statusName(
+                          capaCase.status,
+                        )}
+                      </span>
+                    </div>
+
+                    <dl className="mt-3 grid gap-2 text-xs text-zinc-400 sm:grid-cols-2">
+                      <div>
+                        <dt className="sr-only">
+                          Created
+                        </dt>
+                        <dd>
+                          Created{" "}
+                          {formattedDate(
+                            capaCase.createdAt,
+                          )}
+                        </dd>
+                      </div>
+
+                      <div>
+                        <dt className="sr-only">
+                          Last updated
+                        </dt>
+                        <dd>
+                          Updated{" "}
+                          {formattedDate(
+                            capaCase.updatedAt,
+                          )}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="text-left sm:text-right">
+                    <p className="text-xs text-zinc-500">
+                      Record version
+                    </p>
+                    <p className="mt-1 font-mono text-sm text-zinc-300">
+                      {
+                        capaCase.recordVersion
+                      }
+                    </p>
+                  </div>
+                </article>
+              ),
+            )}
+          </div>
+        ) : null}
+
+        {nextListCursor !== null ? (
+          <div className="mt-5 flex justify-center border-t border-zinc-800 pt-5">
+            <button
+              type="button"
+              onClick={() =>
+                void loadCases(
+                  "append",
+                  nextListCursor,
+                )
+              }
+              disabled={
+                isLoadingMoreCases
+              }
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-950/70 px-5 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-wait disabled:text-zinc-500"
+            >
+              {isLoadingMoreCases
+                ? "Loading more\u2026"
+                : "Load more cases"}
+            </button>
+          </div>
+        ) : null}
+      </section>
 
       <div className="mb-8 grid gap-3 sm:grid-cols-3">
         {[
@@ -738,7 +1159,7 @@ export default function CapaIntakeClient({
                     }`}
                   >
                     {isComplete
-                      ? "✓"
+                      ? "\u2713"
                       : number}
                   </span>
 
@@ -1066,7 +1487,7 @@ export default function CapaIntakeClient({
               </h2>
 
               <p className="mt-2 text-lg font-semibold">
-                S00 — Draft Intake
+                {"S00 \u2014 Draft Intake"}
               </p>
 
               <p className="mt-2 text-sm leading-6 text-blue-100/75">
@@ -1130,7 +1551,9 @@ export default function CapaIntakeClient({
 
             <ReviewItem
               label="Initial state"
-              value="S00 — Draft Intake"
+              value={
+                "S00 \u2014 Draft Intake"
+              }
             />
           </dl>
 
@@ -1230,7 +1653,8 @@ export default function CapaIntakeClient({
               </div>
 
               <span className="inline-flex w-fit rounded-full border border-blue-300/30 bg-blue-500/15 px-4 py-2 text-sm font-semibold text-blue-200">
-                {createdCapa.status} —{" "}
+                {createdCapa.status}
+                {" \u2014 "}
                 {statusName(
                   createdCapa.status,
                 )}
@@ -1299,7 +1723,7 @@ export default function CapaIntakeClient({
                   }`}
                 >
                   {createdCapa.retrievalVerified
-                    ? "✓ Created record was retrieved and verified."
+                    ? "\u2713 Created record was retrieved and verified."
                     : "Draft was created, but retrieval verification was unavailable."}
                 </p>
               </section>

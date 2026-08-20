@@ -19,6 +19,8 @@ import type {
 import type {
   AdvanceCapaVersionInput,
   AdvanceCapaVersionResult,
+  CapaCaseListPage,
+  CapaCaseListQuery,
   CapaRepository,
 } from "../repositories/capa-repository";
 
@@ -69,6 +71,12 @@ const CASE_NUMBER_PREFIX =
 
 const CASE_NUMBER_WIDTH =
   6;
+
+const MAXIMUM_CASE_LIST_LIMIT =
+  100;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface InMemoryState {
   readonly revision: number;
@@ -192,6 +200,18 @@ export class InMemoryAuditQueryError
   }
 }
 
+export class InMemoryCapaCaseListQueryError
+  extends Error {
+  constructor() {
+    super(
+      "The in-memory CAPA case-list query parameters are invalid.",
+    );
+
+    this.name =
+      "InMemoryCapaCaseListQueryError";
+  }
+}
+
 export class InMemoryCapaDatabaseConfigurationError
   extends Error {
   constructor() {
@@ -221,6 +241,36 @@ function iso(
 ): IsoDateTime {
   return value.toISOString() as
     IsoDateTime;
+}
+
+function requireCaseListQuery(
+  query: CapaCaseListQuery,
+): void {
+  if (
+    !Number.isSafeInteger(query.limit) ||
+    query.limit < 1 ||
+    query.limit > MAXIMUM_CASE_LIST_LIMIT
+  ) {
+    throw new InMemoryCapaCaseListQueryError();
+  }
+
+  if (query.cursor === undefined) {
+    return;
+  }
+
+  const cursorTime =
+    new Date(query.cursor.created_at);
+
+  if (
+    !Number.isFinite(cursorTime.getTime()) ||
+    cursorTime.toISOString() !==
+      query.cursor.created_at ||
+    !UUID_PATTERN.test(
+      query.cursor.capa_case_id,
+    )
+  ) {
+    throw new InMemoryCapaCaseListQueryError();
+  }
 }
 
 function recordKey(
@@ -491,6 +541,88 @@ export class InMemoryCapaDatabase
         transactionId,
       );
     }
+  }
+
+  async listCases(
+    query:
+      CapaCaseListQuery,
+  ): Promise<CapaCaseListPage> {
+    requireCaseListQuery(query);
+
+    const matchingCases = [
+      ...this.committed_state
+        .cases.values(),
+    ]
+      .filter(
+        (capaCase) =>
+          capaCase.organization_id ===
+          query.organization_id,
+      )
+      .filter((capaCase) => {
+        if (query.cursor === undefined) {
+          return true;
+        }
+
+        return (
+          capaCase.created_at <
+            query.cursor.created_at ||
+          (
+            capaCase.created_at ===
+              query.cursor.created_at &&
+            capaCase.capa_case_id <
+              query.cursor.capa_case_id
+          )
+        );
+      })
+      .sort((left, right) => {
+        const createdAtOrder =
+          right.created_at.localeCompare(
+            left.created_at,
+          );
+
+        if (createdAtOrder !== 0) {
+          return createdAtOrder;
+        }
+
+        return right.capa_case_id
+          .localeCompare(
+            left.capa_case_id,
+          );
+      });
+
+    const selectedCases =
+      matchingCases.slice(
+        0,
+        query.limit + 1,
+      );
+
+    const hasAnotherPage =
+      selectedCases.length >
+      query.limit;
+
+    const cases = selectedCases
+      .slice(0, query.limit)
+      .map(cloneValue);
+
+    const lastCase =
+      cases[cases.length - 1];
+
+    return {
+      cases,
+
+      ...(hasAnotherPage &&
+      lastCase !== undefined
+        ? {
+            next_cursor: {
+              created_at:
+                lastCase.created_at,
+
+              capa_case_id:
+                lastCase.capa_case_id,
+            },
+          }
+        : {}),
+    };
   }
 
   async findCaseById(

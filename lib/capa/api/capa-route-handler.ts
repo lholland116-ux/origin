@@ -2,6 +2,7 @@ import type {
   CapaCaseId,
   CorrelationId,
   IdempotencyKey,
+  IsoDateTime,
   RequestId,
   RequestTrace,
 } from "../domain/capa-types";
@@ -9,6 +10,15 @@ import type {
 import {
   createCapa,
 } from "../application/create-capa";
+
+import {
+  MAXIMUM_CAPA_CASE_LIST_LIMIT,
+  listCapaCases,
+} from "../application/list-capa-cases";
+
+import type {
+  CapaCaseListCursor,
+} from "../../database/repositories/capa-repository";
 
 import type {
   CapaRuntime,
@@ -39,6 +49,17 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
+
+interface ParsedCaseListQuery {
+  readonly valid: true;
+  readonly limit?: number;
+  readonly cursor?:
+    CapaCaseListCursor;
+}
+
+interface InvalidCaseListQuery {
+  readonly valid: false;
+}
 
 export interface CapaApiLogger {
   error(
@@ -139,6 +160,97 @@ function idempotencyKey(
   }
 
   return generateUuid() as IdempotencyKey;
+}
+
+function parseCaseListQuery(
+  searchParams: URLSearchParams,
+):
+  | ParsedCaseListQuery
+  | InvalidCaseListQuery {
+  const limitValue =
+    searchParams.get("limit");
+
+  let limit: number | undefined;
+
+  if (limitValue !== null) {
+    if (!/^[1-9][0-9]*$/.test(limitValue)) {
+      return { valid: false };
+    }
+
+    limit = Number(limitValue);
+
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit >
+        MAXIMUM_CAPA_CASE_LIST_LIMIT
+    ) {
+      return { valid: false };
+    }
+  }
+
+  const hasCursorCreatedAt =
+    searchParams.has(
+      "cursor_created_at",
+    );
+
+  const hasCursorCaseId =
+    searchParams.has(
+      "cursor_case_id",
+    );
+
+  if (
+    hasCursorCreatedAt !==
+    hasCursorCaseId
+  ) {
+    return { valid: false };
+  }
+
+  let cursor:
+    CapaCaseListCursor | undefined;
+
+  if (hasCursorCreatedAt) {
+    const createdAt =
+      searchParams.get(
+        "cursor_created_at",
+      )!;
+
+    const caseId = normalizedUuid(
+      searchParams.get(
+        "cursor_case_id",
+      ),
+    );
+
+    const parsedCreatedAt =
+      new Date(createdAt);
+
+    if (
+      !Number.isFinite(
+        parsedCreatedAt.getTime(),
+      ) ||
+      parsedCreatedAt.toISOString() !==
+        createdAt ||
+      caseId === null
+    ) {
+      return { valid: false };
+    }
+
+    cursor = {
+      created_at:
+        createdAt as IsoDateTime,
+      capa_case_id:
+        caseId as CapaCaseId,
+    };
+  }
+
+  return {
+    valid: true,
+    ...(limit === undefined
+      ? {}
+      : { limit }),
+    ...(cursor === undefined
+      ? {}
+      : { cursor }),
+  };
 }
 
 function requestTrace(
@@ -474,6 +586,124 @@ export async function handleCapaGet(
 
     const requestUrl =
       new URL(request.url);
+
+    if (
+      !requestUrl.searchParams.has(
+        "id",
+      )
+    ) {
+      const query =
+        parseCaseListQuery(
+          requestUrl.searchParams,
+        );
+
+      if (!query.valid) {
+        return errorResponse(
+          trace,
+          400,
+          "INVALID_CAPA_LIST_QUERY",
+          "The CAPA case-list query parameters are invalid.",
+        );
+      }
+
+      const runtime =
+        dependencies.get_runtime();
+
+      const result =
+        await listCapaCases(
+          {
+            repository:
+              runtime.database,
+            authorization_policy:
+              runtime.dependencies
+                .authorization_policy,
+            clock:
+              runtime.dependencies
+                .clock,
+          },
+          {
+            authentication:
+              context.authentication,
+            tenant:
+              context.tenant,
+            ...(query.limit ===
+            undefined
+              ? {}
+              : {
+                  limit:
+                    query.limit,
+                }),
+            ...(query.cursor ===
+            undefined
+              ? {}
+              : {
+                  cursor:
+                    query.cursor,
+                }),
+          },
+        );
+
+      if (
+        result.status ===
+        "authorization_denied"
+      ) {
+        return errorResponse(
+          trace,
+          403,
+          "CAPA_ACCESS_DENIED",
+          "The CAPA operation is not authorized.",
+        );
+      }
+
+      if (
+        result.status ===
+        "step_up_required"
+      ) {
+        return errorResponse(
+          trace,
+          403,
+          "CAPA_STEP_UP_REQUIRED",
+          "Additional authentication is required.",
+        );
+      }
+
+      return jsonResponse(
+        {
+          capa_cases:
+            result.page.cases.map(
+              (capaCase) => ({
+                capa_case_id:
+                  capaCase.capa_case_id,
+                case_number:
+                  capaCase.case_number,
+                status:
+                  capaCase.status,
+                record_version:
+                  capaCase.record_version,
+                current_version_id:
+                  capaCase
+                    .current_version_id,
+                created_at:
+                  capaCase.created_at,
+                updated_at:
+                  capaCase.updated_at,
+              }),
+            ),
+          ...(result.page
+            .next_cursor ===
+          undefined
+            ? {}
+            : {
+                next_cursor:
+                  result.page
+                    .next_cursor,
+              }),
+          correlation_id:
+            trace.correlation_id,
+        },
+        200,
+      );
+    }
 
     const caseId = normalizedUuid(
       requestUrl.searchParams.get("id"),

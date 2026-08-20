@@ -18,10 +18,15 @@ import type {
 } from "../../lib/capa/domain/capa-types";
 
 import type {
+  CapaCaseListCursor,
+} from "../../lib/database/repositories/capa-repository";
+
+import type {
   TransactionContext,
 } from "../../lib/database/transactions";
 
 import {
+  SupabaseCapaCaseListQueryError,
   SupabaseCapaRepository,
 } from "../../lib/database/supabase/supabase-capa-repository";
 
@@ -301,6 +306,297 @@ async function inTransaction<Result>(
     work,
   );
 }
+
+describe("SupabaseCapaRepository case listing", () => {
+  const SECOND_CASE_ID =
+    "20000000-0000-4000-8000-000000000002" as CapaCaseId;
+
+  const THIRD_CASE_ID =
+    "30000000-0000-4000-8000-000000000003" as CapaCaseId;
+
+  const EARLIER =
+    "2026-08-12T15:59:00.000Z" as IsoDateTime;
+
+  it("returns an empty final organization-scoped page", async () => {
+    const harness = createSqlHarness();
+    harness.enqueue([]);
+
+    const repository =
+      new SupabaseCapaRepository(
+        harness.sql,
+      );
+
+    await expect(
+      repository.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      cases: [],
+    });
+
+    expect(harness.calls[0]?.values)
+      .toEqual([
+        ORGANIZATION_ID,
+        26,
+      ]);
+
+    expect(harness.calls[0]?.query)
+      .toContain(
+        "where organization_id = ? order by created_at desc, capa_case_id desc limit ?",
+      );
+  });
+
+  it("fetches limit plus one and returns a bounded next cursor", async () => {
+    const harness = createSqlHarness();
+
+    harness.enqueue([
+      caseRow({
+        capa_case_id:
+          THIRD_CASE_ID,
+        case_number:
+          "CAPA-000003",
+        created_at:
+          new Date(LATER),
+      }),
+      caseRow({
+        capa_case_id:
+          SECOND_CASE_ID,
+        case_number:
+          "CAPA-000002",
+        created_at:
+          new Date(NOW),
+      }),
+      caseRow({
+        case_number:
+          "CAPA-000001",
+        created_at:
+          new Date(EARLIER),
+      }),
+    ]);
+
+    const repository =
+      new SupabaseCapaRepository(
+        harness.sql,
+      );
+
+    const page =
+      await repository.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 2,
+      });
+
+    expect(
+      page.cases.map(
+        (item) =>
+          item.capa_case_id,
+      ),
+    ).toEqual([
+      THIRD_CASE_ID,
+      SECOND_CASE_ID,
+    ]);
+
+    expect(page.next_cursor)
+      .toEqual({
+        created_at: NOW,
+        capa_case_id:
+          SECOND_CASE_ID,
+      });
+
+    expect(harness.calls[0]?.values)
+      .toEqual([
+        ORGANIZATION_ID,
+        3,
+      ]);
+  });
+
+  it("continues with the complete keyset cursor and no final cursor", async () => {
+    const harness = createSqlHarness();
+
+    harness.enqueue([
+      caseRow({
+        case_number:
+          "CAPA-000001",
+        created_at:
+          new Date(EARLIER),
+      }),
+    ]);
+
+    const repository =
+      new SupabaseCapaRepository(
+        harness.sql,
+      );
+
+    const cursor = {
+      created_at: NOW,
+      capa_case_id:
+        SECOND_CASE_ID,
+    } as CapaCaseListCursor;
+
+    const page =
+      await repository.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 2,
+        cursor,
+      });
+
+    expect(page.cases).toHaveLength(1);
+    expect(page.next_cursor)
+      .toBeUndefined();
+
+    expect(harness.calls[0]?.values)
+      .toEqual([
+        ORGANIZATION_ID,
+        NOW,
+        NOW,
+        SECOND_CASE_ID,
+        3,
+      ]);
+
+    expect(harness.calls[0]?.query)
+      .toContain(
+        "created_at < ? or ( created_at = ? and capa_case_id < ? )",
+      );
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    0,
+    -1,
+    1.5,
+    101,
+  ])(
+    "rejects invalid case-list limit %s before querying",
+    async (limit) => {
+      const harness = createSqlHarness();
+
+      const repository =
+        new SupabaseCapaRepository(
+          harness.sql,
+        );
+
+      await expect(
+        repository.listCases({
+          organization_id:
+            ORGANIZATION_ID,
+          limit,
+        }),
+      ).rejects.toBeInstanceOf(
+        SupabaseCapaCaseListQueryError,
+      );
+
+      expect(harness.calls).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      created_at: "not-a-date",
+      capa_case_id:
+        SECOND_CASE_ID,
+    },
+    {
+      created_at:
+        "2026-08-12T16:00:00Z",
+      capa_case_id:
+        SECOND_CASE_ID,
+    },
+    {
+      created_at: NOW,
+      capa_case_id:
+        "not-a-uuid",
+    },
+  ])(
+    "rejects invalid case-list cursor %# before querying",
+    async (cursor) => {
+      const harness = createSqlHarness();
+
+      const repository =
+        new SupabaseCapaRepository(
+          harness.sql,
+        );
+
+      await expect(
+        repository.listCases({
+          organization_id:
+            ORGANIZATION_ID,
+          limit: 25,
+          cursor:
+            cursor as CapaCaseListCursor,
+        }),
+      ).rejects.toBeInstanceOf(
+        SupabaseCapaCaseListQueryError,
+      );
+
+      expect(harness.calls).toEqual([]);
+    },
+  );
+
+  it("provides a stable named case-list query error", () => {
+    const error =
+      new SupabaseCapaCaseListQueryError();
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe(
+      "SupabaseCapaCaseListQueryError",
+    );
+    expect(error.message).toBe(
+      "The CAPA case-list query parameters are invalid.",
+    );
+  });
+
+  it("rejects a malformed case returned in a list", async () => {
+    const harness = createSqlHarness();
+
+    harness.enqueue([
+      caseRow({
+        record_version:
+          "not-a-version",
+      }),
+    ]);
+
+    const repository =
+      new SupabaseCapaRepository(
+        harness.sql,
+      );
+
+    await expect(
+      repository.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 1,
+      }),
+    ).rejects.toThrow(
+      "Invalid CAPA record version returned by the CAPA database.",
+    );
+  });
+
+  it("propagates a database list failure", async () => {
+    const databaseError =
+      new Error("database unavailable");
+
+    const sql = vi.fn(
+      async () => {
+        throw databaseError;
+      },
+    ) as unknown as postgres.Sql;
+
+    const repository =
+      new SupabaseCapaRepository(sql);
+
+    await expect(
+      repository.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 25,
+      }),
+    ).rejects.toBe(databaseError);
+  });
+});
 
 describe("SupabaseCapaRepository reads", () => {
   it("returns null when a tenant-scoped case is absent", async () => {

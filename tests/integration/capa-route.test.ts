@@ -53,6 +53,21 @@ function controlled(
   return value as ControlledCode;
 }
 
+function allowDecision():
+  CapaPolicyDecision {
+  return {
+    decision: "allow",
+    reason_code:
+      controlled("TEST_ALLOWED"),
+    policy_version:
+      "test-policy-1",
+    evaluated_at:
+      NOW.toISOString() as
+        CapaPolicyDecision["evaluated_at"],
+    relied_on_role_assignment_ids: [],
+  };
+}
+
 function uuidGenerator(): () => string {
   let sequence = 0;
 
@@ -255,6 +270,38 @@ function getRequest(
 
   if (caseId !== undefined) {
     url.searchParams.set("id", caseId);
+  }
+
+  return new Request(url, {
+    method: "GET",
+    headers,
+  });
+}
+
+function listRequest(
+  parameters:
+    Readonly<
+      Record<
+        string,
+        string | undefined
+      >
+    > = {},
+  headers: HeadersInit = {},
+): Request {
+  const url = new URL(
+    "http://localhost/api/capa",
+  );
+
+  for (const [name, value] of
+    Object.entries(parameters)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    url.searchParams.set(
+      name,
+      value,
+    );
   }
 
   return new Request(url, {
@@ -676,6 +723,269 @@ describe("CAPA GET handler", () => {
   }
 
   it(
+    "returns an authorized empty organization case list",
+    async () => {
+      const testHarness = harness({
+        runtime: runtime(
+          allowDecision(),
+        ),
+      });
+
+      const response =
+        await handleCapaGet(
+          listRequest({}, {
+            "x-correlation-id":
+              CORRELATION_ID,
+          }),
+          testHarness.dependencies,
+        );
+
+      expect(response.status).toBe(200);
+
+      expect(
+        await responseBody(response),
+      ).toEqual({
+        capa_cases: [],
+        correlation_id:
+          CORRELATION_ID,
+      });
+    },
+  );
+
+  it(
+    "returns a bounded case list with a continuation cursor",
+    async () => {
+      const testHarness = harness({
+        runtime: runtime(
+          allowDecision(),
+        ),
+      });
+
+      await createCase(testHarness);
+      await createCase(testHarness);
+
+      const response =
+        await handleCapaGet(
+          listRequest({
+            limit: "1",
+          }),
+          testHarness.dependencies,
+        );
+
+      expect(response.status).toBe(200);
+
+      const body =
+        await responseBody(response);
+
+      expect(body.capa_cases)
+        .toHaveLength(1);
+
+      expect(body.capa_cases[0])
+        .toMatchObject({
+          case_number:
+            "CAPA-000002",
+          status: "S00",
+          record_version: 1,
+        });
+
+      expect(body.next_cursor)
+        .toEqual({
+          created_at:
+            body.capa_cases[0]
+              .created_at,
+          capa_case_id:
+            body.capa_cases[0]
+              .capa_case_id,
+        });
+    },
+  );
+
+  it(
+    "continues a case list from its complete cursor",
+    async () => {
+      const testHarness = harness({
+        runtime: runtime(
+          allowDecision(),
+        ),
+      });
+
+      await createCase(testHarness);
+      await createCase(testHarness);
+
+      const firstResponse =
+        await handleCapaGet(
+          listRequest({
+            limit: "1",
+          }),
+          testHarness.dependencies,
+        );
+
+      const firstBody =
+        await responseBody(
+          firstResponse,
+        );
+
+      const response =
+        await handleCapaGet(
+          listRequest({
+            limit: "1",
+            cursor_created_at:
+              firstBody.next_cursor
+                .created_at,
+            cursor_case_id:
+              firstBody.next_cursor
+                .capa_case_id,
+          }),
+          testHarness.dependencies,
+        );
+
+      expect(response.status).toBe(200);
+
+      const body =
+        await responseBody(response);
+
+      expect(body.capa_cases)
+        .toHaveLength(1);
+
+      expect(body.capa_cases[0]
+        .case_number)
+        .toBe("CAPA-000001");
+
+      expect(body).not
+        .toHaveProperty("next_cursor");
+    },
+  );
+
+  it(
+    "returns a controlled denial for case listing",
+    async () => {
+      const testRuntime = runtime({
+        decision: "deny",
+        reason_code:
+          controlled("VIEW_DENIED"),
+        policy_version:
+          "test-policy-1",
+        evaluated_at:
+          NOW.toISOString() as
+            CapaPolicyDecision["evaluated_at"],
+      });
+
+      const response =
+        await handleCapaGet(
+          listRequest(),
+          harness({
+            runtime: testRuntime,
+          }).dependencies,
+        );
+
+      expect(response.status).toBe(403);
+
+      expect(
+        await responseBody(response),
+      ).toMatchObject({
+        error: {
+          code:
+            "CAPA_ACCESS_DENIED",
+        },
+      });
+    },
+  );
+
+  it(
+    "returns a controlled step-up response for case listing",
+    async () => {
+      const testRuntime = runtime({
+        decision: "step_up",
+        reason_code:
+          controlled("MFA_REQUIRED"),
+        policy_version:
+          "test-policy-1",
+        evaluated_at:
+          NOW.toISOString() as
+            CapaPolicyDecision["evaluated_at"],
+        required_assurance:
+          controlled("MFA"),
+      });
+
+      const response =
+        await handleCapaGet(
+          listRequest(),
+          harness({
+            runtime: testRuntime,
+          }).dependencies,
+        );
+
+      expect(response.status).toBe(403);
+
+      expect(
+        await responseBody(response),
+      ).toMatchObject({
+        error: {
+          code:
+            "CAPA_STEP_UP_REQUIRED",
+        },
+      });
+    },
+  );
+
+  it.each([
+    { limit: "0" },
+    { limit: "01" },
+    { limit: "1.5" },
+    { limit: "101" },
+    {
+      limit:
+        "9007199254740992",
+    },
+    {
+      cursor_created_at:
+        "2026-08-12T14:00:00.000Z",
+    },
+    {
+      cursor_case_id:
+        REQUEST_ID,
+    },
+    {
+      cursor_created_at:
+        "not-a-date",
+      cursor_case_id:
+        REQUEST_ID,
+    },
+    {
+      cursor_created_at:
+        "2026-08-12T14:00:00Z",
+      cursor_case_id:
+        REQUEST_ID,
+    },
+    {
+      cursor_created_at:
+        "2026-08-12T14:00:00.000Z",
+      cursor_case_id:
+        "not-a-uuid",
+    },
+  ])(
+    "rejects invalid case-list query %#",
+    async (parameters) => {
+      const response =
+        await handleCapaGet(
+          listRequest(parameters),
+          harness().dependencies,
+        );
+
+      expect(response.status).toBe(400);
+
+      expect(
+        await responseBody(response),
+      ).toMatchObject({
+        error: {
+          code:
+            "INVALID_CAPA_LIST_QUERY",
+        },
+      });
+    },
+  );
+
+  it(
     "returns a created CAPA with its current version and sections",
     async () => {
       const testHarness = harness();
@@ -818,7 +1128,6 @@ describe("CAPA GET handler", () => {
   );
 
   it.each([
-    undefined,
     "",
     "not-a-uuid",
   ])(

@@ -533,6 +533,59 @@ describe(
       },
     );
 
+    it(
+      "allows development CAPA case listing",
+      async () => {
+        const request =
+          policyRequest();
+
+        const decision =
+          await createPolicy()
+            .evaluate({
+              ...request,
+
+              operation:
+                "view_case",
+
+              resource: {
+                organization_id:
+                  request.tenant
+                    .organization_id,
+
+                resource_type:
+                  controlled(
+                    "CAPA_CASE_COLLECTION",
+                  ),
+              },
+
+              purpose:
+                controlled(
+                  "CAPA_CASE_ACCESS",
+                ),
+            });
+
+        expect(
+          decision,
+        ).toEqual({
+          decision:
+            "allow",
+
+          reason_code:
+            "DEVELOPMENT_VIEW_ALLOWED",
+
+          policy_version:
+            "development-policy-1.0.0",
+
+          evaluated_at:
+            "2026-08-12T14:00:00.000Z",
+
+          relied_on_role_assignment_ids: [
+            `development-role:${USER_ID}`,
+          ],
+        });
+      },
+    );
+
     it.each([
       {
         name:
@@ -588,7 +641,7 @@ describe(
             ...request,
 
             operation:
-              "view_case",
+              "edit_case",
           };
         },
       },

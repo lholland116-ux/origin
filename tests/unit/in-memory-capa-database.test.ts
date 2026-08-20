@@ -22,10 +22,12 @@ import type {
 
 import type {
   AdvanceCapaVersionInput,
+  CapaCaseListCursor,
 } from "../../lib/database/repositories/capa-repository";
 
 import {
   InMemoryAuditQueryError,
+  InMemoryCapaCaseListQueryError,
   InMemoryCapaCaseNumberExhaustedError,
   InMemoryCapaDatabase,
   InMemoryCapaDatabaseConfigurationError,
@@ -693,6 +695,384 @@ describe(
     );
   },
 );
+
+describe("InMemoryCapaDatabase case listing", () => {
+  const OLDEST_CASE_ID =
+    "10000000-0000-4000-8000-000000000001" as CapaCaseId;
+
+  const TIED_LOWER_CASE_ID =
+    "20000000-0000-4000-8000-000000000002" as CapaCaseId;
+
+  const TIED_HIGHER_CASE_ID =
+    "30000000-0000-4000-8000-000000000003" as CapaCaseId;
+
+  const OTHER_TENANT_CASE_ID =
+    "90000000-0000-4000-8000-000000000009" as CapaCaseId;
+
+  interface ListFixture {
+    readonly organization_id:
+      OrganizationId;
+    readonly capa_case_id:
+      CapaCaseId;
+    readonly case_version_id:
+      CapaCaseVersionId;
+    readonly section_version_id:
+      CapaSectionVersionId;
+    readonly case_number: string;
+    readonly created_at:
+      IsoDateTime;
+  }
+
+  const LIST_FIXTURES:
+    readonly ListFixture[] = [
+      {
+        organization_id:
+          ORGANIZATION_ID,
+        capa_case_id:
+          OLDEST_CASE_ID,
+        case_version_id:
+          "41000000-0000-4000-8000-000000000001" as CapaCaseVersionId,
+        section_version_id:
+          "51000000-0000-4000-8000-000000000001" as CapaSectionVersionId,
+        case_number: "CAPA-000001",
+        created_at: iso(
+          "2026-08-12T00:30:00.000Z",
+        ),
+      },
+      {
+        organization_id:
+          ORGANIZATION_ID,
+        capa_case_id:
+          TIED_LOWER_CASE_ID,
+        case_version_id:
+          "42000000-0000-4000-8000-000000000002" as CapaCaseVersionId,
+        section_version_id:
+          "52000000-0000-4000-8000-000000000002" as CapaSectionVersionId,
+        case_number: "CAPA-000002",
+        created_at: iso(
+          "2026-08-12T00:45:00.000Z",
+        ),
+      },
+      {
+        organization_id:
+          ORGANIZATION_ID,
+        capa_case_id:
+          TIED_HIGHER_CASE_ID,
+        case_version_id:
+          "43000000-0000-4000-8000-000000000003" as CapaCaseVersionId,
+        section_version_id:
+          "53000000-0000-4000-8000-000000000003" as CapaSectionVersionId,
+        case_number: "CAPA-000003",
+        created_at: iso(
+          "2026-08-12T00:45:00.000Z",
+        ),
+      },
+      {
+        organization_id:
+          OTHER_ORGANIZATION_ID,
+        capa_case_id:
+          OTHER_TENANT_CASE_ID,
+        case_version_id:
+          "49000000-0000-4000-8000-000000000009" as CapaCaseVersionId,
+        section_version_id:
+          "59000000-0000-4000-8000-000000000009" as CapaSectionVersionId,
+        case_number: "CAPA-000001",
+        created_at: iso(
+          "2026-08-12T01:00:00.000Z",
+        ),
+      },
+    ];
+
+  async function seedListFixtures(
+    database: InMemoryCapaDatabase,
+  ): Promise<void> {
+    await database.runInTransaction(
+      requestTrace(),
+      async (transaction) => {
+        for (const fixture of
+          LIST_FIXTURES) {
+          await database.insertCase(
+            transaction,
+            capaCase({
+              organization_id:
+                fixture.organization_id,
+              capa_case_id:
+                fixture.capa_case_id,
+              case_number:
+                fixture.case_number,
+              current_version_id:
+                fixture.case_version_id,
+              effective_at:
+                fixture.created_at,
+              created_at:
+                fixture.created_at,
+              updated_at:
+                fixture.created_at,
+            }),
+          );
+
+          await database.insertSectionVersion(
+            transaction,
+            sectionVersion({
+              organization_id:
+                fixture.organization_id,
+              capa_case_id:
+                fixture.capa_case_id,
+              section_version_id:
+                fixture.section_version_id,
+              effective_at:
+                fixture.created_at,
+              created_at:
+                fixture.created_at,
+            }),
+          );
+
+          await database.insertCaseVersion(
+            transaction,
+            caseVersion({
+              organization_id:
+                fixture.organization_id,
+              capa_case_id:
+                fixture.capa_case_id,
+              case_version_id:
+                fixture.case_version_id,
+              section_version_ids: [
+                fixture.section_version_id,
+              ],
+              effective_at:
+                fixture.created_at,
+              created_at:
+                fixture.created_at,
+            }),
+          );
+        }
+      },
+    );
+  }
+
+  it("isolates organization-scoped case lists", async () => {
+    const database = createDatabase();
+    await seedListFixtures(database);
+
+    const primaryPage =
+      await database.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 10,
+      });
+
+    expect(
+      primaryPage.cases.map(
+        (item) =>
+          item.organization_id,
+      ),
+    ).toEqual([
+      ORGANIZATION_ID,
+      ORGANIZATION_ID,
+      ORGANIZATION_ID,
+    ]);
+
+    const otherPage =
+      await database.listCases({
+        organization_id:
+          OTHER_ORGANIZATION_ID,
+        limit: 10,
+      });
+
+    expect(
+      otherPage.cases.map(
+        (item) =>
+          item.capa_case_id,
+      ),
+    ).toEqual([
+      OTHER_TENANT_CASE_ID,
+    ]);
+  });
+
+  it("orders newest cases first with a descending identity tie-breaker", async () => {
+    const database = createDatabase();
+    await seedListFixtures(database);
+
+    const page =
+      await database.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 10,
+      });
+
+    expect(
+      page.cases.map(
+        (item) =>
+          item.capa_case_id,
+      ),
+    ).toEqual([
+      TIED_HIGHER_CASE_ID,
+      TIED_LOWER_CASE_ID,
+      OLDEST_CASE_ID,
+    ]);
+
+    expect(page.next_cursor)
+      .toBeUndefined();
+  });
+
+  it("paginates without gaps or duplicate cases", async () => {
+    const database = createDatabase();
+    await seedListFixtures(database);
+
+    const firstPage =
+      await database.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 2,
+      });
+
+    expect(
+      firstPage.cases.map(
+        (item) =>
+          item.capa_case_id,
+      ),
+    ).toEqual([
+      TIED_HIGHER_CASE_ID,
+      TIED_LOWER_CASE_ID,
+    ]);
+
+    expect(firstPage.next_cursor)
+      .toEqual({
+        created_at: iso(
+          "2026-08-12T00:45:00.000Z",
+        ),
+        capa_case_id:
+          TIED_LOWER_CASE_ID,
+      });
+
+    const secondPage =
+      await database.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 2,
+        cursor:
+          firstPage.next_cursor!,
+      });
+
+    expect(
+      secondPage.cases.map(
+        (item) =>
+          item.capa_case_id,
+      ),
+    ).toEqual([
+      OLDEST_CASE_ID,
+    ]);
+
+    expect(secondPage.next_cursor)
+      .toBeUndefined();
+  });
+
+  it("returns defensive case copies", async () => {
+    const database = createDatabase();
+    await seedListFixtures(database);
+
+    const firstPage =
+      await database.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 1,
+      });
+
+    const returnedCase =
+      firstPage.cases[0] as {
+        case_number: string;
+      };
+
+    returnedCase.case_number =
+      "CAPA-FORGED";
+
+    const secondPage =
+      await database.listCases({
+        organization_id:
+          ORGANIZATION_ID,
+        limit: 1,
+      });
+
+    expect(
+      secondPage.cases[0]
+        ?.case_number,
+    ).toBe("CAPA-000003");
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    0,
+    -1,
+    1.5,
+    101,
+  ])(
+    "rejects invalid case-list limit %s",
+    async (limit) => {
+      const database = createDatabase();
+
+      await expect(
+        database.listCases({
+          organization_id:
+            ORGANIZATION_ID,
+          limit,
+        }),
+      ).rejects.toBeInstanceOf(
+        InMemoryCapaCaseListQueryError,
+      );
+    },
+  );
+
+  it.each([
+    {
+      created_at: "not-a-date",
+      capa_case_id:
+        TIED_LOWER_CASE_ID,
+    },
+    {
+      created_at:
+        "2026-08-12T00:45:00Z",
+      capa_case_id:
+        TIED_LOWER_CASE_ID,
+    },
+    {
+      created_at:
+        "2026-08-12T00:45:00.000Z",
+      capa_case_id:
+        "not-a-uuid",
+    },
+  ])(
+    "rejects invalid case-list cursor %#",
+    async (cursor) => {
+      const database = createDatabase();
+
+      await expect(
+        database.listCases({
+          organization_id:
+            ORGANIZATION_ID,
+          limit: 10,
+          cursor:
+            cursor as CapaCaseListCursor,
+        }),
+      ).rejects.toBeInstanceOf(
+        InMemoryCapaCaseListQueryError,
+      );
+    },
+  );
+
+  it("provides a stable named case-list query error", () => {
+    const error =
+      new InMemoryCapaCaseListQueryError();
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe(
+      "InMemoryCapaCaseListQueryError",
+    );
+    expect(error.message).toBe(
+      "The in-memory CAPA case-list query parameters are invalid.",
+    );
+  });
+});
 
 describe("InMemoryCapaDatabase optimistic concurrency", () => {
   function advanceInput(

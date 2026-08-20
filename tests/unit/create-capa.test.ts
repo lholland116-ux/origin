@@ -416,7 +416,13 @@ function createHarness():
 
   const capaRepository:
     CapaRepository = {
-    async findCaseById() {
+    async listCases() {
+      return {
+        cases: [],
+      };
+    },
+
+      async findCaseById() {
       return null;
     },
 

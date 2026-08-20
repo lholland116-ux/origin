@@ -20,6 +20,8 @@ import type {
 import type {
   AdvanceCapaVersionInput,
   AdvanceCapaVersionResult,
+  CapaCaseListPage,
+  CapaCaseListQuery,
   CapaRepository,
 } from "../repositories/capa-repository";
 
@@ -111,6 +113,65 @@ interface ExistingVersionRow extends postgres.Row {
 
 interface ExistsRow extends postgres.Row {
   readonly exists: boolean;
+}
+
+const MAXIMUM_CASE_LIST_LIMIT =
+  100;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export class SupabaseCapaCaseListQueryError
+  extends Error {
+  constructor() {
+    super(
+      "The CAPA case-list query parameters are invalid.",
+    );
+
+    this.name =
+      "SupabaseCapaCaseListQueryError";
+  }
+}
+
+function requireCaseListQuery(
+  query:
+    CapaCaseListQuery,
+): void {
+  if (
+    !Number.isSafeInteger(
+      query.limit,
+    ) ||
+    query.limit < 1 ||
+    query.limit >
+      MAXIMUM_CASE_LIST_LIMIT
+  ) {
+    throw new SupabaseCapaCaseListQueryError();
+  }
+
+  const cursor =
+    query.cursor;
+
+  if (cursor === undefined) {
+    return;
+  }
+
+  const parsedCreatedAt =
+    new Date(
+      cursor.created_at,
+    );
+
+  if (
+    !Number.isFinite(
+      parsedCreatedAt.getTime(),
+    ) ||
+    parsedCreatedAt.toISOString() !==
+      cursor.created_at ||
+    !UUID_PATTERN.test(
+      cursor.capa_case_id,
+    )
+  ) {
+    throw new SupabaseCapaCaseListQueryError();
+  }
 }
 
 function iso(value: Date | string): IsoDateTime {
@@ -336,6 +397,94 @@ export class SupabaseCapaRepository
   constructor(
     private readonly sql: postgres.Sql,
   ) {}
+
+  async listCases(
+    query:
+      CapaCaseListQuery,
+  ): Promise<CapaCaseListPage> {
+    requireCaseListQuery(
+      query,
+    );
+
+    const rowLimit =
+      query.limit + 1;
+
+    const cursor =
+      query.cursor;
+
+    const rows =
+      cursor === undefined
+        ? await this.sql<
+            CapaCaseRow[]
+          >`
+            select *
+            from public.capa_cases
+            where organization_id =
+              ${query.organization_id}
+            order by
+              created_at desc,
+              capa_case_id desc
+            limit ${rowLimit}
+          `
+        : await this.sql<
+            CapaCaseRow[]
+          >`
+            select *
+            from public.capa_cases
+            where organization_id =
+                ${query.organization_id}
+              and (
+                created_at <
+                  ${cursor.created_at}
+                or (
+                  created_at =
+                    ${cursor.created_at}
+                  and capa_case_id <
+                    ${cursor.capa_case_id}
+                )
+              )
+            order by
+              created_at desc,
+              capa_case_id desc
+            limit ${rowLimit}
+          `;
+
+    const hasAnotherPage =
+      rows.length >
+      query.limit;
+
+    const cases =
+      rows
+        .slice(
+          0,
+          query.limit,
+        )
+        .map(toCapaCase);
+
+    const lastCase =
+      cases[
+        cases.length - 1
+      ];
+
+    return {
+      cases,
+
+      ...(
+        hasAnotherPage &&
+        lastCase !== undefined
+          ? {
+              next_cursor: {
+                created_at:
+                  lastCase.created_at,
+
+                capa_case_id:
+                  lastCase.capa_case_id,
+              },
+            }
+          : {}
+      ),
+    };
+  }
 
   async findCaseById(
     organizationId: OrganizationId,
