@@ -11,6 +11,7 @@ import type {
   CapaCaseVersionId,
   CapaSectionVersion,
   CapaSectionVersionId,
+  IdempotencyKey,
   IsoDateTime,
   OrganizationId,
   RequestTrace,
@@ -35,6 +36,12 @@ import type {
 import type {
   CapaCaseNumberAllocator,
 } from "../repositories/capa-case-number-allocator";
+
+import type {
+  CapaCreationIdempotencyRecord,
+  CapaCreationIdempotencyRepository,
+  ClaimCapaCreationResult,
+} from "../repositories/capa-creation-idempotency-repository";
 
 import type {
   TransactionContext,
@@ -104,6 +111,16 @@ interface InMemoryState {
 
   readonly audit_events:
     Map<string, AuditEvent>;
+
+  /**
+   * Transaction-owned organization-local creation reservations.
+   * Failed transactions roll back their reservations with all writes.
+   */
+  readonly creation_idempotency:
+    Map<
+      string,
+      CapaCreationIdempotencyRecord
+    >;
 }
 
 interface ActiveTransaction {
@@ -302,6 +319,15 @@ function caseNumberCounterKey(
   );
 }
 
+function creationIdempotencyKey(
+  organizationId:
+    OrganizationId,
+  idempotencyKey:
+    IdempotencyKey,
+): string {
+  return `${organizationId}:${idempotencyKey}`;
+}
+
 function formatCaseNumber(
   value: number,
 ): string {
@@ -367,6 +393,11 @@ function cloneState(
       cloneMap(
         state.audit_events,
       ),
+
+    creation_idempotency:
+      cloneMap(
+        state.creation_idempotency,
+      ),
   };
 }
 
@@ -391,6 +422,9 @@ function emptyState():
       new Map(),
 
     audit_events:
+      new Map(),
+
+    creation_idempotency:
       new Map(),
   };
 }
@@ -421,7 +455,8 @@ export class InMemoryCapaDatabase
     TransactionManager,
     CapaRepository,
     AuditRepository,
-    CapaCaseNumberAllocator
+    CapaCaseNumberAllocator,
+    CapaCreationIdempotencyRepository
 {
   private committed_state:
     InMemoryState =
@@ -707,6 +742,63 @@ export class InMemoryCapaDatabase
     }
 
     return cloneValue(value);
+  }
+
+  async claimCreation(
+    transaction:
+      TransactionContext,
+    record:
+      CapaCreationIdempotencyRecord,
+  ): Promise<ClaimCapaCreationResult> {
+    const state =
+      this.transactionState(
+        transaction,
+      );
+
+    const key =
+      creationIdempotencyKey(
+        record.organization_id,
+        record.idempotency_key,
+      );
+
+    const existing =
+      state.creation_idempotency
+        .get(key);
+
+    if (existing === undefined) {
+      const claimedRecord =
+        cloneValue(record);
+
+      state.creation_idempotency.set(
+        key,
+        claimedRecord,
+      );
+
+      return {
+        status: "claimed",
+        record:
+          cloneValue(claimedRecord),
+      };
+    }
+
+    if (
+      existing.request_fingerprint ===
+      record.request_fingerprint
+    ) {
+      return {
+        status: "already_claimed",
+        record:
+          cloneValue(existing),
+      };
+    }
+
+    return {
+      status: "conflict",
+      record:
+        cloneValue(existing),
+      reason_code:
+        "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST",
+    };
   }
 
   /**
@@ -1239,6 +1331,67 @@ export class InMemoryCapaDatabase
     state:
       InMemoryState,
   ): void {
+    for (
+      const claim
+      of state.creation_idempotency
+        .values()
+    ) {
+      const capaCase =
+        state.cases.get(
+          recordKey(
+            claim.organization_id,
+            claim.capa_case_id,
+          ),
+        );
+
+      const caseVersion =
+        state.case_versions.get(
+          recordKey(
+            claim.organization_id,
+            claim.case_version_id,
+          ),
+        );
+
+      const sectionVersion =
+        state.section_versions.get(
+          recordKey(
+            claim.organization_id,
+            claim.section_version_id,
+          ),
+        );
+
+      const auditEvent =
+        state.audit_events.get(
+          recordKey(
+            claim.organization_id,
+            claim.audit_event_id,
+          ),
+        );
+
+      if (
+        capaCase === undefined ||
+        caseVersion === undefined ||
+        sectionVersion === undefined ||
+        auditEvent === undefined ||
+        capaCase.current_version_id !==
+          claim.case_version_id ||
+        caseVersion.capa_case_id !==
+          claim.capa_case_id ||
+        !caseVersion.section_version_ids
+          .includes(
+            claim.section_version_id,
+          ) ||
+        sectionVersion.capa_case_id !==
+          claim.capa_case_id ||
+        auditEvent.aggregate_id !==
+          claim.capa_case_id
+      ) {
+        throw new InMemoryIntegrityError(
+          "A CAPA creation-idempotency record references an incomplete aggregate.",
+        );
+      }
+    }
+
     for (
       const capaCase
       of state.cases.values()

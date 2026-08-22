@@ -291,6 +291,9 @@ function createDependencies(
      * The in-memory database owns the counter so allocation and CAPA
      * persistence share the same transaction snapshot.
      */
+    creation_idempotency_repository:
+      database,
+
     case_number_allocator:
       database,
 

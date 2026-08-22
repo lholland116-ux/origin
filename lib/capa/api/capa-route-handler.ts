@@ -511,6 +511,18 @@ export async function handleCapaPost(
       );
     }
 
+    if (
+      result.status ===
+      "idempotency_conflict"
+    ) {
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_IDEMPOTENCY_CONFLICT",
+        "The idempotency key was already used for a different CAPA request.",
+      );
+    }
+
     return jsonResponse(
       {
         capa: {
@@ -534,7 +546,9 @@ export async function handleCapaPost(
         correlation_id:
           trace.correlation_id,
       },
-      201,
+      result.status === "already_created"
+        ? 200
+        : 201,
     );
   } catch (error) {
     const contextErrorResponse =

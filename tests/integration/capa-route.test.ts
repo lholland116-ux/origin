@@ -701,6 +701,144 @@ describe("CAPA POST handler", () => {
       );
     },
   );
+
+  it(
+    "returns the authoritative CAPA with 200 for an exact creation retry",
+    async () => {
+      const testHarness = harness();
+      const headers = {
+        "x-request-id":
+          REQUEST_ID,
+        "x-correlation-id":
+          CORRELATION_ID,
+        "idempotency-key":
+          "route-exact-retry-1",
+      };
+
+      const firstResponse =
+        await handleCapaPost(
+          postRequest(
+            validBody(),
+            headers,
+          ),
+          testHarness.dependencies,
+        );
+
+      const retryResponse =
+        await handleCapaPost(
+          postRequest(
+            validBody(),
+            headers,
+          ),
+          testHarness.dependencies,
+        );
+
+      expect(firstResponse.status)
+        .toBe(201);
+      expect(retryResponse.status)
+        .toBe(200);
+
+      const firstBody =
+        await responseBody(
+          firstResponse,
+        );
+      const retryBody =
+        await responseBody(
+          retryResponse,
+        );
+
+      expect(retryBody.capa)
+        .toEqual(firstBody.capa);
+      expect(retryBody.correlation_id)
+        .toBe(CORRELATION_ID);
+
+      const page =
+        await testHarness.runtime
+          .database.listCases({
+            organization_id:
+              resolveDevelopmentCapaRequestContext(
+                validSessionFacts(),
+                NOW,
+              ).tenant.organization_id,
+            limit: 100,
+          });
+
+      expect(page.cases)
+        .toHaveLength(1);
+    },
+  );
+
+  it(
+    "returns controlled 409 when a creation key is reused for different content",
+    async () => {
+      const testHarness = harness();
+      const headers = {
+        "x-request-id":
+          REQUEST_ID,
+        "x-correlation-id":
+          CORRELATION_ID,
+        "idempotency-key":
+          "route-conflict-1",
+      };
+
+      const firstResponse =
+        await handleCapaPost(
+          postRequest(
+            validBody(),
+            headers,
+          ),
+          testHarness.dependencies,
+        );
+
+      const conflictResponse =
+        await handleCapaPost(
+          postRequest(
+            {
+              ...validBody(),
+              initiating_event:
+                "Different controlled initiating event.",
+            },
+            headers,
+          ),
+          testHarness.dependencies,
+        );
+
+      expect(firstResponse.status)
+        .toBe(201);
+      expect(conflictResponse.status)
+        .toBe(409);
+
+      expect(
+        await responseBody(
+          conflictResponse,
+        ),
+      ).toMatchObject({
+        error: {
+          code:
+            "CAPA_IDEMPOTENCY_CONFLICT",
+          message:
+            "The idempotency key was already used for a different CAPA request.",
+          correlation_id:
+            CORRELATION_ID,
+        },
+      });
+
+      const page =
+        await testHarness.runtime
+          .database.listCases({
+            organization_id:
+              resolveDevelopmentCapaRequestContext(
+                validSessionFacts(),
+                NOW,
+              ).tenant.organization_id,
+            limit: 100,
+          });
+
+      expect(page.cases)
+        .toHaveLength(1);
+    },
+  );
+
 });
 
 describe("CAPA GET handler", () => {

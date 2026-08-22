@@ -257,6 +257,9 @@ export function createCapaDevelopmentRuntime(
      * The database owns the development counter so allocation participates
      * in the same snapshot, commit and rollback boundary as CAPA creation.
      */
+    creation_idempotency_repository:
+      database,
+
     case_number_allocator:
       database,
 

@@ -554,6 +554,26 @@ function createHarness():
     audit_repository:
       auditRepository,
 
+    creation_idempotency_repository: {
+      async claimCreation(
+        transaction,
+        record,
+      ) {
+        expect(transaction).toBe(
+          transactionContext,
+        );
+
+        writeOrder.push(
+          "idempotency",
+        );
+
+        return {
+          status: "claimed",
+          record,
+        };
+      },
+    },
+
     case_number_allocator: {
       async allocateNextCaseNumber(
         transaction,
@@ -943,6 +963,7 @@ describe(
         expect(
           harness.write_order,
         ).toEqual([
+          "idempotency",
           "case-number",
           "case",
           "section",
@@ -1213,6 +1234,7 @@ describe(
         expect(
           harness.write_order,
         ).toEqual([
+          "idempotency",
           "case-number",
           "case",
           "section",
@@ -1250,6 +1272,7 @@ describe(
         expect(
           harness.write_order,
         ).toEqual([
+          "idempotency",
           "case-number",
         ]);
 
@@ -1290,6 +1313,7 @@ describe(
         expect(
           harness.write_order,
         ).toEqual([
+          "idempotency",
           "case-number",
           "case",
         ]);

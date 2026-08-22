@@ -36,6 +36,10 @@ import {
 } from "../../database/supabase/supabase-capa-case-number-allocator";
 
 import {
+  SupabaseCapaCreationIdempotencyRepository,
+} from "../../database/supabase/supabase-capa-creation-idempotency-repository";
+
+import {
   createSupabaseDatabaseSql,
   SupabaseTransactionManager,
 } from "../../database/supabase/supabase-transactions";
@@ -292,6 +296,9 @@ export function createCapaProductionRuntime(
       sql,
     );
 
+  const creationIdempotencyRepository =
+    new SupabaseCapaCreationIdempotencyRepository();
+
   const caseNumberAllocator =
     new SupabaseCapaCaseNumberAllocator();
 
@@ -322,6 +329,9 @@ export function createCapaProductionRuntime(
 
     audit_repository:
       auditRepository,
+
+    creation_idempotency_repository:
+      creationIdempotencyRepository,
 
     case_number_allocator:
       caseNumberAllocator,
