@@ -23,6 +23,10 @@ import type {
 } from "./create-capa";
 
 import type {
+  SubmitCapaIntakeDependencies,
+} from "./submit-capa-intake";
+
+import type {
   CapaRuntime,
 } from "./capa-runtime";
 
@@ -133,7 +137,9 @@ function developmentAuthorizationPolicy():
         request.operation ===
           "create_case" ||
         request.operation ===
-          "view_case";
+          "view_case" ||
+        request.operation ===
+          "submit_intake";
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -165,7 +171,10 @@ function developmentAuthorizationPolicy():
             request.operation ===
               "create_case"
               ? "DEVELOPMENT_CREATE_ALLOWED"
-              : "DEVELOPMENT_VIEW_ALLOWED",
+              : request.operation ===
+                  "view_case"
+                ? "DEVELOPMENT_VIEW_ALLOWED"
+                : "DEVELOPMENT_SUBMIT_INTAKE_ALLOWED",
           ),
         policy_version:
           DEVELOPMENT_POLICY_VERSION,
@@ -297,9 +306,41 @@ export function createCapaDevelopmentRuntime(
     },
   };
 
+  const submitIntakeDependencies:
+    SubmitCapaIntakeDependencies = {
+    transaction_manager:
+      database,
+    capa_repository:
+      database,
+    audit_repository:
+      database,
+    workflow_idempotency_repository:
+      database,
+    authorization_policy:
+      dependencies.authorization_policy,
+    id_generator:
+      dependencies.id_generator,
+    clock:
+      dependencies.clock,
+    configuration: {
+      workflow_version:
+        dependencies.configuration
+          .workflow_version,
+      audit_schema_version:
+        dependencies.configuration
+          .audit_schema_version,
+      authorization_purpose:
+        controlled(
+          "CAPA_WORKFLOW_TRANSITION",
+        ),
+    },
+  };
+
   return {
     database,
     dependencies,
+    submit_intake_dependencies:
+      submitIntakeDependencies,
   };
 }
 

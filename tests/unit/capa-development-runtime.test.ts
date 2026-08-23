@@ -175,6 +175,46 @@ describe(
         );
 
         expect(
+          runtime.submit_intake_dependencies
+            .transaction_manager,
+        ).toBe(
+          runtime.database,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .capa_repository,
+        ).toBe(
+          runtime.database,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .audit_repository,
+        ).toBe(
+          runtime.database,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .workflow_idempotency_repository,
+        ).toBe(
+          runtime.database,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .configuration,
+        ).toEqual({
+          workflow_version:
+            "workflow-development-1.0.0",
+          audit_schema_version:
+            "audit-schema-1.0.0",
+          authorization_purpose:
+            "CAPA_WORKFLOW_TRANSITION",
+        });
+
+        expect(
           runtime.dependencies
             .clock
             .now(),
@@ -579,6 +619,48 @@ describe(
           evaluated_at:
             "2026-08-12T14:00:00.000Z",
 
+          relied_on_role_assignment_ids: [
+            `development-role:${USER_ID}`,
+          ],
+        });
+      },
+    );
+
+    it(
+      "allows development CAPA intake submission",
+      async () => {
+        const request =
+          policyRequest();
+
+        const decision =
+          await createPolicy()
+            .evaluate({
+              ...request,
+              operation:
+                "submit_intake",
+              resource: {
+                organization_id:
+                  request.tenant
+                    .organization_id,
+                resource_type:
+                  controlled("CAPA_CASE"),
+                workflow_state:
+                  "S00",
+              },
+              purpose:
+                controlled(
+                  "CAPA_WORKFLOW_TRANSITION",
+                ),
+            });
+
+        expect(decision).toEqual({
+          decision: "allow",
+          reason_code:
+            "DEVELOPMENT_SUBMIT_INTAKE_ALLOWED",
+          policy_version:
+            "development-policy-1.0.0",
+          evaluated_at:
+            "2026-08-12T14:00:00.000Z",
           relied_on_role_assignment_ids: [
             `development-role:${USER_ID}`,
           ],

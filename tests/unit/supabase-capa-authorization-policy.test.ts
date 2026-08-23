@@ -819,6 +819,11 @@ describe(
         "CAPA_CASE_EDIT",
       ],
       [
+        "submit_intake",
+        "S10",
+        "CAPA_WORKFLOW_TRANSITION",
+      ],
+      [
         "submit_for_review",
         "S10",
         "CAPA_WORKFLOW_TRANSITION",
@@ -863,6 +868,91 @@ describe(
           reason_code:
             "WORKFLOW_STATE_NOT_AUTHORIZED",
         });
+      },
+    );
+  },
+);
+
+describe(
+  "SupabaseCapaAuthorizationPolicy submit-intake controls",
+  () => {
+    it(
+      "denies a service principal submitting intake before querying",
+      async () => {
+        const harness =
+          createSqlHarness();
+
+        const result =
+          await createPolicy(
+            harness,
+          ).evaluate(
+            policyRequest({
+              authentication:
+                serviceAuthentication(),
+              operation:
+                "submit_intake",
+              resource: {
+                organization_id:
+                  ORGANIZATION_A,
+                resource_type:
+                  controlled("CAPA_CASE"),
+                workflow_state:
+                  "S00" as CapaCaseStatus,
+              },
+              purpose:
+                controlled(
+                  "CAPA_WORKFLOW_TRANSITION",
+                ),
+            }),
+          );
+
+        expect(result).toMatchObject({
+          decision: "deny",
+          reason_code:
+            "AUTHORIZED_HUMAN_REQUIRED",
+        });
+
+        expect(harness.calls)
+          .toHaveLength(0);
+      },
+    );
+
+    it(
+      "denies an incorrect submit-intake purpose before querying",
+      async () => {
+        const harness =
+          createSqlHarness();
+
+        const result =
+          await createPolicy(
+            harness,
+          ).evaluate(
+            policyRequest({
+              operation:
+                "submit_intake",
+              resource: {
+                organization_id:
+                  ORGANIZATION_A,
+                resource_type:
+                  controlled("CAPA_CASE"),
+                workflow_state:
+                  "S00" as CapaCaseStatus,
+              },
+              purpose:
+                controlled(
+                  "CAPA_CASE_ACCESS",
+                ),
+            }),
+          );
+
+        expect(result).toMatchObject({
+          decision: "deny",
+          reason_code:
+            "PURPOSE_NOT_AUTHORIZED",
+        });
+
+        expect(harness.calls)
+          .toHaveLength(0);
       },
     );
   },
@@ -1301,6 +1391,50 @@ describe(
           NOW.toISOString(),
           NOW.toISOString(),
         ]);
+      },
+    );
+
+    it(
+      "authorizes intake submission from draft using a current owner assignment",
+      async () => {
+        const {
+          result,
+          harness,
+        } =
+          await evaluateWithAuthority(
+            policyRequest({
+              operation:
+                "submit_intake",
+              resource: {
+                organization_id:
+                  ORGANIZATION_A,
+                resource_type:
+                  controlled("CAPA_CASE"),
+                workflow_state:
+                  "S00" as CapaCaseStatus,
+              },
+              purpose:
+                controlled(
+                  "CAPA_WORKFLOW_TRANSITION",
+                ),
+            }),
+          );
+
+        expect(result).toEqual({
+          decision: "allow",
+          reason_code:
+            "AUTHORIZED_BY_ACTIVE_ROLE_ASSIGNMENT",
+          policy_version:
+            POLICY_VERSION,
+          evaluated_at:
+            NOW.toISOString(),
+          relied_on_role_assignment_ids: [
+            OWNER_ASSIGNMENT_ID,
+          ],
+        });
+
+        expect(harness.calls)
+          .toHaveLength(2);
       },
     );
 

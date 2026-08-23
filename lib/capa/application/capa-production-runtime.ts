@@ -16,6 +16,10 @@ import type {
 } from "./create-capa";
 
 import type {
+  SubmitCapaIntakeDependencies,
+} from "./submit-capa-intake";
+
+import type {
   CapaRuntime,
 } from "./capa-runtime";
 
@@ -38,6 +42,10 @@ import {
 import {
   SupabaseCapaCreationIdempotencyRepository,
 } from "../../database/supabase/supabase-capa-creation-idempotency-repository";
+
+import {
+  SupabaseCapaWorkflowIdempotencyRepository,
+} from "../../database/supabase/supabase-capa-workflow-idempotency-repository";
 
 import {
   createSupabaseDatabaseSql,
@@ -299,6 +307,9 @@ export function createCapaProductionRuntime(
   const creationIdempotencyRepository =
     new SupabaseCapaCreationIdempotencyRepository();
 
+  const workflowIdempotencyRepository =
+    new SupabaseCapaWorkflowIdempotencyRepository();
+
   const caseNumberAllocator =
     new SupabaseCapaCaseNumberAllocator();
 
@@ -373,11 +384,42 @@ export function createCapaProductionRuntime(
     },
   };
 
+  const submitIntakeDependencies:
+    SubmitCapaIntakeDependencies = {
+    transaction_manager:
+      transactionManager,
+    capa_repository:
+      capaRepository,
+    audit_repository:
+      auditRepository,
+    workflow_idempotency_repository:
+      workflowIdempotencyRepository,
+    authorization_policy:
+      authorizationPolicy,
+    id_generator:
+      dependencies.id_generator,
+    clock:
+      dependencies.clock,
+    configuration: {
+      workflow_version:
+        workflowVersion,
+      audit_schema_version:
+        auditSchemaVersion,
+      authorization_purpose:
+        controlled(
+          "CAPA_WORKFLOW_TRANSITION",
+        ),
+    },
+  };
+
   return {
     database:
       capaRepository,
 
     dependencies,
+
+    submit_intake_dependencies:
+      submitIntakeDependencies,
 
     resolve_context:
       contextResolver.resolve,

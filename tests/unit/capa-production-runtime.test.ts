@@ -54,6 +54,10 @@ import {
 } from "../../lib/database/supabase/supabase-capa-case-number-allocator";
 
 import {
+  SupabaseCapaWorkflowIdempotencyRepository,
+} from "../../lib/database/supabase/supabase-capa-workflow-idempotency-repository";
+
+import {
   SupabaseCapaRepository,
 } from "../../lib/database/supabase/supabase-capa-repository";
 
@@ -172,6 +176,56 @@ describe(
         ).toBeInstanceOf(
           SupabaseCapaAuthorizationPolicy,
         );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .transaction_manager,
+        ).toBe(
+          runtime.dependencies
+            .transaction_manager,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .capa_repository,
+        ).toBe(
+          runtime.database,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .audit_repository,
+        ).toBe(
+          runtime.dependencies
+            .audit_repository,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .workflow_idempotency_repository,
+        ).toBeInstanceOf(
+          SupabaseCapaWorkflowIdempotencyRepository,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .authorization_policy,
+        ).toBe(
+          runtime.dependencies
+            .authorization_policy,
+        );
+
+        expect(
+          runtime.submit_intake_dependencies
+            .configuration,
+        ).toEqual({
+          workflow_version:
+            "workflow-1.0.0",
+          audit_schema_version:
+            "audit-schema-1.0.0",
+          authorization_purpose:
+            "CAPA_WORKFLOW_TRANSITION",
+        });
 
         expect(
           runtime.resolve_context,

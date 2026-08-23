@@ -1,5 +1,6 @@
 import type {
   CapaCaseId,
+  CapaCaseVersionId,
   CorrelationId,
   IdempotencyKey,
   IsoDateTime,
@@ -10,6 +11,10 @@ import type {
 import {
   createCapa,
 } from "../application/create-capa";
+
+import {
+  submitCapaIntake,
+} from "../application/submit-capa-intake";
 
 import {
   MAXIMUM_CAPA_CASE_LIST_LIMIT,
@@ -339,6 +344,62 @@ async function parseJsonBody(
       valid: false,
     };
   }
+}
+
+interface ParsedSubmitIntakeBody {
+  readonly expected_record_version:
+    number;
+  readonly expected_current_version_id:
+    CapaCaseVersionId;
+}
+
+function parsedSubmitIntakeBody(
+  value: unknown,
+): ParsedSubmitIntakeBody | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const body = value as
+    Readonly<Record<string, unknown>>;
+
+  if (
+    Object.keys(body).length !== 2 ||
+    !Number.isSafeInteger(
+      body.expected_record_version,
+    ) ||
+    (body.expected_record_version as number) < 1 ||
+    typeof body.expected_current_version_id !==
+      "string"
+  ) {
+    return null;
+  }
+
+  const currentVersionId =
+    normalizedUuid(
+      body.expected_current_version_id,
+    );
+
+  if (
+    currentVersionId === null ||
+    currentVersionId !==
+      body.expected_current_version_id
+  ) {
+    return null;
+  }
+
+  return {
+    expected_record_version:
+      body.expected_record_version as
+        number,
+    expected_current_version_id:
+      currentVersionId as
+        CapaCaseVersionId,
+  };
 }
 
 function safeUnexpectedError(
@@ -820,6 +881,234 @@ export async function handleCapaGet(
       dependencies,
       trace,
       "retrieval",
+      error,
+    );
+  }
+}
+
+/**
+ * Submits one authorized Draft Intake record to Triage and Scope.
+ *
+ * The dynamic Next.js route supplies the path identity. The request body
+ * supplies optimistic-concurrency facts obtained from the authorized case
+ * representation. Idempotency is controlled by the Idempotency-Key header.
+ */
+export async function handleCapaSubmitIntake(
+  request: Request,
+  capaCaseId: string,
+  dependencies:
+    CapaApiHandlerDependencies,
+): Promise<Response> {
+  const trace = requestTrace(
+    request,
+    dependencies.generate_uuid,
+  );
+
+  try {
+    const context =
+      await authenticatedContext(
+        dependencies,
+      );
+
+    if (context === null) {
+      return errorResponse(
+        trace,
+        401,
+        "UNAUTHORIZED",
+        "Authentication is required.",
+      );
+    }
+
+    const normalizedCaseId =
+      normalizedUuid(capaCaseId);
+
+    if (
+      normalizedCaseId === null ||
+      normalizedCaseId !== capaCaseId
+    ) {
+      return errorResponse(
+        trace,
+        400,
+        "INVALID_CAPA_CASE_ID",
+        "A valid CAPA case identifier is required.",
+      );
+    }
+
+    const parsedJson =
+      await parseJsonBody(request);
+
+    if (!parsedJson.valid) {
+      return errorResponse(
+        trace,
+        400,
+        "INVALID_JSON",
+        "The request body must be valid JSON.",
+      );
+    }
+
+    const body =
+      parsedSubmitIntakeBody(
+        parsedJson.body,
+      );
+
+    if (body === null) {
+      return errorResponse(
+        trace,
+        400,
+        "INVALID_CAPA_SUBMISSION",
+        "The CAPA intake-submission request is invalid.",
+      );
+    }
+
+    const runtime =
+      dependencies.get_runtime();
+
+    const result =
+      await submitCapaIntake(
+        runtime
+          .submit_intake_dependencies,
+        {
+          authentication:
+            context.authentication,
+          tenant:
+            context.tenant,
+          capa_case_id:
+            normalizedCaseId as
+              CapaCaseId,
+          expected_record_version:
+            body.expected_record_version,
+          expected_current_version_id:
+            body
+              .expected_current_version_id,
+          request_trace:
+            trace,
+        },
+      );
+
+    if (
+      result.status ===
+      "authorization_denied"
+    ) {
+      return errorResponse(
+        trace,
+        403,
+        "CAPA_ACCESS_DENIED",
+        "The CAPA operation is not authorized.",
+      );
+    }
+
+    if (
+      result.status ===
+      "step_up_required"
+    ) {
+      return errorResponse(
+        trace,
+        403,
+        "CAPA_STEP_UP_REQUIRED",
+        "Additional authentication is required.",
+      );
+    }
+
+    if (
+      result.status ===
+      "not_found_or_not_authorized"
+    ) {
+      return errorResponse(
+        trace,
+        404,
+        "CAPA_NOT_FOUND",
+        "The CAPA case was not found.",
+      );
+    }
+
+    if (
+      result.status ===
+      "idempotency_conflict"
+    ) {
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_IDEMPOTENCY_CONFLICT",
+        "The idempotency key was already used for a different CAPA request.",
+      );
+    }
+
+    if (
+      result.status ===
+      "concurrency_conflict"
+    ) {
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_CONCURRENCY_CONFLICT",
+        "The CAPA intake changed before submission could be completed.",
+      );
+    }
+
+    if (
+      result.status ===
+      "workflow_conflict"
+    ) {
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_WORKFLOW_CONFLICT",
+        "The CAPA intake is not in a state that permits submission.",
+      );
+    }
+
+    return jsonResponse(
+      {
+        capa: {
+          capa_case_id:
+            result.capa_case
+              .capa_case_id,
+          case_number:
+            result.capa_case
+              .case_number,
+          status:
+            result.capa_case.status,
+          record_version:
+            result.capa_case
+              .record_version,
+          current_version_id:
+            result.capa_case
+              .current_version_id,
+          submitted_version_id:
+            result.case_version
+              .case_version_id,
+          submitted_at:
+            result.case_version
+              .effective_at,
+          audit_event_id:
+            result.audit_event_id,
+        },
+        replayed:
+          result.status ===
+          "already_submitted",
+        correlation_id:
+          trace.correlation_id,
+      },
+      200,
+    );
+  } catch (error) {
+    const contextErrorResponse =
+      contextResolutionErrorResponse(
+        dependencies,
+        trace,
+        error,
+      );
+
+    if (
+      contextErrorResponse !== null
+    ) {
+      return contextErrorResponse;
+    }
+
+    return safeUnexpectedError(
+      dependencies,
+      trace,
+      "intake submission",
       error,
     );
   }

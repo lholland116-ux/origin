@@ -64,6 +64,7 @@ const OPERATION_PERMISSION = {
   create_case: "capa.case.create",
   view_case: "capa.case.view",
   edit_case: "capa.case.edit",
+  submit_intake: "capa.case.submit",
   submit_for_review: "capa.case.submit",
   approve_scope:
     "capa.review.disposition",
@@ -101,6 +102,8 @@ const OPERATION_PURPOSE = {
     "CAPA_CASE_ACCESS",
   edit_case:
     "CAPA_CASE_EDIT",
+  submit_intake:
+    "CAPA_WORKFLOW_TRANSITION",
   submit_for_review:
     "CAPA_WORKFLOW_TRANSITION",
   approve_scope:
@@ -163,6 +166,11 @@ const REQUIRED_WORKFLOW_STATES:
   > = {
     edit_case:
       ACTIVE_EDIT_STATES,
+
+    submit_intake:
+      new Set([
+        CAPA_STATE.DRAFT_INTAKE,
+      ]),
 
     submit_for_review:
       SUBMISSION_STATES,

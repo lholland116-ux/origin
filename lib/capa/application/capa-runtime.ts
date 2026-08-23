@@ -3,6 +3,10 @@ import type {
 } from "./create-capa";
 
 import type {
+  SubmitCapaIntakeDependencies,
+} from "./submit-capa-intake";
+
+import type {
   CapaRepository,
 } from "../../database/repositories/capa-repository";
 
@@ -26,4 +30,12 @@ export interface CapaRuntime {
    * Application dependencies used by controlled CAPA commands.
    */
   readonly dependencies: CreateCapaDependencies;
+
+  /**
+   * Application dependencies for the controlled S00 to S10 transition.
+   * Kept separate so workflow authorization configuration cannot be
+   * confused with CAPA creation configuration.
+   */
+  readonly submit_intake_dependencies:
+    SubmitCapaIntakeDependencies;
 }

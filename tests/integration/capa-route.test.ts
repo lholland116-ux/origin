@@ -122,15 +122,24 @@ function runtime(
     return created;
   }
 
+  const authorizationPolicy = {
+    async evaluate() {
+      return decision;
+    },
+  };
+
   return {
     database: created.database,
     dependencies: {
       ...created.dependencies,
-      authorization_policy: {
-        async evaluate() {
-          return decision;
-        },
-      },
+      authorization_policy:
+        authorizationPolicy,
+    },
+    submit_intake_dependencies: {
+      ...created
+        .submit_intake_dependencies,
+      authorization_policy:
+        authorizationPolicy,
     },
   };
 }

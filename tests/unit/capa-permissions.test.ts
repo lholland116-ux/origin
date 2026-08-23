@@ -126,6 +126,7 @@ describe("CAPA operation classifications", () => {
       true,
     );
     expect(requiresHumanAuthority("close_case")).toBe(true);
+    expect(requiresHumanAuthority("submit_intake")).toBe(true);
     expect(requiresHumanAuthority("view_case")).toBe(false);
 
     expect(
@@ -144,6 +145,10 @@ describe("CAPA operation classifications", () => {
 
     expect(
       requiresStepUpAuthentication("edit_case"),
+    ).toBe(false);
+
+    expect(
+      requiresStepUpAuthentication("submit_intake"),
     ).toBe(false);
 
     expect(

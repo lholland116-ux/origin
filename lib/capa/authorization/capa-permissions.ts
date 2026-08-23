@@ -38,6 +38,7 @@ export type CapaAuthorizationOperation =
   | "create_case"
   | "view_case"
   | "edit_case"
+  | "submit_intake"
   | "submit_for_review"
   | "approve_scope"
   | "accept_containment_risk"
@@ -60,6 +61,7 @@ export type CapaAuthorizationOperation =
  */
 export const HUMAN_ONLY_CAPA_OPERATIONS =
   new Set<CapaAuthorizationOperation>([
+    "submit_intake",
     "approve_scope",
     "accept_containment_risk",
     "approve_root_cause",

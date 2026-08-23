@@ -44,6 +44,12 @@ import type {
 } from "../repositories/capa-creation-idempotency-repository";
 
 import type {
+  CapaWorkflowIdempotencyRecord,
+  CapaWorkflowIdempotencyRepository,
+  ClaimCapaWorkflowOperationResult,
+} from "../repositories/capa-workflow-idempotency-repository";
+
+import type {
   TransactionContext,
   TransactionId,
   TransactionManager,
@@ -120,6 +126,16 @@ interface InMemoryState {
     Map<
       string,
       CapaCreationIdempotencyRecord
+    >;
+
+  /**
+   * Transaction-owned organization-local workflow-operation reservations.
+   * Failed transitions roll back their reservations with all writes.
+   */
+  readonly workflow_idempotency:
+    Map<
+      string,
+      CapaWorkflowIdempotencyRecord
     >;
 }
 
@@ -328,6 +344,15 @@ function creationIdempotencyKey(
   return `${organizationId}:${idempotencyKey}`;
 }
 
+function workflowIdempotencyKey(
+  organizationId:
+    OrganizationId,
+  idempotencyKey:
+    IdempotencyKey,
+): string {
+  return `${organizationId}:${idempotencyKey}`;
+}
+
 function formatCaseNumber(
   value: number,
 ): string {
@@ -398,6 +423,11 @@ function cloneState(
       cloneMap(
         state.creation_idempotency,
       ),
+
+    workflow_idempotency:
+      cloneMap(
+        state.workflow_idempotency,
+      ),
   };
 }
 
@@ -425,6 +455,9 @@ function emptyState():
       new Map(),
 
     creation_idempotency:
+      new Map(),
+
+    workflow_idempotency:
       new Map(),
   };
 }
@@ -456,7 +489,8 @@ export class InMemoryCapaDatabase
     CapaRepository,
     AuditRepository,
     CapaCaseNumberAllocator,
-    CapaCreationIdempotencyRepository
+    CapaCreationIdempotencyRepository,
+    CapaWorkflowIdempotencyRepository
 {
   private committed_state:
     InMemoryState =
@@ -784,6 +818,65 @@ export class InMemoryCapaDatabase
     if (
       existing.request_fingerprint ===
       record.request_fingerprint
+    ) {
+      return {
+        status: "already_claimed",
+        record:
+          cloneValue(existing),
+      };
+    }
+
+    return {
+      status: "conflict",
+      record:
+        cloneValue(existing),
+      reason_code:
+        "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST",
+    };
+  }
+
+  async claimWorkflowOperation(
+    transaction:
+      TransactionContext,
+    record:
+      CapaWorkflowIdempotencyRecord,
+  ): Promise<ClaimCapaWorkflowOperationResult> {
+    const state =
+      this.transactionState(
+        transaction,
+      );
+
+    const key =
+      workflowIdempotencyKey(
+        record.organization_id,
+        record.idempotency_key,
+      );
+
+    const existing =
+      state.workflow_idempotency
+        .get(key);
+
+    if (existing === undefined) {
+      const claimedRecord =
+        cloneValue(record);
+
+      state.workflow_idempotency.set(
+        key,
+        claimedRecord,
+      );
+
+      return {
+        status: "claimed",
+        record:
+          cloneValue(claimedRecord),
+      };
+    }
+
+    if (
+      existing.operation_code ===
+        record.operation_code &&
+      existing.request_fingerprint ===
+        record.request_fingerprint
     ) {
       return {
         status: "already_claimed",
@@ -1373,8 +1466,6 @@ export class InMemoryCapaDatabase
         caseVersion === undefined ||
         sectionVersion === undefined ||
         auditEvent === undefined ||
-        capaCase.current_version_id !==
-          claim.case_version_id ||
         caseVersion.capa_case_id !==
           claim.capa_case_id ||
         !caseVersion.section_version_ids
@@ -1388,6 +1479,61 @@ export class InMemoryCapaDatabase
       ) {
         throw new InMemoryIntegrityError(
           "A CAPA creation-idempotency record references an incomplete aggregate.",
+        );
+      }
+    }
+
+    for (
+      const claim
+      of state.workflow_idempotency
+        .values()
+    ) {
+      const capaCase =
+        state.cases.get(
+          recordKey(
+            claim.organization_id,
+            claim.capa_case_id,
+          ),
+        );
+
+      const sourceVersion =
+        state.case_versions.get(
+          recordKey(
+            claim.organization_id,
+            claim.source_case_version_id,
+          ),
+        );
+
+      const resultingVersion =
+        state.case_versions.get(
+          recordKey(
+            claim.organization_id,
+            claim.resulting_case_version_id,
+          ),
+        );
+
+      const auditEvent =
+        state.audit_events.get(
+          recordKey(
+            claim.organization_id,
+            claim.audit_event_id,
+          ),
+        );
+
+      if (
+        capaCase === undefined ||
+        sourceVersion === undefined ||
+        resultingVersion === undefined ||
+        auditEvent === undefined ||
+        sourceVersion.capa_case_id !==
+          claim.capa_case_id ||
+        resultingVersion.capa_case_id !==
+          claim.capa_case_id ||
+        auditEvent.aggregate_id !==
+          claim.capa_case_id
+      ) {
+        throw new InMemoryIntegrityError(
+          "A CAPA workflow-idempotency record references an incomplete transition.",
         );
       }
     }

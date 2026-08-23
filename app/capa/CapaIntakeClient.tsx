@@ -119,6 +119,29 @@ interface CapaListItem {
   readonly updatedAt: string;
 }
 
+interface SubmitIntakeResponse {
+  readonly capa?: {
+    readonly capa_case_id?: string;
+    readonly case_number?: string;
+    readonly status?: string;
+    readonly record_version?: number;
+    readonly current_version_id?: string;
+    readonly submitted_version_id?: string;
+    readonly submitted_at?: string;
+    readonly audit_event_id?: string;
+  };
+  readonly replayed?: boolean;
+  readonly correlation_id?: string;
+}
+
+interface WorkflowSubmissionTarget {
+  readonly capaCaseId: string;
+  readonly caseNumber: string;
+  readonly recordVersion: number;
+  readonly currentVersionId: string;
+  readonly idempotencyKey: string;
+}
+
 interface CapaListCursor {
   readonly createdAt: string;
   readonly capaCaseId: string;
@@ -413,8 +436,12 @@ function formattedDate(
 function statusName(
   status: string,
 ): string {
-  return status === "S00"
-    ? "Draft Intake"
+  if (status === "S00") {
+    return "Draft Intake";
+  }
+
+  return status === "S10"
+    ? "Intake Submitted"
     : status;
 }
 
@@ -460,6 +487,21 @@ export default function CapaIntakeClient({
     useState(false);
 
   const [caseListError, setCaseListError] =
+    useState<string | null>(null);
+
+  const [workflowSubmission, setWorkflowSubmission] =
+    useState<WorkflowSubmissionTarget | null>(null);
+
+  const [workflowSubmissionConfirmed, setWorkflowSubmissionConfirmed] =
+    useState(false);
+
+  const [isSubmittingIntake, setIsSubmittingIntake] =
+    useState(false);
+
+  const [workflowSubmissionError, setWorkflowSubmissionError] =
+    useState<string | null>(null);
+
+  const [workflowSubmissionMessage, setWorkflowSubmissionMessage] =
     useState<string | null>(null);
 
   const loadCases = useCallback(
@@ -881,6 +923,184 @@ export default function CapaIntakeClient({
     }
   }
 
+  function beginIntakeSubmission(
+    capaCase: Pick<
+      CapaListItem,
+      | "capaCaseId"
+      | "caseNumber"
+      | "recordVersion"
+      | "currentVersionId"
+    >,
+  ) {
+    setWorkflowSubmission({
+      ...capaCase,
+      idempotencyKey: createTraceId(),
+    });
+    setWorkflowSubmissionConfirmed(false);
+    setWorkflowSubmissionError(null);
+    setWorkflowSubmissionMessage(null);
+  }
+
+  function cancelIntakeSubmission() {
+    if (isSubmittingIntake) {
+      return;
+    }
+
+    setWorkflowSubmission(null);
+    setWorkflowSubmissionConfirmed(false);
+    setWorkflowSubmissionError(null);
+  }
+
+  async function submitIntake() {
+    const target = workflowSubmission;
+
+    if (
+      target === null ||
+      isSubmittingIntake ||
+      !workflowSubmissionConfirmed
+    ) {
+      return;
+    }
+
+    setIsSubmittingIntake(true);
+    setWorkflowSubmissionError(null);
+
+    const correlationId = createTraceId();
+
+    try {
+      const response = await fetch(
+        "/api/capa/" +
+          encodeURIComponent(
+            target.capaCaseId,
+          ) +
+          "/submit-intake",
+        {
+          method: "POST",
+          headers: {
+            "content-type":
+              "application/json",
+            "x-request-id":
+              createTraceId(),
+            "x-correlation-id":
+              correlationId,
+            "idempotency-key":
+              target.idempotencyKey,
+          },
+          body: JSON.stringify({
+            expected_record_version:
+              target.recordVersion,
+            expected_current_version_id:
+              target.currentVersionId,
+          }),
+        },
+      );
+
+      const body = await readJson(response);
+
+      if (!response.ok) {
+        throw new Error(
+          apiErrorMessage(
+            body,
+            "The CAPA intake could not be submitted.",
+          ),
+        );
+      }
+
+      const submitted =
+        body as SubmitIntakeResponse;
+      const capa = submitted.capa;
+
+      if (
+        capa === undefined ||
+        typeof capa.capa_case_id !== "string" ||
+        typeof capa.case_number !== "string" ||
+        capa.status !== "S10" ||
+        typeof capa.record_version !== "number" ||
+        typeof capa.current_version_id !== "string" ||
+        typeof capa.submitted_version_id !== "string" ||
+        typeof capa.submitted_at !== "string" ||
+        typeof capa.audit_event_id !== "string" ||
+        typeof submitted.replayed !== "boolean"
+      ) {
+        throw new Error(
+          "The server returned an incomplete CAPA intake-submission response.",
+        );
+      }
+
+      /*
+       * Capture the validated response values before entering React state
+       * callbacks. This preserves TypeScript's runtime-validation narrowing
+       * across the callback boundary.
+       */
+      const submittedCaseId =
+        capa.capa_case_id;
+      const submittedCaseNumber =
+        capa.case_number;
+      const submittedStatus =
+        capa.status;
+      const submittedRecordVersion =
+        capa.record_version;
+      const submittedCurrentVersionId =
+        capa.current_version_id;
+      const submittedAt =
+        capa.submitted_at;
+
+      setListedCases((current) =>
+        current.map((item) =>
+          item.capaCaseId === submittedCaseId
+            ? {
+                ...item,
+                caseNumber:
+                  submittedCaseNumber,
+                status:
+                  submittedStatus,
+                recordVersion:
+                  submittedRecordVersion,
+                currentVersionId:
+                  submittedCurrentVersionId,
+                updatedAt:
+                  submittedAt,
+              }
+            : item,
+        ),
+      );
+
+      setCreatedCapa((current) =>
+        current?.capaCaseId === submittedCaseId
+          ? {
+              ...current,
+              status:
+                submittedStatus,
+              recordVersion:
+                submittedRecordVersion,
+              currentVersionId:
+                submittedCurrentVersionId,
+            }
+          : current,
+      );
+
+      setWorkflowSubmissionMessage(
+        submitted.replayed
+          ? submittedCaseNumber +
+              " was already submitted. The authoritative S10 record was loaded."
+          : submittedCaseNumber +
+              " intake was submitted successfully.",
+      );
+      setWorkflowSubmission(null);
+      setWorkflowSubmissionConfirmed(false);
+
+      void loadCases("replace");
+    } catch (error) {
+      setWorkflowSubmissionError(
+        error instanceof Error
+          ? error.message
+          : "The CAPA intake could not be submitted.",
+      );
+    } finally {
+      setIsSubmittingIntake(false);
+    }
+  }
+
   function createAnother() {
     setFields(EMPTY_FIELDS);
     setErrors({});
@@ -952,7 +1172,7 @@ export default function CapaIntakeClient({
 
             <p className="mt-2 text-sm leading-6 text-zinc-400">
               Review the most recently created
-              CAPA drafts for your organization.
+              CAPA records for your organization.
             </p>
           </div>
 
@@ -969,6 +1189,15 @@ export default function CapaIntakeClient({
               : "Refresh cases"}
           </button>
         </div>
+
+        {workflowSubmissionMessage ? (
+          <div
+            role="status"
+            className="mt-5 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-200"
+          >
+            {workflowSubmissionMessage}
+          </div>
+        ) : null}
 
         {caseListError ? (
           <div
@@ -1004,7 +1233,7 @@ export default function CapaIntakeClient({
         listedCases.length === 0 ? (
           <div className="mt-5 rounded-2xl border border-dashed border-zinc-700 bg-zinc-950/40 px-5 py-8 text-center">
             <h3 className="font-semibold text-zinc-100">
-              No CAPA drafts yet
+              No CAPA records yet
             </h3>
 
             <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-zinc-400">
@@ -1067,15 +1296,29 @@ export default function CapaIntakeClient({
                     </dl>
                   </div>
 
-                  <div className="text-left sm:text-right">
-                    <p className="text-xs text-zinc-500">
-                      Record version
-                    </p>
-                    <p className="mt-1 font-mono text-sm text-zinc-300">
-                      {
-                        capaCase.recordVersion
-                      }
-                    </p>
+                  <div className="flex flex-col items-start gap-3 sm:items-end">
+                    <div className="text-left sm:text-right">
+                      <p className="text-xs text-zinc-500">
+                        Record version
+                      </p>
+                      <p className="mt-1 font-mono text-sm text-zinc-300">
+                        {capaCase.recordVersion}
+                      </p>
+                    </div>
+
+                    {capaCase.status === "S00" ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          beginIntakeSubmission(
+                            capaCase,
+                          )
+                        }
+                        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-blue-400/40 bg-blue-500/15 px-4 py-2 text-sm font-semibold text-blue-100 transition hover:border-blue-300 hover:bg-blue-500/25 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      >
+                        Submit Intake
+                      </button>
+                    ) : null}
                   </div>
                 </article>
               ),
@@ -1110,7 +1353,13 @@ export default function CapaIntakeClient({
         {[
           ["1", "Enter intake", "edit"],
           ["2", "Human review", "review"],
-          ["3", "Draft created", "created"],
+          [
+            "3",
+            createdCapa?.status === "S10"
+              ? "Intake submitted"
+              : "Draft created",
+            "created",
+          ],
         ].map(
           ([
             number,
@@ -1132,10 +1381,14 @@ export default function CapaIntakeClient({
               );
 
             const isCurrent =
-              activeIndex === itemIndex;
+              activeIndex === itemIndex &&
+              !(step === "created" &&
+                itemStep === "created");
 
             const isComplete =
-              activeIndex > itemIndex;
+              activeIndex > itemIndex ||
+              (step === "created" &&
+                itemStep === "created");
 
             return (
               <div
@@ -1636,7 +1889,9 @@ export default function CapaIntakeClient({
             <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-300">
-                  CAPA draft created
+                  {createdCapa.status === "S10"
+                    ? "CAPA intake submitted"
+                    : "CAPA draft created"}
                 </p>
 
                 <h2 className="mt-2 text-3xl font-semibold">
@@ -1646,9 +1901,9 @@ export default function CapaIntakeClient({
                 </h2>
 
                 <p className="mt-3 text-sm text-emerald-100/80">
-                  The record and its audit
-                  event were committed
-                  atomically.
+                  {createdCapa.status === "S10"
+                    ? "The submitted version and its audit event were committed atomically."
+                    : "The draft record and its audit event were committed atomically."}
                 </p>
               </div>
 
@@ -1723,8 +1978,8 @@ export default function CapaIntakeClient({
                   }`}
                 >
                   {createdCapa.retrievalVerified
-                    ? "\u2713 Created record was retrieved and verified."
-                    : "Draft was created, but retrieval verification was unavailable."}
+                    ? "\u2713 Controlled record was retrieved and verified."
+                    : "The record was created, but retrieval verification was unavailable."}
                 </p>
               </section>
 
@@ -1770,12 +2025,132 @@ export default function CapaIntakeClient({
             <button
               type="button"
               onClick={createAnother}
-              className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               Create another CAPA
             </button>
+
+            {createdCapa.status === "S00" ? (
+              <button
+                type="button"
+                onClick={() =>
+                  beginIntakeSubmission({
+                    capaCaseId:
+                      createdCapa.capaCaseId,
+                    caseNumber:
+                      createdCapa.caseNumber,
+                    recordVersion:
+                      createdCapa.recordVersion,
+                    currentVersionId:
+                      createdCapa.currentVersionId,
+                  })
+                }
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              >
+                Submit Intake
+              </button>
+            ) : null}
           </div>
         </section>
+      ) : null}
+
+      {workflowSubmission !== null ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              cancelIntakeSubmission();
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="submit-intake-heading"
+            className="w-full max-w-xl rounded-3xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl sm:p-7"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+              Human review required
+            </p>
+
+            <h2
+              id="submit-intake-heading"
+              className="mt-2 text-2xl font-semibold"
+            >
+              Submit {workflowSubmission.caseNumber} intake?
+            </h2>
+
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              This controlled workflow action advances the CAPA from S00 — Draft Intake to S10 — Intake Submitted. It creates a new immutable case version and an audit event.
+            </p>
+
+            <dl className="mt-5 grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-zinc-500">Current state</dt>
+                <dd className="mt-1 font-medium text-zinc-100">S00 — Draft Intake</dd>
+              </div>
+              <div>
+                <dt className="text-zinc-500">Record version</dt>
+                <dd className="mt-1 font-mono text-zinc-100">{workflowSubmission.recordVersion}</dd>
+              </div>
+            </dl>
+
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-700 bg-zinc-900/70 p-4">
+              <input
+                type="checkbox"
+                checked={workflowSubmissionConfirmed}
+                disabled={isSubmittingIntake}
+                onChange={(event) =>
+                  setWorkflowSubmissionConfirmed(
+                    event.target.checked,
+                  )
+                }
+                className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-blue-600 focus:ring-blue-500"
+              />
+              <span>
+                <span className="block text-sm font-medium text-zinc-100">
+                  I reviewed the controlled intake record.
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                  I confirm it is ready to advance to Intake Submitted.
+                </span>
+              </span>
+            </label>
+
+            {workflowSubmissionError ? (
+              <div
+                role="alert"
+                className="mt-5 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-200"
+              >
+                {workflowSubmissionError}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={isSubmittingIntake}
+                onClick={cancelIntakeSubmission}
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  isSubmittingIntake ||
+                  !workflowSubmissionConfirmed
+                }
+                onClick={() => void submitIntake()}
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+              >
+                {isSubmittingIntake
+                  ? "Submitting intake…"
+                  : "Confirm and submit intake"}
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
     </div>
   );
