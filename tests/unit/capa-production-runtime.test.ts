@@ -228,6 +228,39 @@ describe(
         });
 
         expect(
+          runtime.agent_activation_service
+            .registry_version,
+        ).toBe(
+          "capa-agent-registry-1.0.0",
+        );
+
+        const activationDecision =
+          runtime.agent_activation_service
+            .evaluate({
+              agent_id: "AG-INTAKE",
+              agent_version:
+                "ag-intake-1.0.0" as never,
+              workflow_state: "S10",
+              operation:
+                "draft_intake_analysis",
+              active_role_ids: [
+                "CAPA_OWNER" as never,
+              ],
+              requested_tool_ids: [
+                "TOOL-CASE-READ",
+              ],
+              output_schema_version:
+                "capa_intake_draft-1.0.0" as never,
+            });
+
+        expect(activationDecision)
+          .toMatchObject({
+            eligible: true,
+            reason_code:
+              "AGENT_ELIGIBLE",
+          });
+
+        expect(
           runtime.prompt_assembly_service
             .configuration,
         ).toMatchObject({

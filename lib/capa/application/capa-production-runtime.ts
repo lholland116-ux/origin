@@ -28,6 +28,10 @@ import {
 } from "../ai/capa-prompt-service";
 
 import {
+  createCapaAgentActivationService,
+} from "../ai/capa-agent-activation-service";
+
+import {
   SupabaseCapaAuthorizationPolicy,
 } from "../authorization/supabase-capa-authorization-policy";
 
@@ -427,6 +431,9 @@ export function createCapaProductionRuntime(
 
     prompt_assembly_service:
       createCapaPromptAssemblyService(),
+
+    agent_activation_service:
+      createCapaAgentActivationService(),
 
     resolve_context:
       contextResolver.resolve,

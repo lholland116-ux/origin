@@ -14,6 +14,10 @@ import type {
   CapaPromptAssemblyService,
 } from "../ai/capa-prompt-service";
 
+import type {
+  CapaAgentActivationService,
+} from "../ai/capa-agent-activation-service";
+
 /**
  * Provider-neutral CAPA application runtime.
  *
@@ -49,4 +53,11 @@ export interface CapaRuntime {
    */
   readonly prompt_assembly_service:
     CapaPromptAssemblyService;
+
+  /**
+   * Fail-closed exact-version agent eligibility boundary. It does not
+   * invoke models or tools and has no workflow mutation authority.
+   */
+  readonly agent_activation_service:
+    CapaAgentActivationService;
 }

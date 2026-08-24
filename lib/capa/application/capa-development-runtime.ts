@@ -35,6 +35,10 @@ import {
 } from "../ai/capa-prompt-service";
 
 import {
+  createCapaAgentActivationService,
+} from "../ai/capa-agent-activation-service";
+
+import {
   getActiveRoleAssignments,
 } from "../../security/tenant-context";
 
@@ -347,6 +351,9 @@ export function createCapaDevelopmentRuntime(
       submitIntakeDependencies,
     prompt_assembly_service:
       createCapaPromptAssemblyService(),
+
+    agent_activation_service:
+      createCapaAgentActivationService(),
   };
 }
 
