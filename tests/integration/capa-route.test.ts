@@ -130,6 +130,8 @@ function runtime(
 
   return {
     database: created.database,
+    knowledge_repository:
+      created.knowledge_repository,
     dependencies: {
       ...created.dependencies,
       authorization_policy:

@@ -63,6 +63,10 @@ import {
   InMemoryCapaDatabase,
 } from "../../database/in-memory/in-memory-capa-database";
 
+import {
+  InMemoryCapaKnowledgeDatabase,
+} from "../../database/in-memory/in-memory-capa-knowledge-database";
+
 import type {
   TransactionId,
 } from "../../database/transactions";
@@ -361,6 +365,13 @@ export function createCapaDevelopmentRuntime(
     },
   };
 
+  const knowledgeRepository =
+    new InMemoryCapaKnowledgeDatabase({
+      generate_transaction_id: () =>
+        randomUUID() as TransactionId,
+      now,
+    });
+
   const agentActivationService =
     createCapaAgentActivationService();
   const toolRegistry =
@@ -391,6 +402,8 @@ export function createCapaDevelopmentRuntime(
 
   return {
     database,
+    knowledge_repository:
+      knowledgeRepository,
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,

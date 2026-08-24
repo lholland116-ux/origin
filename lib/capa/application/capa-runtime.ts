@@ -11,6 +11,10 @@ import type {
 } from "../../database/repositories/capa-repository";
 
 import type {
+  CapaKnowledgeRepository,
+} from "../../database/repositories/capa-knowledge-repository";
+
+import type {
   CapaPromptAssemblyService,
 } from "../ai/capa-prompt-service";
 
@@ -37,6 +41,13 @@ export interface CapaRuntime {
    * Tenant-scoped repository used by read operations.
    */
   readonly database: CapaRepository;
+
+  /**
+   * Governed knowledge persistence boundary. This does not expose source
+   * approval, activation, retrieval ranking or model invocation authority.
+   */
+  readonly knowledge_repository:
+    CapaKnowledgeRepository;
 
   /**
    * Application dependencies used by controlled CAPA commands.

@@ -21,6 +21,10 @@ import {
 } from "../../lib/capa/application/capa-development-runtime";
 
 import {
+  InMemoryCapaKnowledgeDatabase,
+} from "../../lib/database/in-memory/in-memory-capa-knowledge-database";
+
+import {
   resolveDevelopmentCapaRequestContext,
 } from "../../lib/security/supabase-capa-context";
 
@@ -213,6 +217,12 @@ describe(
           authorization_purpose:
             "CAPA_WORKFLOW_TRANSITION",
         });
+
+        expect(
+          runtime.knowledge_repository,
+        ).toBeInstanceOf(
+          InMemoryCapaKnowledgeDatabase,
+        );
 
         expect(
           runtime.tool_gateway.execute,

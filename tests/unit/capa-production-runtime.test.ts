@@ -62,6 +62,10 @@ import {
 } from "../../lib/database/supabase/supabase-capa-repository";
 
 import {
+  SupabaseCapaKnowledgeRepository,
+} from "../../lib/database/supabase/supabase-capa-knowledge-repository";
+
+import {
   SupabaseTransactionManager,
 } from "../../lib/database/supabase/supabase-transactions";
 
@@ -226,6 +230,12 @@ describe(
           authorization_purpose:
             "CAPA_WORKFLOW_TRANSITION",
         });
+
+        expect(
+          runtime.knowledge_repository,
+        ).toBeInstanceOf(
+          SupabaseCapaKnowledgeRepository,
+        );
 
         expect(
           runtime.tool_gateway.execute,

@@ -57,6 +57,10 @@ import {
 } from "../../database/supabase/supabase-capa-repository";
 
 import {
+  SupabaseCapaKnowledgeRepository,
+} from "../../database/supabase/supabase-capa-knowledge-repository";
+
+import {
   SupabaseAuditRepository,
 } from "../../database/supabase/supabase-audit-repository";
 
@@ -437,6 +441,11 @@ export function createCapaProductionRuntime(
     },
   };
 
+  const knowledgeRepository =
+    new SupabaseCapaKnowledgeRepository(
+      sql,
+    );
+
   const agentActivationService =
     createCapaAgentActivationService();
   const toolRegistry =
@@ -468,6 +477,9 @@ export function createCapaProductionRuntime(
   return {
     database:
       capaRepository,
+
+    knowledge_repository:
+      knowledgeRepository,
 
     dependencies,
 
