@@ -228,6 +228,16 @@ describe(
         });
 
         expect(
+          runtime.tool_gateway.execute,
+        ).toEqual(
+          expect.any(Function),
+        );
+        expect(runtime.tool_gateway)
+          .not.toHaveProperty(
+            "transitionWorkflow",
+          );
+
+        expect(
           runtime.agent_activation_service
             .registry_version,
         ).toBe(

@@ -145,6 +145,8 @@ function runtime(
       created.prompt_assembly_service,
     agent_activation_service:
       created.agent_activation_service,
+    tool_gateway:
+      created.tool_gateway,
   };
 }
 

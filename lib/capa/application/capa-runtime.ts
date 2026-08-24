@@ -18,6 +18,10 @@ import type {
   CapaAgentActivationService,
 } from "../ai/capa-agent-activation-service";
 
+import type {
+  CapaToolGateway,
+} from "../ai/capa-tool-gateway";
+
 /**
  * Provider-neutral CAPA application runtime.
  *
@@ -60,4 +64,10 @@ export interface CapaRuntime {
    */
   readonly agent_activation_service:
     CapaAgentActivationService;
+
+  /**
+   * Governed, audited, exact-version CAPA tool execution boundary.
+   * Approved adapters expose no direct workflow mutation authority.
+   */
+  readonly tool_gateway: CapaToolGateway;
 }

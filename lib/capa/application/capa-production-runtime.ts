@@ -32,6 +32,23 @@ import {
 } from "../ai/capa-agent-activation-service";
 
 import {
+  createInitialCapaToolRegistry,
+} from "../ai/capa-tool-registry";
+
+import {
+  createCapaToolGateway,
+} from "../ai/capa-tool-gateway";
+
+import {
+  CapaCaseReadPayloadValidator,
+  createInitialCapaToolAdapterRegistry,
+} from "../ai/capa-case-read-tool";
+
+import {
+  RepositoryCapaToolAuditRecorder,
+} from "../ai/capa-tool-audit-recorder";
+
+import {
   SupabaseCapaAuthorizationPolicy,
 } from "../authorization/supabase-capa-authorization-policy";
 
@@ -420,6 +437,34 @@ export function createCapaProductionRuntime(
     },
   };
 
+  const agentActivationService =
+    createCapaAgentActivationService();
+  const toolRegistry =
+    createInitialCapaToolRegistry();
+  const toolGateway = createCapaToolGateway({
+    tool_registry: toolRegistry,
+    agent_activation_service:
+      agentActivationService,
+    adapter_registry:
+      createInitialCapaToolAdapterRegistry(
+        capaRepository,
+      ),
+    payload_validator:
+      new CapaCaseReadPayloadValidator(),
+    audit_recorder:
+      new RepositoryCapaToolAuditRecorder({
+        transaction_manager:
+          transactionManager,
+        audit_repository: auditRepository,
+        generate_audit_event_id:
+          dependencies.id_generator
+            .generateAuditEventId,
+        now,
+        audit_schema_version:
+          auditSchemaVersion,
+      }),
+  });
+
   return {
     database:
       capaRepository,
@@ -433,7 +478,9 @@ export function createCapaProductionRuntime(
       createCapaPromptAssemblyService(),
 
     agent_activation_service:
-      createCapaAgentActivationService(),
+      agentActivationService,
+
+    tool_gateway: toolGateway,
 
     resolve_context:
       contextResolver.resolve,
