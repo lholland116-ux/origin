@@ -15,6 +15,10 @@ import type {
 } from "../../database/repositories/capa-knowledge-repository";
 
 import type {
+  CapaKnowledgeRetrievalService,
+} from "../knowledge/capa-knowledge-retrieval-service";
+
+import type {
   CapaPromptAssemblyService,
 } from "../ai/capa-prompt-service";
 
@@ -48,6 +52,14 @@ export interface CapaRuntime {
    */
   readonly knowledge_repository:
     CapaKnowledgeRepository;
+
+  /**
+   * Governed retrieval orchestration. This boundary returns authorized,
+   * bounded evidence and exact citation validation only. It cannot invoke a
+   * model, mutate workflow state, approve work or determine compliance.
+   */
+  readonly knowledge_retrieval_service:
+    CapaKnowledgeRetrievalService;
 
   /**
    * Application dependencies used by controlled CAPA commands.

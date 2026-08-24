@@ -61,6 +61,18 @@ import {
 } from "../../database/supabase/supabase-capa-knowledge-repository";
 
 import {
+  SupabaseCapaKnowledgeRetrievalRepository,
+} from "../../database/supabase/supabase-capa-knowledge-retrieval-repository";
+
+import {
+  createCapaKnowledgeRetrievalService,
+} from "../knowledge/capa-knowledge-retrieval-service";
+
+import {
+  createRepositoryBackedCapaKnowledgeCandidateMaterialResolver,
+} from "../knowledge/capa-knowledge-candidate-material-resolver";
+
+import {
   SupabaseAuditRepository,
 } from "../../database/supabase/supabase-audit-repository";
 
@@ -268,6 +280,10 @@ function createIdGenerator(
  * ensuring that case-number allocation, aggregate creation and audit
  * append either commit or roll back together.
  */
+export function currentCapaSystemDate(): Date {
+  return new Date();
+}
+
 export function createCapaProductionRuntime(
   options:
     CapaProductionRuntimeOptions = {},
@@ -446,6 +462,22 @@ export function createCapaProductionRuntime(
       sql,
     );
 
+  const knowledgeRetrievalIndexRepository =
+    new SupabaseCapaKnowledgeRetrievalRepository(
+      sql,
+    );
+
+  const knowledgeRetrievalService =
+    createCapaKnowledgeRetrievalService({
+      index_repository:
+        knowledgeRetrievalIndexRepository,
+      material_resolver:
+        createRepositoryBackedCapaKnowledgeCandidateMaterialResolver(
+          knowledgeRepository,
+        ),
+      now: currentCapaSystemDate,
+    });
+
   const agentActivationService =
     createCapaAgentActivationService();
   const toolRegistry =
@@ -480,6 +512,9 @@ export function createCapaProductionRuntime(
 
     knowledge_repository:
       knowledgeRepository,
+
+    knowledge_retrieval_service:
+      knowledgeRetrievalService,
 
     dependencies,
 

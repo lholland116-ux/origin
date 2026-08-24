@@ -225,6 +225,19 @@ describe(
         );
 
         expect(
+          runtime.knowledge_retrieval_service
+            .retrieve,
+        ).toEqual(
+          expect.any(Function),
+        );
+        expect(
+          runtime.knowledge_retrieval_service
+            .validateCitation,
+        ).toEqual(
+          expect.any(Function),
+        );
+
+        expect(
           runtime.tool_gateway.execute,
         ).toEqual(
           expect.any(Function),

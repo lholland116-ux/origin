@@ -132,6 +132,8 @@ function runtime(
     database: created.database,
     knowledge_repository:
       created.knowledge_repository,
+    knowledge_retrieval_service:
+      created.knowledge_retrieval_service,
     dependencies: {
       ...created.dependencies,
       authorization_policy:

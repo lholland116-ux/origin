@@ -38,6 +38,7 @@ vi.mock(
 import {
   CapaProductionRuntimeConfigurationError,
   createCapaProductionRuntime,
+  currentCapaSystemDate,
   getCapaProductionRuntime,
 } from "../../lib/capa/application/capa-production-runtime";
 
@@ -235,6 +236,19 @@ describe(
           runtime.knowledge_repository,
         ).toBeInstanceOf(
           SupabaseCapaKnowledgeRepository,
+        );
+
+        expect(
+          runtime.knowledge_retrieval_service
+            .retrieve,
+        ).toEqual(
+          expect.any(Function),
+        );
+        expect(
+          runtime.knowledge_retrieval_service
+            .validateCitation,
+        ).toEqual(
+          expect.any(Function),
         );
 
         expect(
@@ -547,6 +561,20 @@ describe(
         ).toBeInstanceOf(
           SupabaseCapaRepository,
         );
+      },
+    );
+
+
+    it(
+      "provides the production retrieval system clock",
+      () => {
+        const before = Date.now();
+        const result = currentCapaSystemDate();
+        const after = Date.now();
+
+        expect(result).toBeInstanceOf(Date);
+        expect(result.getTime()).toBeGreaterThanOrEqual(before);
+        expect(result.getTime()).toBeLessThanOrEqual(after);
       },
     );
   },

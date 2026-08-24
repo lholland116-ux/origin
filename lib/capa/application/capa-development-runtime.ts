@@ -67,6 +67,18 @@ import {
   InMemoryCapaKnowledgeDatabase,
 } from "../../database/in-memory/in-memory-capa-knowledge-database";
 
+import {
+  InMemoryCapaKnowledgeRetrievalRepository,
+} from "../../database/in-memory/in-memory-capa-knowledge-retrieval-repository";
+
+import {
+  createCapaKnowledgeRetrievalService,
+} from "../knowledge/capa-knowledge-retrieval-service";
+
+import {
+  createRepositoryBackedCapaKnowledgeCandidateMaterialResolver,
+} from "../knowledge/capa-knowledge-candidate-material-resolver";
+
 import type {
   TransactionId,
 } from "../../database/transactions";
@@ -372,6 +384,20 @@ export function createCapaDevelopmentRuntime(
       now,
     });
 
+  const knowledgeRetrievalIndexRepository =
+    new InMemoryCapaKnowledgeRetrievalRepository();
+
+  const knowledgeRetrievalService =
+    createCapaKnowledgeRetrievalService({
+      index_repository:
+        knowledgeRetrievalIndexRepository,
+      material_resolver:
+        createRepositoryBackedCapaKnowledgeCandidateMaterialResolver(
+          knowledgeRepository,
+        ),
+      now,
+    });
+
   const agentActivationService =
     createCapaAgentActivationService();
   const toolRegistry =
@@ -404,6 +430,8 @@ export function createCapaDevelopmentRuntime(
     database,
     knowledge_repository:
       knowledgeRepository,
+    knowledge_retrieval_service:
+      knowledgeRetrievalService,
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,
