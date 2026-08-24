@@ -10,6 +10,10 @@ import type {
   CapaRepository,
 } from "../../database/repositories/capa-repository";
 
+import type {
+  CapaPromptAssemblyService,
+} from "../ai/capa-prompt-service";
+
 /**
  * Provider-neutral CAPA application runtime.
  *
@@ -38,4 +42,11 @@ export interface CapaRuntime {
    */
   readonly submit_intake_dependencies:
     SubmitCapaIntakeDependencies;
+
+  /**
+   * Controlled provider-neutral prompt assembly. This boundary does not
+   * invoke a model or possess workflow mutation authority.
+   */
+  readonly prompt_assembly_service:
+    CapaPromptAssemblyService;
 }

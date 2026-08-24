@@ -31,6 +31,10 @@ import type {
 } from "./capa-runtime";
 
 import {
+  createCapaPromptAssemblyService,
+} from "../ai/capa-prompt-service";
+
+import {
   getActiveRoleAssignments,
 } from "../../security/tenant-context";
 
@@ -341,6 +345,8 @@ export function createCapaDevelopmentRuntime(
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,
+    prompt_assembly_service:
+      createCapaPromptAssemblyService(),
   };
 }
 

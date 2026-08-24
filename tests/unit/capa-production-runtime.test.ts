@@ -228,6 +228,18 @@ describe(
         });
 
         expect(
+          runtime.prompt_assembly_service
+            .configuration,
+        ).toMatchObject({
+          agent_id: "AG-INTAKE",
+          agent_version:
+            "ag-intake-1.0.0",
+          allowed_workflow_states: [
+            "S10",
+          ],
+        });
+
+        expect(
           runtime.resolve_context,
         ).toEqual(
           expect.any(Function),

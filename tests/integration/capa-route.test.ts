@@ -141,6 +141,8 @@ function runtime(
       authorization_policy:
         authorizationPolicy,
     },
+    prompt_assembly_service:
+      created.prompt_assembly_service,
   };
 }
 

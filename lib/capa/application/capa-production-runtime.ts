@@ -24,6 +24,10 @@ import type {
 } from "./capa-runtime";
 
 import {
+  createCapaPromptAssemblyService,
+} from "../ai/capa-prompt-service";
+
+import {
   SupabaseCapaAuthorizationPolicy,
 } from "../authorization/supabase-capa-authorization-policy";
 
@@ -420,6 +424,9 @@ export function createCapaProductionRuntime(
 
     submit_intake_dependencies:
       submitIntakeDependencies,
+
+    prompt_assembly_service:
+      createCapaPromptAssemblyService(),
 
     resolve_context:
       contextResolver.resolve,
