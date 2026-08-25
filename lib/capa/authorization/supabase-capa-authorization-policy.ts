@@ -66,6 +66,8 @@ const OPERATION_PERMISSION = {
   edit_case: "capa.case.edit",
   submit_intake: "capa.case.submit",
   submit_for_review: "capa.case.submit",
+  review_knowledge_citation:
+    "capa.knowledge.citation.review",
   approve_scope:
     "capa.review.disposition",
   accept_containment_risk:
@@ -106,6 +108,8 @@ const OPERATION_PURPOSE = {
     "CAPA_WORKFLOW_TRANSITION",
   submit_for_review:
     "CAPA_WORKFLOW_TRANSITION",
+  review_knowledge_citation:
+    "CAPA_KNOWLEDGE_CITATION_REVIEW",
   approve_scope:
     "CAPA_GATE_DECISION",
   accept_containment_risk:

@@ -53,6 +53,10 @@ import {
 } from "../authorization/supabase-capa-authorization-policy";
 
 import {
+  PolicyBackedCapaKnowledgeCitationReviewAuthorizer,
+} from "../authorization/capa-knowledge-citation-review-authorizer";
+
+import {
   SupabaseCapaRepository,
 } from "../../database/supabase/supabase-capa-repository";
 
@@ -65,8 +69,20 @@ import {
 } from "../../database/supabase/supabase-capa-knowledge-retrieval-repository";
 
 import {
+  SupabaseCapaKnowledgeCitationReviewRepository,
+} from "../../database/supabase/supabase-capa-knowledge-citation-review-repository";
+
+import {
+  SupabaseCapaKnowledgeCitationReviewSourceStatusResolver,
+} from "../../database/supabase/supabase-capa-knowledge-citation-review-source-status-resolver";
+
+import {
   createCapaKnowledgeRetrievalService,
 } from "../knowledge/capa-knowledge-retrieval-service";
+
+import {
+  createCapaKnowledgeCitationReviewService,
+} from "../knowledge/capa-knowledge-citation-review-service";
 
 import {
   createRepositoryBackedCapaKnowledgeCandidateMaterialResolver,
@@ -462,6 +478,12 @@ export function createCapaProductionRuntime(
       sql,
     );
 
+  const citationReviewRepository =
+    new SupabaseCapaKnowledgeCitationReviewRepository(sql);
+
+  const citationReviewSourceStatusResolver =
+    new SupabaseCapaKnowledgeCitationReviewSourceStatusResolver(sql);
+
   const knowledgeRetrievalIndexRepository =
     new SupabaseCapaKnowledgeRetrievalRepository(
       sql,
@@ -515,6 +537,22 @@ export function createCapaProductionRuntime(
 
     knowledge_retrieval_service:
       knowledgeRetrievalService,
+
+    create_knowledge_citation_review_service(context) {
+      return createCapaKnowledgeCitationReviewService({
+        repository: citationReviewRepository,
+        transaction_manager: transactionManager,
+        authorizer:
+          new PolicyBackedCapaKnowledgeCitationReviewAuthorizer({
+            authentication: context.authentication,
+            tenant: context.tenant,
+            policy: authorizationPolicy,
+            now,
+          }),
+        source_status_resolver: citationReviewSourceStatusResolver,
+        now,
+      });
+    },
 
     dependencies,
 

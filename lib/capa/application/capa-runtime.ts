@@ -30,6 +30,14 @@ import type {
   CapaToolGateway,
 } from "../ai/capa-tool-gateway";
 
+import type {
+  CapaKnowledgeCitationReviewService,
+} from "../knowledge/capa-knowledge-citation-review-service";
+
+import type {
+  CapaRequestContext,
+} from "../../security/supabase-capa-context";
+
 /**
  * Provider-neutral CAPA application runtime.
  *
@@ -60,6 +68,11 @@ export interface CapaRuntime {
    */
   readonly knowledge_retrieval_service:
     CapaKnowledgeRetrievalService;
+
+  /** Creates one request-scoped, tenant-bound human review service. */
+  readonly create_knowledge_citation_review_service?: (
+    context: CapaRequestContext,
+  ) => CapaKnowledgeCitationReviewService;
 
   /**
    * Application dependencies used by controlled CAPA commands.

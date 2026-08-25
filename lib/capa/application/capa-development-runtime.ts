@@ -72,8 +72,21 @@ import {
 } from "../../database/in-memory/in-memory-capa-knowledge-retrieval-repository";
 
 import {
+  InMemoryCapaKnowledgeCitationReviewRepository,
+} from "../../database/in-memory/in-memory-capa-knowledge-citation-review-repository";
+
+import {
   createCapaKnowledgeRetrievalService,
 } from "../knowledge/capa-knowledge-retrieval-service";
+
+import {
+  createCapaKnowledgeCitationReviewService,
+  type CapaKnowledgeCitationReviewSourceStatusResolver,
+} from "../knowledge/capa-knowledge-citation-review-service";
+
+import {
+  PolicyBackedCapaKnowledgeCitationReviewAuthorizer,
+} from "../authorization/capa-knowledge-citation-review-authorizer";
 
 import {
   createRepositoryBackedCapaKnowledgeCandidateMaterialResolver,
@@ -180,7 +193,9 @@ function developmentAuthorizationPolicy():
         request.operation ===
           "view_case" ||
         request.operation ===
-          "submit_intake";
+          "submit_intake" ||
+        request.operation ===
+          "review_knowledge_citation";
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -384,6 +399,32 @@ export function createCapaDevelopmentRuntime(
       now,
     });
 
+  const citationReviewRepository =
+    new InMemoryCapaKnowledgeCitationReviewRepository();
+
+  const citationReviewSourceStatusResolver:
+    CapaKnowledgeCitationReviewSourceStatusResolver = {
+    async resolveSourceStatus(input) {
+      const organizationVersion =
+        await knowledgeRepository.findSourceVersionById({
+          scope: {
+            visibility: "organization",
+            organization_id: input.organization_id,
+          },
+          source_id: input.source_id,
+          source_version_id: input.source_version_id,
+        });
+      if (organizationVersion !== null) return organizationVersion.status;
+      const globalVersion =
+        await knowledgeRepository.findSourceVersionById({
+          scope: { visibility: "approved_global" },
+          source_id: input.source_id,
+          source_version_id: input.source_version_id,
+        });
+      return globalVersion?.status ?? null;
+    },
+  };
+
   const knowledgeRetrievalIndexRepository =
     new InMemoryCapaKnowledgeRetrievalRepository();
 
@@ -432,6 +473,21 @@ export function createCapaDevelopmentRuntime(
       knowledgeRepository,
     knowledge_retrieval_service:
       knowledgeRetrievalService,
+    create_knowledge_citation_review_service(context) {
+      return createCapaKnowledgeCitationReviewService({
+        repository: citationReviewRepository,
+        transaction_manager: database,
+        authorizer:
+          new PolicyBackedCapaKnowledgeCitationReviewAuthorizer({
+            authentication: context.authentication,
+            tenant: context.tenant,
+            policy: dependencies.authorization_policy,
+            now,
+          }),
+        source_status_resolver: citationReviewSourceStatusResolver,
+        now,
+      });
+    },
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,
