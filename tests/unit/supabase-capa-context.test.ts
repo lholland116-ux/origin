@@ -144,7 +144,7 @@ describe(
                 role_assignment_id:
                   `development-role:${USER_ID}`,
                 role_id:
-                  "CAPA_DEVELOPMENT_USER",
+                  "CAPA_OWNER",
                 scope: "ORGANIZATION",
                 effective_at:
                   "2026-08-12T13:00:00.000Z",

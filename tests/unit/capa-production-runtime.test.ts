@@ -42,6 +42,18 @@ import {
   getCapaProductionRuntime,
 } from "../../lib/capa/application/capa-production-runtime";
 
+import type {
+  CapaIntakeAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-intake-advisory-model-generator";
+
+import type {
+  CapaIntakeAdvisoryRetrievalConfiguration,
+} from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
+
+import {
+  resolveDevelopmentCapaRequestContext,
+} from "../../lib/security/supabase-capa-context";
+
 import {
   SupabaseCapaAuthorizationPolicy,
 } from "../../lib/capa/authorization/supabase-capa-authorization-policy";
@@ -78,6 +90,9 @@ const NOW =
 const SQL =
   vi.fn() as unknown as postgres.Sql;
 
+const USER_ID =
+  "17e5a590-8e2c-4b08-8fb2-5a6c6fe87d23";
+
 type ProductionRuntimeGlobal =
   typeof globalThis & {
     __lvt_capa_production_runtime__?:
@@ -85,6 +100,68 @@ type ProductionRuntimeGlobal =
         typeof createCapaProductionRuntime
       >;
   };
+
+function advisoryRetrievalConfiguration():
+  CapaIntakeAdvisoryRetrievalConfiguration {
+  return {
+    collection_id:
+      "7d974143-2bdc-4178-b529-9571a4f25a4a" as
+        CapaIntakeAdvisoryRetrievalConfiguration[
+          "collection_id"
+        ],
+
+    collection_version_id:
+      "62baea6e-f42c-424d-bdc8-01fce5921fb0" as
+        CapaIntakeAdvisoryRetrievalConfiguration[
+          "collection_version_id"
+        ],
+
+    retrieval_policy_version:
+      "capa-retrieval-policy-1.0.0",
+
+    source_precedence_policy_version:
+      "test-source-precedence-1.0.0",
+
+    query_construction_version:
+      "capa-knowledge-query-1.0.0",
+
+    ranking_policy_version:
+      "test-ranking-policy-1.0.0",
+
+    citation_policy_version:
+      "test-citation-policy-1.0.0",
+  };
+}
+
+function structuredModelClient():
+  CapaIntakeAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The production runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
+function requestContext() {
+  return resolveDevelopmentCapaRequestContext(
+    {
+      verified_user_id:
+        USER_ID,
+
+      authenticated_at:
+        "2026-08-19T11:00:00.000Z",
+
+      expires_at_epoch_seconds:
+        Date.parse(
+          "2026-08-19T13:00:00.000Z",
+        ) / 1_000,
+    },
+
+    NOW,
+  );
+}
 
 function productionGlobal():
   ProductionRuntimeGlobal {
@@ -284,7 +361,7 @@ describe(
                 "TOOL-CASE-READ",
               ],
               output_schema_version:
-                "capa_intake_draft-1.0.0" as never,
+                "capa-intake-draft-output-1.0.0" as never,
             });
 
         expect(activationDecision)
@@ -477,6 +554,113 @@ describe(
         ).toThrow(
           CapaProductionRuntimeConfigurationError,
         );
+      },
+    );
+
+    it(
+      "keeps the production runtime usable without AI configuration but fails advisory creation closed",
+      () => {
+        const runtime =
+          createCapaProductionRuntime({
+            sql:
+              SQL,
+
+            now:
+              () => NOW,
+
+            generate_uuid:
+              uuidGenerator(),
+          });
+
+        expect(
+          runtime.database,
+        ).toBeInstanceOf(
+          SupabaseCapaRepository,
+        );
+
+        expect(
+          () =>
+            runtime
+              .create_intake_advisory_service(
+                requestContext(),
+              ),
+        ).toThrow(
+          CapaProductionRuntimeConfigurationError,
+        );
+      },
+    );
+
+    it(
+      "uses an injected provider-neutral model client without requiring an OpenAI API key",
+      () => {
+        const previousApiKey =
+          process.env.OPENAI_API_KEY;
+
+        delete process.env.OPENAI_API_KEY;
+
+        try {
+          const modelClient =
+            structuredModelClient();
+
+          const runtime =
+            createCapaProductionRuntime({
+              sql:
+                SQL,
+
+              now:
+                () => NOW,
+
+              generate_uuid:
+                uuidGenerator(),
+
+              intake_advisory: {
+                model:
+                  "test-controlled-model",
+
+                retrieval_configuration:
+                  advisoryRetrievalConfiguration(),
+
+                structured_model_client:
+                  modelClient,
+              },
+            });
+
+          const first =
+            runtime
+              .create_intake_advisory_service(
+                requestContext(),
+              );
+
+          const second =
+            runtime
+              .create_intake_advisory_service(
+                requestContext(),
+              );
+
+          expect(first).not.toBe(second);
+
+          expect(first.advise)
+            .toEqual(
+              expect.any(Function),
+            );
+
+          expect(second.advise)
+            .toEqual(
+              expect.any(Function),
+            );
+        } finally {
+          if (
+            previousApiKey ===
+              undefined
+          ) {
+            delete process.env
+              .OPENAI_API_KEY;
+          } else {
+            process.env
+              .OPENAI_API_KEY =
+                previousApiKey;
+          }
+        }
       },
     );
 

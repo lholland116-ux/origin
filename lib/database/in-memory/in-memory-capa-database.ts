@@ -56,6 +56,15 @@ import type {
   TransactionWork,
 } from "../transactions";
 
+import type {
+  CapaIntakeAdvisoryOutputRepository,
+  CapaIntakeAdvisoryOutputSaveResult,
+} from "../../capa/ai/capa-intake-advisory-service";
+
+import type {
+  CapaIntakeAdvisoryResponse,
+} from "../../capa/ai/capa-intake-advisory-contract";
+
 /**
  * Development and integration-test CAPA persistence adapter.
  *
@@ -90,6 +99,22 @@ const MAXIMUM_CASE_LIST_LIMIT =
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+interface InMemoryCapaIntakeAdvisoryOutputRecord {
+  readonly organization_id:
+    OrganizationId;
+  readonly capa_case_id:
+    CapaCaseId;
+  readonly case_version_id:
+    CapaCaseVersionId;
+  readonly record_version: number;
+  readonly request_trace:
+    RequestTrace;
+  readonly response:
+    CapaIntakeAdvisoryResponse;
+  readonly created_at:
+    IsoDateTime;
+}
 
 interface InMemoryState {
   readonly revision: number;
@@ -137,6 +162,24 @@ interface InMemoryState {
       string,
       CapaWorkflowIdempotencyRecord
     >;
+
+  /**
+   * Transaction-owned governed AI advisory outputs.
+   *
+   * Outputs commit and roll back with the same snapshot as the CAPA case.
+   */
+  readonly advisory_outputs:
+    Map<
+      string,
+      InMemoryCapaIntakeAdvisoryOutputRecord
+    >;
+
+  /**
+   * Organization-scoped run identity index mirroring the durable
+   * organization/run uniqueness constraint.
+   */
+  readonly advisory_runs:
+    Map<string, string>;
 }
 
 interface ActiveTransaction {
@@ -428,6 +471,16 @@ function cloneState(
       cloneMap(
         state.workflow_idempotency,
       ),
+
+    advisory_outputs:
+      cloneMap(
+        state.advisory_outputs,
+      ),
+
+    advisory_runs:
+      new Map(
+        state.advisory_runs,
+      ),
   };
 }
 
@@ -458,6 +511,12 @@ function emptyState():
       new Map(),
 
     workflow_idempotency:
+      new Map(),
+
+    advisory_outputs:
+      new Map(),
+
+    advisory_runs:
       new Map(),
   };
 }
@@ -490,7 +549,8 @@ export class InMemoryCapaDatabase
     AuditRepository,
     CapaCaseNumberAllocator,
     CapaCreationIdempotencyRepository,
-    CapaWorkflowIdempotencyRepository
+    CapaWorkflowIdempotencyRepository,
+    CapaIntakeAdvisoryOutputRepository
 {
   private committed_state:
     InMemoryState =
@@ -610,6 +670,136 @@ export class InMemoryCapaDatabase
         transactionId,
       );
     }
+  }
+
+  /**
+   * Persists one governed intake advisory inside an active CAPA transaction.
+   *
+   * The transaction-owned case snapshot is rechecked immediately before the
+   * output is stored. A stale workflow/version returns "case_changed" rather
+   * than persisting an advisory against a superseded CAPA state.
+   */
+  async save(
+    transaction: TransactionContext,
+    input: Parameters<
+      CapaIntakeAdvisoryOutputRepository["save"]
+    >[1],
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult> {
+    const state =
+      this.transactionState(
+        transaction,
+      );
+
+    if (
+      transaction.request_trace
+        .request_id !==
+        input.request_id ||
+      transaction.request_trace
+        .correlation_id !==
+        input.correlation_id
+    ) {
+      throw new Error(
+        "IN_MEMORY_CAPA_ADVISORY_REQUEST_TRACE_MISMATCH",
+      );
+    }
+
+    const response =
+      input.response;
+
+    /*
+     * AI output authority is deliberately narrower than workflow authority.
+     * Development persistence must enforce the same immutable authority
+     * boundary as the durable repository.
+     */
+    if (
+      response.advisory_only !== true ||
+      response.workflow_mutated !== false ||
+      response.human_acceptance_required !==
+        true
+    ) {
+      throw new Error(
+        "IN_MEMORY_CAPA_ADVISORY_AUTHORITY_INVALID",
+      );
+    }
+
+    const capaCase =
+      state.cases.get(
+        recordKey(
+          input.context.organization_id,
+          input.context.capa_case_id,
+        ),
+      );
+
+    if (
+      capaCase === undefined ||
+      capaCase.current_version_id !==
+        input.context.case_version_id ||
+      capaCase.record_version !==
+        input.context.record_version ||
+      capaCase.status !==
+        input.context.workflow_state
+    ) {
+      return "case_changed";
+    }
+
+    const outputKey =
+      recordKey(
+        input.context.organization_id,
+        response.output_id,
+      );
+
+    const runKey =
+      recordKey(
+        input.context.organization_id,
+        response.run_id,
+      );
+
+    if (
+      state.advisory_outputs.has(
+        outputKey,
+      ) ||
+      state.advisory_runs.has(
+        runKey,
+      )
+    ) {
+      throw new InMemoryDuplicateRecordError(
+        "CAPA AI advisory output",
+      );
+    }
+
+    const record:
+      InMemoryCapaIntakeAdvisoryOutputRecord = {
+      organization_id:
+        input.context.organization_id,
+      capa_case_id:
+        input.context.capa_case_id,
+      case_version_id:
+        input.context.case_version_id,
+      record_version:
+        input.context.record_version,
+      request_trace: {
+        request_id:
+          input.request_id,
+        correlation_id:
+          input.correlation_id,
+      },
+      response:
+        cloneValue(response),
+      created_at:
+        transaction.started_at,
+    };
+
+    state.advisory_outputs.set(
+      outputKey,
+      cloneValue(record),
+    );
+
+    state.advisory_runs.set(
+      runKey,
+      response.output_id,
+    );
+
+    return "saved";
   }
 
   async listCases(

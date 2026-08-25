@@ -2,6 +2,8 @@ import {
   randomUUID,
 } from "node:crypto";
 
+import OpenAI from "openai";
+
 import type {
   AuditEventId,
   CapaCaseId,
@@ -29,6 +31,26 @@ import type {
 import type {
   CapaRuntime,
 } from "./capa-runtime";
+
+import {
+  createRequestScopedCapaIntakeAdvisoryService,
+} from "./capa-intake-advisory-runtime-factory";
+
+import type {
+  CapaIntakeAdvisoryStructuredModelClient,
+} from "../ai/capa-intake-advisory-model-generator";
+
+import type {
+  CapaIntakeAdvisoryRetrievalConfiguration,
+} from "../ai/capa-intake-advisory-retrieval-request-factory";
+
+import {
+  createOpenAICapaIntakeAdvisoryStructuredModelClient,
+} from "../ai/openai-capa-intake-advisory-structured-model-client";
+
+import {
+  CAPA_KNOWLEDGE_QUERY_CONSTRUCTION_VERSION,
+} from "../knowledge/capa-knowledge-query-construction";
 
 import {
   createCapaPromptAssemblyService,
@@ -110,7 +132,7 @@ const DEVELOPMENT_POLICY_VERSION =
   "development-policy-1.0.0";
 
 const DEVELOPMENT_ROLE_ID =
-  "CAPA_DEVELOPMENT_USER" as RoleId;
+  "CAPA_OWNER" as RoleId;
 
 /**
  * Development implementation of the provider-neutral CAPA runtime.
@@ -124,10 +146,21 @@ export interface CapaDevelopmentRuntime
     InMemoryCapaDatabase;
 }
 
+export interface CapaDevelopmentIntakeAdvisoryConfiguration {
+  readonly retrieval_configuration:
+    CapaIntakeAdvisoryRetrievalConfiguration;
+
+  readonly structured_model_client:
+    CapaIntakeAdvisoryStructuredModelClient;
+}
+
 export interface CapaDevelopmentRuntimeOptions {
   readonly environment?: string;
   readonly now?: () => Date;
   readonly generate_uuid?: () => string;
+
+  readonly intake_advisory?:
+    CapaDevelopmentIntakeAdvisoryConfiguration;
 }
 
 export class CapaDevelopmentRuntimeDisabledError
@@ -139,6 +172,18 @@ export class CapaDevelopmentRuntimeDisabledError
 
     this.name =
       "CapaDevelopmentRuntimeDisabledError";
+  }
+}
+
+export class CapaDevelopmentRuntimeAdvisoryConfigurationError
+  extends Error {
+  constructor() {
+    super(
+      "The CAPA intake advisory development runtime is not configured.",
+    );
+
+    this.name =
+      "CapaDevelopmentRuntimeAdvisoryConfigurationError";
   }
 }
 
@@ -154,6 +199,43 @@ function assertDevelopmentRuntimeAllowed(
 ): void {
   if (environment === "production") {
     throw new CapaDevelopmentRuntimeDisabledError();
+  }
+}
+
+function developmentAllowReasonCode(
+  operation:
+    CapaPolicyEvaluationRequest["operation"],
+): ControlledCode {
+  switch (operation) {
+    case "create_case":
+      return controlled(
+        "DEVELOPMENT_CREATE_ALLOWED",
+      );
+
+    case "view_case":
+      return controlled(
+        "DEVELOPMENT_VIEW_ALLOWED",
+      );
+
+    case "submit_intake":
+      return controlled(
+        "DEVELOPMENT_SUBMIT_INTAKE_ALLOWED",
+      );
+
+    case "review_knowledge_citation":
+      return controlled(
+        "DEVELOPMENT_KNOWLEDGE_CITATION_REVIEW_ALLOWED",
+      );
+
+    case "request_ai_intake_advisory":
+      return controlled(
+        "DEVELOPMENT_AI_INTAKE_ADVISORY_ALLOWED",
+      );
+
+    default:
+      return controlled(
+        "DEVELOPMENT_POLICY_DENIED",
+      );
   }
 }
 
@@ -195,7 +277,9 @@ function developmentAuthorizationPolicy():
         request.operation ===
           "submit_intake" ||
         request.operation ===
-          "review_knowledge_citation";
+          "review_knowledge_citation" ||
+        request.operation ===
+          "request_ai_intake_advisory";
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -223,14 +307,8 @@ function developmentAuthorizationPolicy():
       return {
         decision: "allow",
         reason_code:
-          controlled(
-            request.operation ===
-              "create_case"
-              ? "DEVELOPMENT_CREATE_ALLOWED"
-              : request.operation ===
-                  "view_case"
-                ? "DEVELOPMENT_VIEW_ALLOWED"
-                : "DEVELOPMENT_SUBMIT_INTAKE_ALLOWED",
+          developmentAllowReasonCode(
+            request.operation,
           ),
         policy_version:
           DEVELOPMENT_POLICY_VERSION,
@@ -275,6 +353,114 @@ function createIdGenerator(
   };
 }
 
+function developmentIntakeAdvisoryConfigurationFromEnvironment():
+  CapaDevelopmentIntakeAdvisoryConfiguration | undefined {
+  const enabled =
+    process.env.CAPA_INTAKE_ADVISORY_DEVELOPMENT_ENABLED;
+
+  if (
+    enabled === undefined ||
+    enabled.trim().length === 0 ||
+    enabled === "false"
+  ) {
+    return undefined;
+  }
+
+  if (enabled !== "true") {
+    throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  }
+
+  const values = {
+    model:
+      process.env.CAPA_INTAKE_ADVISORY_MODEL,
+
+    collection_id:
+      process.env.CAPA_INTAKE_ADVISORY_COLLECTION_ID,
+
+    collection_version_id:
+      process.env
+        .CAPA_INTAKE_ADVISORY_COLLECTION_VERSION_ID,
+
+    retrieval_policy_version:
+      process.env
+        .CAPA_INTAKE_ADVISORY_RETRIEVAL_POLICY_VERSION,
+
+    source_precedence_policy_version:
+      process.env
+        .CAPA_INTAKE_ADVISORY_SOURCE_PRECEDENCE_POLICY_VERSION,
+
+    ranking_policy_version:
+      process.env
+        .CAPA_INTAKE_ADVISORY_RANKING_POLICY_VERSION,
+
+    citation_policy_version:
+      process.env
+        .CAPA_INTAKE_ADVISORY_CITATION_POLICY_VERSION,
+
+    openai_api_key:
+      process.env.OPENAI_API_KEY,
+  };
+
+  if (
+    Object.values(values).some(
+      (value) =>
+        typeof value !== "string" ||
+        value.trim().length === 0,
+    )
+  ) {
+    throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  }
+
+  const openaiClient =
+    new OpenAI({
+      apiKey:
+        values.openai_api_key!,
+    });
+
+  const structuredModelClient =
+    createOpenAICapaIntakeAdvisoryStructuredModelClient(
+      openaiClient,
+      {
+        model:
+          values.model!,
+      },
+    );
+
+  return {
+    retrieval_configuration: {
+      collection_id:
+        values.collection_id! as
+          CapaIntakeAdvisoryRetrievalConfiguration[
+            "collection_id"
+          ],
+
+      collection_version_id:
+        values.collection_version_id! as
+          CapaIntakeAdvisoryRetrievalConfiguration[
+            "collection_version_id"
+          ],
+
+      retrieval_policy_version:
+        values.retrieval_policy_version!,
+
+      source_precedence_policy_version:
+        values.source_precedence_policy_version!,
+
+      query_construction_version:
+        CAPA_KNOWLEDGE_QUERY_CONSTRUCTION_VERSION,
+
+      ranking_policy_version:
+        values.ranking_policy_version!,
+
+      citation_policy_version:
+        values.citation_policy_version!,
+    },
+
+    structured_model_client:
+      structuredModelClient,
+  };
+}
+
 /**
  * Creates an isolated development runtime.
  *
@@ -298,6 +484,9 @@ export function createCapaDevelopmentRuntime(
   const generateUuid =
     options.generate_uuid ??
     randomUUID;
+
+  const intakeAdvisoryConfiguration =
+    options.intake_advisory;
 
   const database =
     new InMemoryCapaDatabase({
@@ -439,6 +628,9 @@ export function createCapaDevelopmentRuntime(
       now,
     });
 
+  const promptAssemblyService =
+    createCapaPromptAssemblyService();
+
   const agentActivationService =
     createCapaAgentActivationService();
   const toolRegistry =
@@ -488,11 +680,64 @@ export function createCapaDevelopmentRuntime(
         now,
       });
     },
+
+    create_intake_advisory_service(context) {
+      if (
+        intakeAdvisoryConfiguration ===
+          undefined
+      ) {
+        throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+      }
+
+      return createRequestScopedCapaIntakeAdvisoryService({
+        request_context:
+          context,
+
+        capa_repository:
+          database,
+
+        transaction_manager:
+          database,
+
+        output_repository:
+          database,
+
+        authorization_policy:
+          dependencies.authorization_policy,
+
+        agent_activation_service:
+          agentActivationService,
+
+        knowledge_retrieval_service:
+          knowledgeRetrievalService,
+
+        prompt_assembly_service:
+          promptAssemblyService,
+
+        structured_model_client:
+          intakeAdvisoryConfiguration
+            .structured_model_client,
+
+        retrieval_configuration:
+          intakeAdvisoryConfiguration
+            .retrieval_configuration,
+
+        intake_section_type:
+          dependencies.configuration
+            .intake_section_type,
+
+        now,
+
+        generate_uuid:
+          generateUuid,
+      });
+    },
+
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,
     prompt_assembly_service:
-      createCapaPromptAssemblyService(),
+      promptAssemblyService,
 
     agent_activation_service:
       agentActivationService,
@@ -534,6 +779,9 @@ export function getCapaDevelopmentRuntime():
       createCapaDevelopmentRuntime({
         environment:
           process.env.NODE_ENV,
+
+        intake_advisory:
+          developmentIntakeAdvisoryConfigurationFromEnvironment(),
       });
   }
 

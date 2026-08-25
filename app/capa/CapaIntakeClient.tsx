@@ -154,6 +154,98 @@ interface ParsedCapaListPage {
     CapaListCursor;
 }
 
+interface CapaIntakeAdvisoryProposal {
+  readonly problem_statement_draft:
+    string;
+
+  readonly scope_dimensions:
+    readonly string[];
+
+  readonly missing_dimensions:
+    readonly string[];
+
+  readonly containment_risk_questions:
+    readonly string[];
+
+  readonly investigation_questions:
+    readonly string[];
+}
+
+interface CapaIntakeAdvisoryCitation {
+  readonly citation_id:
+    string;
+
+  readonly rendered_label:
+    string;
+
+  readonly source_title:
+    string;
+
+  readonly precise_locator:
+    string;
+
+  readonly relationship:
+    string;
+
+  readonly validation_status:
+    string;
+}
+
+interface CapaIntakeAdvisoryResult {
+  readonly run_id:
+    string;
+
+  readonly output_id:
+    string;
+
+  readonly output_schema_version:
+    string;
+
+  readonly status:
+    string;
+
+  readonly proposal:
+    CapaIntakeAdvisoryProposal | null;
+
+  readonly citations:
+    readonly CapaIntakeAdvisoryCitation[];
+
+  readonly assumptions:
+    readonly string[];
+
+  readonly missing_information:
+    readonly string[];
+
+  readonly conflicts_and_alternatives:
+    readonly string[];
+
+  readonly uncertainty_and_limitations:
+    readonly string[];
+
+  readonly human_action_required:
+    readonly string[];
+
+  readonly warnings:
+    readonly string[];
+
+  readonly advisory_only:
+    true;
+
+  readonly workflow_mutated:
+    false;
+
+  readonly human_acceptance_required:
+    true;
+}
+
+interface CapaIntakeAdvisoryApiResponse {
+  readonly advisory?:
+    CapaIntakeAdvisoryResult;
+
+  readonly correlation_id?:
+    string;
+}
+
 const EMPTY_FIELDS: IntakeFields = {
   initiatingEvent: "",
   sourceType: "",
@@ -173,6 +265,252 @@ async function readJson(
   } catch {
     return null;
   }
+}
+
+function stringArray(
+  value: unknown,
+): readonly string[] | null {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (item) =>
+        typeof item !== "string",
+    )
+  ) {
+    return null;
+  }
+
+  return value;
+}
+
+function parsedAdvisoryProposal(
+  value: unknown,
+): CapaIntakeAdvisoryProposal | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const scopeDimensions =
+    stringArray(
+      value.scope_dimensions,
+    );
+
+  const missingDimensions =
+    stringArray(
+      value.missing_dimensions,
+    );
+
+  const containmentQuestions =
+    stringArray(
+      value.containment_risk_questions,
+    );
+
+  const investigationQuestions =
+    stringArray(
+      value.investigation_questions,
+    );
+
+  if (
+    typeof value.problem_statement_draft !==
+      "string" ||
+    scopeDimensions === null ||
+    missingDimensions === null ||
+    containmentQuestions === null ||
+    investigationQuestions === null
+  ) {
+    return undefined;
+  }
+
+  return {
+    problem_statement_draft:
+      value.problem_statement_draft,
+
+    scope_dimensions:
+      scopeDimensions,
+
+    missing_dimensions:
+      missingDimensions,
+
+    containment_risk_questions:
+      containmentQuestions,
+
+    investigation_questions:
+      investigationQuestions,
+  };
+}
+
+function parsedAdvisoryCitations(
+  value: unknown,
+): readonly CapaIntakeAdvisoryCitation[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const citations:
+    CapaIntakeAdvisoryCitation[] = [];
+
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.citation_id !== "string" ||
+      typeof item.rendered_label !== "string" ||
+      typeof item.source_title !== "string" ||
+      typeof item.precise_locator !== "string" ||
+      typeof item.relationship !== "string" ||
+      typeof item.validation_status !== "string"
+    ) {
+      return null;
+    }
+
+    citations.push({
+      citation_id:
+        item.citation_id,
+
+      rendered_label:
+        item.rendered_label,
+
+      source_title:
+        item.source_title,
+
+      precise_locator:
+        item.precise_locator,
+
+      relationship:
+        item.relationship,
+
+      validation_status:
+        item.validation_status,
+    });
+  }
+
+  return citations;
+}
+
+function parsedIntakeAdvisoryResponse(
+  value: unknown,
+): CapaIntakeAdvisoryResult | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const response =
+    value as CapaIntakeAdvisoryApiResponse;
+
+  const advisory =
+    response.advisory;
+
+  if (!isRecord(advisory)) {
+    return null;
+  }
+
+  const proposal =
+    parsedAdvisoryProposal(
+      advisory.proposal,
+    );
+
+  const citations =
+    parsedAdvisoryCitations(
+      advisory.citations,
+    );
+
+  const assumptions =
+    stringArray(
+      advisory.assumptions,
+    );
+
+  const missingInformation =
+    stringArray(
+      advisory.missing_information,
+    );
+
+  const conflicts =
+    stringArray(
+      advisory.conflicts_and_alternatives,
+    );
+
+  const uncertainty =
+    stringArray(
+      advisory.uncertainty_and_limitations,
+    );
+
+  const humanAction =
+    stringArray(
+      advisory.human_action_required,
+    );
+
+  const warnings =
+    stringArray(
+      advisory.warnings,
+    );
+
+  if (
+    typeof advisory.run_id !== "string" ||
+    typeof advisory.output_id !== "string" ||
+    typeof advisory.output_schema_version !==
+      "string" ||
+    typeof advisory.status !== "string" ||
+    proposal === undefined ||
+    citations === null ||
+    assumptions === null ||
+    missingInformation === null ||
+    conflicts === null ||
+    uncertainty === null ||
+    humanAction === null ||
+    warnings === null ||
+    advisory.advisory_only !== true ||
+    advisory.workflow_mutated !== false ||
+    advisory.human_acceptance_required !==
+      true
+  ) {
+    return null;
+  }
+
+  return {
+    run_id:
+      advisory.run_id,
+
+    output_id:
+      advisory.output_id,
+
+    output_schema_version:
+      advisory.output_schema_version,
+
+    status:
+      advisory.status,
+
+    proposal,
+
+    citations,
+
+    assumptions,
+
+    missing_information:
+      missingInformation,
+
+    conflicts_and_alternatives:
+      conflicts,
+
+    uncertainty_and_limitations:
+      uncertainty,
+
+    human_action_required:
+      humanAction,
+
+    warnings,
+
+    advisory_only:
+      true,
+
+    workflow_mutated:
+      false,
+
+    human_acceptance_required:
+      true,
+  };
 }
 
 function isRecord(
@@ -502,6 +840,23 @@ export default function CapaIntakeClient({
     useState<string | null>(null);
 
   const [workflowSubmissionMessage, setWorkflowSubmissionMessage] =
+    useState<string | null>(null);
+
+  const [advisoryFocus, setAdvisoryFocus] =
+    useState("");
+
+  const [intakeAdvisory, setIntakeAdvisory] =
+    useState<CapaIntakeAdvisoryResult | null>(
+      null,
+    );
+
+  const [isRequestingAdvisory, setIsRequestingAdvisory] =
+    useState(false);
+
+  const [advisoryError, setAdvisoryError] =
+    useState<string | null>(null);
+
+  const [advisoryCorrelationId, setAdvisoryCorrelationId] =
     useState<string | null>(null);
 
   const loadCases = useCallback(
@@ -1101,11 +1456,125 @@ export default function CapaIntakeClient({
     }
   }
 
+  async function requestIntakeAdvisory() {
+    if (
+      createdCapa === null ||
+      createdCapa.status !== "S10" ||
+      isRequestingAdvisory
+    ) {
+      return;
+    }
+
+    setIsRequestingAdvisory(true);
+    setAdvisoryError(null);
+
+    const correlationId =
+      createTraceId();
+
+    try {
+      const response =
+        await fetch(
+          "/api/capa/" +
+            encodeURIComponent(
+              createdCapa.capaCaseId,
+            ) +
+            "/intake-advisory",
+          {
+            method:
+              "POST",
+
+            headers: {
+              "content-type":
+                "application/json",
+
+              "x-request-id":
+                createTraceId(),
+
+              "x-correlation-id":
+                correlationId,
+            },
+
+            body:
+              JSON.stringify(
+                advisoryFocus.trim()
+                  ? {
+                      focus:
+                        advisoryFocus,
+                    }
+                  : {},
+              ),
+          },
+        );
+
+      const body =
+        await readJson(
+          response,
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          apiErrorMessage(
+            body,
+            "The governed CAPA intake analysis could not be generated.",
+          ),
+        );
+      }
+
+      const advisory =
+        parsedIntakeAdvisoryResponse(
+          body,
+        );
+
+      if (advisory === null) {
+        throw new Error(
+          "The server returned an incomplete CAPA intake advisory response.",
+        );
+      }
+
+      const responseEnvelope =
+        isRecord(body)
+          ? body
+          : null;
+
+      setIntakeAdvisory(
+        advisory,
+      );
+
+      setAdvisoryCorrelationId(
+        responseEnvelope !== null &&
+        typeof responseEnvelope.correlation_id ===
+          "string"
+          ? responseEnvelope.correlation_id
+          : correlationId,
+      );
+    } catch (error) {
+      setIntakeAdvisory(null);
+
+      setAdvisoryCorrelationId(
+        null,
+      );
+
+      setAdvisoryError(
+        error instanceof Error
+          ? error.message
+          : "The governed CAPA intake analysis could not be generated.",
+      );
+    } finally {
+      setIsRequestingAdvisory(false);
+    }
+  }
+
   function createAnother() {
     setFields(EMPTY_FIELDS);
     setErrors({});
     setSubmitError(null);
     setCreatedCapa(null);
+
+    setAdvisoryFocus("");
+    setIntakeAdvisory(null);
+    setAdvisoryError(null);
+    setAdvisoryCorrelationId(null);
+
     setStep("edit");
 
     window.scrollTo({
@@ -2014,6 +2483,297 @@ export default function CapaIntakeClient({
             </aside>
           </div>
 
+          {createdCapa.status === "S10" ? (
+            <section
+              aria-labelledby="ai-intake-analysis-heading"
+              className="rounded-3xl border border-violet-400/25 bg-violet-500/10 p-5 sm:p-7"
+            >
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">
+                    Governed AI assistance
+                  </p>
+
+                  <h3
+                    id="ai-intake-analysis-heading"
+                    className="mt-2 text-xl font-semibold text-white"
+                  >
+                    AI Intake Analysis
+                  </h3>
+
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
+                    Generate an advisory-only analysis of the submitted intake.
+                    The AI cannot approve the CAPA, change workflow state, or
+                    overwrite the controlled record.
+                  </p>
+                </div>
+
+                <span className="inline-flex w-fit rounded-full border border-amber-300/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200">
+                  Human review required
+                </span>
+              </div>
+
+              <label className="mt-5 block">
+                <span className="text-sm font-medium text-zinc-200">
+                  Optional analysis focus
+                </span>
+
+                <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                  You may ask the governed agent to emphasize a specific issue.
+                  This does not change its authorization, model, evidence, or
+                  workflow controls.
+                </span>
+
+                <textarea
+                  value={advisoryFocus}
+                  onChange={(event) =>
+                    setAdvisoryFocus(
+                      event.target.value,
+                    )
+                  }
+                  maxLength={1_000}
+                  rows={3}
+                  disabled={isRequestingAdvisory}
+                  placeholder="Example: Focus on containment risk and missing investigation information."
+                  className="mt-3 w-full rounded-2xl border border-zinc-700 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400 focus:ring-2 focus:ring-violet-500/30 disabled:cursor-wait disabled:opacity-60"
+                />
+              </label>
+
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={isRequestingAdvisory}
+                  onClick={() =>
+                    void requestIntakeAdvisory()
+                  }
+                  className="inline-flex min-h-11 items-center justify-center rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-400 disabled:cursor-wait disabled:bg-violet-900 disabled:text-violet-300"
+                >
+                  {isRequestingAdvisory
+                    ? "Generating governed analysis..."
+                    : intakeAdvisory === null
+                      ? "Generate AI Intake Analysis"
+                      : "Regenerate AI Intake Analysis"}
+                </button>
+
+                <p className="text-xs text-zinc-500">
+                  Advisory output is stored separately from the human CAPA
+                  record.
+                </p>
+              </div>
+
+              {advisoryError !== null ? (
+                <div
+                  role="alert"
+                  className="mt-5 rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm leading-6 text-red-200"
+                >
+                  {advisoryError}
+                </div>
+              ) : null}
+
+              {intakeAdvisory !== null ? (
+                <div className="mt-6 space-y-5">
+                  <div className="rounded-2xl border border-amber-400/25 bg-amber-500/10 p-4">
+                    <p className="text-sm font-semibold text-amber-200">
+                      Advisory only — human acceptance required
+                    </p>
+
+                    <p className="mt-1 text-xs leading-5 text-amber-100/75">
+                      This output has not changed the CAPA workflow or controlled
+                      intake record.
+                    </p>
+                  </div>
+
+                  {intakeAdvisory.proposal !== null ? (
+                    <section className="rounded-2xl border border-zinc-800 bg-zinc-950/55 p-5">
+                      <h4 className="font-semibold text-zinc-100">
+                        Proposed problem statement
+                      </h4>
+
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
+                        {
+                          intakeAdvisory.proposal
+                            .problem_statement_draft
+                        }
+                      </p>
+                    </section>
+                  ) : null}
+
+                  {intakeAdvisory.proposal !== null ? (
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <AdvisoryList
+                        title="Scope dimensions"
+                        items={
+                          intakeAdvisory.proposal
+                            .scope_dimensions
+                        }
+                      />
+
+                      <AdvisoryList
+                        title="Missing dimensions"
+                        items={
+                          intakeAdvisory.proposal
+                            .missing_dimensions
+                        }
+                      />
+
+                      <AdvisoryList
+                        title="Containment-risk questions"
+                        items={
+                          intakeAdvisory.proposal
+                            .containment_risk_questions
+                        }
+                      />
+
+                      <AdvisoryList
+                        title="Investigation questions"
+                        items={
+                          intakeAdvisory.proposal
+                            .investigation_questions
+                        }
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <AdvisoryList
+                      title="Missing information"
+                      items={
+                        intakeAdvisory
+                          .missing_information
+                      }
+                    />
+
+                    <AdvisoryList
+                      title="Assumptions"
+                      items={
+                        intakeAdvisory
+                          .assumptions
+                      }
+                    />
+
+                    <AdvisoryList
+                      title="Conflicts and alternatives"
+                      items={
+                        intakeAdvisory
+                          .conflicts_and_alternatives
+                      }
+                    />
+
+                    <AdvisoryList
+                      title="Uncertainty and limitations"
+                      items={
+                        intakeAdvisory
+                          .uncertainty_and_limitations
+                      }
+                    />
+
+                    <AdvisoryList
+                      title="Human action required"
+                      items={
+                        intakeAdvisory
+                          .human_action_required
+                      }
+                    />
+
+                    <AdvisoryList
+                      title="Warnings"
+                      items={
+                        intakeAdvisory
+                          .warnings
+                      }
+                    />
+                  </div>
+
+                  <section className="rounded-2xl border border-zinc-800 bg-zinc-950/55 p-5">
+                    <h4 className="font-semibold text-zinc-100">
+                      Supporting citations
+                    </h4>
+
+                    {intakeAdvisory.citations.length === 0 ? (
+                      <p className="mt-3 text-sm text-zinc-500">
+                        No supporting citations were returned.
+                      </p>
+                    ) : (
+                      <div className="mt-4 space-y-3">
+                        {intakeAdvisory.citations.map(
+                          (citation) => (
+                            <article
+                              key={
+                                citation.citation_id
+                              }
+                              className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4"
+                            >
+                              <p className="text-sm font-medium text-blue-200">
+                                {
+                                  citation.rendered_label
+                                }
+                              </p>
+
+                              <p className="mt-1 text-sm text-zinc-300">
+                                {
+                                  citation.source_title
+                                }
+                              </p>
+
+                              <p className="mt-2 text-xs leading-5 text-zinc-500">
+                                {
+                                  citation.precise_locator
+                                }
+                              </p>
+
+                              <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                                <span>
+                                  {
+                                    citation.relationship
+                                  }
+                                </span>
+
+                                <span aria-hidden="true">
+                                  •
+                                </span>
+
+                                <span>
+                                  {
+                                    citation.validation_status
+                                  }
+                                </span>
+                              </div>
+                            </article>
+                          ),
+                        )}
+                      </div>
+                    )}
+                  </section>
+
+                  <div className="grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/55 p-4 text-xs text-zinc-500 sm:grid-cols-2">
+                    <div>
+                      <span className="block text-zinc-600">
+                        AI run ID
+                      </span>
+
+                      <span className="mt-1 block break-all font-mono text-zinc-400">
+                        {intakeAdvisory.run_id}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="block text-zinc-600">
+                        Correlation ID
+                      </span>
+
+                      <span className="mt-1 block break-all font-mono text-zinc-400">
+                        {
+                          advisoryCorrelationId ??
+                          "Unavailable"
+                        }
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <Link
               href="/chat"
@@ -2205,5 +2965,51 @@ function IdentifierItem({
         {value}
       </dd>
     </div>
+  );
+}
+interface AdvisoryListProps {
+  readonly title: string;
+  readonly items: readonly string[];
+}
+
+function AdvisoryList({
+  title,
+  items,
+}: AdvisoryListProps) {
+  return (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-950/55 p-5">
+      <h4 className="font-semibold text-zinc-100">
+        {title}
+      </h4>
+
+      {items.length === 0 ? (
+        <p className="mt-3 text-sm text-zinc-500">
+          None identified.
+        </p>
+      ) : (
+        <ul className="mt-3 space-y-2 text-sm leading-6 text-zinc-300">
+          {items.map(
+            (
+              item,
+              index,
+            ) => (
+              <li
+                key={`${title}-${index}`}
+                className="flex gap-3"
+              >
+                <span
+                  aria-hidden="true"
+                  className="mt-[0.55rem] h-1.5 w-1.5 shrink-0 rounded-full bg-violet-300"
+                />
+
+                <span>
+                  {item}
+                </span>
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+    </section>
   );
 }

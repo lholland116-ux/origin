@@ -15,10 +15,19 @@ import type {
 } from "../../lib/capa/authorization/capa-policy";
 
 import {
+  CapaDevelopmentRuntimeAdvisoryConfigurationError,
   CapaDevelopmentRuntimeDisabledError,
   createCapaDevelopmentRuntime,
   getCapaDevelopmentRuntime,
 } from "../../lib/capa/application/capa-development-runtime";
+
+import type {
+  CapaIntakeAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-intake-advisory-model-generator";
+
+import type {
+  CapaIntakeAdvisoryRetrievalConfiguration,
+} from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
 import {
   InMemoryCapaKnowledgeDatabase,
@@ -59,6 +68,49 @@ function createUuidGenerator():
       12,
       "0",
     )}`;
+  };
+}
+
+function advisoryRetrievalConfiguration():
+  CapaIntakeAdvisoryRetrievalConfiguration {
+  return {
+    collection_id:
+      "7d974143-2bdc-4178-b529-9571a4f25a4a" as
+        CapaIntakeAdvisoryRetrievalConfiguration[
+          "collection_id"
+        ],
+
+    collection_version_id:
+      "62baea6e-f42c-424d-bdc8-01fce5921fb0" as
+        CapaIntakeAdvisoryRetrievalConfiguration[
+          "collection_version_id"
+        ],
+
+    retrieval_policy_version:
+      "capa-retrieval-policy-1.0.0",
+
+    source_precedence_policy_version:
+      "test-source-precedence-1.0.0",
+
+    query_construction_version:
+      "capa-knowledge-query-1.0.0",
+
+    ranking_policy_version:
+      "test-ranking-policy-1.0.0",
+
+    citation_policy_version:
+      "test-citation-policy-1.0.0",
+  };
+}
+
+function structuredModelClient():
+  CapaIntakeAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The runtime-composition test must not invoke the model.",
+      );
+    },
   };
 }
 
@@ -270,7 +322,7 @@ describe(
                 "TOOL-CASE-READ",
               ],
               output_schema_version:
-                "capa_intake_draft-1.0.0" as never,
+                "capa-intake-draft-output-1.0.0" as never,
             });
 
         expect(activationDecision)
@@ -550,6 +602,85 @@ describe(
     );
 
     it(
+      "fails closed when the development advisory runtime is not configured",
+      () => {
+        const runtime =
+          createCapaDevelopmentRuntime({
+            environment:
+              "test",
+
+            now:
+              () => NOW,
+
+            generate_uuid:
+              createUuidGenerator(),
+          });
+
+        expect(
+          () =>
+            runtime
+              .create_intake_advisory_service(
+                developmentContext(),
+              ),
+        ).toThrow(
+          CapaDevelopmentRuntimeAdvisoryConfigurationError,
+        );
+      },
+    );
+
+    it(
+      "creates a fresh request-scoped advisory service from injected development configuration",
+      () => {
+        const modelClient =
+          structuredModelClient();
+
+        const runtime =
+          createCapaDevelopmentRuntime({
+            environment:
+              "test",
+
+            now:
+              () => NOW,
+
+            generate_uuid:
+              createUuidGenerator(),
+
+            intake_advisory: {
+              retrieval_configuration:
+                advisoryRetrievalConfiguration(),
+
+              structured_model_client:
+                modelClient,
+            },
+          });
+
+        const first =
+          runtime
+            .create_intake_advisory_service(
+              developmentContext(),
+            );
+
+        const second =
+          runtime
+            .create_intake_advisory_service(
+              developmentContext(),
+            );
+
+        expect(first).not.toBe(second);
+
+        expect(first.advise)
+          .toEqual(
+            expect.any(Function),
+          );
+
+        expect(second.advise)
+          .toEqual(
+            expect.any(Function),
+          );
+      },
+    );
+
+    it(
       "blocks creation in a production environment",
       () => {
         expect(
@@ -739,6 +870,60 @@ describe(
             "development-policy-1.0.0",
           evaluated_at:
             "2026-08-12T14:00:00.000Z",
+          relied_on_role_assignment_ids: [
+            `development-role:${USER_ID}`,
+          ],
+        });
+      },
+    );
+
+    it(
+      "allows governed development AI intake advisory requests",
+      async () => {
+        const request =
+          policyRequest();
+
+        const decision =
+          await createPolicy()
+            .evaluate({
+              ...request,
+
+              operation:
+                "request_ai_intake_advisory",
+
+              resource: {
+                organization_id:
+                  request.tenant
+                    .organization_id,
+
+                resource_type:
+                  controlled(
+                    "CAPA_CASE",
+                  ),
+
+                workflow_state:
+                  "S10",
+              },
+
+              purpose:
+                controlled(
+                  "CAPA_AI_INTAKE_ADVISORY",
+                ),
+            });
+
+        expect(decision).toEqual({
+          decision:
+            "allow",
+
+          reason_code:
+            "DEVELOPMENT_AI_INTAKE_ADVISORY_ALLOWED",
+
+          policy_version:
+            "development-policy-1.0.0",
+
+          evaluated_at:
+            "2026-08-12T14:00:00.000Z",
+
           relied_on_role_assignment_ids: [
             `development-role:${USER_ID}`,
           ],

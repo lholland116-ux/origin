@@ -35,6 +35,11 @@ import type {
 } from "../knowledge/capa-knowledge-citation-review-service";
 
 import type {
+  CapaIntakeAdvisoryService,
+} from "../ai/capa-intake-advisory-service";
+
+
+import type {
   CapaRequestContext,
 } from "../../security/supabase-capa-context";
 
@@ -73,6 +78,21 @@ export interface CapaRuntime {
   readonly create_knowledge_citation_review_service?: (
     context: CapaRequestContext,
   ) => CapaKnowledgeCitationReviewService;
+
+  /**
+   * Creates one request-scoped governed CAPA intake advisory service.
+   *
+   * Authentication, tenant membership and authorization authority remain
+   * bound to the trusted server-resolved request context. The runtime must
+   * not expose a process-shared advisory service carrying request-specific
+   * authority.
+   *
+   * Optional only during M5G 5C runtime composition. Production and
+   * development implementations are wired in 5C.5.
+   */
+  readonly create_intake_advisory_service: (
+    context: CapaRequestContext,
+  ) => CapaIntakeAdvisoryService;
 
   /**
    * Application dependencies used by controlled CAPA commands.

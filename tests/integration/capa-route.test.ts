@@ -129,28 +129,20 @@ function runtime(
   };
 
   return {
-    database: created.database,
-    knowledge_repository:
-      created.knowledge_repository,
-    knowledge_retrieval_service:
-      created.knowledge_retrieval_service,
+    ...created,
+
     dependencies: {
       ...created.dependencies,
       authorization_policy:
         authorizationPolicy,
     },
+
     submit_intake_dependencies: {
       ...created
         .submit_intake_dependencies,
       authorization_policy:
         authorizationPolicy,
     },
-    prompt_assembly_service:
-      created.prompt_assembly_service,
-    agent_activation_service:
-      created.agent_activation_service,
-    tool_gateway:
-      created.tool_gateway,
   };
 }
 

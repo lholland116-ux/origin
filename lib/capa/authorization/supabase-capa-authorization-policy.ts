@@ -68,6 +68,8 @@ const OPERATION_PERMISSION = {
   submit_for_review: "capa.case.submit",
   review_knowledge_citation:
     "capa.knowledge.citation.review",
+  request_ai_intake_advisory:
+    "capa.ai.intake.advise",
   approve_scope:
     "capa.review.disposition",
   accept_containment_risk:
@@ -110,6 +112,8 @@ const OPERATION_PURPOSE = {
     "CAPA_WORKFLOW_TRANSITION",
   review_knowledge_citation:
     "CAPA_KNOWLEDGE_CITATION_REVIEW",
+  request_ai_intake_advisory:
+    "CAPA_AI_INTAKE_ADVISORY",
   approve_scope:
     "CAPA_GATE_DECISION",
   accept_containment_risk:
@@ -170,6 +174,11 @@ const REQUIRED_WORKFLOW_STATES:
   > = {
     edit_case:
       ACTIVE_EDIT_STATES,
+
+    request_ai_intake_advisory:
+      new Set([
+        CAPA_STATE.TRIAGE_AND_SCOPE,
+      ]),
 
     submit_intake:
       new Set([

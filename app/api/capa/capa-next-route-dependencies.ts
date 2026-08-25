@@ -10,6 +10,10 @@ import type {
   CapaCitationReviewApiDependencies,
 } from "@/lib/capa/api/capa-citation-review-route-handler";
 
+import type {
+  CapaIntakeAdvisoryApiDependencies,
+} from "@/lib/capa/api/capa-intake-advisory-route-handler";
+
 import {
   selectCapaRuntime,
 } from "@/lib/capa/application/capa-runtime-selection";
@@ -117,6 +121,24 @@ export function createCapaCitationReviewApiDependencies():
         throw new Error("CAPA citation review is not configured.");
       }
       return factory(context);
+    },
+  };
+}
+
+export function createCapaIntakeAdvisoryApiDependencies():
+  CapaIntakeAdvisoryApiDependencies {
+  const dependencies =
+    createCapaApiHandlerDependencies();
+
+  return {
+    ...dependencies,
+
+    create_advisory_service(context) {
+      return dependencies
+        .get_runtime()
+        .create_intake_advisory_service(
+          context,
+        );
     },
   };
 }

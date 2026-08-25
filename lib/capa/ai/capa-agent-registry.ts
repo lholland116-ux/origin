@@ -76,6 +76,7 @@ interface DefinitionInput {
   readonly roles: readonly RoleId[];
   readonly tools: readonly CapaAgentToolId[];
   readonly output_type: string;
+  readonly output_schema_version?: string;
   readonly output_fields:
     readonly CapaAgentOutputField[];
 }
@@ -106,7 +107,10 @@ function definition(
     output_type:
       input.output_type as never,
     output_schema_version:
-      `${input.output_type.toLowerCase()}-1.0.0` as never,
+      (
+        input.output_schema_version ??
+        `${input.output_type.toLowerCase()}-1.0.0`
+      ) as never,
     required_output_fields:
       Object.freeze([
         ...input.output_fields,
@@ -165,6 +169,8 @@ const DEFINITIONS = [
       "TOOL-FEEDBACK",
     ],
     output_type: "CAPA_INTAKE_DRAFT",
+    output_schema_version:
+      "capa-intake-draft-output-1.0.0",
     output_fields: [
       "problem_statement_draft",
       "scope_dimensions",

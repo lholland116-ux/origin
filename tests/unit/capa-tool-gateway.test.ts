@@ -89,7 +89,7 @@ function request():
         "TOOL-CASE-READ",
       ],
       output_schema_version:
-        "capa_intake_draft-1.0.0" as never,
+        "capa-intake-draft-output-1.0.0" as never,
     },
   };
 }
