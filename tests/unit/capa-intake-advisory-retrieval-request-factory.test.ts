@@ -173,18 +173,18 @@ describe(
     );
 
     it(
-      "uses advisory focus only as query material",
+      "keeps retrieval on the controlled intake query when focus is present",
       () => {
         const result =
           factory().create(
             invocation(
-              "Clarify containment risk.",
+              "Analyze this CAPA intake and identify missing information, containment and risk questions, investigation questions, assumptions, and uncertainties that should be reviewed by the CAPA owner.",
             ),
           );
 
         expect(result.query.user_query)
           .toBe(
-            "Clarify containment risk.",
+            "CAPA intake advisory",
           );
       },
     );

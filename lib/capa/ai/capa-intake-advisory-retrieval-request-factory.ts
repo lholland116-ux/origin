@@ -130,9 +130,6 @@ export class ControlledCapaIntakeAdvisoryRetrievalRequestFactory
     const configuration =
       this.dependencies.configuration;
 
-    const focus =
-      input.request.focus?.trim();
-
     return Object.freeze({
       request: Object.freeze({
         retrieval_run_id:
@@ -227,10 +224,17 @@ export class ControlledCapaIntakeAdvisoryRetrievalRequestFactory
       }),
 
       query: Object.freeze({
+        /*
+         * Retrieval remains anchored to the controlled intake task.
+         *
+         * Optional human focus is preserved for controlled prompt
+         * generation, but it must not become an unrestricted lexical
+         * retrieval expression. Long focus text can otherwise suppress
+         * relevant governed evidence because PostgreSQL lexical matching
+         * treats the normalized terms conjunctively.
+         */
         user_query:
-          focus && focus.length > 0
-            ? focus
-            : "CAPA intake advisory",
+          "CAPA intake advisory",
 
         task_type:
           "CAPA_SUPPORT" as never,
