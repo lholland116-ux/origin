@@ -1,0 +1,142 @@
+LVTChat CAPA Intake Analysis Reference
+Version 1.0.0
+
+Purpose
+
+This controlled internal reference provides a structured method for assisting
+human users during CAPA intake analysis. It is an advisory methodology and is
+not a regulation, regulatory interpretation, governing procedure, or substitute
+for qualified human judgment.
+
+1. Problem Statement Development
+
+A CAPA intake problem statement should describe the observed condition
+objectively and distinguish known facts from assumptions.
+
+Where available, identify:
+
+- what was observed;
+- the expected requirement, specification, procedure, or condition;
+- the actual observed result;
+- the magnitude or nature of the difference;
+- when and where the condition was detected;
+- affected product, process, equipment, material, software, supplier, or
+  documentation;
+- known quantity or extent;
+- the source of the information.
+
+Do not state a root cause during intake unless it has already been established
+through controlled evidence.
+
+2. Scope Assessment
+
+Evaluate whether sufficient information exists to determine the apparent
+extent of the issue.
+
+Relevant scope dimensions may include:
+
+- product, device, component, material, or part number;
+- revision or configuration;
+- lot, batch, serial number, or production quantity;
+- manufacturing or processing dates;
+- production line, machine, tool, fixture, cavity, equipment, or software;
+- site or location;
+- supplier or subcontractor involvement;
+- operator, shift, or work group;
+- related complaints, nonconformances, deviations, service records, or CAPAs;
+- released, distributed, in-process, quarantined, or remaining inventory.
+
+Unknown scope dimensions should be identified explicitly rather than inferred.
+
+3. Missing Information
+
+Identify information that is necessary to clarify the problem or establish
+its extent but is not yet available.
+
+Examples include:
+
+- affected product or part identity;
+- applicable specification or requirement;
+- batch or lot identifiers;
+- total quantity potentially affected;
+- location and disposition of affected units;
+- measurement or inspection method;
+- measurement-system validity;
+- equipment or process identifiers;
+- relevant dates and time period;
+- related records or prior occurrences.
+
+Missing information should be presented as a gap requiring human follow-up.
+
+4. Containment and Immediate Risk Questions
+
+CAPA intake analysis may identify questions that should be considered by
+qualified personnel when determining immediate containment or escalation.
+
+Examples include:
+
+- Could additional affected product remain in process, inventory, distribution,
+  or the field?
+- Should potentially affected material be identified, segregated, or placed on
+  hold pending human evaluation?
+- Could the condition affect safety, performance, quality, compliance, or
+  intended use?
+- Is there evidence of recurrence or broader process impact?
+- Are additional inspections, record reviews, or other immediate checks needed
+  to understand extent?
+- Does the issue require escalation under applicable complaint, nonconformance,
+  risk-management, regulatory-reporting, or field-action procedures?
+
+The AI does not make containment, reportability, disposition, recall, or safety
+decisions.
+
+5. Investigation Questions
+
+Intake analysis may propose questions to guide subsequent human investigation.
+
+Examples include:
+
+- What evidence demonstrates when the condition first occurred?
+- Is the condition isolated or systemic?
+- What changed before the event occurred?
+- Were applicable procedures and specifications current and followed?
+- Were equipment, tools, software, materials, and measurement systems in an
+  appropriate controlled state?
+- Are similar events present in historical quality data?
+- What evidence is needed to distinguish possible causal explanations?
+- Which records, personnel, samples, equipment, or process data should be
+  reviewed?
+
+Investigation questions are advisory prompts and are not conclusions about root
+cause.
+
+6. Facts, Assumptions, and Uncertainty
+
+The analysis shall distinguish:
+
+- facts supported by the controlled CAPA record or governed evidence;
+- assumptions used only to frame possible questions;
+- missing information;
+- conflicting information;
+- uncertainty and limitations.
+
+Unsupported assumptions shall not be presented as established facts.
+
+7. Human Authority
+
+All AI intake-analysis output is advisory only.
+
+The AI shall not:
+
+- approve a CAPA;
+- determine final scope;
+- make final risk or containment decisions;
+- determine regulatory reportability;
+- determine root cause;
+- modify controlled CAPA data;
+- transition workflow state;
+- replace required human review or approval.
+
+Qualified human users remain responsible for evaluating the evidence,
+accepting, revising, or rejecting AI suggestions, and making all controlled
+quality and regulatory decisions.

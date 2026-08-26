@@ -4,9 +4,9 @@
 
 SET check_function_bodies = false;
 
-DROP EXTENSION pg_net;
+DROP EXTENSION IF EXISTS pg_net;
 
-DROP EXTENSION pg_graphql;
+DROP EXTENSION IF EXISTS pg_graphql;
 
 CREATE ROLE supabase_privileged_role;
 

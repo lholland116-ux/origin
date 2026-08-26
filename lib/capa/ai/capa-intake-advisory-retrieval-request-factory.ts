@@ -53,6 +53,17 @@ export interface CapaIntakeAdvisoryRetrievalRequestFactoryDependencies {
   readonly create_query_id?: () => string;
 }
 
+/**
+ * PostgreSQL ts_rank_cd lexical scores are not probability scores.
+ *
+ * Keep the governed intake threshold low enough to admit relevant
+ * organization-controlled evidence while still excluding zero-score
+ * lexical matches. Production calibration on 2026-08-26 demonstrated
+ * valid intake-reference matches in approximately the 0.02-0.22 range.
+ */
+const CAPA_INTAKE_ADVISORY_MINIMUM_RELEVANCE_SCORE =
+  0.01;
+
 function controlledTimestamp(
   value: Date,
 ): IsoDateTime {
@@ -208,7 +219,8 @@ export class ControlledCapaIntakeAdvisoryRetrievalRequestFactory
           maximum_results: 8,
           maximum_total_characters:
             20_000,
-          minimum_relevance_score: 0.4,
+          minimum_relevance_score:
+            CAPA_INTAKE_ADVISORY_MINIMUM_RELEVANCE_SCORE,
         }),
 
         requested_at: timestamp,

@@ -73,10 +73,12 @@ create table public.capa_ai_outputs (
   constraint capa_ai_outputs_case_version_fk
     foreign key (
       organization_id,
+      capa_case_id,
       case_version_id
     )
     references public.capa_case_versions (
       organization_id,
+      capa_case_id,
       case_version_id
     )
 );

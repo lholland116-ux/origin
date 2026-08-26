@@ -1,0 +1,140 @@
+{
+  "schema_version": "lvtchat-capa-knowledge-bootstrap-manifest-1.0.0",
+  "source": {
+    "path": "docs/knowledge/lvtchat-capa-intake-analysis-reference-v1.0.0.txt",
+    "byte_length": 4872,
+    "sha256": "ffc4cc513a9318482ed573129e687e5264bd010488d064aedccaba57b91e9dcd",
+    "source_id": "145ff42d-4073-55cd-b8e0-e06973e3a088",
+    "source_version_id": "929cbc36-1127-58b7-ae6f-4fb5dd1bb088",
+    "artifact_id": "5a2becd1-383c-539c-ae7d-738c67ecb0a9",
+    "derivative_id": "e43e1b39-b318-5499-ab27-cfc6b2000697",
+    "collection_id": "df3e4e8a-65f8-5903-a690-940ae7b70ffd",
+    "collection_version_id": "5de217e9-baf3-5110-8319-ba616f29c71d"
+  },
+  "governance": {
+    "visibility": "organization",
+    "organization_id": "f57db69b-8506-4ed2-a1f6-505b34e190a7",
+    "source_type": "SRC-06",
+    "approval_actor_type": "human",
+    "approval_actor_id": "0bc46f03-3dfa-4222-88cb-4dc914b0be43",
+    "approval_basis": "Human-approved controlled internal CAPA intake reference."
+  },
+  "segmentation": {
+    "version": "lvtchat-capa-intake-segmentation-1.0.0",
+    "passage_count": 8,
+    "passages": [
+      {
+        "sequence_number": 1,
+        "slug": "purpose",
+        "heading": "Purpose",
+        "passage_id": "ed33d211-fc3d-5e50-a893-5f787e17de72",
+        "character_length": 274,
+        "byte_length": 274,
+        "sha256": "6274108806adda13ad93413f8332c238b50f95f3ed6f1184aef72349dee411fb",
+        "locator": {
+          "kind": "section",
+          "label": "Purpose"
+        },
+        "content": "Purpose\n\nThis controlled internal reference provides a structured method for assisting\nhuman users during CAPA intake analysis. It is an advisory methodology and is\nnot a regulation, regulatory interpretation, governing procedure, or substitute\nfor qualified human judgment."
+      },
+      {
+        "sequence_number": 2,
+        "slug": "problem-statement-development",
+        "heading": "1. Problem Statement Development",
+        "passage_id": "757612b1-9829-5e0b-ad2d-04c6d53ad589",
+        "character_length": 660,
+        "byte_length": 660,
+        "sha256": "9978d25229391162733d4f1753c10f55d00bfffd42f154013f8e62c84dd741d2",
+        "locator": {
+          "kind": "section",
+          "label": "1. Problem Statement Development"
+        },
+        "content": "1. Problem Statement Development\n\nA CAPA intake problem statement should describe the observed condition\nobjectively and distinguish known facts from assumptions.\n\nWhere available, identify:\n\n- what was observed;\n- the expected requirement, specification, procedure, or condition;\n- the actual observed result;\n- the magnitude or nature of the difference;\n- when and where the condition was detected;\n- affected product, process, equipment, material, software, supplier, or\n  documentation;\n- known quantity or extent;\n- the source of the information.\n\nDo not state a root cause during intake unless it has already been established\nthrough controlled evidence."
+      },
+      {
+        "sequence_number": 3,
+        "slug": "scope-assessment",
+        "heading": "2. Scope Assessment",
+        "passage_id": "52f36e4c-fd08-5c29-9279-bcef3c7c7a95",
+        "character_length": 732,
+        "byte_length": 732,
+        "sha256": "6f4fbc5eade84b1f322448c94c643036faeda9d0ff8b48d2d9f1489dd0de53d0",
+        "locator": {
+          "kind": "section",
+          "label": "2. Scope Assessment"
+        },
+        "content": "2. Scope Assessment\n\nEvaluate whether sufficient information exists to determine the apparent\nextent of the issue.\n\nRelevant scope dimensions may include:\n\n- product, device, component, material, or part number;\n- revision or configuration;\n- lot, batch, serial number, or production quantity;\n- manufacturing or processing dates;\n- production line, machine, tool, fixture, cavity, equipment, or software;\n- site or location;\n- supplier or subcontractor involvement;\n- operator, shift, or work group;\n- related complaints, nonconformances, deviations, service records, or CAPAs;\n- released, distributed, in-process, quarantined, or remaining inventory.\n\nUnknown scope dimensions should be identified explicitly rather than inferred."
+      },
+      {
+        "sequence_number": 4,
+        "slug": "missing-information",
+        "heading": "3. Missing Information",
+        "passage_id": "9d665144-f310-5acd-842f-16fc1f205c50",
+        "character_length": 602,
+        "byte_length": 602,
+        "sha256": "f721af10c2a47b0adfe2b3cd388138d533f5f658bca810d59e724c0e14bf8f8f",
+        "locator": {
+          "kind": "section",
+          "label": "3. Missing Information"
+        },
+        "content": "3. Missing Information\n\nIdentify information that is necessary to clarify the problem or establish\nits extent but is not yet available.\n\nExamples include:\n\n- affected product or part identity;\n- applicable specification or requirement;\n- batch or lot identifiers;\n- total quantity potentially affected;\n- location and disposition of affected units;\n- measurement or inspection method;\n- measurement-system validity;\n- equipment or process identifiers;\n- relevant dates and time period;\n- related records or prior occurrences.\n\nMissing information should be presented as a gap requiring human follow-up."
+      },
+      {
+        "sequence_number": 5,
+        "slug": "containment-and-immediate-risk-questions",
+        "heading": "4. Containment and Immediate Risk Questions",
+        "passage_id": "60617dc5-4a96-5e47-8c78-3d54cde7423f",
+        "character_length": 914,
+        "byte_length": 914,
+        "sha256": "faba0f98250da503bd2030bbc2a95e784b9933d0859991f4ebe898d6bcdfbe1c",
+        "locator": {
+          "kind": "section",
+          "label": "4. Containment and Immediate Risk Questions"
+        },
+        "content": "4. Containment and Immediate Risk Questions\n\nCAPA intake analysis may identify questions that should be considered by\nqualified personnel when determining immediate containment or escalation.\n\nExamples include:\n\n- Could additional affected product remain in process, inventory, distribution,\n  or the field?\n- Should potentially affected material be identified, segregated, or placed on\n  hold pending human evaluation?\n- Could the condition affect safety, performance, quality, compliance, or\n  intended use?\n- Is there evidence of recurrence or broader process impact?\n- Are additional inspections, record reviews, or other immediate checks needed\n  to understand extent?\n- Does the issue require escalation under applicable complaint, nonconformance,\n  risk-management, regulatory-reporting, or field-action procedures?\n\nThe AI does not make containment, reportability, disposition, recall, or safety\ndecisions."
+      },
+      {
+        "sequence_number": 6,
+        "slug": "investigation-questions",
+        "heading": "5. Investigation Questions",
+        "passage_id": "aa2cbda4-ee4f-5854-8a01-e3fdbb21cb2a",
+        "character_length": 753,
+        "byte_length": 753,
+        "sha256": "50df46bdb0540e05e2874dc6bb0e0f7715219725e132d12b3defb582e3029c47",
+        "locator": {
+          "kind": "section",
+          "label": "5. Investigation Questions"
+        },
+        "content": "5. Investigation Questions\n\nIntake analysis may propose questions to guide subsequent human investigation.\n\nExamples include:\n\n- What evidence demonstrates when the condition first occurred?\n- Is the condition isolated or systemic?\n- What changed before the event occurred?\n- Were applicable procedures and specifications current and followed?\n- Were equipment, tools, software, materials, and measurement systems in an\n  appropriate controlled state?\n- Are similar events present in historical quality data?\n- What evidence is needed to distinguish possible causal explanations?\n- Which records, personnel, samples, equipment, or process data should be\n  reviewed?\n\nInvestigation questions are advisory prompts and are not conclusions about root\ncause."
+      },
+      {
+        "sequence_number": 7,
+        "slug": "facts-assumptions-and-uncertainty",
+        "heading": "6. Facts, Assumptions, and Uncertainty",
+        "passage_id": "decb8316-b320-5742-9699-2bed5397c8d1",
+        "character_length": 346,
+        "byte_length": 346,
+        "sha256": "9826b3074245ffddaef0fa30effdd41a9bb03f085b7f46f87707ef26d1e04fc9",
+        "locator": {
+          "kind": "section",
+          "label": "6. Facts, Assumptions, and Uncertainty"
+        },
+        "content": "6. Facts, Assumptions, and Uncertainty\n\nThe analysis shall distinguish:\n\n- facts supported by the controlled CAPA record or governed evidence;\n- assumptions used only to frame possible questions;\n- missing information;\n- conflicting information;\n- uncertainty and limitations.\n\nUnsupported assumptions shall not be presented as established facts."
+      },
+      {
+        "sequence_number": 8,
+        "slug": "human-authority",
+        "heading": "7. Human Authority",
+        "passage_id": "b0206fb0-9019-5c36-a081-754dabf74731",
+        "character_length": 522,
+        "byte_length": 522,
+        "sha256": "16581a8cd7490647f0e0864075b764a788be776870bf4cfe7ed0094f1d0453e8",
+        "locator": {
+          "kind": "section",
+          "label": "7. Human Authority"
+        },
+        "content": "7. Human Authority\n\nAll AI intake-analysis output is advisory only.\n\nThe AI shall not:\n\n- approve a CAPA;\n- determine final scope;\n- make final risk or containment decisions;\n- determine regulatory reportability;\n- determine root cause;\n- modify controlled CAPA data;\n- transition workflow state;\n- replace required human review or approval.\n\nQualified human users remain responsible for evaluating the evidence,\naccepting, revising, or rejecting AI suggestions, and making all controlled\nquality and regulatory decisions."
+      }
+    ]
+  }
+}

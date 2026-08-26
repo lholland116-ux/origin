@@ -142,7 +142,7 @@ describe(
               maximum_total_characters:
                 20_000,
               minimum_relevance_score:
-                0.4,
+                0.01,
             },
             requested_at:
               "2026-08-25T14:00:00.000Z",
