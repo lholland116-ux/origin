@@ -29,6 +29,8 @@ alter table public.capa_ai_outputs
     capa_case_id,
     case_version_id,
     record_version,
+    request_id,
+    correlation_id,
     status
   );
 
@@ -92,6 +94,8 @@ create table public.capa_ai_generation_traces (
       capa_case_id,
       case_version_id,
       record_version,
+      request_id,
+      correlation_id,
       output_status
     )
     references public.capa_ai_outputs (
@@ -101,6 +105,8 @@ create table public.capa_ai_generation_traces (
       capa_case_id,
       case_version_id,
       record_version,
+      request_id,
+      correlation_id,
       status
     )
     on update restrict

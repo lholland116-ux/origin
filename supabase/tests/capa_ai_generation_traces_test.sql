@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap
 with schema extensions;
 
-select plan(27);
+select plan(29);
 
 -- ---------------------------------------------------------------------------
 -- Table shape
@@ -240,6 +240,67 @@ select ok(
       and contype = 'u'
   ),
   'AI outputs expose the exact composite generation-trace reference'
+);
+
+select is(
+  (
+    select string_agg(
+      attribute.attname,
+      ','
+      order by position.i
+    )
+    from pg_catalog.pg_constraint as constraint_record
+    cross join lateral
+      generate_subscripts(
+        constraint_record.conkey,
+        1
+      ) as position(i)
+    join pg_catalog.pg_attribute as attribute
+      on attribute.attrelid =
+        constraint_record.conrelid
+      and attribute.attnum =
+        constraint_record.conkey[position.i]
+    where constraint_record.conrelid =
+      'public.capa_ai_outputs'::regclass
+      and constraint_record.conname =
+        'capa_ai_outputs_generation_trace_unique'
+  ),
+  'organization_id,output_id,run_id,capa_case_id,case_version_id,record_version,request_id,correlation_id,status',
+  'AI output generation-trace identity includes request and correlation provenance'
+);
+
+select is(
+  (
+    select string_agg(
+      child_attribute.attname ||
+      '->' ||
+      parent_attribute.attname,
+      ','
+      order by position.i
+    )
+    from pg_catalog.pg_constraint as constraint_record
+    cross join lateral
+      generate_subscripts(
+        constraint_record.conkey,
+        1
+      ) as position(i)
+    join pg_catalog.pg_attribute as child_attribute
+      on child_attribute.attrelid =
+        constraint_record.conrelid
+      and child_attribute.attnum =
+        constraint_record.conkey[position.i]
+    join pg_catalog.pg_attribute as parent_attribute
+      on parent_attribute.attrelid =
+        constraint_record.confrelid
+      and parent_attribute.attnum =
+        constraint_record.confkey[position.i]
+    where constraint_record.conrelid =
+      'public.capa_ai_generation_traces'::regclass
+      and constraint_record.conname =
+        'capa_ai_generation_traces_output_fk'
+  ),
+  'organization_id->organization_id,output_id->output_id,run_id->run_id,capa_case_id->capa_case_id,case_version_id->case_version_id,record_version->record_version,request_id->request_id,correlation_id->correlation_id,output_status->status',
+  'generation trace FK binds exact output, run, snapshot, request and correlation identity'
 );
 
 -- ---------------------------------------------------------------------------
