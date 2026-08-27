@@ -1,0 +1,575 @@
+LVTChat CAPA
+Milestone 5 / M5G
+Final Production End-to-End Validation Evidence
+
+Date: 2026-08-27
+Environment: Production
+Application: https://lvtchat.com
+Validation record: CAPA-000008
+
+======================================================================
+1. PURPOSE
+======================================================================
+
+This evidence documents the final production end-to-end validation of
+Milestone 5 / M5G for the governed LVTChat CAPA AI workflow.
+
+The validation demonstrates that:
+
+1. A human can create and submit a CAPA intake.
+2. Submission performs the controlled workflow transition from Draft
+   Intake to Intake Submitted.
+3. A governed AI intake advisory can be generated only against the
+   submitted CAPA record.
+4. The AI output remains advisory and proposed pending human review.
+5. A human reviewer can explicitly ACCEPT, REJECT, or REVISE the AI
+   advisory with no disposition preselected.
+6. Human disposition of the AI advisory is not CAPA approval.
+7. AI generation does not advance CAPA workflow or create a new
+   controlled CAPA record version.
+8. Human disposition of the AI advisory does not advance CAPA workflow
+   or create a new controlled CAPA record version.
+9. Existing CAPA records can be reopened after navigation, reload, or
+   reauthentication using an authoritative tenant-scoped retrieval.
+
+======================================================================
+2. PRODUCTION SOFTWARE BASELINE
+======================================================================
+
+Final production branch:
+main
+
+Production commit at final validation:
+ef4d328 Allow reopening existing CAPA cases
+
+Relevant production commits:
+
+ef4d328 Allow reopening existing CAPA cases
+15db0b0 Bypass auth callback in Supabase middleware
+0e12ccc Resolve CAPA AI review role mapping
+02cc5a9 Add CAPA AI generation trace production evidence
+7bce7c8 Require durable CAPA AI generation trace
+
+At final validation:
+
+HEAD -> main
+origin/main -> ef4d328
+
+The unrelated untracked file below was not included in this validation
+change set:
+
+public/logos/lvtchat-linkedin-logo.png
+
+======================================================================
+3. SRS-TBD-006 ROLE-MAPPING DECISION
+======================================================================
+
+Approved role-mapping decision:
+
+1. CAPA_REVIEWER receives capa.ai.intake.review.
+
+2. CAPA_REVIEWER may ACCEPT, REJECT, or REVISE a governed AI intake
+   advisory.
+
+3. AI advisory disposition is human review only. It is not CAPA
+   approval and does not advance workflow or modify the controlled CAPA
+   record.
+
+4. CAPA_REVIEWER retains:
+   - capa.case.view
+   - capa.review.disposition
+   - capa.knowledge.citation.review
+   - capa.ai.intake.review
+
+5. CAPA_REVIEWER does not receive capa.gate.approve.
+
+6. CAPA_APPROVER retains formal approval authority but does not
+   automatically receive AI intake-review authority.
+
+7. CAPA owner, contributor, auditor, and organization administrator do
+   not receive AI intake-review authority solely by virtue of those
+   roles.
+
+8. No CASE_OWNER prohibition applies specifically to AI advisory
+   review.
+
+9. Existing segregation-of-duties controls remain applicable to
+   approver-level gate decisions.
+
+Role-mapping implementation commit:
+0e12ccc Resolve CAPA AI review role mapping
+
+Production migration:
+20260827173000_resolve_capa_ai_intake_review_role_mapping.sql
+
+Qualified migration SHA-256:
+0a402da2d4e3b055ad7fa0ef6a8e206331328690dbb5eb01822a2ef518ade107
+
+Production verification established:
+
+CAPA_REVIEWER role version: 1.2.0
+Reviewer active: true
+Reviewer human authority: true
+Reviewer permission profile exact: true
+Reviewer gate approval excluded: true
+Total roles with capa.ai.intake.review: 1
+Reviewer roles with capa.ai.intake.review: 1
+Non-reviewer roles with capa.ai.intake.review: 0
+Active CAPA_REVIEWER assignments: 1
+
+======================================================================
+4. EXISTING-CASE REOPENING DEFECT AND CORRECTION
+======================================================================
+
+During final production validation, CAPA-000008 could be listed after
+reauthentication but could not be reopened.
+
+The CAPA workspace rows were display-only. The detailed CAPA view and
+AI Intake Analysis controls required the client-side createdCapa state,
+which was populated only when a CAPA had been created during the active
+component lifecycle.
+
+The defect therefore prevented an existing submitted CAPA from being
+rehydrated after navigation, reload, logout, or login.
+
+Correction:
+
+An explicit "Open case" action was added to each CAPA workspace row.
+
+The action:
+
+- performs an authorized GET /api/capa?id=<case-id>;
+- relies on the existing tenant-scoped server retrieval;
+- validates that the returned CAPA identity matches the selected case;
+- validates the authoritative current record and intake section;
+- reconstructs the controlled client-side CAPA summary only after
+  successful validation;
+- fails closed for incomplete or mismatched server responses;
+- clears prior AI advisory and human-review state before changing
+  cases;
+- does not weaken CAPA authorization;
+- does not trust the lightweight workspace-list representation as the
+  authoritative controlled record.
+
+Implementation commit:
+ef4d328 Allow reopening existing CAPA cases
+
+Local focused parser qualification:
+
+Test files: 1 passed
+Tests: 11 passed
+Status: PASS
+
+CAPA browser/client regression qualification:
+
+Test files: 5 passed
+Tests: 59 passed
+Status: PASS
+
+TypeScript:
+npx tsc --noEmit
+Status: PASS
+
+Production build:
+Next.js 16.3.0
+npm run build
+Status: PASS
+
+git diff --check:
+Status: PASS
+
+The existing Next.js middleware-to-proxy deprecation warning remained
+informational and was not part of this CAPA correction.
+
+======================================================================
+5. AUTHENTICATION INCIDENT DURING VALIDATION
+======================================================================
+
+During the final validation sequence, Google OAuth successfully returned
+to:
+
+/auth/callback
+
+but the callback request encountered a Vercel
+MIDDLEWARE_INVOCATION_TIMEOUT.
+
+The routing middleware was performing a remote Supabase auth.getUser()
+call for /auth/callback before the callback route could exchange the
+OAuth authorization code.
+
+Correction:
+
+/auth/callback was excluded from the middleware matcher while normal
+Supabase session-refresh behavior remained enabled for the rest of the
+application.
+
+Implementation commit:
+15db0b0 Bypass auth callback in Supabase middleware
+
+Production verification confirmed successful Google authentication and
+normal navigation to the authenticated LVTChat interface.
+
+The middleware-to-proxy migration was intentionally not combined with
+this incident correction.
+
+======================================================================
+6. FINAL PRODUCTION E2E RECORD
+======================================================================
+
+Controlled validation record:
+
+Case number:
+CAPA-000008
+
+CAPA case identifier:
+46ba2abc-24e2-4295-856e-7c8cf8af2dc1
+
+Initial state:
+S00 - Draft Intake
+
+Initial record version:
+1
+
+Initial creation date:
+2026-08-27
+
+Initial creation correlation ID:
+bd32c4e1-a1a1-414a-abe2-bbf39bb39a71
+
+The draft creation previously demonstrated atomic creation of the CAPA
+record and corresponding audit evidence with successful post-create
+retrieval.
+
+======================================================================
+7. HUMAN INTAKE SUBMISSION
+======================================================================
+
+CAPA-000008 was submitted exactly once through the controlled Submit
+Intake action.
+
+Observed production result:
+
+Before submission:
+State: S00 - Draft Intake
+Record version: 1
+
+After submission:
+State: S10 - Intake Submitted
+Record version: 2
+
+Production success message:
+
+"CAPA-000008 intake was submitted successfully."
+
+Observed updated timestamp:
+2026-08-27 14:29 local production-validation time
+
+Result:
+PASS
+
+This demonstrated the intended controlled workflow transition:
+
+S00 Draft Intake
+        ->
+S10 Intake Submitted
+
+and controlled record-version increment:
+
+1
+ ->
+2
+
+======================================================================
+8. EXISTING-CASE REHYDRATION
+======================================================================
+
+Following deployment of ef4d328, CAPA-000008 was reopened from the
+production CAPA workspace using the new explicit Open case action.
+
+Production verification confirmed:
+
+Case:
+CAPA-000008
+
+State:
+S10 - Intake Submitted
+
+Record version:
+2
+
+Controlled intake details:
+Retrieved and displayed
+
+AI Intake Analysis panel:
+Available
+
+Generate AI Intake Analysis action:
+Available
+
+Result:
+PASS
+
+======================================================================
+9. FINAL GOVERNED AI INTAKE ADVISORY
+======================================================================
+
+Exactly one final governed AI intake advisory was generated for
+CAPA-000008.
+
+Analysis focus:
+
+"Evaluate the current CAPA intake for completeness and identify any
+missing information requiring human review."
+
+The generated output:
+
+- remained advisory;
+- identified missing intake information;
+- identified assumptions;
+- identified uncertainty and limitations;
+- identified containment and investigation questions;
+- required human action;
+- did not determine that CAPA approval was warranted;
+- did not approve, close, cancel, reopen, or transition the CAPA;
+- displayed that human acceptance was required;
+- displayed that workflow and controlled intake record were not
+  modified.
+
+No supporting citations were returned for this advisory. The client did
+not fabricate citations.
+
+AI run ID:
+520c7c0b-d508-4f7d-98b3-b456c06218ef
+
+AI output ID:
+3131000c-c54d-4c2d-99fa-0ac5a52a8409
+
+AI generation correlation ID:
+af2e4827-7c23-43de-9485-9c8dddcc9acf
+
+CAPA case version bound to AI output:
+8627ed0d-5b02-481b-8801-c230e286e04e
+
+CAPA record version bound to AI output:
+2
+
+Result:
+PASS
+
+======================================================================
+10. HUMAN AI-OUTPUT REVIEW
+======================================================================
+
+The production human-review interface presented:
+
+- Accept
+- Reject
+- Revise
+
+No disposition was preselected.
+
+For the final validation, the human reviewer selected:
+
+ACCEPT
+
+Human review rationale:
+
+"Reviewed for M5 production validation. The advisory appropriately
+identifies missing intake information and required human follow-up.
+Acceptance is for advisory review purposes only and does not constitute
+CAPA approval or workflow progression."
+
+The confirmation control explicitly stated that the action records an
+immutable human review and does not approve or transition the CAPA.
+
+Recorded production result:
+
+Disposition:
+accept
+
+Reviewed at:
+2026-08-27T19:13:43.739Z
+
+Review ID:
+35e0b2c0-465a-4789-bc23-e29b9c6fa99f
+
+Audit event ID:
+71ba4dfa-9eec-46e5-9eae-7f4de6e554c7
+
+Review correlation ID:
+c695aafa-7ab3-46ac-af9f-e27ef0232458
+
+AI run ID:
+520c7c0b-d508-4f7d-98b3-b456c06218ef
+
+AI output ID:
+3131000c-c54d-4c2d-99fa-0ac5a52a8409
+
+CAPA case version:
+8627ed0d-5b02-481b-8801-c230e286e04e
+
+CAPA record version:
+2
+
+Production UI confirmation stated that the review action:
+
+- did not approve the CAPA;
+- did not modify the controlled record;
+- did not transition workflow.
+
+Result:
+PASS
+
+======================================================================
+11. FINAL CONTROLLED-RECORD INVARIANT
+======================================================================
+
+After AI generation and after the human ACCEPT disposition, the
+production CAPA header was rechecked.
+
+Final observed state:
+
+Case:
+CAPA-000008
+
+Workflow state:
+S10 - Intake Submitted
+
+Record version:
+2
+
+Therefore the complete production sequence was:
+
+S00 Draft Intake / version 1
+        |
+        | Human Submit Intake
+        v
+S10 Intake Submitted / version 2
+        |
+        | Governed AI intake advisory
+        v
+S10 Intake Submitted / version 2
+        |
+        | Human ACCEPT of AI advisory
+        v
+S10 Intake Submitted / version 2
+
+Observed final invariant:
+
+AI generation did not advance the CAPA workflow or create a new
+controlled CAPA record version.
+
+Human disposition of the AI advisory did not approve the CAPA, advance
+workflow, or create a new controlled CAPA record version.
+
+Result:
+PASS
+
+======================================================================
+12. DURABLE AI GENERATION TRACE CONTROL
+======================================================================
+
+The mandatory durable generation-trace control had already been
+qualified and deployed before this final E2E validation.
+
+Relevant commits:
+
+7bce7c8 Require durable CAPA AI generation trace
+02cc5a9 Add CAPA AI generation trace production evidence
+
+The production schema requires an exact durable generation trace for
+new governed CAPA AI outputs.
+
+Separate production evidence for the generation-trace control is
+maintained in:
+
+docs/validation-evidence/m5-ca1-production-generation-trace.txt
+
+The final E2E advisory is identified above by its exact run, output,
+correlation, CAPA-version, and record-version identifiers.
+
+======================================================================
+13. ACCEPTANCE SUMMARY
+======================================================================
+
+Final production validation results:
+
+CAPA draft creation:
+PASS
+
+Controlled S00 -> S10 intake submission:
+PASS
+
+Record version 1 -> 2:
+PASS
+
+Existing-case reopening after reauthentication:
+PASS
+
+Authoritative tenant-scoped case rehydration:
+PASS
+
+Governed AI intake advisory:
+PASS
+
+Advisory-only presentation:
+PASS
+
+Human acceptance required:
+PASS
+
+No default human disposition:
+PASS
+
+Explicit ACCEPT / REJECT / REVISE controls:
+PASS
+
+Human ACCEPT disposition:
+PASS
+
+Human review audit identifier returned:
+PASS
+
+AI output identity preserved:
+PASS
+
+AI generation did not mutate CAPA workflow:
+PASS
+
+AI generation did not create CAPA record version 3:
+PASS
+
+Human AI review did not approve CAPA:
+PASS
+
+Human AI review did not mutate CAPA workflow:
+PASS
+
+Human AI review did not create CAPA record version 3:
+PASS
+
+Final CAPA state S10:
+PASS
+
+Final CAPA record version 2:
+PASS
+
+======================================================================
+14. CONCLUSION
+======================================================================
+
+Milestone 5 / M5G final production end-to-end validation is complete.
+
+The production implementation demonstrated controlled CAPA workflow,
+governed AI generation, explicit human AI-output review, durable
+identity and audit provenance, tenant-authorized existing-record
+rehydration, and preservation of the key governance boundary between
+AI advisory activity and controlled CAPA workflow authority.
+
+Final validation outcome:
+
+PASS
+
+CAPA-000008 is retained as the final M5 production E2E validation
+record and should not be regenerated, resubmitted, or otherwise altered
+for this validation sequence.
