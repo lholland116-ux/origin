@@ -3,6 +3,11 @@
 import Link from "next/link";
 
 import {
+  parseCapaExistingCaseResponse,
+  type CapaExistingCaseSummary,
+} from "./capa-existing-case-client";
+
+import {
   parseCapaIntakeAdvisorySnapshot,
   type CapaIntakeAdvisorySnapshot,
 } from "./capa-intake-advisory-snapshot";
@@ -109,21 +114,8 @@ type FieldErrors = Partial<
   Record<FieldName, string>
 >;
 
-interface CreatedCapaSummary {
-  readonly capaCaseId: string;
-  readonly caseNumber: string;
-  readonly status: string;
-  readonly recordVersion: number;
-  readonly currentVersionId: string;
-  readonly sectionVersionId: string;
-  readonly createdAt: string;
-  readonly initiatingEvent: string;
-  readonly sourceType: string;
-  readonly sourceReference?: string;
-  readonly organizationReference?: string;
-  readonly correlationId: string;
-  readonly retrievalVerified: boolean;
-}
+type CreatedCapaSummary =
+  CapaExistingCaseSummary;
 
 interface ApiIssue {
   readonly path: string;
@@ -920,6 +912,12 @@ export default function CapaIntakeClient({
   const [caseListError, setCaseListError] =
     useState<string | null>(null);
 
+  const [openingCaseId, setOpeningCaseId] =
+    useState<string | null>(null);
+
+  const [openCaseError, setOpenCaseError] =
+    useState<string | null>(null);
+
   const [workflowSubmission, setWorkflowSubmission] =
     useState<WorkflowSubmissionTarget | null>(null);
 
@@ -1414,6 +1412,104 @@ export default function CapaIntakeClient({
       );
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function openExistingCase(
+    capaCase: CapaListItem,
+  ) {
+    if (
+      openingCaseId !== null ||
+      isSubmittingIntake ||
+      isRequestingAdvisory ||
+      isSubmittingReview
+    ) {
+      return;
+    }
+
+    setOpeningCaseId(
+      capaCase.capaCaseId,
+    );
+    setOpenCaseError(null);
+
+    const correlationId =
+      createTraceId();
+
+    try {
+      const response = await fetch(
+        `/api/capa?id=${encodeURIComponent(
+          capaCase.capaCaseId,
+        )}`,
+        {
+          method: "GET",
+          headers: {
+            "x-request-id":
+              createTraceId(),
+            "x-correlation-id":
+              correlationId,
+          },
+          cache: "no-store",
+        },
+      );
+
+      const body =
+        await readJson(response);
+
+      if (!response.ok) {
+        throw new Error(
+          apiErrorMessage(
+            body,
+            "The CAPA case could not be opened.",
+          ),
+        );
+      }
+
+      const parsedCase =
+        parseCapaExistingCaseResponse(
+          body,
+          {
+            expectedCaseId:
+              capaCase.capaCaseId,
+            fallbackCorrelationId:
+              correlationId,
+          },
+        );
+
+      if (parsedCase === null) {
+        throw new Error(
+          "The server returned an incomplete CAPA case representation.",
+        );
+      }
+
+      setCreatedCapa(
+        parsedCase,
+      );
+
+      /*
+       * Never carry an advisory or human-review attempt from one
+       * CAPA case into another case view.
+       */
+      setAdvisoryFocus("");
+      setIntakeAdvisory(null);
+      setAdvisorySnapshot(null);
+      setAdvisoryError(null);
+      setAdvisoryCorrelationId(null);
+      resetAiOutputReviewState();
+
+      setStep("created");
+
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    } catch (error) {
+      setOpenCaseError(
+        error instanceof Error
+          ? error.message
+          : "The CAPA case could not be opened.",
+      );
+    } finally {
+      setOpeningCaseId(null);
     }
   }
 
@@ -2308,6 +2404,15 @@ export default function CapaIntakeClient({
           </div>
         ) : null}
 
+        {openCaseError !== null ? (
+          <div
+            role="alert"
+            className="mt-5 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-200"
+          >
+            {openCaseError}
+          </div>
+        ) : null}
+
         {isLoadingCases &&
         listedCases.length === 0 ? (
           <div
@@ -2396,19 +2501,42 @@ export default function CapaIntakeClient({
                       </p>
                     </div>
 
-                    {capaCase.status === "S00" ? (
+                    <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
                       <button
                         type="button"
+                        disabled={
+                          openingCaseId !== null
+                        }
                         onClick={() =>
-                          beginIntakeSubmission(
+                          void openExistingCase(
                             capaCase,
                           )
                         }
-                        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-blue-400/40 bg-blue-500/15 px-4 py-2 text-sm font-semibold text-blue-100 transition hover:border-blue-300 hover:bg-blue-500/25 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-600 bg-zinc-900/80 px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-wait disabled:opacity-50"
                       >
-                        Submit Intake
+                        {openingCaseId ===
+                        capaCase.capaCaseId
+                          ? "Opening..."
+                          : "Open case"}
                       </button>
-                    ) : null}
+
+                      {capaCase.status === "S00" ? (
+                        <button
+                          type="button"
+                          disabled={
+                            openingCaseId !== null
+                          }
+                          onClick={() =>
+                            beginIntakeSubmission(
+                              capaCase,
+                            )
+                          }
+                          className="inline-flex min-h-11 items-center justify-center rounded-xl border border-blue-400/40 bg-blue-500/15 px-4 py-2 text-sm font-semibold text-blue-100 transition hover:border-blue-300 hover:bg-blue-500/25 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:cursor-wait disabled:opacity-50"
+                        >
+                          Submit Intake
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 </article>
               ),
