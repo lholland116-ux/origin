@@ -1,0 +1,22 @@
+Initialising login role...
+Connecting to remote database...
+[?25l[90m│[39m
+[36m◆[39m  Do you want to push these migrations to the remote database?
+[90m│[39m   • 20260826180000_create_capa_ai_output_reviews.sql
+[90m│[39m   •
+[90m│[39m  20260826183000_hold_capa_ai_intake_review_permission_unassigned.sql
+[90m│[39m
+[36m│[39m  [32m●[39m Yes [2m/[22m [2m○[22m [2mNo[22m
+[36m└[39m
+[1A
+[?25h[999D[8A[1B[J[32m◇[39m  Do you want to push these migrations to the remote database?
+[90m│[39m   • 20260826180000_create_capa_ai_output_reviews.sql
+[90m│[39m   •
+[90m│[39m  20260826183000_hold_capa_ai_intake_review_permission_unassigned.sql
+[90m│[39m
+[90m│[39m  [2mYes[22m
+Applying migration 20260826180000_create_capa_ai_output_reviews.sql...
+Applying migration 20260826183000_hold_capa_ai_intake_review_permission_unassigned.sql...
+Finished supabase db push.
+A new version of Supabase CLI is available: v2.116.0 (currently installed v2.115.0)
+We recommend updating regularly for new features and bug fixes: https://supabase.com/docs/guides/cli/getting-started#updating-the-supabase-cli

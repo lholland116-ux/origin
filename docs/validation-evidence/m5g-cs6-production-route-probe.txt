@@ -1,0 +1,11 @@
+HTTP/2 401
+cache-control: no-store
+content-type: application/json
+date: Thu, 27 Aug 2026 11:37:16 GMT
+server: Vercel
+strict-transport-security: max-age=63072000
+x-matched-path: /api/capa/[caseId]/intake-advisory/[outputId]/review
+x-vercel-cache: MISS
+x-vercel-id: iad1::iad1::t22ks-1787830636057-2b9e83b9594a
+
+{"error":{"code":"UNAUTHORIZED","message":"Authentication is required.","correlation_id":"c590bdd0-15f6-49f1-8b49-0a9e72d4e863"}}

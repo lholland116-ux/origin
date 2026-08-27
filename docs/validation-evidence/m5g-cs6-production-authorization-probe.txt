@@ -1,0 +1,26 @@
+M5G Change Set 6 — Production Authenticated Authorization Probe
+Date: 2026-08-27
+
+Context:
+Authenticated same-origin browser session on https://lvtchat.com/capa.
+POST request sent to the deployed governed CAPA AI-output human-review endpoint
+using synthetic CAPA, AI-output, and case-version UUIDs.
+
+Observed result:
+HTTP status: 403
+
+Error code:
+CAPA_AI_OUTPUT_REVIEW_ACCESS_DENIED
+
+Error message:
+The CAPA AI-output review operation is not authorized.
+
+Assessment:
+PASS — the production route authenticated the browser session and denied the
+human-review operation because capa.ai.intake.review is intentionally unassigned
+pending resolution of SRS-TBD-006.
+
+No successful human review was asserted.
+No CAPA approval was asserted.
+No CAPA controlled-record mutation was asserted.
+No workflow transition was asserted.
