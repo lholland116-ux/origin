@@ -327,7 +327,7 @@ export async function handleCapaIntakeAdvisoryPost(
           context,
         );
 
-    const advisory =
+    const result =
       await advisoryService
         .advise({
           organization_id:
@@ -355,7 +355,12 @@ export async function handleCapaIntakeAdvisoryPost(
 
     return jsonResponse(
       {
-        advisory,
+        advisory:
+          result.advisory,
+
+        snapshot:
+          result.snapshot,
+
         correlation_id:
           trace
             .correlation_id,

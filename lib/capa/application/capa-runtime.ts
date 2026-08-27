@@ -38,6 +38,9 @@ import type {
   CapaIntakeAdvisoryService,
 } from "../ai/capa-intake-advisory-service";
 
+import type {
+  CapaAiOutputReviewService,
+} from "./capa-ai-output-review-runtime-factory";
 
 import type {
   CapaRequestContext,
@@ -78,6 +81,18 @@ export interface CapaRuntime {
   readonly create_knowledge_citation_review_service?: (
     context: CapaRequestContext,
   ) => CapaKnowledgeCitationReviewService;
+
+  /**
+   * Creates one request-scoped, tenant-bound human review service for
+   * immutable CAPA AI intake-advisory output.
+   *
+   * Optional while a runtime lacks the durable append-only review
+   * persistence required by M5G Change Set 6. Callers must fail closed
+   * when this capability is absent.
+   */
+  readonly create_ai_output_review_service?: (
+    context: CapaRequestContext,
+  ) => CapaAiOutputReviewService;
 
   /**
    * Creates one request-scoped governed CAPA intake advisory service.

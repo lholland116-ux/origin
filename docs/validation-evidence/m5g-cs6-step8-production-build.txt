@@ -1,0 +1,70 @@
+
+> openai-next-starter@0.1.0 build
+> next build
+
+▲ Next.js 16.3.0 (Turbopack)
+- Environments: .env.local
+✓ Running next.config.ts took 35ms
+
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.
+
+  To migrate automatically, run:
+  npx @next/codemod@canary middleware-to-proxy .
+
+  Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+  Creating an optimized production build ...
+✓ Compiled successfully in 4.8s
+  Running TypeScript ...
+  Finished TypeScript in 5.6s ...
+  Collecting page data using 3 workers ...
+  Generating static pages using 3 workers (0/27) ...
+  Generating static pages using 3 workers (6/27)
+  Generating static pages using 3 workers (13/27)
+  Generating static pages using 3 workers (20/27)
+✓ Generating static pages using 3 workers (27/27) in 1887ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ƒ /
+├ ○ /_not-found
+├ ○ /about
+├ ○ /account
+├ ○ /account-deletion
+├ ƒ /api/auth/forgot-password
+├ ƒ /api/capa
+├ ƒ /api/capa/[caseId]/intake-advisory
+├ ƒ /api/capa/[caseId]/intake-advisory/[outputId]/review
+├ ƒ /api/capa/[caseId]/submit-intake
+├ ƒ /api/capa/citations/[citationId]/reviews
+├ ƒ /api/chat
+├ ƒ /api/chat-web
+├ ƒ /api/conversations
+├ ƒ /api/documents
+├ ƒ /api/documents/upload
+├ ƒ /api/message-feedback
+├ ƒ /api/messages
+├ ƒ /api/stripe/checkout
+├ ƒ /api/stripe/portal
+├ ƒ /api/stripe/webhook
+├ ƒ /api/usage
+├ ƒ /auth/callback
+├ ○ /blog
+├ ○ /blog/lvtchat-now-available-on-google-play
+├ ○ /blog/watch-the-official-lvtchat-demo
+├ ƒ /capa
+├ ƒ /chat
+├ ○ /forgot-password
+├ ○ /help
+├ ○ /icon.svg
+├ ○ /levi
+├ ○ /login
+├ ○ /pricing
+├ ○ /privacy
+├ ○ /reset-password
+└ ○ /terms
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand

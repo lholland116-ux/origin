@@ -1,0 +1,25 @@
+Connecting to local database...
+/home/levi/openai-next-starter/supabase/tests/capa_knowledge_citation_reviews_test.sql ..
+# Failed test 1: "capa_knowledge_citations"
+# Failed test 2: "capa_knowledge_citation_reviews"
+# Failed test 3: "capa_knowledge_citations"
+# Failed test 4: "capa_knowledge_citation_reviews"
+# Failed test 5: "capa_knowledge_citations"
+# Failed test 6: "capa_knowledge_citation_reviews"
+# Failed test 7: "citation_id"
+#         have: NULL
+#         want: {capa_knowledge_citations}
+# Failed test 8: "citation_review_id"
+#         have: NULL
+#         want: {capa_knowledge_citation_reviews}
+# Looks like you failed 8 tests of 12
+Failed 8/12 subtests
+
+Test Summary Report
+-------------------
+/home/levi/openai-next-starter/supabase/tests/capa_knowledge_citation_reviews_test.sql (Wstat: 0 Tests: 12 Failed: 8)
+  Failed tests:  1-8
+Files=1, Tests=12,  0 wallclock secs ( 0.04 usr  0.01 sys +  0.01 cusr  0.00 csys =  0.06 CPU)
+Result: FAIL
+[31merror running container: exit 1[39m
+Try rerunning the command with --debug to troubleshoot the error.

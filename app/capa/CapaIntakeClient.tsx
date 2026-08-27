@@ -1,6 +1,22 @@
 "use client";
 
 import Link from "next/link";
+
+import {
+  parseCapaIntakeAdvisorySnapshot,
+  type CapaIntakeAdvisorySnapshot,
+} from "./capa-intake-advisory-snapshot";
+
+import {
+  buildCapaAiOutputReviewRequest,
+  createEmptyCapaAiOutputReviewDraft,
+  parseCapaAiOutputReviewFailure,
+  parseCapaAiOutputReviewSuccess,
+  type CapaAiOutputReviewDecision,
+  type CapaAiOutputReviewFailure,
+  type CapaAiOutputReviewHumanRevision,
+  type CapaAiOutputReviewSuccess,
+} from "./capa-ai-output-review-client";
 import {
   type FormEvent,
   useCallback,
@@ -35,6 +51,56 @@ interface IntakeFields {
   readonly sourceType: string;
   readonly sourceReference: string;
   readonly organizationReference: string;
+}
+
+interface CapaAiOutputReviewRevisionEditor {
+  readonly problemStatement:
+    string;
+
+  readonly scopeDimensions:
+    string;
+
+  readonly missingDimensions:
+    string;
+
+  readonly containmentRiskQuestions:
+    string;
+
+  readonly investigationQuestions:
+    string;
+}
+
+const EMPTY_AI_REVIEW_REVISION:
+  CapaAiOutputReviewRevisionEditor = {
+  problemStatement:
+    "",
+
+  scopeDimensions:
+    "",
+
+  missingDimensions:
+    "",
+
+  containmentRiskQuestions:
+    "",
+
+  investigationQuestions:
+    "",
+};
+
+function normalizedReviewLines(
+  value: string,
+): readonly string[] {
+  return value
+    .split(/\r?\n/)
+    .map(
+      (item) =>
+        item.trim(),
+    )
+    .filter(
+      (item) =>
+        item.length > 0,
+    );
 }
 
 type FieldName = keyof IntakeFields;
@@ -242,8 +308,19 @@ interface CapaIntakeAdvisoryApiResponse {
   readonly advisory?:
     CapaIntakeAdvisoryResult;
 
+  readonly snapshot?:
+    unknown;
+
   readonly correlation_id?:
     string;
+}
+
+interface ParsedCapaIntakeAdvisoryResponse {
+  readonly advisory:
+    CapaIntakeAdvisoryResult;
+
+  readonly snapshot:
+    CapaIntakeAdvisorySnapshot;
 }
 
 const EMPTY_FIELDS: IntakeFields = {
@@ -392,7 +469,7 @@ function parsedAdvisoryCitations(
 
 function parsedIntakeAdvisoryResponse(
   value: unknown,
-): CapaIntakeAdvisoryResult | null {
+): ParsedCapaIntakeAdvisoryResponse | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -403,7 +480,15 @@ function parsedIntakeAdvisoryResponse(
   const advisory =
     response.advisory;
 
-  if (!isRecord(advisory)) {
+  const snapshot =
+    parseCapaIntakeAdvisorySnapshot(
+      response.snapshot,
+    );
+
+  if (
+    !isRecord(advisory) ||
+    snapshot === null
+  ) {
     return null;
   }
 
@@ -469,7 +554,8 @@ function parsedIntakeAdvisoryResponse(
     return null;
   }
 
-  return {
+  const parsedAdvisory:
+    CapaIntakeAdvisoryResult = {
     run_id:
       advisory.run_id,
 
@@ -510,6 +596,13 @@ function parsedIntakeAdvisoryResponse(
 
     human_acceptance_required:
       true,
+  };
+
+  return {
+    advisory:
+      parsedAdvisory,
+
+    snapshot,
   };
 }
 
@@ -850,6 +943,11 @@ export default function CapaIntakeClient({
       null,
     );
 
+  const [advisorySnapshot, setAdvisorySnapshot] =
+    useState<CapaIntakeAdvisorySnapshot | null>(
+      null,
+    );
+
   const [isRequestingAdvisory, setIsRequestingAdvisory] =
     useState(false);
 
@@ -858,6 +956,47 @@ export default function CapaIntakeClient({
 
   const [advisoryCorrelationId, setAdvisoryCorrelationId] =
     useState<string | null>(null);
+
+  const [reviewDecision, setReviewDecision] =
+    useState<CapaAiOutputReviewDecision | null>(
+      null,
+    );
+
+  const [reviewRationale, setReviewRationale] =
+    useState("");
+
+  const [reviewRevisionEditor, setReviewRevisionEditor] =
+    useState<CapaAiOutputReviewRevisionEditor>(
+      EMPTY_AI_REVIEW_REVISION,
+    );
+
+  const [reviewIdempotencyKey, setReviewIdempotencyKey] =
+    useState<string | null>(
+      null,
+    );
+
+  const [isSubmittingReview, setIsSubmittingReview] =
+    useState(false);
+
+  const [reviewResult, setReviewResult] =
+    useState<CapaAiOutputReviewSuccess | null>(
+      null,
+    );
+
+  const [reviewFailure, setReviewFailure] =
+    useState<CapaAiOutputReviewFailure | null>(
+      null,
+    );
+
+  const [
+    reviewConfirmationOpen,
+    setReviewConfirmationOpen,
+  ] = useState(false);
+
+  const [
+    reviewConfirmationConfirmed,
+    setReviewConfirmationConfirmed,
+  ] = useState(false);
 
   const loadCases = useCallback(
     async (
@@ -1456,17 +1595,481 @@ export default function CapaIntakeClient({
     }
   }
 
+  function resetAiOutputReviewState() {
+    setReviewDecision(
+      createEmptyCapaAiOutputReviewDraft()
+        .decision,
+    );
+
+    setReviewRationale("");
+    setReviewRevisionEditor(
+      EMPTY_AI_REVIEW_REVISION,
+    );
+
+    setReviewIdempotencyKey(null);
+    setIsSubmittingReview(false);
+    setReviewResult(null);
+    setReviewFailure(null);
+    setReviewConfirmationOpen(false);
+    setReviewConfirmationConfirmed(false);
+  }
+
+  function invalidateAiOutputReviewAttempt() {
+    setReviewIdempotencyKey(null);
+    setReviewFailure(null);
+    setReviewConfirmationOpen(false);
+    setReviewConfirmationConfirmed(false);
+  }
+
+  function selectAiOutputReviewDecision(
+    decision:
+      CapaAiOutputReviewDecision,
+  ) {
+    if (reviewResult !== null) {
+      return;
+    }
+
+    setReviewDecision(
+      decision,
+    );
+
+    if (decision !== "revise") {
+      setReviewRevisionEditor(
+        EMPTY_AI_REVIEW_REVISION,
+      );
+    }
+
+    invalidateAiOutputReviewAttempt();
+  }
+
+  function updateReviewRationale(
+    value: string,
+  ) {
+    if (reviewResult !== null) {
+      return;
+    }
+
+    setReviewRationale(
+      value,
+    );
+
+    invalidateAiOutputReviewAttempt();
+  }
+
+  function updateReviewRevisionField(
+    field:
+      keyof CapaAiOutputReviewRevisionEditor,
+    value:
+      string,
+  ) {
+    if (reviewResult !== null) {
+      return;
+    }
+
+    setReviewRevisionEditor(
+      (current) => ({
+        ...current,
+        [field]:
+          value,
+      }),
+    );
+
+    invalidateAiOutputReviewAttempt();
+  }
+
+  function humanRevisionFromEditor():
+    CapaAiOutputReviewHumanRevision {
+    return {
+      problem_statement_draft:
+        reviewRevisionEditor
+          .problemStatement
+          .trim(),
+
+      scope_dimensions:
+        normalizedReviewLines(
+          reviewRevisionEditor
+            .scopeDimensions,
+        ),
+
+      missing_dimensions:
+        normalizedReviewLines(
+          reviewRevisionEditor
+            .missingDimensions,
+        ),
+
+      containment_risk_questions:
+        normalizedReviewLines(
+          reviewRevisionEditor
+            .containmentRiskQuestions,
+        ),
+
+      investigation_questions:
+        normalizedReviewLines(
+          reviewRevisionEditor
+            .investigationQuestions,
+        ),
+    };
+  }
+
+  function reviewFailureGuidance(
+    failure:
+      CapaAiOutputReviewFailure,
+  ): string {
+    switch (failure.kind) {
+      case "authorization_denied":
+        return "Your current role is not authorized to record this human review. No review was committed.";
+
+      case "authentication":
+        return "Your authenticated CAPA session is no longer valid. No review was committed.";
+
+      case "not_found":
+        return "The governed AI output is unavailable for review. No review was committed.";
+
+      case "not_reviewable":
+        return "This governed AI output cannot be reviewed in its current persisted state. No review was committed.";
+
+      case "stale":
+        return "The CAPA changed after this AI advisory was generated. Generate a fresh governed analysis before reviewing it.";
+
+      case "idempotency_conflict":
+        return "The immutable request key conflicted with different review content. Do not assume a review was recorded.";
+
+      case "invalid_request":
+        return "Correct the review information and submit again.";
+
+      case "unexpected":
+        return "The review result could not be verified. Do not assume a review was recorded.";
+    }
+  }
+
+  function reviewFailureBlocksRetry(
+    failure:
+      CapaAiOutputReviewFailure | null,
+  ): boolean {
+    if (failure === null) {
+      return false;
+    }
+
+    return (
+      failure.kind ===
+        "authorization_denied" ||
+      failure.kind ===
+        "authentication" ||
+      failure.kind ===
+        "not_found" ||
+      failure.kind ===
+        "not_reviewable" ||
+      failure.kind ===
+        "stale" ||
+      failure.kind ===
+        "idempotency_conflict"
+    );
+  }
+
+  function beginAiOutputReviewConfirmation() {
+    if (
+      createdCapa === null ||
+      intakeAdvisory === null ||
+      advisorySnapshot === null ||
+      isSubmittingReview ||
+      isRequestingAdvisory ||
+      reviewResult !== null ||
+      reviewFailureBlocksRetry(
+        reviewFailure,
+      )
+    ) {
+      return;
+    }
+
+    if (
+      advisorySnapshot.capaCaseId !==
+        createdCapa.capaCaseId
+    ) {
+      setReviewFailure({
+        kind:
+          "invalid_request",
+
+        message:
+          "The displayed AI advisory is not bound to this CAPA case.",
+
+        correlationId:
+          null,
+      });
+
+      return;
+    }
+
+    const humanRevision =
+      reviewDecision === "revise"
+        ? humanRevisionFromEditor()
+        : null;
+
+    const builtRequest =
+      buildCapaAiOutputReviewRequest(
+        {
+          decision:
+            reviewDecision,
+
+          rationale:
+            reviewRationale,
+
+          humanRevision,
+        },
+        advisorySnapshot,
+      );
+
+    if (!builtRequest.valid) {
+      setReviewFailure({
+        kind:
+          "invalid_request",
+
+        message:
+          builtRequest.issue.message,
+
+        correlationId:
+          null,
+      });
+
+      return;
+    }
+
+    setReviewFailure(null);
+    setReviewConfirmationConfirmed(false);
+    setReviewConfirmationOpen(true);
+  }
+
+  function cancelAiOutputReviewConfirmation() {
+    if (isSubmittingReview) {
+      return;
+    }
+
+    setReviewConfirmationOpen(false);
+    setReviewConfirmationConfirmed(false);
+  }
+
+  async function submitAiOutputReview() {
+    if (
+      createdCapa === null ||
+      intakeAdvisory === null ||
+      advisorySnapshot === null ||
+      isSubmittingReview ||
+      isRequestingAdvisory ||
+      reviewResult !== null ||
+      !reviewConfirmationOpen ||
+      !reviewConfirmationConfirmed ||
+      reviewFailureBlocksRetry(
+        reviewFailure,
+      )
+    ) {
+      return;
+    }
+
+    if (
+      advisorySnapshot.capaCaseId !==
+        createdCapa.capaCaseId
+    ) {
+      setReviewFailure({
+        kind:
+          "invalid_request",
+
+        message:
+          "The displayed AI advisory is not bound to this CAPA case.",
+
+        correlationId:
+          null,
+      });
+
+      return;
+    }
+
+    const humanRevision =
+      reviewDecision === "revise"
+        ? humanRevisionFromEditor()
+        : null;
+
+    const builtRequest =
+      buildCapaAiOutputReviewRequest(
+        {
+          decision:
+            reviewDecision,
+
+          rationale:
+            reviewRationale,
+
+          humanRevision,
+        },
+        advisorySnapshot,
+      );
+
+    if (!builtRequest.valid) {
+      setReviewFailure({
+        kind:
+          "invalid_request",
+
+        message:
+          builtRequest.issue.message,
+
+        correlationId:
+          null,
+      });
+
+      return;
+    }
+
+    const idempotencyKey =
+      reviewIdempotencyKey ??
+      createTraceId();
+
+    if (
+      reviewIdempotencyKey === null
+    ) {
+      setReviewIdempotencyKey(
+        idempotencyKey,
+      );
+    }
+
+    const correlationId =
+      createTraceId();
+
+    setIsSubmittingReview(true);
+    setReviewFailure(null);
+
+    try {
+      const response =
+        await fetch(
+          "/api/capa/" +
+            encodeURIComponent(
+              createdCapa.capaCaseId,
+            ) +
+            "/intake-advisory/" +
+            encodeURIComponent(
+              intakeAdvisory.output_id,
+            ) +
+            "/review",
+          {
+            method:
+              "POST",
+
+            headers: {
+              "content-type":
+                "application/json",
+
+              "x-request-id":
+                createTraceId(),
+
+              "x-correlation-id":
+                correlationId,
+
+              "Idempotency-Key":
+                idempotencyKey,
+            },
+
+            body:
+              JSON.stringify(
+                builtRequest.request,
+              ),
+          },
+        );
+
+      const body =
+        await readJson(
+          response,
+        );
+
+      if (!response.ok) {
+        setReviewFailure(
+          parseCapaAiOutputReviewFailure(
+            response.status,
+            body,
+          ),
+        );
+
+        return;
+      }
+
+      const parsed =
+        parseCapaAiOutputReviewSuccess(
+          body,
+          {
+            capaCaseId:
+              createdCapa.capaCaseId,
+
+            outputId:
+              intakeAdvisory.output_id,
+
+            snapshot:
+              advisorySnapshot,
+          },
+        );
+
+      if (parsed === null) {
+        setReviewFailure({
+          kind:
+            "unexpected",
+
+          message:
+            "The server returned an unverifiable CAPA AI-output review response.",
+
+          correlationId:
+            correlationId,
+        });
+
+        return;
+      }
+
+      if (
+        parsed.decision !==
+          builtRequest.request.decision
+      ) {
+        setReviewFailure({
+          kind:
+            "unexpected",
+
+          message:
+            "The recorded review disposition did not match the submitted human disposition.",
+
+          correlationId:
+            parsed.correlationId,
+        });
+
+        return;
+      }
+
+      setReviewResult(
+        parsed,
+      );
+
+      setReviewFailure(null);
+    } catch {
+      setReviewFailure({
+        kind:
+          "unexpected",
+
+        message:
+          "The CAPA AI-output review could not be recorded or verified.",
+
+        correlationId,
+      });
+    } finally {
+      setIsSubmittingReview(false);
+      setReviewConfirmationOpen(false);
+      setReviewConfirmationConfirmed(false);
+    }
+  }
+
   async function requestIntakeAdvisory() {
     if (
       createdCapa === null ||
       createdCapa.status !== "S10" ||
-      isRequestingAdvisory
+      isRequestingAdvisory ||
+      isSubmittingReview
     ) {
       return;
     }
 
     setIsRequestingAdvisory(true);
     setAdvisoryError(null);
+    resetAiOutputReviewState();
 
     const correlationId =
       createTraceId();
@@ -1520,14 +2123,24 @@ export default function CapaIntakeClient({
         );
       }
 
-      const advisory =
+      const parsedAdvisory =
         parsedIntakeAdvisoryResponse(
           body,
         );
 
-      if (advisory === null) {
+      if (parsedAdvisory === null) {
         throw new Error(
           "The server returned an incomplete CAPA intake advisory response.",
+        );
+      }
+
+      if (
+        parsedAdvisory.snapshot
+          .capaCaseId !==
+          createdCapa.capaCaseId
+      ) {
+        throw new Error(
+          "The server returned an advisory for a different CAPA case.",
         );
       }
 
@@ -1537,7 +2150,11 @@ export default function CapaIntakeClient({
           : null;
 
       setIntakeAdvisory(
-        advisory,
+        parsedAdvisory.advisory,
+      );
+
+      setAdvisorySnapshot(
+        parsedAdvisory.snapshot,
       );
 
       setAdvisoryCorrelationId(
@@ -1549,6 +2166,7 @@ export default function CapaIntakeClient({
       );
     } catch (error) {
       setIntakeAdvisory(null);
+      setAdvisorySnapshot(null);
 
       setAdvisoryCorrelationId(
         null,
@@ -1572,8 +2190,11 @@ export default function CapaIntakeClient({
 
     setAdvisoryFocus("");
     setIntakeAdvisory(null);
+    setAdvisorySnapshot(null);
     setAdvisoryError(null);
     setAdvisoryCorrelationId(null);
+
+    resetAiOutputReviewState();
 
     setStep("edit");
 
@@ -2533,7 +3154,10 @@ export default function CapaIntakeClient({
                   }
                   maxLength={1_000}
                   rows={3}
-                  disabled={isRequestingAdvisory}
+                  disabled={
+                    isRequestingAdvisory ||
+                    isSubmittingReview
+                  }
                   placeholder="Example: Focus on containment risk and missing investigation information."
                   className="mt-3 w-full rounded-2xl border border-zinc-700 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400 focus:ring-2 focus:ring-violet-500/30 disabled:cursor-wait disabled:opacity-60"
                 />
@@ -2542,7 +3166,10 @@ export default function CapaIntakeClient({
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  disabled={isRequestingAdvisory}
+                  disabled={
+                    isRequestingAdvisory ||
+                    isSubmittingReview
+                  }
                   onClick={() =>
                     void requestIntakeAdvisory()
                   }
@@ -2745,6 +3372,470 @@ export default function CapaIntakeClient({
                     )}
                   </section>
 
+                  <section
+                    aria-labelledby="ai-output-human-review-heading"
+                    className="rounded-2xl border border-zinc-700 bg-zinc-950/70 p-5"
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+                      Human review required
+                    </p>
+
+                    <h4
+                      id="ai-output-human-review-heading"
+                      className="mt-2 text-lg font-semibold text-zinc-100"
+                    >
+                      Review the governed AI advisory
+                    </h4>
+
+                    <p className="mt-3 text-sm leading-6 text-zinc-400">
+                      This content was generated by AI and remains advisory.
+                      Your disposition is a human-authored review decision.
+                      Accepting it does not approve the CAPA, change workflow,
+                      or modify the controlled CAPA record.
+                    </p>
+
+                    {reviewResult === null ? (
+                      <>
+                        <fieldset
+                          className="mt-5"
+                          disabled={
+                            isSubmittingReview ||
+                            reviewFailureBlocksRetry(
+                              reviewFailure,
+                            )
+                          }
+                        >
+                          <legend className="text-sm font-medium text-zinc-200">
+                            Human disposition
+                          </legend>
+
+                          <p className="mt-1 text-xs leading-5 text-zinc-500">
+                            No disposition is preselected. Choose one action
+                            deliberately.
+                          </p>
+
+                          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                            <button
+                              type="button"
+                              aria-pressed={
+                                reviewDecision ===
+                                "accept"
+                              }
+                              onClick={() =>
+                                selectAiOutputReviewDecision(
+                                  "accept",
+                                )
+                              }
+                              className={
+                                "min-h-12 rounded-xl border px-4 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500 " +
+                                (
+                                  reviewDecision ===
+                                  "accept"
+                                    ? "border-blue-400 bg-blue-500/10 text-blue-100"
+                                    : "border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:border-zinc-600"
+                                )
+                              }
+                            >
+                              <span className="block font-semibold">
+                                Accept
+                              </span>
+
+                              <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                                Acceptable for this review purpose only.
+                              </span>
+                            </button>
+
+                            <button
+                              type="button"
+                              aria-pressed={
+                                reviewDecision ===
+                                "reject"
+                              }
+                              onClick={() =>
+                                selectAiOutputReviewDecision(
+                                  "reject",
+                                )
+                              }
+                              className={
+                                "min-h-12 rounded-xl border px-4 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500 " +
+                                (
+                                  reviewDecision ===
+                                  "reject"
+                                    ? "border-blue-400 bg-blue-500/10 text-blue-100"
+                                    : "border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:border-zinc-600"
+                                )
+                              }
+                            >
+                              <span className="block font-semibold">
+                                Reject
+                              </span>
+
+                              <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                                Reject the AI proposal and document why.
+                              </span>
+                            </button>
+
+                            <button
+                              type="button"
+                              aria-pressed={
+                                reviewDecision ===
+                                "revise"
+                              }
+                              onClick={() =>
+                                selectAiOutputReviewDecision(
+                                  "revise",
+                                )
+                              }
+                              className={
+                                "min-h-12 rounded-xl border px-4 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500 " +
+                                (
+                                  reviewDecision ===
+                                  "revise"
+                                    ? "border-blue-400 bg-blue-500/10 text-blue-100"
+                                    : "border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:border-zinc-600"
+                                )
+                              }
+                            >
+                              <span className="block font-semibold">
+                                Revise
+                              </span>
+
+                              <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                                Author a human replacement while preserving
+                                the original AI output.
+                              </span>
+                            </button>
+                          </div>
+                        </fieldset>
+
+                        {reviewDecision !== null ? (
+                          <div className="mt-5">
+                            <label
+                              htmlFor="ai-review-rationale"
+                              className="text-sm font-medium text-zinc-200"
+                            >
+                              Review rationale
+                              {
+                                reviewDecision ===
+                                  "accept"
+                                  ? " (optional)"
+                                  : " (required)"
+                              }
+                            </label>
+
+                            <textarea
+                              id="ai-review-rationale"
+                              value={
+                                reviewRationale
+                              }
+                              maxLength={4000}
+                              rows={4}
+                              disabled={
+                                isSubmittingReview ||
+                                reviewFailureBlocksRetry(
+                                  reviewFailure,
+                                )
+                              }
+                              onChange={(event) =>
+                                updateReviewRationale(
+                                  event.target.value,
+                                )
+                              }
+                              className="mt-2 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              placeholder={
+                                reviewDecision ===
+                                "accept"
+                                  ? "Optional: document why the advisory is acceptable for this review purpose."
+                                  : "Document the human review rationale."
+                              }
+                            />
+
+                            <p className="mt-1 text-right text-xs text-zinc-600">
+                              {
+                                reviewRationale.length
+                              }
+                              /4000
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {reviewDecision ===
+                        "revise" ? (
+                          <div className="mt-6 space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+                            <div>
+                              <h5 className="text-sm font-semibold text-zinc-200">
+                                Human-authored replacement
+                              </h5>
+
+                              <p className="mt-1 text-xs leading-5 text-zinc-500">
+                                These fields start blank intentionally. The AI
+                                proposal is not copied into the controlled
+                                human revision.
+                              </p>
+                            </div>
+
+                            <div>
+                              <label
+                                htmlFor="ai-review-problem-statement"
+                                className="text-sm font-medium text-zinc-300"
+                              >
+                                Problem statement
+                              </label>
+
+                              <textarea
+                                id="ai-review-problem-statement"
+                                rows={5}
+                                maxLength={8000}
+                                value={
+                                  reviewRevisionEditor
+                                    .problemStatement
+                                }
+                                disabled={
+                                  isSubmittingReview
+                                }
+                                onChange={(event) =>
+                                  updateReviewRevisionField(
+                                    "problemStatement",
+                                    event.target.value,
+                                  )
+                                }
+                                className="mt-2 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                            </div>
+
+                            {[
+                              {
+                                id:
+                                  "ai-review-scope-dimensions",
+                                label:
+                                  "Scope dimensions",
+                                field:
+                                  "scopeDimensions",
+                                value:
+                                  reviewRevisionEditor
+                                    .scopeDimensions,
+                              },
+                              {
+                                id:
+                                  "ai-review-missing-dimensions",
+                                label:
+                                  "Missing dimensions",
+                                field:
+                                  "missingDimensions",
+                                value:
+                                  reviewRevisionEditor
+                                    .missingDimensions,
+                              },
+                              {
+                                id:
+                                  "ai-review-containment-questions",
+                                label:
+                                  "Containment / risk questions",
+                                field:
+                                  "containmentRiskQuestions",
+                                value:
+                                  reviewRevisionEditor
+                                    .containmentRiskQuestions,
+                              },
+                              {
+                                id:
+                                  "ai-review-investigation-questions",
+                                label:
+                                  "Investigation questions",
+                                field:
+                                  "investigationQuestions",
+                                value:
+                                  reviewRevisionEditor
+                                    .investigationQuestions,
+                              },
+                            ].map(
+                              (item) => (
+                                <div
+                                  key={
+                                    item.id
+                                  }
+                                >
+                                  <label
+                                    htmlFor={
+                                      item.id
+                                    }
+                                    className="text-sm font-medium text-zinc-300"
+                                  >
+                                    {
+                                      item.label
+                                    }
+                                  </label>
+
+                                  <textarea
+                                    id={
+                                      item.id
+                                    }
+                                    rows={4}
+                                    value={
+                                      item.value
+                                    }
+                                    disabled={
+                                      isSubmittingReview
+                                    }
+                                    onChange={(event) =>
+                                      updateReviewRevisionField(
+                                        item.field as
+                                          keyof CapaAiOutputReviewRevisionEditor,
+                                        event.target.value,
+                                      )
+                                    }
+                                    className="mt-2 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    placeholder="One item per line."
+                                  />
+                                </div>
+                              ),
+                            )}
+                          </div>
+                        ) : null}
+
+                        {reviewFailure !== null ? (
+                          <div
+                            role="alert"
+                            className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
+                          >
+                            <p className="text-sm font-semibold text-amber-100">
+                              Human review not recorded
+                            </p>
+
+                            <p className="mt-2 text-sm leading-6 text-amber-100/80">
+                              {
+                                reviewFailure.message
+                              }
+                            </p>
+
+                            <p className="mt-2 text-xs leading-5 text-amber-200/70">
+                              {
+                                reviewFailureGuidance(
+                                  reviewFailure,
+                                )
+                              }
+                            </p>
+
+                            {reviewFailure.correlationId !==
+                            null ? (
+                              <p className="mt-2 break-all font-mono text-[11px] text-amber-200/60">
+                                Correlation ID:{" "}
+                                {
+                                  reviewFailure
+                                    .correlationId
+                                }
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        <div className="mt-5 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={
+                              beginAiOutputReviewConfirmation
+                            }
+                            disabled={
+                              reviewDecision === null ||
+                              isSubmittingReview ||
+                              reviewFailureBlocksRetry(
+                                reviewFailure,
+                              )
+                            }
+                            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-blue-500/60 bg-blue-500/10 px-5 py-2.5 text-sm font-semibold text-blue-100 transition hover:bg-blue-500/20 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {
+                              isSubmittingReview
+                                ? "Recording review..."
+                                : "Review and record..."
+                            }
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="mt-5 rounded-xl border border-blue-500/30 bg-blue-500/10 p-4">
+                        <p className="text-sm font-semibold text-blue-100">
+                          Human review recorded
+                        </p>
+
+                        <p className="mt-2 text-sm leading-6 text-blue-100/80">
+                          The immutable human disposition was recorded.
+                          This action did not approve the CAPA, modify the
+                          controlled record, or transition workflow.
+                        </p>
+
+                        {reviewResult.replayed ? (
+                          <p className="mt-2 text-xs leading-5 text-blue-200/70">
+                            The server recognized an exact idempotent replay;
+                            no duplicate review was created.
+                          </p>
+                        ) : null}
+
+                        <dl className="mt-4 grid gap-3 text-xs text-zinc-400 sm:grid-cols-2">
+                          <div>
+                            <dt className="text-zinc-600">
+                              Disposition
+                            </dt>
+
+                            <dd className="mt-1 font-medium text-zinc-300">
+                              {
+                                reviewResult.decision
+                              }
+                            </dd>
+                          </div>
+
+                          <div>
+                            <dt className="text-zinc-600">
+                              Reviewed at
+                            </dt>
+
+                            <dd className="mt-1 font-mono text-zinc-300">
+                              {
+                                reviewResult.reviewedAt
+                              }
+                            </dd>
+                          </div>
+
+                          <div>
+                            <dt className="text-zinc-600">
+                              Review ID
+                            </dt>
+
+                            <dd className="mt-1 break-all font-mono text-zinc-300">
+                              {
+                                reviewResult.reviewId
+                              }
+                            </dd>
+                          </div>
+
+                          <div>
+                            <dt className="text-zinc-600">
+                              Audit event ID
+                            </dt>
+
+                            <dd className="mt-1 break-all font-mono text-zinc-300">
+                              {
+                                reviewResult.auditEventId
+                              }
+                            </dd>
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <dt className="text-zinc-600">
+                              Correlation ID
+                            </dt>
+
+                            <dd className="mt-1 break-all font-mono text-zinc-300">
+                              {
+                                reviewResult.correlationId
+                              }
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+                    )}
+                  </section>
+
                   <div className="grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/55 p-4 text-xs text-zinc-500 sm:grid-cols-2">
                     <div>
                       <span className="block text-zinc-600">
@@ -2768,6 +3859,46 @@ export default function CapaIntakeClient({
                         }
                       </span>
                     </div>
+
+                    <div>
+                      <span className="block text-zinc-600">
+                        AI output ID
+                      </span>
+
+                      <span className="mt-1 block break-all font-mono text-zinc-400">
+                        {
+                          intakeAdvisory.output_id
+                        }
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="block text-zinc-600">
+                        CAPA case version
+                      </span>
+
+                      <span className="mt-1 block break-all font-mono text-zinc-400">
+                        {
+                          advisorySnapshot
+                            ?.caseVersionId ??
+                          "Unavailable"
+                        }
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="block text-zinc-600">
+                        CAPA record version
+                      </span>
+
+                      <span className="mt-1 block font-mono text-zinc-400">
+                        {
+                          advisorySnapshot
+                            ?.recordVersion ??
+                          "Unavailable"
+                        }
+                      </span>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -2785,7 +3916,8 @@ export default function CapaIntakeClient({
             <button
               type="button"
               onClick={createAnother}
-              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={isSubmittingReview}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Create another CAPA
             </button>
@@ -2812,6 +3944,148 @@ export default function CapaIntakeClient({
             ) : null}
           </div>
         </section>
+      ) : null}
+
+      {reviewConfirmationOpen &&
+      reviewDecision !== null &&
+      intakeAdvisory !== null &&
+      advisorySnapshot !== null ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget
+            ) {
+              cancelAiOutputReviewConfirmation();
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-ai-review-heading"
+            className="w-full max-w-xl rounded-3xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl sm:p-7"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+              Immutable human review
+            </p>
+
+            <h2
+              id="confirm-ai-review-heading"
+              className="mt-2 text-2xl font-semibold"
+            >
+              Record {reviewDecision} disposition?
+            </h2>
+
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              This will append an immutable, audit-linked human
+              review to the governed AI output. It will not approve
+              the CAPA, alter the controlled CAPA record, or
+              transition workflow.
+            </p>
+
+            <dl className="mt-5 grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-zinc-500">
+                  Human disposition
+                </dt>
+
+                <dd className="mt-1 font-medium capitalize text-zinc-100">
+                  {reviewDecision}
+                </dd>
+              </div>
+
+              <div>
+                <dt className="text-zinc-500">
+                  CAPA record version
+                </dt>
+
+                <dd className="mt-1 font-mono text-zinc-100">
+                  {advisorySnapshot.recordVersion}
+                </dd>
+              </div>
+
+              <div className="sm:col-span-2">
+                <dt className="text-zinc-500">
+                  AI output ID
+                </dt>
+
+                <dd className="mt-1 break-all font-mono text-xs text-zinc-100">
+                  {intakeAdvisory.output_id}
+                </dd>
+              </div>
+
+              <div className="sm:col-span-2">
+                <dt className="text-zinc-500">
+                  CAPA case version
+                </dt>
+
+                <dd className="mt-1 break-all font-mono text-xs text-zinc-100">
+                  {advisorySnapshot.caseVersionId}
+                </dd>
+              </div>
+            </dl>
+
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-700 bg-zinc-900/70 p-4">
+              <input
+                type="checkbox"
+                checked={
+                  reviewConfirmationConfirmed
+                }
+                disabled={isSubmittingReview}
+                onChange={(event) =>
+                  setReviewConfirmationConfirmed(
+                    event.target.checked,
+                  )
+                }
+                className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-blue-600 focus:ring-blue-500"
+              />
+
+              <span>
+                <span className="block text-sm font-medium text-zinc-100">
+                  I reviewed this governed AI output and confirm
+                  this is my human-authored disposition.
+                </span>
+
+                <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                  I understand this records a review only and does
+                  not constitute CAPA approval.
+                </span>
+              </span>
+            </label>
+
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={isSubmittingReview}
+                onClick={
+                  cancelAiOutputReviewConfirmation
+                }
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  isSubmittingReview ||
+                  !reviewConfirmationConfirmed
+                }
+                onClick={() =>
+                  void submitAiOutputReview()
+                }
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+              >
+                {
+                  isSubmittingReview
+                    ? "Recording review..."
+                    : "Confirm and record review"
+                }
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {workflowSubmission !== null ? (

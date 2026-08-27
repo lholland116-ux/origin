@@ -42,6 +42,12 @@ const OUTPUT_ID =
 const RUN_ID =
   "70000000-0000-4000-8000-000000000001";
 
+const CASE_VERSION_ID =
+  "80000000-0000-4000-8000-000000000001";
+
+const RECORD_VERSION =
+  2;
+
 function completedAdvisory() {
   return {
     run_id:
@@ -101,8 +107,21 @@ function completedAdvisory() {
 function setup() {
   const advise =
     vi.fn(
-      async () =>
-        completedAdvisory(),
+      async () => ({
+        advisory:
+          completedAdvisory(),
+
+        snapshot: {
+          capa_case_id:
+            CASE_ID,
+
+          case_version_id:
+            CASE_VERSION_ID,
+
+          record_version:
+            RECORD_VERSION,
+        },
+      }),
     );
 
   const createAdvisoryService =
@@ -431,6 +450,17 @@ describe(
         ).toEqual({
           advisory:
             completedAdvisory(),
+
+          snapshot: {
+            capa_case_id:
+              CASE_ID,
+
+            case_version_id:
+              CASE_VERSION_ID,
+
+            record_version:
+              RECORD_VERSION,
+          },
 
           correlation_id:
             CORRELATION_ID,

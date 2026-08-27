@@ -201,7 +201,36 @@ describe(
           ports,
         ).advise(invocation);
 
-      expect(result).toBe(response);
+      expect(
+        result.advisory,
+      ).toBe(
+        response,
+      );
+
+      expect(
+        result.snapshot,
+      ).toEqual({
+        capa_case_id:
+          context.capa_case_id,
+
+        case_version_id:
+          context.case_version_id,
+
+        record_version:
+          context.record_version,
+      });
+
+      expect(
+        Object.isFrozen(
+          result,
+        ),
+      ).toBe(true);
+
+      expect(
+        Object.isFrozen(
+          result.snapshot,
+        ),
+      ).toBe(true);
 
       expect(
         ports.transaction_manager

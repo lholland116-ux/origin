@@ -121,6 +121,25 @@ export interface CapaIntakeAdvisoryCaseContext {
     readonly CapaMinimumCaseContextItem[];
 }
 
+export interface CapaIntakeAdvisorySnapshot {
+  readonly capa_case_id:
+    CapaCaseId;
+
+  readonly case_version_id:
+    CapaCaseVersionId;
+
+  readonly record_version:
+    number;
+}
+
+export interface CapaIntakeAdvisoryServiceResult {
+  readonly advisory:
+    CapaIntakeAdvisoryResponse;
+
+  readonly snapshot:
+    CapaIntakeAdvisorySnapshot;
+}
+
 export interface CapaIntakeAdvisoryEvidence {
   readonly prompt_context:
     readonly unknown[];
@@ -299,7 +318,7 @@ export class CapaIntakeAdvisoryService {
   async advise(
     invocation:
       CapaIntakeAdvisoryInvocation,
-  ): Promise<CapaIntakeAdvisoryResponse> {
+  ): Promise<CapaIntakeAdvisoryServiceResult> {
     const context =
       await this.dependencies
         .context_resolver
@@ -430,7 +449,22 @@ export class CapaIntakeAdvisoryService {
       fail("WORKFLOW_MUTATION_DETECTED");
     }
 
-    return response;
+    return Object.freeze({
+      advisory:
+        response,
+
+      snapshot:
+        Object.freeze({
+          capa_case_id:
+            context.capa_case_id,
+
+          case_version_id:
+            context.case_version_id,
+
+          record_version:
+            context.record_version,
+        }),
+    });
   }
 }
 

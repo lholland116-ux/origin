@@ -29,6 +29,10 @@ import {
   createRequestScopedCapaIntakeAdvisoryService,
 } from "./capa-intake-advisory-runtime-factory";
 
+import {
+  createRequestScopedCapaAiOutputReviewService,
+} from "./capa-ai-output-review-runtime-factory";
+
 import type {
   CapaIntakeAdvisoryStructuredModelClient,
 } from "../ai/capa-intake-advisory-model-generator";
@@ -129,6 +133,10 @@ import {
 import {
   SupabaseCapaIntakeAdvisoryOutputRepository,
 } from "../../database/supabase/supabase-capa-intake-advisory-output-repository";
+
+import {
+  createSupabaseCapaAiOutputReviewRepository,
+} from "../../database/supabase/supabase-capa-ai-output-review-repository";
 
 import {
   createSupabaseDatabaseSql,
@@ -732,6 +740,11 @@ export function createCapaProductionRuntime(
   const citationReviewRepository =
     new SupabaseCapaKnowledgeCitationReviewRepository(sql);
 
+  const aiOutputReviewRepository =
+    createSupabaseCapaAiOutputReviewRepository(
+      sql,
+    );
+
   const citationReviewSourceStatusResolver =
     new SupabaseCapaKnowledgeCitationReviewSourceStatusResolver(sql);
 
@@ -853,6 +866,33 @@ export function createCapaProductionRuntime(
           }),
         source_status_resolver: citationReviewSourceStatusResolver,
         now,
+      });
+    },
+
+    create_ai_output_review_service(context) {
+      return createRequestScopedCapaAiOutputReviewService({
+        request_context:
+          context,
+
+        transaction_manager:
+          transactionManager,
+
+        review_repository:
+          aiOutputReviewRepository,
+
+        audit_repository:
+          auditRepository,
+
+        authorization_policy:
+          authorizationPolicy,
+
+        now,
+
+        generate_uuid:
+          generateUuid,
+
+        audit_schema_version:
+          auditSchemaVersion,
       });
     },
 
