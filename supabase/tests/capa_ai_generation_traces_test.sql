@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap
 with schema extensions;
 
-select plan(29);
+select plan(31);
 
 -- ---------------------------------------------------------------------------
 -- Table shape
@@ -301,6 +301,72 @@ select is(
   ),
   'organization_id->organization_id,output_id->output_id,run_id->run_id,capa_case_id->capa_case_id,case_version_id->case_version_id,record_version->record_version,request_id->request_id,correlation_id->correlation_id,output_status->status',
   'generation trace FK binds exact output, run, snapshot, request and correlation identity'
+);
+
+-- ---------------------------------------------------------------------------
+-- Mandatory future output-to-trace enforcement
+-- ---------------------------------------------------------------------------
+
+select ok(
+  exists (
+    select 1
+    from pg_catalog.pg_trigger as trigger_record
+    join pg_catalog.pg_proc as function_record
+      on function_record.oid =
+        trigger_record.tgfoid
+    join pg_catalog.pg_namespace as namespace_record
+      on namespace_record.oid =
+        function_record.pronamespace
+    where trigger_record.tgrelid =
+      'public.capa_ai_outputs'::regclass
+      and trigger_record.tgname =
+        'capa_ai_outputs_require_generation_trace'
+      and not trigger_record.tgisinternal
+      and trigger_record.tgconstraint <> 0
+      and trigger_record.tgdeferrable
+      and trigger_record.tginitdeferred
+      and (trigger_record.tgtype & 1) = 1
+      and (trigger_record.tgtype & 2) = 0
+      and (trigger_record.tgtype & 4) = 4
+      and namespace_record.nspname = 'private'
+      and function_record.proname =
+        'capa_require_ai_generation_trace'
+  ),
+  'future AI outputs require a row-level deferred generation-trace constraint'
+);
+
+select ok(
+  exists (
+    select 1
+    from pg_catalog.pg_proc as function_record
+    join pg_catalog.pg_namespace as namespace_record
+      on namespace_record.oid =
+        function_record.pronamespace
+    where namespace_record.nspname = 'private'
+      and function_record.proname =
+        'capa_require_ai_generation_trace'
+      and function_record.pronargs = 0
+      and function_record.prosecdef
+      and function_record.prosrc like
+        '%generation_trace.organization_id = new.organization_id%'
+      and function_record.prosrc like
+        '%generation_trace.output_id = new.output_id%'
+      and function_record.prosrc like
+        '%generation_trace.run_id = new.run_id%'
+      and function_record.prosrc like
+        '%generation_trace.capa_case_id = new.capa_case_id%'
+      and function_record.prosrc like
+        '%generation_trace.case_version_id = new.case_version_id%'
+      and function_record.prosrc like
+        '%generation_trace.record_version = new.record_version%'
+      and function_record.prosrc like
+        '%generation_trace.request_id = new.request_id%'
+      and function_record.prosrc like
+        '%generation_trace.correlation_id = new.correlation_id%'
+      and function_record.prosrc like
+        '%generation_trace.output_status = new.status%'
+  ),
+  'generation-trace enforcement checks the complete output provenance identity'
 );
 
 -- ---------------------------------------------------------------------------
