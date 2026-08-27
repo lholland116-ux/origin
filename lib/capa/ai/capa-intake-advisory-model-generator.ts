@@ -1,8 +1,13 @@
 import type {
   CapaAiOutputId,
   CapaAiRunId,
+  CapaControlledPromptPackage,
   ControlledVersion,
 } from "./capa-prompt-contract";
+
+import type {
+  CapaIntakeAdvisoryGenerationResult,
+} from "./capa-ai-generation-trace";
 
 import type {
   CapaIntakeAdvisoryResponse,
@@ -103,11 +108,15 @@ export const CAPA_INTAKE_ADVISORY_JSON_SCHEMA =
   } as const);
 
 export interface CapaIntakeAdvisoryPromptRenderer {
-  render(input: {
+  build(input: {
     readonly generation_input:
       CapaIntakeAdvisoryGenerationInput;
     readonly run_id: CapaAiRunId;
-  }): string;
+  }): {
+    readonly prompt_package:
+      CapaControlledPromptPackage;
+    readonly rendered_prompt: string;
+  };
 }
 
 export interface CapaIntakeAdvisoryStructuredModelClient {
@@ -157,6 +166,51 @@ function controlledPrompt(
   return value;
 }
 
+function assertPromptPackageBoundToGeneration(
+  promptPackage:
+    CapaControlledPromptPackage,
+  input:
+    CapaIntakeAdvisoryGenerationInput,
+  runId:
+    CapaAiRunId,
+): void {
+  if (
+    promptPackage.trace.run_id !==
+      runId ||
+    promptPackage.trace.request_id !==
+      input.request_id ||
+    promptPackage.trace.correlation_id !==
+      input.correlation_id ||
+    promptPackage.scope.organization_id !==
+      input.context.organization_id ||
+    promptPackage.scope.capa_case_id !==
+      input.context.capa_case_id ||
+    promptPackage.scope.case_version_id !==
+      input.context.case_version_id ||
+    promptPackage.scope.record_version !==
+      input.context.record_version ||
+    promptPackage.scope.workflow_state !==
+      input.context.workflow_state ||
+    promptPackage.agent.agent_id !==
+      input.agent.agent_id ||
+    promptPackage.agent.agent_version !==
+      input.agent.agent_version ||
+    promptPackage.agent.output_type !==
+      input.agent.output_schema_version ||
+    promptPackage.component_versions
+      .model_profile_version !==
+      CAPA_INTAKE_ADVISORY_MODEL_PROFILE
+        .profile_version ||
+    promptPackage.component_versions
+      .output_schema_version !==
+      input.agent.output_schema_version
+  ) {
+    throw new Error(
+      "CONTROLLED_CAPA_PROMPT_TRACE_INVALID",
+    );
+  }
+}
+
 export class CapaIntakeAdvisoryModelGenerator
   implements CapaIntakeAdvisoryGenerator {
   constructor(
@@ -167,7 +221,7 @@ export class CapaIntakeAdvisoryModelGenerator
   async generate(
     input:
       CapaIntakeAdvisoryGenerationInput,
-  ): Promise<CapaIntakeAdvisoryResponse> {
+  ): Promise<CapaIntakeAdvisoryGenerationResult> {
     /*
      * Create the AI run identity before prompt assembly.
      *
@@ -178,13 +232,23 @@ export class CapaIntakeAdvisoryModelGenerator
       this.dependencies.id_factory
         .createRunId();
 
-    const prompt = controlledPrompt(
+    const promptArtifact =
       this.dependencies.prompt_renderer
-        .render({
+        .build({
           generation_input: input,
           run_id: runId,
-        }),
+        });
+
+    assertPromptPackageBoundToGeneration(
+      promptArtifact.prompt_package,
+      input,
+      runId,
     );
+
+    const prompt =
+      controlledPrompt(
+        promptArtifact.rendered_prompt,
+      );
 
     const raw =
       await this.dependencies.model_client
@@ -208,8 +272,9 @@ export class CapaIntakeAdvisoryModelGenerator
         raw.output_text,
       );
 
-    return Object.freeze({
-      run_id: runId,
+    const response =
+      Object.freeze({
+        run_id: runId,
       output_id:
         this.dependencies.id_factory
           .createOutputId(),
@@ -235,7 +300,24 @@ export class CapaIntakeAdvisoryModelGenerator
       ]),
       advisory_only: true,
       workflow_mutated: false,
-      human_acceptance_required: true,
+        human_acceptance_required: true,
+      });
+
+    return Object.freeze({
+      response,
+
+      trace: Object.freeze({
+        prompt_package:
+          promptArtifact.prompt_package,
+
+        rendered_prompt:
+          prompt,
+
+        model_profile_version:
+          CAPA_INTAKE_ADVISORY_MODEL_PROFILE
+            .profile_version as unknown as
+              ControlledVersion,
+      }),
     });
   }
 }

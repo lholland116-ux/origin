@@ -110,9 +110,20 @@ function dependencies():
       }),
     },
     generator: {
-      generate: vi.fn().mockResolvedValue(
+      generate: vi.fn().mockResolvedValue({
         response,
-      ),
+
+        trace: {
+          prompt_package:
+            {} as never,
+
+          rendered_prompt:
+            "controlled rendered prompt",
+
+          model_profile_version:
+            "capa-model-profile-1.0.0" as never,
+        },
+      }),
     },
     output_repository: {
       save: vi.fn().mockResolvedValue(
@@ -264,6 +275,13 @@ describe(
         {
           context,
           response,
+          generation_trace:
+            expect.objectContaining({
+              rendered_prompt:
+                "controlled rendered prompt",
+              model_profile_version:
+                "capa-model-profile-1.0.0",
+            }),
           request_id:
             invocation.request_id,
           correlation_id:
@@ -469,9 +487,22 @@ describe(
         vi.mocked(
           ports.generator.generate,
         ).mockResolvedValue({
-          ...response,
-          ...invalid,
-        } as CapaIntakeAdvisoryResponse);
+          response: {
+            ...response,
+            ...invalid,
+          } as CapaIntakeAdvisoryResponse,
+
+          trace: {
+            prompt_package:
+              {} as never,
+
+            rendered_prompt:
+              "controlled rendered prompt",
+
+            model_profile_version:
+              "capa-model-profile-1.0.0" as never,
+          },
+        });
 
         await expectReason(
           createCapaIntakeAdvisoryService(

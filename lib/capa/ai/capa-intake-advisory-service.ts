@@ -207,7 +207,10 @@ export interface CapaIntakeAdvisoryGenerator {
   generate(
     input:
       CapaIntakeAdvisoryGenerationInput,
-  ): Promise<CapaIntakeAdvisoryResponse>;
+  ): Promise<
+    import("./capa-ai-generation-trace")
+      .CapaIntakeAdvisoryGenerationResult
+  >;
 }
 
 export type CapaIntakeAdvisoryOutputSaveResult =
@@ -222,6 +225,9 @@ export interface CapaIntakeAdvisoryOutputRepository {
         CapaIntakeAdvisoryCaseContext;
       readonly response:
         CapaIntakeAdvisoryResponse;
+      readonly generation_trace:
+        import("./capa-ai-generation-trace")
+          .CapaIntakeAdvisoryGenerationTraceCapture;
       readonly request_id: RequestId;
       readonly correlation_id:
         CorrelationId;
@@ -377,11 +383,12 @@ export class CapaIntakeAdvisoryService {
       fail("EVIDENCE_RETRIEVAL_FAILED");
     }
 
-    let response:
-      CapaIntakeAdvisoryResponse;
+    let generationResult:
+      import("./capa-ai-generation-trace")
+        .CapaIntakeAdvisoryGenerationResult;
 
     try {
-      response =
+      generationResult =
         await this.dependencies.generator
           .generate({
             context,
@@ -398,6 +405,9 @@ export class CapaIntakeAdvisoryService {
     } catch {
       fail("ADVISORY_GENERATION_FAILED");
     }
+
+    const response =
+      generationResult.response;
 
     validateResponse(response);
 
@@ -423,6 +433,8 @@ export class CapaIntakeAdvisoryService {
                   {
                     context,
                     response,
+                    generation_trace:
+                      generationResult.trace,
                     request_id:
                       invocation.request_id,
                     correlation_id:

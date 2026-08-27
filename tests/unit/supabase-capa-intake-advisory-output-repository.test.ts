@@ -11,6 +11,10 @@ import type {
   CapaIntakeAdvisoryResponse,
 } from "../../lib/capa/ai/capa-intake-advisory-contract";
 
+import type {
+  CapaIntakeAdvisoryGenerationTraceCapture,
+} from "../../lib/capa/ai/capa-ai-generation-trace";
+
 import {
   SupabaseCapaIntakeAdvisoryOutputRepository,
 } from "../../lib/database/supabase/supabase-capa-intake-advisory-output-repository";
@@ -40,7 +44,14 @@ function harness() {
         values,
       });
 
-      return responses.shift() ?? [];
+      const response =
+        responses.shift();
+
+      if (response instanceof Error) {
+        throw response;
+      }
+
+      return response ?? [];
     },
   );
 
@@ -110,6 +121,9 @@ const RUN_ID =
 const OUTPUT_ID =
   "80000000-0000-4000-8000-000000000001";
 
+const PROMPT_PACKAGE_ID =
+  "90000000-0000-4000-8000-000000000002";
+
 const context = {
   organization_id: ORG,
   capa_case_id: CASE_ID,
@@ -159,9 +173,197 @@ const response = {
   human_acceptance_required: true,
 } as unknown as CapaIntakeAdvisoryResponse;
 
+const generationTrace = {
+  prompt_package: {
+    scope: {
+      organization_id: ORG,
+      capa_case_id: CASE_ID,
+      case_version_id: CASE_VERSION_ID,
+      record_version: 2,
+      workflow_state: "S10",
+    },
+
+    trace: {
+      run_id: RUN_ID,
+      prompt_package_id:
+        PROMPT_PACKAGE_ID,
+      request_id: REQUEST_ID,
+      correlation_id:
+        CORRELATION_ID,
+      assembled_at:
+        "2026-08-27T12:00:00.000Z",
+    },
+
+    agent: {
+      agent_id: "AG-INTAKE",
+      agent_version:
+        "ag-intake-1.0.0",
+      output_type:
+        "capa-intake-draft-output-1.0.0",
+    },
+
+    component_versions: {
+      assembly_version:
+        "capa-prompt-assembly-1.0.0",
+      platform_policy_version:
+        "capa-platform-policy-1.0.0",
+      product_policy_version:
+        "capa-product-policy-1.0.0",
+      agent_version:
+        "ag-intake-1.0.0",
+      workflow_context_version:
+        "capa-workflow-context-1.0.0",
+      authorization_context_version:
+        "capa-authorization-context-1.0.0",
+      case_context_schema_version:
+        "capa-minimum-case-context-1.0.0",
+      retrieval_policy_version:
+        "capa-retrieval-policy-1.0.0",
+      tool_policy_version:
+        "capa-tool-policy-1.0.0",
+      output_schema_version:
+        "capa-intake-draft-output-1.0.0",
+      model_profile_version:
+        "capa-model-profile-1.0.0",
+      evaluation_suite_version:
+        "capa-ai-evaluation-1.0.0",
+    },
+
+    layers: [
+      {
+        position: 1,
+        name:
+          "platform_system_policy",
+        trust:
+          "controlled_system",
+        content: {
+          instruction:
+            "Platform policy",
+        },
+        content_version:
+          "capa-platform-policy-1.0.0",
+      },
+      {
+        position: 2,
+        name: "product_policy",
+        trust:
+          "controlled_system",
+        content: {
+          instruction:
+            "Product policy",
+        },
+        content_version:
+          "capa-product-policy-1.0.0",
+      },
+      {
+        position: 3,
+        name: "agent_definition",
+        trust:
+          "controlled_system",
+        content: {
+          instruction:
+            "Agent definition",
+        },
+        content_version:
+          "ag-intake-1.0.0",
+      },
+      {
+        position: 4,
+        name: "workflow_context",
+        trust:
+          "trusted_server_context",
+        content: {
+          workflow_state: "S10",
+        },
+        content_version:
+          "capa-workflow-context-1.0.0",
+      },
+      {
+        position: 5,
+        name:
+          "authorization_context",
+        trust:
+          "trusted_server_context",
+        content: {
+          authorized_operation:
+            "draft_intake_analysis",
+          authorization_policy_version:
+            "capa-authorization-context-1.0.0",
+        },
+        content_version:
+          "capa-authorization-context-1.0.0",
+      },
+      {
+        position: 6,
+        name:
+          "minimum_case_context",
+        trust:
+          "trusted_server_context",
+        content: [],
+        content_version:
+          "capa-minimum-case-context-1.0.0",
+      },
+      {
+        position: 7,
+        name: "retrieved_sources",
+        trust: "untrusted_data",
+        content: [],
+        content_version:
+          "capa-retrieval-policy-1.0.0",
+      },
+      {
+        position: 8,
+        name: "user_request",
+        trust: "untrusted_data",
+        content: {
+          trust:
+            "untrusted_data",
+          provenance_type:
+            "user_request",
+          content:
+            "Assess intake completeness.",
+        },
+        content_version:
+          "capa-prompt-assembly-1.0.0",
+      },
+      {
+        position: 9,
+        name: "tool_results",
+        trust: "untrusted_data",
+        content: [],
+        content_version:
+          "capa-tool-policy-1.0.0",
+      },
+      {
+        position: 10,
+        name: "output_contract",
+        trust:
+          "controlled_system",
+        content: {
+          instruction:
+            "Return controlled structured advisory output.",
+        },
+        content_version:
+          "capa-intake-draft-output-1.0.0",
+      },
+    ],
+
+    reduction_applied: false,
+  },
+
+  rendered_prompt:
+    "controlled rendered prompt",
+
+  model_profile_version:
+    "capa-model-profile-1.0.0",
+} as unknown as
+  CapaIntakeAdvisoryGenerationTraceCapture;
+
 const input = {
   context,
   response,
+  generation_trace:
+    generationTrace,
   request_id: REQUEST_ID as never,
   correlation_id:
     CORRELATION_ID as never,
@@ -204,7 +406,7 @@ describe(
 
       expect(result).toBe("saved");
 
-      expect(test.calls).toHaveLength(2);
+      expect(test.calls).toHaveLength(3);
 
       expect(
         test.calls[0]?.query,
@@ -273,6 +475,49 @@ describe(
           false,
         ]),
       );
+      const traceCall =
+        test.calls[2];
+
+      expect(
+        traceCall?.query,
+      ).toContain(
+        "insert into public.capa_ai_generation_traces",
+      );
+
+      expect(
+        traceCall?.values,
+      ).toEqual(
+        expect.arrayContaining([
+          ORG,
+          RUN_ID,
+          OUTPUT_ID,
+          CASE_ID,
+          CASE_VERSION_ID,
+          2,
+          "completed_draft",
+          REQUEST_ID,
+          CORRELATION_ID,
+          PROMPT_PACKAGE_ID,
+          "capa-ai-generation-trace-1.0.0",
+          "sha256-canonical-json-v1",
+          "capa-model-profile-1.0.0",
+          generationTrace
+            .prompt_package,
+        ]),
+      );
+
+      const fingerprintValues =
+        traceCall?.values.filter(
+          (value): value is string =>
+            typeof value === "string" &&
+            /^[0-9a-f]{64}$/.test(
+              value,
+            ),
+        ) ?? [];
+
+      expect(
+        fingerprintValues,
+      ).toHaveLength(4);
     });
 
     it("refuses persistence when the CAPA case changed before the guarded write", async () => {
@@ -314,6 +559,15 @@ describe(
           (call) =>
             call.query.includes(
               "insert into public.capa_ai_outputs",
+            ),
+        ),
+      ).toBe(false);
+
+      expect(
+        test.calls.some(
+          (call) =>
+            call.query.includes(
+              "insert into public.capa_ai_generation_traces",
             ),
         ),
       ).toBe(false);
@@ -390,6 +644,160 @@ describe(
       });
 
       expect(test.calls).toHaveLength(0);
+    });
+
+    it("rejects generation-run identity mismatch before issuing SQL", async () => {
+      const test = harness();
+
+      const repository =
+        new SupabaseCapaIntakeAdvisoryOutputRepository();
+
+      const manager =
+        new SupabaseTransactionManager(
+          test.sql,
+        );
+
+      const mismatchedTrace = {
+        ...generationTrace,
+        prompt_package: {
+          ...generationTrace.prompt_package,
+          trace: {
+            ...generationTrace
+              .prompt_package
+              .trace,
+            run_id:
+              "91000000-0000-4000-8000-000000000001",
+          },
+        },
+      } as unknown as
+        CapaIntakeAdvisoryGenerationTraceCapture;
+
+      await expect(
+        manager.runInTransaction(
+          {
+            request_id:
+              REQUEST_ID as never,
+            correlation_id:
+              CORRELATION_ID as never,
+          },
+          (transaction) =>
+            repository.save(
+              transaction,
+              {
+                ...input,
+                generation_trace:
+                  mismatchedTrace,
+              },
+            ),
+        ),
+      ).rejects.toMatchObject({
+        name:
+          "SupabaseCapaIntakeAdvisoryOutputRepositoryError",
+      });
+
+      expect(test.calls).toHaveLength(0);
+    });
+
+    it("rejects malformed generation trace before issuing SQL", async () => {
+      const test = harness();
+
+      const repository =
+        new SupabaseCapaIntakeAdvisoryOutputRepository();
+
+      const manager =
+        new SupabaseTransactionManager(
+          test.sql,
+        );
+
+      const malformedTrace = {
+        ...generationTrace,
+        prompt_package: {
+          ...generationTrace.prompt_package,
+          layers: [],
+        },
+      } as unknown as
+        CapaIntakeAdvisoryGenerationTraceCapture;
+
+      await expect(
+        manager.runInTransaction(
+          {
+            request_id:
+              REQUEST_ID as never,
+            correlation_id:
+              CORRELATION_ID as never,
+          },
+          (transaction) =>
+            repository.save(
+              transaction,
+              {
+                ...input,
+                generation_trace:
+                  malformedTrace,
+              },
+            ),
+        ),
+      ).rejects.toMatchObject({
+        name:
+          "SupabaseCapaIntakeAdvisoryOutputRepositoryError",
+      });
+
+      expect(test.calls).toHaveLength(0);
+    });
+
+    it("fails the transaction when generation-trace persistence fails", async () => {
+      const test = harness();
+
+      test.enqueue(
+        [
+          {
+            capa_case_id: CASE_ID,
+          },
+        ],
+        [],
+        new Error(
+          "simulated generation-trace insert failure",
+        ),
+      );
+
+      const repository =
+        new SupabaseCapaIntakeAdvisoryOutputRepository();
+
+      const manager =
+        new SupabaseTransactionManager(
+          test.sql,
+        );
+
+      await expect(
+        manager.runInTransaction(
+          {
+            request_id:
+              REQUEST_ID as never,
+            correlation_id:
+              CORRELATION_ID as never,
+          },
+          (transaction) =>
+            repository.save(
+              transaction,
+              input,
+            ),
+        ),
+      ).rejects.toThrow(
+        "simulated generation-trace insert failure",
+      );
+
+      expect(test.calls).toHaveLength(3);
+
+      expect(
+        test.calls[1]?.query,
+      ).toContain(
+        "insert into public.capa_ai_outputs",
+      );
+
+      expect(
+        test.calls[2]?.query,
+      ).toContain(
+        "insert into public.capa_ai_generation_traces",
+      );
     });
 
     it("rejects a manufactured transaction context", async () => {

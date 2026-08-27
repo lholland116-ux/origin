@@ -68,13 +68,72 @@ const input = {
   agent: CAPA_INTAKE_ADVISORY_AGENT,
 } as unknown as CapaIntakeAdvisoryGenerationInput;
 
+function promptPackage(
+  runId = "run-1",
+): import("../../lib/capa/ai/capa-prompt-contract").CapaControlledPromptPackage {
+  return {
+    scope: {
+      organization_id:
+        "org-1",
+      capa_case_id:
+        "case-1",
+      case_version_id:
+        "version-1",
+      record_version: 2,
+      workflow_state: "S10",
+    },
+
+    trace: {
+      run_id:
+        runId,
+      prompt_package_id:
+        "prompt-package-1",
+      request_id:
+        "request-1",
+      correlation_id:
+        "correlation-1",
+      assembled_at:
+        "2026-08-27T12:00:00.000Z",
+    },
+
+    agent: {
+      agent_id:
+        CAPA_INTAKE_ADVISORY_AGENT
+          .agent_id,
+      agent_version:
+        CAPA_INTAKE_ADVISORY_AGENT
+          .agent_version,
+      output_type:
+        CAPA_INTAKE_ADVISORY_AGENT
+          .output_schema_version,
+    },
+
+    component_versions: {
+      model_profile_version:
+        "capa-model-profile-1.0.0",
+      output_schema_version:
+        CAPA_INTAKE_ADVISORY_AGENT
+          .output_schema_version,
+    },
+
+    layers: [],
+    reduction_applied: false,
+  } as unknown as
+    import("../../lib/capa/ai/capa-prompt-contract")
+      .CapaControlledPromptPackage;
+}
+
 function dependencies():
   CapaIntakeAdvisoryModelGeneratorDependencies {
   return {
     prompt_renderer: {
-      render: vi.fn().mockReturnValue(
-        "controlled rendered prompt",
-      ),
+      build: vi.fn().mockReturnValue({
+        prompt_package:
+          promptPackage(),
+
+        rendered_prompt:
+          "controlled rendered prompt",
+      }),
     },
     model_client: {
       generateStructured:
@@ -146,19 +205,70 @@ describe(
       ).toHaveBeenCalledTimes(1);
 
       expect(
-        ports.prompt_renderer.render,
+        ports.prompt_renderer.build,
       ).toHaveBeenCalledTimes(1);
 
       expect(
-        ports.prompt_renderer.render,
+        ports.prompt_renderer.build,
       ).toHaveBeenCalledWith({
         generation_input: input,
         run_id: "run-1",
       });
 
-      expect(result.run_id).toBe(
+      expect(
+        result.response.run_id,
+      ).toBe(
         "run-1",
       );
+
+      expect(
+        result.trace.prompt_package
+          .trace.run_id,
+      ).toBe(
+        "run-1",
+      );
+
+      expect(
+        result.trace.rendered_prompt,
+      ).toBe(
+        "controlled rendered prompt",
+      );
+
+      expect(
+        result.trace
+          .model_profile_version,
+      ).toBe(
+        "capa-model-profile-1.0.0",
+      );
+    });
+
+    it("fails closed when the prompt package is bound to a different run", async () => {
+      const ports = dependencies();
+
+      vi.mocked(
+        ports.prompt_renderer.build,
+      ).mockReturnValue({
+        prompt_package:
+          promptPackage(
+            "different-run",
+          ),
+
+        rendered_prompt:
+          "controlled rendered prompt",
+      });
+
+      await expect(
+        createCapaIntakeAdvisoryModelGenerator(
+          ports,
+        ).generate(input),
+      ).rejects.toThrow(
+        "CONTROLLED_CAPA_PROMPT_TRACE_INVALID",
+      );
+
+      expect(
+        ports.model_client
+          .generateStructured,
+      ).not.toHaveBeenCalled();
     });
 
     it("constructs an advisory-only response", async () => {
@@ -168,7 +278,9 @@ describe(
           ports,
         ).generate(input);
 
-      expect(result).toMatchObject({
+      expect(
+        result.response,
+      ).toMatchObject({
         run_id: "run-1",
         output_id: "output-1",
         output_schema_version:
@@ -209,8 +321,14 @@ describe(
     it("rejects an empty controlled prompt", async () => {
       const ports = dependencies();
       vi.mocked(
-        ports.prompt_renderer.render,
-      ).mockReturnValue("   ");
+        ports.prompt_renderer.build,
+      ).mockReturnValue({
+        prompt_package:
+          promptPackage(),
+
+        rendered_prompt:
+          "   ",
+      });
 
       await expect(
         createCapaIntakeAdvisoryModelGenerator(
@@ -228,8 +346,14 @@ describe(
     it("rejects an oversized controlled prompt", async () => {
       const ports = dependencies();
       vi.mocked(
-        ports.prompt_renderer.render,
-      ).mockReturnValue("x".repeat(120_001));
+        ports.prompt_renderer.build,
+      ).mockReturnValue({
+        prompt_package:
+          promptPackage(),
+
+        rendered_prompt:
+          "x".repeat(120_001),
+      });
 
       await expect(
         createCapaIntakeAdvisoryModelGenerator(
@@ -262,7 +386,7 @@ describe(
     it("does not call the provider when prompt rendering fails", async () => {
       const ports = dependencies();
       vi.mocked(
-        ports.prompt_renderer.render,
+        ports.prompt_renderer.build,
       ).mockImplementation(() => {
         throw new Error("render failure");
       });

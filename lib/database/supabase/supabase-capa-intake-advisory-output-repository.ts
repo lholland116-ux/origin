@@ -7,6 +7,11 @@ import {
 } from "../../capa/ai/capa-intake-advisory-service";
 
 import {
+  CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
+  createCapaAiGenerationTraceArtifacts,
+} from "../../capa/ai/capa-ai-generation-trace";
+
+import {
   requireSupabaseTransaction,
 } from "./supabase-transactions";
 
@@ -87,6 +92,56 @@ export class SupabaseCapaIntakeAdvisoryOutputRepository
     ) {
       throw new SupabaseCapaIntakeAdvisoryOutputRepositoryError();
     }
+
+    const generationTrace =
+      input.generation_trace;
+
+    const promptPackage =
+      generationTrace.prompt_package;
+
+    if (
+      promptPackage.trace.run_id !==
+        input.response.run_id ||
+      promptPackage.trace.request_id !==
+        input.request_id ||
+      promptPackage.trace.correlation_id !==
+        input.correlation_id ||
+      promptPackage.scope.organization_id !==
+        input.context.organization_id ||
+      promptPackage.scope.capa_case_id !==
+        input.context.capa_case_id ||
+      promptPackage.scope.case_version_id !==
+        input.context.case_version_id ||
+      promptPackage.scope.record_version !==
+        input.context.record_version ||
+      promptPackage.scope.workflow_state !==
+        input.context.workflow_state ||
+      promptPackage.agent.agent_id !==
+        CAPA_INTAKE_ADVISORY_AGENT.agent_id ||
+      promptPackage.agent.agent_version !==
+        CAPA_INTAKE_ADVISORY_AGENT.agent_version ||
+      promptPackage.component_versions
+        .agent_version !==
+        CAPA_INTAKE_ADVISORY_AGENT.agent_version ||
+      promptPackage.component_versions
+        .output_schema_version !==
+        input.response.output_schema_version ||
+      promptPackage.component_versions
+        .model_profile_version !==
+        generationTrace.model_profile_version
+    ) {
+      throw new SupabaseCapaIntakeAdvisoryOutputRepositoryError();
+    }
+
+    const traceArtifacts = (() => {
+      try {
+        return createCapaAiGenerationTraceArtifacts(
+          generationTrace,
+        );
+      } catch {
+        throw new SupabaseCapaIntakeAdvisoryOutputRepositoryError();
+      }
+    })();
 
     const currentRows =
       await sql<CurrentCapaRow[]>`
@@ -204,6 +259,67 @@ export class SupabaseCapaIntakeAdvisoryOutputRepository
             .human_acceptance_required
         },
         ${transaction.started_at}
+      )
+    `;
+
+    await sql`
+      insert into public.capa_ai_generation_traces (
+        organization_id,
+        run_id,
+        output_id,
+        capa_case_id,
+        case_version_id,
+        record_version,
+        output_status,
+        request_id,
+        correlation_id,
+        prompt_package_id,
+        trace_schema_version,
+        fingerprint_algorithm,
+        prompt_package,
+        prompt_package_sha256,
+        rendered_prompt_sha256,
+        evidence_manifest,
+        evidence_manifest_sha256,
+        policy_manifest,
+        policy_manifest_sha256,
+        model_profile_version,
+        assembled_at
+      )
+      values (
+        ${input.context.organization_id},
+        ${input.response.run_id},
+        ${input.response.output_id},
+        ${input.context.capa_case_id},
+        ${input.context.case_version_id},
+        ${input.context.record_version},
+        ${input.response.status},
+        ${input.request_id},
+        ${input.correlation_id},
+        ${promptPackage.trace.prompt_package_id},
+        ${CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION},
+        ${traceArtifacts.algorithm},
+        ${sql.json(
+          databaseJson(
+            promptPackage,
+          ),
+        )},
+        ${traceArtifacts.prompt_package_sha256},
+        ${traceArtifacts.rendered_prompt_sha256},
+        ${sql.json(
+          databaseJson(
+            traceArtifacts.evidence_manifest,
+          ),
+        )},
+        ${traceArtifacts.evidence_manifest_sha256},
+        ${sql.json(
+          databaseJson(
+            traceArtifacts.policy_manifest,
+          ),
+        )},
+        ${traceArtifacts.policy_manifest_sha256},
+        ${generationTrace.model_profile_version},
+        ${promptPackage.trace.assembled_at}
       )
     `;
 
