@@ -25,8 +25,8 @@ select is(
     from public.capa_roles
     where role_id = 'CAPA_REVIEWER'
   ),
-  '1.1.0',
-  'CAPA_REVIEWER uses controlled role version 1.1.0'
+  '1.2.0',
+  'CAPA_REVIEWER uses controlled role version 1.2.0'
 );
 
 select ok(

@@ -28,8 +28,8 @@ select is(
     from public.capa_roles
     where role_id = 'CAPA_REVIEWER'
   ),
-  '1.1.0',
-  'CAPA reviewer role records the citation-review permission version'
+  '1.2.0',
+  'CAPA reviewer role records the current controlled role version'
 );
 
 select ok(
