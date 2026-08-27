@@ -1,0 +1,220 @@
+LVTChat CAPA
+Milestone 5 Closure Corrective Action CA-1
+Durable AI Generation Trace
+Production Validation Evidence
+
+Date:
+2026-08-27
+
+PURPOSE
+Verify that governed CAPA AI advisory generation persists durable,
+immutable prompt/evidence/policy provenance and remains advisory-only.
+
+IMPLEMENTATION COMMITS
+d90a347 Add durable CAPA AI generation trace schema
+49f3bc6 Harden CAPA AI generation trace provenance
+4cfcca5 Persist durable CAPA AI generation trace
+7bce7c8 Require durable CAPA AI generation trace
+
+PRODUCTION MIGRATIONS
+20260827130000_create_capa_ai_generation_traces.sql
+20260827150000_require_capa_ai_generation_trace.sql
+
+FINAL ENFORCEMENT MIGRATION SHA-256
+7018c20851433c4d19a2e8100bf469ee5f9079669482c45a9499971f858c559a
+
+LOCAL QUALIFICATION
+Generation-trace focused pgTAP:
+31 / 31 PASS
+
+Full Supabase regression:
+416 / 416 PASS
+
+Production migration ledger:
+20260827130000 applied
+20260827150000 applied
+
+PRODUCTION VALIDATION CASE
+Case number:
+CAPA-000006
+
+CAPA case ID:
+957645dc-4beb-424d-b4fb-484493a8cbb5
+
+Case version ID:
+04b25bc3-194f-4bee-9741-3b22b9c9c4ed
+
+Record version:
+2
+
+Workflow state:
+S10
+
+PRODUCTION GENERATION
+Run ID:
+c4d0524f-3151-4d32-9eb5-758b4bad3423
+
+Output ID:
+ac4e52e1-d9da-4a39-8029-d6a41d842172
+
+Request ID:
+84c583ef-e947-41b0-86ef-f51fc9fb5131
+
+Correlation ID:
+598beed4-9bc1-4438-ba93-4d3ca9119af2
+
+Output status:
+completed_draft
+
+DUAL-WRITE / TRACE RESULTS
+Exact output-to-trace linkage:
+PASS
+
+Prompt package present:
+PASS
+
+Evidence manifest present:
+PASS
+
+Policy manifest present:
+PASS
+
+Prompt package SHA-256 length:
+64
+
+Rendered prompt SHA-256 length:
+64
+
+Evidence manifest SHA-256 length:
+64
+
+Policy manifest SHA-256 length:
+64
+
+Trace schema version:
+capa-ai-generation-trace-1.0.0
+
+Fingerprint algorithm:
+sha256-canonical-json-v1
+
+Model profile version:
+capa-model-profile-1.0.0
+
+EVIDENCE PROVENANCE
+Evidence item count:
+1
+
+Evidence items valid:
+PASS
+
+Controlled source:
+LVTChat CAPA Intake Analysis Reference
+
+Source ID:
+145ff42d-4073-55cd-b8e0-e06973e3a088
+
+Source version ID:
+929cbc36-1127-58b7-ae6f-4fb5dd1bb088
+
+Collection ID:
+df3e4e8a-65f8-5903-a690-940ae7b70ffd
+
+Source status:
+approved
+
+Evidence item SHA-256:
+populated and validated
+
+Evidence text SHA-256:
+populated and validated
+
+POLICY PROVENANCE
+Agent ID:
+AG-INTAKE
+
+Agent version:
+ag-intake-1.0.0
+
+Governance layer count:
+5
+
+Governance layers valid:
+PASS
+
+Authorization context version:
+capa-authorization-context-1.0.0
+
+Output schema version:
+capa-intake-draft-output-1.0.0
+
+Reduction applied:
+false
+
+ADVISORY-ONLY INVARIANTS
+CAPA state after generation:
+S10
+
+CAPA record version after generation:
+2
+
+Generation snapshot still current:
+PASS
+
+CAPA versions created since generation:
+0
+
+Workflow writes since generation:
+0
+
+Audit events using generation correlation ID:
+0
+
+MANDATORY TRACE ENFORCEMENT
+Trigger:
+capa_ai_outputs_require_generation_trace
+
+Trigger state:
+enabled
+
+Constraint trigger:
+true
+
+Deferrable:
+true
+
+Initially deferred:
+true
+
+Row level:
+true
+
+After trigger:
+true
+
+Fires on insert:
+true
+
+Function schema:
+private
+
+Function:
+capa_require_ai_generation_trace
+
+Security definer:
+true
+
+CONCLUSION
+PASS
+
+CA-1 demonstrates durable, immutable AI generation provenance for new
+CAPA advisory outputs. Production generation preserved exact output/run,
+CAPA snapshot, request, correlation, prompt, evidence, policy and model
+provenance. The advisory created no CAPA version and no workflow write.
+
+The database now fails closed for future CAPA AI output inserts that do
+not receive an exact corresponding generation trace before transaction
+commit.
+
+Historical outputs created before CA-1 are intentionally not backfilled
+with fabricated generation provenance and remain legacy records without
+CA-1 exact-generation verification.
