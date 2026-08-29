@@ -226,6 +226,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_SUBMIT_INTAKE_ALLOWED",
       );
 
+    case "approve_scope":
+      return controlled(
+        "DEVELOPMENT_APPROVE_SCOPE_ALLOWED",
+      );
+
     case "review_knowledge_citation":
       return controlled(
         "DEVELOPMENT_KNOWLEDGE_CITATION_REVIEW_ALLOWED",
@@ -280,6 +285,8 @@ function developmentAuthorizationPolicy():
           "view_case" ||
         request.operation ===
           "submit_intake" ||
+        request.operation ===
+          "approve_scope" ||
         request.operation ===
           "review_knowledge_citation" ||
         request.operation ===

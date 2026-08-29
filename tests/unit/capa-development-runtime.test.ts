@@ -878,6 +878,60 @@ describe(
     );
 
     it(
+      "allows development human CAPA scope approval",
+      async () => {
+        const request =
+          policyRequest();
+
+        const decision =
+          await createPolicy()
+            .evaluate({
+              ...request,
+
+              operation:
+                "approve_scope",
+
+              resource: {
+                organization_id:
+                  request.tenant
+                    .organization_id,
+
+                resource_type:
+                  controlled(
+                    "CAPA_CASE",
+                  ),
+
+                workflow_state:
+                  "S10",
+              },
+
+              purpose:
+                controlled(
+                  "CAPA_GATE_DECISION",
+                ),
+            });
+
+        expect(decision).toEqual({
+          decision:
+            "allow",
+
+          reason_code:
+            "DEVELOPMENT_APPROVE_SCOPE_ALLOWED",
+
+          policy_version:
+            "development-policy-1.0.0",
+
+          evaluated_at:
+            "2026-08-12T14:00:00.000Z",
+
+          relied_on_role_assignment_ids: [
+            `development-role:${USER_ID}`,
+          ],
+        });
+      },
+    );
+
+    it(
       "allows governed development AI intake advisory requests",
       async () => {
         const request =
