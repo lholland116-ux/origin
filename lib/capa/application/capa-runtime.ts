@@ -1,4 +1,8 @@
 import type {
+  ApproveCapaScopeDependencies,
+} from "./approve-capa-scope";
+
+import type {
   CreateCapaDependencies,
 } from "./create-capa";
 
@@ -121,6 +125,17 @@ export interface CapaRuntime {
    */
   readonly submit_intake_dependencies:
     SubmitCapaIntakeDependencies;
+
+  /**
+   * Application dependencies for the human-controlled G-01 S10 to S20
+   * scope-acceptance transition.
+   *
+   * Kept separate from ordinary workflow-transition dependencies because
+   * G-01 requires scope validation, explicit human confirmation, fresh
+   * step-up authentication and paired approval/state-transition auditing.
+   */
+  readonly approve_scope_dependencies:
+    ApproveCapaScopeDependencies;
 
   /**
    * Controlled provider-neutral prompt assembly. This boundary does not

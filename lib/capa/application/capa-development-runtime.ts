@@ -1,3 +1,7 @@
+import type {
+  ApproveCapaScopeDependencies,
+} from "./approve-capa-scope";
+
 import {
   randomUUID,
 } from "node:crypto";
@@ -581,6 +585,51 @@ export function createCapaDevelopmentRuntime(
     },
   };
 
+  const approveScopeDependencies:
+    ApproveCapaScopeDependencies = {
+    transaction_manager:
+      database,
+
+    capa_repository:
+      database,
+
+    audit_repository:
+      database,
+
+    workflow_idempotency_repository:
+      database,
+
+    authorization_policy:
+      dependencies.authorization_policy,
+
+    id_generator:
+      dependencies.id_generator,
+
+    clock:
+      dependencies.clock,
+
+    configuration: {
+      workflow_version:
+        dependencies.configuration
+          .workflow_version,
+
+      audit_schema_version:
+        dependencies.configuration
+          .audit_schema_version,
+
+      step_up_maximum_age_ms:
+        15 * 60 * 1000,
+
+      required_step_up_assurance:
+        controlled(
+          "MFA",
+        ),
+
+      approval_rationale_required:
+        true,
+    },
+  };
+
   const knowledgeRepository =
     new InMemoryCapaKnowledgeDatabase({
       generate_transaction_id: () =>
@@ -736,6 +785,9 @@ export function createCapaDevelopmentRuntime(
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,
+
+    approve_scope_dependencies:
+      approveScopeDependencies,
     prompt_assembly_service:
       promptAssemblyService,
 

@@ -1,3 +1,7 @@
+import type {
+  ApproveCapaScopeDependencies,
+} from "./approve-capa-scope";
+
 import { randomUUID } from "node:crypto";
 
 import type postgres from "postgres";
@@ -732,6 +736,47 @@ export function createCapaProductionRuntime(
     },
   };
 
+  const approveScopeDependencies:
+    ApproveCapaScopeDependencies = {
+    transaction_manager:
+      transactionManager,
+
+    capa_repository:
+      capaRepository,
+
+    audit_repository:
+      auditRepository,
+
+    workflow_idempotency_repository:
+      workflowIdempotencyRepository,
+
+    authorization_policy:
+      authorizationPolicy,
+
+    id_generator:
+      dependencies.id_generator,
+
+    clock:
+      dependencies.clock,
+
+    configuration: {
+      workflow_version:
+        workflowVersion,
+
+      audit_schema_version:
+        auditSchemaVersion,
+
+      step_up_maximum_age_ms:
+        stepUpMaximumAge,
+
+      required_step_up_assurance:
+        requiredStepUpAssurance,
+
+      approval_rationale_required:
+        true,
+    },
+  };
+
   const knowledgeRepository =
     new SupabaseCapaKnowledgeRepository(
       sql,
@@ -954,6 +999,9 @@ export function createCapaProductionRuntime(
 
     submit_intake_dependencies:
       submitIntakeDependencies,
+
+    approve_scope_dependencies:
+      approveScopeDependencies,
 
     prompt_assembly_service:
       promptAssemblyService,
