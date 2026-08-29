@@ -1420,6 +1420,172 @@ describe(
     );
 
     it(
+      "does not disclose G-01 blocker facts before fine-grained authorization",
+      async () => {
+        const test =
+          fixture();
+
+        let policyCalls = 0;
+
+        const denyPolicy:
+          CapaAuthorizationPolicy = {
+          async evaluate(
+            request:
+              CapaPolicyEvaluationRequest,
+          ): Promise<CapaPolicyDecision> {
+            policyCalls += 1;
+
+            return {
+              decision:
+                "deny",
+
+              reason_code:
+                controlled(
+                  "TEST_SCOPE_APPROVAL_DENIED",
+                ),
+
+              policy_version:
+                "policy-1.0.0",
+
+              evaluated_at:
+                iso(
+                  request.trusted_now
+                    .toISOString(),
+                ),
+            };
+          },
+        };
+
+        const body =
+          validBody();
+
+        const result =
+          await approveCapaScope(
+            {
+              ...test.dependencies,
+
+              authorization_policy:
+                denyPolicy,
+            },
+            command({
+              body: {
+                ...body,
+
+                scope: {
+                  ...body.scope,
+
+                  unresolved_scope_gaps: [
+                    "Protected unresolved supplier scope.",
+                  ],
+                },
+              },
+            }),
+          );
+
+        expect(result).toEqual({
+          status:
+            "authorization_denied",
+
+          reason_code:
+            "TEST_SCOPE_APPROVAL_DENIED",
+
+          policy_version:
+            "policy-1.0.0",
+        });
+
+        expect(policyCalls)
+          .toBe(1);
+
+        expect(
+          test.transactionManager
+            .calls,
+        ).toBe(0);
+
+        expect(
+          test.repository
+            .insertedSections,
+        ).toHaveLength(0);
+
+        expect(
+          test.auditRepository
+            .events.size,
+        ).toBe(0);
+      },
+    );
+
+    it(
+      "does not enforce caller source-version coordinates before fine-grained authorization",
+      async () => {
+        const test =
+          fixture();
+
+        let policyCalls = 0;
+
+        const denyPolicy:
+          CapaAuthorizationPolicy = {
+          async evaluate(
+            request:
+              CapaPolicyEvaluationRequest,
+          ): Promise<CapaPolicyDecision> {
+            policyCalls += 1;
+
+            return {
+              decision:
+                "deny",
+
+              reason_code:
+                controlled(
+                  "TEST_SCOPE_APPROVAL_DENIED",
+                ),
+
+              policy_version:
+                "policy-1.0.0",
+
+              evaluated_at:
+                iso(
+                  request.trusted_now
+                    .toISOString(),
+                ),
+            };
+          },
+        };
+
+        const result =
+          await approveCapaScope(
+            {
+              ...test.dependencies,
+
+              authorization_policy:
+                denyPolicy,
+            },
+            command({
+              expected_record_version:
+                999,
+            }),
+          );
+
+        expect(result).toEqual({
+          status:
+            "authorization_denied",
+
+          reason_code:
+            "TEST_SCOPE_APPROVAL_DENIED",
+
+          policy_version:
+            "policy-1.0.0",
+        });
+
+        expect(policyCalls)
+          .toBe(1);
+
+        expect(
+          test.transactionManager
+            .calls,
+        ).toBe(0);
+      },
+    );
+
+    it(
       "blocks G-01 before persistence when deterministic prerequisites are unresolved",
       async () => {
         const test =

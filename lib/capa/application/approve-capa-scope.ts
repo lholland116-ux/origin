@@ -1219,25 +1219,6 @@ export async function approveCapaScope(
     };
   }
 
-  const gatePrerequisites =
-    evaluateCapaScopeGatePrerequisites(
-      validatedBody.value.scope,
-    );
-
-  if (
-    gatePrerequisites.status ===
-    "blocked"
-  ) {
-    return {
-      status:
-        "gate_blocked",
-
-      blocker_codes:
-        gatePrerequisites
-          .blocker_codes,
-    };
-  }
-
   const trustedNow =
     dependencies.clock.now();
 
@@ -1362,19 +1343,40 @@ export async function approveCapaScope(
     throw new ApproveCapaScopeIntegrityError();
   }
 
-  const sourceVersion =
-    requireSourceVersion(
-      capaCase,
-      await dependencies
-        .capa_repository
-        .findCaseVersionById(
-          organizationId,
-          capaCase.capa_case_id,
-          command
-            .expected_current_version_id,
-        ),
-      command,
-    );
+  const candidateSourceVersion =
+    await dependencies
+      .capa_repository
+      .findCaseVersionById(
+        organizationId,
+        capaCase.capa_case_id,
+        command
+          .expected_current_version_id,
+      );
+
+  if (
+    candidateSourceVersion === null
+  ) {
+    return {
+      status:
+        "not_found_or_not_authorized",
+    };
+  }
+
+  /*
+   * The repository lookup is tenant- and case-scoped. Structural ownership
+   * mismatches indicate repository corruption, not a caller-visible
+   * concurrency condition.
+   */
+  if (
+    candidateSourceVersion
+      .organization_id !==
+      organizationId ||
+    candidateSourceVersion
+      .capa_case_id !==
+      capaCase.capa_case_id
+  ) {
+    throw new ApproveCapaScopeIntegrityError();
+  }
 
   const policyDecision =
     await dependencies
@@ -1402,18 +1404,18 @@ export async function approveCapaScope(
             capaCase.capa_case_id,
 
           resource_version_id:
-            sourceVersion
+            candidateSourceVersion
               .case_version_id,
 
           capa_case_id:
             capaCase.capa_case_id,
 
           case_version_id:
-            sourceVersion
+            candidateSourceVersion
               .case_version_id,
 
           workflow_state:
-            sourceVersion.status,
+            candidateSourceVersion.status,
         },
 
         purpose:
@@ -1462,6 +1464,37 @@ export async function approveCapaScope(
       required_assurance:
         policyDecision
           .required_assurance,
+    };
+  }
+
+  /*
+   * Only an authorized human reviewer may receive controlled source-version
+   * or G-01 prerequisite outcomes. Exact idempotent replay remains possible
+   * because the original immutable S10 source version is retained.
+   */
+  const sourceVersion =
+    requireSourceVersion(
+      capaCase,
+      candidateSourceVersion,
+      command,
+    );
+
+  const gatePrerequisites =
+    evaluateCapaScopeGatePrerequisites(
+      validatedBody.value.scope,
+    );
+
+  if (
+    gatePrerequisites.status ===
+    "blocked"
+  ) {
+    return {
+      status:
+        "gate_blocked",
+
+      blocker_codes:
+        gatePrerequisites
+          .blocker_codes,
     };
   }
 
