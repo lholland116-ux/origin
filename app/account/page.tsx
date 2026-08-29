@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BRAND } from "@/lib/branding";
+import TotpMfaEnrollment from "./TotpMfaEnrollment";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -240,7 +241,7 @@ function AccountContent() {
         <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
           <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
           <p className="mt-1 text-sm text-zinc-400">
-            Manage your plan, billing, and password.
+            Manage your plan, billing, password, and account security.
           </p>
         </section>
 
@@ -305,6 +306,8 @@ function AccountContent() {
             )}
           </div>
         </section>
+
+        <TotpMfaEnrollment />
 
         <section className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
           <h2 className="text-xl font-semibold">Change Password</h2>
