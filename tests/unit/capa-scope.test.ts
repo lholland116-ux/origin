@@ -7,6 +7,7 @@ import {
 import {
   CAPA_SCOPE_SCHEMA_VERSION,
   CAPA_SCOPE_SECTION_TYPE,
+  evaluateCapaScopeGatePrerequisites,
   validateCapaScopeContent,
 } from "../../lib/capa/domain/capa-scope";
 
@@ -14,6 +15,7 @@ function validScope() {
   return {
     problem_statement:
       "Thread depth is below the drawing requirement on sampled units.",
+
     scope_dimensions: {
       what:
         "Primary-port thread depth",
@@ -26,9 +28,26 @@ function validScope() {
       detection_method:
         "Final dimensional inspection",
     },
+
+    affected_scope_elements: [
+      {
+        element_type:
+          "product",
+        value:
+          "Device family A",
+      },
+      {
+        element_type:
+          "process",
+        value:
+          "Machining operation 40",
+      },
+    ],
+
     included_scope: [
       "Batch under investigation",
     ],
+
     exclusions: [
       {
         subject:
@@ -37,6 +56,7 @@ function validScope() {
           "Independent records show a different setup and conforming results.",
       },
     ],
+
     extent_summary: {
       magnitude:
         "12 nonconforming sampled units",
@@ -44,17 +64,48 @@ function validScope() {
         "12 of 50 sampled",
       trend: null,
       affected_population:
-        "Batch population not yet fully determined",
+        "Batch population under investigation",
     },
-    applicability_statement:
-      "CAPA investigation remains applicable.",
+
+    priority:
+      "High",
+
+    target_dates: [
+      {
+        label:
+          "Investigation target",
+        target_date:
+          "2026-09-15",
+      },
+    ],
+
+    applicability: {
+      decision:
+        "capa_applicable",
+      rationale:
+        "A systemic investigation is required.",
+    },
+
     source_reference:
       "NCR-2026-0042",
+
     evidence_references: [
       "inspection-record-001",
     ],
-    unresolved_scope_gaps: [
-      "Total potentially affected lot quantity remains to be confirmed.",
+
+    unresolved_scope_gaps: [],
+
+    required_escalations: [
+      {
+        process:
+          "Regulatory assessment",
+        reference:
+          "RA-2026-001",
+        status:
+          "resolved",
+        rationale:
+          "Qualified regulatory review completed before G-01.",
+      },
     ],
   };
 }
@@ -72,13 +123,13 @@ describe(
         expect(
           CAPA_SCOPE_SCHEMA_VERSION,
         ).toBe(
-          "capa-scope-1.0.0",
+          "capa-scope-1.1.0",
         );
       },
     );
 
     it(
-      "accepts a complete structured scope record",
+      "accepts a complete structured S10 scope record",
       () => {
         const result =
           validateCapaScopeContent(
@@ -91,20 +142,21 @@ describe(
         if (result.status === "valid") {
           expect(
             result.value
-              .scope_dimensions.what,
-          ).toBe(
-            "Primary-port thread depth",
-          );
+              .affected_scope_elements,
+          ).toHaveLength(2);
 
           expect(
-            result.value.exclusions,
-          ).toHaveLength(1);
+            result.value.applicability
+              ?.decision,
+          ).toBe(
+            "capa_applicable",
+          );
         }
       },
     );
 
     it(
-      "allows structurally valid incomplete working scope",
+      "allows structurally valid incomplete working scope without calling it adequate",
       () => {
         const value = validScope();
 
@@ -112,6 +164,14 @@ describe(
           validateCapaScopeContent({
             ...value,
             problem_statement: null,
+            affected_scope_elements: [],
+            included_scope: [],
+            extent_summary: {
+              magnitude: null,
+              frequency: null,
+              trend: null,
+              affected_population: null,
+            },
             scope_dimensions: {
               what: null,
               where: null,
@@ -119,7 +179,10 @@ describe(
               extent: null,
               detection_method: null,
             },
-            included_scope: [],
+            priority: null,
+            target_dates: [],
+            applicability: null,
+            source_reference: null,
             unresolved_scope_gaps: [
               "Problem definition remains incomplete.",
             ],
@@ -127,6 +190,14 @@ describe(
 
         expect(result.status)
           .toBe("valid");
+
+        if (result.status === "valid") {
+          expect(
+            evaluateCapaScopeGatePrerequisites(
+              result.value,
+            ).status,
+          ).toBe("blocked");
+        }
       },
     );
 
@@ -151,6 +222,156 @@ describe(
           reason_code:
             "INVALID_SCOPE_EXCLUSIONS",
         });
+      },
+    );
+
+    it(
+      "rejects duplicate structured scope elements",
+      () => {
+        const value = validScope();
+
+        const result =
+          validateCapaScopeContent({
+            ...value,
+            affected_scope_elements: [
+              value
+                .affected_scope_elements[0],
+              value
+                .affected_scope_elements[0],
+            ],
+          });
+
+        expect(result).toEqual({
+          status: "invalid",
+          reason_code:
+            "INVALID_AFFECTED_SCOPE_ELEMENTS",
+        });
+      },
+    );
+
+    it(
+      "rejects invalid target dates",
+      () => {
+        const value = validScope();
+
+        const result =
+          validateCapaScopeContent({
+            ...value,
+            target_dates: [
+              {
+                label:
+                  "Investigation target",
+                target_date:
+                  "2026-02-31",
+              },
+            ],
+          });
+
+        expect(result).toEqual({
+          status: "invalid",
+          reason_code:
+            "INVALID_TARGET_DATES",
+        });
+      },
+    );
+
+    it(
+      "meets deterministic G-01 prerequisites without representing human approval",
+      () => {
+        const result =
+          validateCapaScopeContent(
+            validScope(),
+          );
+
+        expect(result.status)
+          .toBe("valid");
+
+        if (result.status === "valid") {
+          expect(
+            evaluateCapaScopeGatePrerequisites(
+              result.value,
+            ),
+          ).toEqual({
+            status:
+              "prerequisites_met",
+          });
+        }
+      },
+    );
+
+    it(
+      "blocks G-01 prerequisites when CAPA applicability is not confirmed",
+      () => {
+        const value = validScope();
+
+        const result =
+          validateCapaScopeContent({
+            ...value,
+            applicability: {
+              decision: "pending",
+              rationale:
+                "Quality review remains open.",
+            },
+          });
+
+        expect(result.status)
+          .toBe("valid");
+
+        if (result.status === "valid") {
+          expect(
+            evaluateCapaScopeGatePrerequisites(
+              result.value,
+            ),
+          ).toEqual({
+            status: "blocked",
+            blocker_codes: [
+              "CAPA_APPLICABILITY_NOT_CONFIRMED",
+            ],
+          });
+        }
+      },
+    );
+
+    it(
+      "blocks unresolved scope gaps and required escalations",
+      () => {
+        const value = validScope();
+
+        const result =
+          validateCapaScopeContent({
+            ...value,
+            unresolved_scope_gaps: [
+              "Potential supplier scope remains unresolved.",
+            ],
+            required_escalations: [
+              {
+                process:
+                  "Regulatory assessment",
+                reference:
+                  "RA-2026-002",
+                status: "open",
+                rationale:
+                  "Assessment is required before G-01.",
+              },
+            ],
+          });
+
+        expect(result.status)
+          .toBe("valid");
+
+        if (result.status === "valid") {
+          expect(
+            evaluateCapaScopeGatePrerequisites(
+              result.value,
+            ),
+          ).toEqual({
+            status: "blocked",
+            blocker_codes: [
+              "UNRESOLVED_SCOPE_GAPS",
+              "UNRESOLVED_REQUIRED_ESCALATION",
+            ],
+          });
+        }
       },
     );
 
