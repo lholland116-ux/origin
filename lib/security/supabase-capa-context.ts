@@ -68,6 +68,27 @@ export interface SupabaseCapaSessionFacts {
    * Supabase session expiry represented as Unix seconds.
    */
   readonly expires_at_epoch_seconds: number;
+
+  /**
+   * Authenticator Assurance Level obtained only from a server-verified
+   * Supabase JWT.
+   *
+   * Optional for compatibility with pre-step-up callers. Absence is treated
+   * as aal1 and can never satisfy a controlled CAPA gate.
+   */
+  readonly verified_aal?:
+    | "aal1"
+    | "aal2";
+
+  /**
+   * Unix timestamp of the latest qualifying MFA AMR event derived from a
+   * server-verified JWT.
+   *
+   * It is deliberately absent for legacy string-form AMR because those
+   * values do not prove authentication recency.
+   */
+  readonly verified_reauthenticated_at_epoch_seconds?:
+    number;
 }
 
 /**
@@ -115,6 +136,8 @@ export type SupabaseCapaContextFailureReason =
   | "INVALID_USER_ID"
   | "INVALID_AUTHENTICATED_AT"
   | "INVALID_SESSION_EXPIRATION"
+  | "INVALID_ASSURANCE_LEVEL"
+  | "INVALID_REAUTHENTICATION_AT"
   | "SESSION_INACTIVE";
 
 export class SupabaseCapaContextError extends Error {
@@ -175,6 +198,83 @@ function parseAuthenticatedAt(
   }
 
   return new Date(timestamp);
+}
+
+function verifiedAal(
+  value:
+    | "aal1"
+    | "aal2"
+    | undefined,
+):
+  | "aal1"
+  | "aal2" {
+  if (value === undefined) {
+    return "aal1";
+  }
+
+  if (
+    value !== "aal1" &&
+    value !== "aal2"
+  ) {
+    throw new SupabaseCapaContextError(
+      "INVALID_ASSURANCE_LEVEL",
+    );
+  }
+
+  return value;
+}
+
+function parseVerifiedReauthentication(
+  value: number | undefined,
+  aal:
+    | "aal1"
+    | "aal2",
+  authenticatedAt: Date,
+  expiresAt: Date,
+  trustedNow: Date,
+): Date | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (
+    aal !== "aal2" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0
+  ) {
+    throw new SupabaseCapaContextError(
+      "INVALID_REAUTHENTICATION_AT",
+    );
+  }
+
+  const milliseconds =
+    value * 1_000;
+
+  if (
+    !Number.isFinite(milliseconds)
+  ) {
+    throw new SupabaseCapaContextError(
+      "INVALID_REAUTHENTICATION_AT",
+    );
+  }
+
+  const timestamp =
+    new Date(milliseconds);
+
+  if (
+    timestamp.getTime() <
+      authenticatedAt.getTime() ||
+    timestamp.getTime() >
+      trustedNow.getTime() ||
+    timestamp.getTime() >=
+      expiresAt.getTime()
+  ) {
+    throw new SupabaseCapaContextError(
+      "INVALID_REAUTHENTICATION_AT",
+    );
+  }
+
+  return timestamp;
 }
 
 function parseExpiration(
@@ -256,6 +356,20 @@ export function resolveSupabaseAuthenticationContext(
       trustedNow,
     );
 
+  const aal =
+    verifiedAal(
+      facts.verified_aal,
+    );
+
+  const reauthenticatedAt =
+    parseVerifiedReauthentication(
+      facts.verified_reauthenticated_at_epoch_seconds,
+      aal,
+      authenticatedAt,
+      expiresAt,
+      trustedNow,
+    );
+
   return {
     user_id: userId,
 
@@ -276,18 +390,32 @@ export function resolveSupabaseAuthenticationContext(
       authentication_method:
         controlled("SUPABASE_SESSION"),
 
-      /*
-       * Do not claim MFA or step-up assurance unless Supabase AMR/AAL
-       * evidence is explicitly verified in a future implementation.
+      /**
+       * aal2 is accepted only when it originated from server-verified
+       * Supabase JWT claims. A timestamped qualifying MFA AMR event is
+       * independently required to establish recent reauthentication.
        */
       assurance_level:
-        controlled("SINGLE_FACTOR"),
+        controlled(
+          aal === "aal2"
+            ? "MFA"
+            : "SINGLE_FACTOR",
+        ),
 
       authenticated_at:
         iso(authenticatedAt),
 
       expires_at:
         iso(expiresAt),
+
+      ...(reauthenticatedAt === undefined
+        ? {}
+        : {
+            reauthenticated_at:
+              iso(
+                reauthenticatedAt,
+              ),
+          }),
     },
   };
 }

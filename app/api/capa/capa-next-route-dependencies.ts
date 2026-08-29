@@ -27,6 +27,10 @@ import type {
 } from "@/lib/security/supabase-capa-context";
 
 import {
+  deriveSupabaseCapaStepUpFacts,
+} from "@/lib/security/supabase-capa-step-up-facts";
+
+import {
   createServerSupabaseClient,
 } from "@/lib/supabase/server";
 
@@ -50,33 +54,77 @@ async function getVerifiedSessionFacts():
 
   if (
     userError !== null ||
-    user === null
+    user === null ||
+    user.last_sign_in_at === undefined
   ) {
     return null;
   }
 
+  /**
+   * getClaims() verifies the active JWT. With asymmetric signing keys the
+   * signature is checked against the project's JWKS; otherwise Supabase
+   * falls back to an Auth-server getUser() verification.
+   *
+   * Browser-provided AAL, AMR or reauthentication values are never read.
+   */
   const {
-    data: { session },
-    error: sessionError,
-  } = await supabase.auth.getSession();
+    data: claimsData,
+    error: claimsError,
+  } = await supabase.auth.getClaims();
 
   if (
-    sessionError !== null ||
-    session === null ||
-    session.user.id !== user.id ||
-    session.expires_at === undefined ||
-    user.last_sign_in_at === undefined
+    claimsError !== null ||
+    claimsData === null ||
+    claimsData.claims.sub !==
+      user.id ||
+    !Number.isSafeInteger(
+      claimsData.claims.exp,
+    ) ||
+    claimsData.claims.exp <= 0
   ) {
+    return null;
+  }
+
+  let stepUpFacts;
+
+  try {
+    stepUpFacts =
+      deriveSupabaseCapaStepUpFacts({
+        aal:
+          claimsData.claims.aal,
+        amr:
+          claimsData.claims.amr,
+      });
+  } catch {
+    /*
+     * Invalid or unsupported verified assurance claims fail closed as an
+     * unauthenticated CAPA request context rather than being normalized.
+     */
     return null;
   }
 
   return {
     verified_user_id:
       user.id,
+
     authenticated_at:
       user.last_sign_in_at,
+
     expires_at_epoch_seconds:
-      session.expires_at,
+      claimsData.claims.exp,
+
+    verified_aal:
+      stepUpFacts.verified_aal,
+
+    ...(stepUpFacts
+      .verified_reauthenticated_at_epoch_seconds ===
+    undefined
+      ? {}
+      : {
+          verified_reauthenticated_at_epoch_seconds:
+            stepUpFacts
+              .verified_reauthenticated_at_epoch_seconds,
+        }),
   };
 }
 
