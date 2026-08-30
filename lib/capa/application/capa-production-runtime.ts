@@ -2,6 +2,10 @@ import type {
   ApproveCapaScopeDependencies,
 } from "./approve-capa-scope";
 
+import type {
+  AcceptCapaContainmentRiskDependencies,
+} from "./accept-capa-containment-risk";
+
 import { randomUUID } from "node:crypto";
 
 import type postgres from "postgres";
@@ -777,6 +781,11 @@ export function createCapaProductionRuntime(
     },
   };
 
+  const acceptContainmentRiskDependencies:
+    AcceptCapaContainmentRiskDependencies = {
+    ...approveScopeDependencies,
+  };
+
   const knowledgeRepository =
     new SupabaseCapaKnowledgeRepository(
       sql,
@@ -1002,6 +1011,9 @@ export function createCapaProductionRuntime(
 
     approve_scope_dependencies:
       approveScopeDependencies,
+
+    accept_containment_risk_dependencies:
+      acceptContainmentRiskDependencies,
 
     prompt_assembly_service:
       promptAssemblyService,

@@ -271,6 +271,25 @@ describe(
         });
 
         expect(
+          runtime.accept_containment_risk_dependencies
+            .transaction_manager,
+        ).toBe(runtime.database);
+        expect(
+          runtime.accept_containment_risk_dependencies
+            .capa_repository,
+        ).toBe(runtime.database);
+        expect(
+          runtime.accept_containment_risk_dependencies
+            .configuration,
+        ).toMatchObject({
+          workflow_version: "workflow-development-1.0.0",
+          audit_schema_version: "audit-schema-1.0.0",
+          step_up_maximum_age_ms: 15 * 60 * 1000,
+          required_step_up_assurance: "MFA",
+          approval_rationale_required: true,
+        });
+
+        expect(
           runtime.knowledge_repository,
         ).toBeInstanceOf(
           InMemoryCapaKnowledgeDatabase,
@@ -930,6 +949,24 @@ describe(
         });
       },
     );
+
+    it("allows development human G-02 containment/risk acceptance", async () => {
+      const request = policyRequest();
+      const decision = await createPolicy().evaluate({
+        ...request,
+        operation: "accept_containment_risk",
+        resource: {
+          organization_id: request.tenant.organization_id,
+          resource_type: controlled("CAPA_CASE"),
+          workflow_state: "S20",
+        },
+        purpose: controlled("CAPA_GATE_DECISION"),
+      });
+      expect(decision).toMatchObject({
+        decision: "allow",
+        reason_code: "DEVELOPMENT_ACCEPT_CONTAINMENT_RISK_ALLOWED",
+      });
+    });
 
     it(
       "allows governed development AI intake advisory requests",

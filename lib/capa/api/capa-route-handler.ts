@@ -2,6 +2,10 @@ import {
   approveCapaScope,
 } from "../application/approve-capa-scope";
 
+import {
+  acceptCapaContainmentRisk,
+} from "../application/accept-capa-containment-risk";
+
 import type {
   CapaCaseId,
   CapaCaseVersionId,
@@ -509,6 +513,48 @@ function parsedApproveScopeBody(
         approval:
           body.approval,
       }),
+  };
+}
+
+interface ParsedAcceptContainmentRiskBody {
+  readonly expected_record_version: number;
+  readonly expected_current_version_id: CapaCaseVersionId;
+  readonly application_body: Readonly<{
+    readonly containment_risk: unknown;
+    readonly approval: unknown;
+  }>;
+}
+
+function parsedAcceptContainmentRiskBody(
+  value: unknown,
+): ParsedAcceptContainmentRiskBody | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const body = value as Readonly<Record<string, unknown>>;
+  if (
+    Object.keys(body).length !== 4 ||
+    !Object.prototype.hasOwnProperty.call(body, "expected_record_version") ||
+    !Object.prototype.hasOwnProperty.call(body, "expected_current_version_id") ||
+    !Object.prototype.hasOwnProperty.call(body, "containment_risk") ||
+    !Object.prototype.hasOwnProperty.call(body, "approval") ||
+    !Number.isSafeInteger(body.expected_record_version) ||
+    (body.expected_record_version as number) < 1 ||
+    typeof body.expected_current_version_id !== "string"
+  ) {
+    return null;
+  }
+  const currentVersionId = normalizedUuid(body.expected_current_version_id);
+  if (currentVersionId === null || currentVersionId !== body.expected_current_version_id) {
+    return null;
+  }
+  return {
+    expected_record_version: body.expected_record_version as number,
+    expected_current_version_id: currentVersionId as CapaCaseVersionId,
+    application_body: {
+      containment_risk: body.containment_risk,
+      approval: body.approval,
+    },
   };
 }
 
@@ -1552,6 +1598,155 @@ export async function handleCapaApproveScope(
       trace,
       "scope approval",
       error,
+    );
+  }
+}
+
+/** Framework-neutral POST handler for human-controlled G-02 acceptance. */
+export async function handleCapaAcceptContainmentRisk(
+  request: Request,
+  capaCaseId: string,
+  dependencies: CapaApiHandlerDependencies,
+): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+
+  try {
+    const context = await authenticatedContext(dependencies);
+    if (context === null) {
+      return errorResponse(trace, 401, "UNAUTHORIZED", "Authentication is required.");
+    }
+
+    const normalizedCaseId = normalizedUuid(capaCaseId);
+    if (normalizedCaseId === null || normalizedCaseId !== capaCaseId) {
+      return errorResponse(
+        trace, 400, "INVALID_CAPA_CASE_ID",
+        "A valid CAPA case identifier is required.",
+      );
+    }
+
+    const rawIdempotencyKey = request.headers.get("idempotency-key");
+    if (
+      rawIdempotencyKey === null ||
+      rawIdempotencyKey.length === 0 ||
+      rawIdempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH ||
+      rawIdempotencyKey.trim() !== rawIdempotencyKey
+    ) {
+      return errorResponse(
+        trace, 400, "INVALID_IDEMPOTENCY_KEY",
+        "A valid idempotency key is required.",
+      );
+    }
+
+    const parsedJson = await parseJsonBody(request);
+    if (!parsedJson.valid) {
+      return errorResponse(
+        trace, 400, "INVALID_JSON", "The request body must be valid JSON.",
+      );
+    }
+
+    const body = parsedAcceptContainmentRiskBody(parsedJson.body);
+    if (body === null) {
+      return errorResponse(
+        trace, 400, "INVALID_CAPA_CONTAINMENT_RISK_ACCEPTANCE",
+        "The CAPA containment/risk-acceptance request is invalid.",
+      );
+    }
+
+    const result = await acceptCapaContainmentRisk(
+      dependencies.get_runtime().accept_containment_risk_dependencies,
+      {
+        authentication: context.authentication,
+        tenant: context.tenant,
+        capa_case_id: normalizedCaseId as CapaCaseId,
+        expected_record_version: body.expected_record_version,
+        expected_current_version_id: body.expected_current_version_id,
+        request_trace: trace,
+        body: body.application_body,
+      },
+    );
+
+    if (result.status === "validation_failed") {
+      const issues: Array<{ readonly path: string; readonly message: string }> = [
+        { path: "approval", message: result.reason_code },
+      ];
+      if (result.containment_risk_reason_code !== undefined) {
+        issues.push({
+          path: "containment_risk",
+          message: result.containment_risk_reason_code,
+        });
+      }
+      return errorResponse(
+        trace, 400, "CAPA_CONTAINMENT_RISK_ACCEPTANCE_VALIDATION_FAILED",
+        "The CAPA containment/risk-acceptance request did not pass controlled validation.",
+        issues,
+      );
+    }
+
+    if (result.status === "gate_blocked") {
+      return errorResponse(
+        trace, 409, "CAPA_CONTAINMENT_RISK_GATE_BLOCKED",
+        "The CAPA containment/risk record does not satisfy the G-02 prerequisites.",
+        result.blocker_codes.map((blockerCode) => ({
+          path: "containment_risk",
+          message: blockerCode,
+        })),
+      );
+    }
+
+    if (result.status === "authorization_denied") {
+      return errorResponse(
+        trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.",
+      );
+    }
+    if (result.status === "step_up_required") {
+      return errorResponse(
+        trace, 403, "CAPA_STEP_UP_REQUIRED", "Additional authentication is required.",
+      );
+    }
+    if (result.status === "not_found_or_not_authorized") {
+      return errorResponse(trace, 404, "CAPA_NOT_FOUND", "The CAPA case was not found.");
+    }
+    if (result.status === "idempotency_conflict") {
+      return errorResponse(
+        trace, 409, "CAPA_IDEMPOTENCY_CONFLICT",
+        "The idempotency key was already used for a different CAPA request.",
+      );
+    }
+    if (result.status === "concurrency_conflict") {
+      return errorResponse(
+        trace, 409, "CAPA_CONCURRENCY_CONFLICT",
+        "The CAPA record changed before containment/risk acceptance could be completed.",
+      );
+    }
+    if (result.status === "workflow_conflict") {
+      return errorResponse(
+        trace, 409, "CAPA_WORKFLOW_CONFLICT",
+        "The CAPA case is not in a state that permits G-02 containment/risk acceptance.",
+      );
+    }
+
+    return jsonResponse({
+      capa: {
+        capa_case_id: result.capa_case.capa_case_id,
+        case_number: result.capa_case.case_number,
+        status: result.capa_case.status,
+        record_version: result.capa_case.record_version,
+        current_version_id: result.capa_case.current_version_id,
+        accepted_version_id: result.case_version.case_version_id,
+        containment_risk_section_version_id:
+          result.containment_risk_section_version.section_version_id,
+        accepted_at: result.case_version.effective_at,
+        decision_audit_event_id: result.approval_audit_event_id,
+        transition_audit_event_id: result.transition_audit_event_id,
+      },
+      replayed: result.status === "already_approved",
+      correlation_id: trace.correlation_id,
+    }, 200);
+  } catch (error) {
+    const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
+    if (contextResponse !== null) return contextResponse;
+    return safeUnexpectedError(
+      dependencies, trace, "containment/risk acceptance", error,
     );
   }
 }

@@ -3,6 +3,10 @@ import type {
 } from "./approve-capa-scope";
 
 import type {
+  AcceptCapaContainmentRiskDependencies,
+} from "./accept-capa-containment-risk";
+
+import type {
   CreateCapaDependencies,
 } from "./create-capa";
 
@@ -136,6 +140,10 @@ export interface CapaRuntime {
    */
   readonly approve_scope_dependencies:
     ApproveCapaScopeDependencies;
+
+  /** Human-controlled G-02 S20 to S30 acceptance dependencies. */
+  readonly accept_containment_risk_dependencies:
+    AcceptCapaContainmentRiskDependencies;
 
   /**
    * Controlled provider-neutral prompt assembly. This boundary does not
