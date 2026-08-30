@@ -131,6 +131,43 @@ export type CapaContainmentRiskValidationResult =
         CapaContainmentRiskValidationReasonCode;
     };
 
+/**
+ * Deterministic G-02 internal issue codes. These are not a replacement for
+ * the controlled B-01 through B-12 blocker catalog. Each value names the
+ * approved S20 blocker semantic directly so presentation/reporting layers
+ * can map it to the authoritative catalog without creating a second set of
+ * B-identifiers.
+ */
+export const CAPA_CONTAINMENT_RISK_GATE_BLOCKER_CODES = [
+  "MISSING_REQUIRED_CONTROLLED_DATA",
+  "UNASSIGNED_CONTAINMENT",
+  "UNRESOLVED_RISK_INFORMATION",
+  "OVERDUE_CONTAINMENT_CRITICALITY_UNRESOLVED",
+  "REQUIRED_SEPARATE_ESCALATION_NOT_ADDRESSED",
+] as const;
+
+export type CapaContainmentRiskGateBlockerCode =
+  (typeof CAPA_CONTAINMENT_RISK_GATE_BLOCKER_CODES)[number];
+
+export const CAPA_CONTAINMENT_RISK_CANONICAL_BLOCKER_MAPPING = {
+  MISSING_REQUIRED_CONTROLLED_DATA: "B-01",
+  UNASSIGNED_CONTAINMENT: "B-01",
+  UNRESOLVED_RISK_INFORMATION: "B-01",
+  OVERDUE_CONTAINMENT_CRITICALITY_UNRESOLVED: "B-09",
+  REQUIRED_SEPARATE_ESCALATION_NOT_ADDRESSED: "B-09",
+} as const satisfies Record<
+  CapaContainmentRiskGateBlockerCode,
+  "B-01" | "B-09"
+>;
+
+export type CapaContainmentRiskGatePrerequisiteResult =
+  | { readonly status: "prerequisites_met" }
+  | {
+      readonly status: "blocked";
+      readonly blocker_codes:
+        readonly CapaContainmentRiskGateBlockerCode[];
+    };
+
 const INVALID = Symbol("INVALID");
 
 function isPlainObject(
@@ -620,4 +657,107 @@ export function validateCapaContainmentRiskContent(
       escalations,
     }),
   };
+}
+
+function hasRecordedImpactScope(
+  impactScope: CapaImpactScope,
+): boolean {
+  return (
+    impactScope.products.length > 0 ||
+    impactScope.processes.length > 0 ||
+    impactScope.data.length > 0 ||
+    impactScope.customers.length > 0 ||
+    impactScope.patients.length > 0
+  );
+}
+
+function isAddressedEscalationStatus(
+  status: string,
+): boolean {
+  const normalized = status.trim().toLowerCase();
+  return (
+    normalized === "addressed" ||
+    normalized === "resolved" ||
+    normalized === "closed" ||
+    normalized === "completed" ||
+    normalized === "not_required"
+  );
+}
+
+/**
+ * Evaluates objective G-02 prerequisites without making the substantive
+ * human risk-acceptance decision.
+ *
+ * The current controlled schema does not carry action criticality or an
+ * approved-exception record. An overdue active containment therefore blocks
+ * conservatively while reporting that criticality is unresolved; it is not
+ * represented as known critical. Blocker overrides remain out of scope under
+ * SRS-TBD-007.
+ */
+export function evaluateCapaContainmentRiskGatePrerequisites(
+  content: CapaContainmentRiskContent,
+  trustedReviewDate: string,
+): CapaContainmentRiskGatePrerequisiteResult {
+  if (!isIsoDate(trustedReviewDate)) {
+    throw new TypeError(
+      "trustedReviewDate must be a valid ISO calendar date.",
+    );
+  }
+
+  const blockers: CapaContainmentRiskGateBlockerCode[] = [];
+  const activeContainment = content.actions.filter(
+    (action) =>
+      action.action_type === "containment" &&
+      action.status !== "cancelled",
+  );
+
+  if (
+    content.risk_evaluation === null ||
+    !hasRecordedImpactScope(content.impact_scope)
+  ) {
+    blockers.push("MISSING_REQUIRED_CONTROLLED_DATA");
+  }
+
+  if (
+    activeContainment.some(
+      (action) => action.owner_user_id === null,
+    )
+  ) {
+    blockers.push("UNASSIGNED_CONTAINMENT");
+  }
+
+  if (content.missing_risk_information.length > 0) {
+    blockers.push("UNRESOLVED_RISK_INFORMATION");
+  }
+
+  if (
+    activeContainment.some(
+      (action) =>
+        action.status !== "completed" &&
+        action.target_date !== null &&
+        action.target_date < trustedReviewDate,
+    )
+  ) {
+    blockers.push(
+      "OVERDUE_CONTAINMENT_CRITICALITY_UNRESOLVED",
+    );
+  }
+
+  if (
+    content.escalations.some(
+      (escalation) =>
+        !isAddressedEscalationStatus(escalation.status),
+    )
+  ) {
+    blockers.push(
+      "REQUIRED_SEPARATE_ESCALATION_NOT_ADDRESSED",
+    );
+  }
+
+  return blockers.length === 0
+    ? { status: "prerequisites_met" }
+    : {
+        status: "blocked",
+        blocker_codes: Object.freeze(blockers),
+      };
 }
