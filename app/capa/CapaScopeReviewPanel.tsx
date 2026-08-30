@@ -55,6 +55,10 @@ export default function CapaScopeReviewPanel({
       keyof CapaScopeReviewDraft,
     value: string,
   ) {
+    if (busy) {
+      return;
+    }
+
     setDraft((current) => ({
       ...current,
       [field]:

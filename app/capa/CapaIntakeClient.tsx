@@ -2,10 +2,24 @@
 
 import Link from "next/link";
 
+import type {
+  CapaScopeContent,
+} from "@/lib/capa/domain/capa-scope";
+
 import {
   parseCapaExistingCaseResponse,
   type CapaExistingCaseSummary,
 } from "./capa-existing-case-client";
+
+import CapaScopeReviewPanel from "./CapaScopeReviewPanel";
+import FreshTotpStepUp from "./FreshTotpStepUp";
+
+import {
+  createCapaScopeApprovalAttempt,
+  parseCapaScopeApprovalFailure,
+  parseCapaScopeApprovalSuccess,
+  type CapaScopeApprovalAttempt,
+} from "./capa-scope-approval-client";
 
 import {
   parseCapaIntakeAdvisorySnapshot,
@@ -863,9 +877,15 @@ function statusName(
     return "Draft Intake";
   }
 
-  return status === "S10"
-    ? "Intake Submitted"
-    : status;
+  if (status === "S10") {
+    return "Triage and Scope";
+  }
+
+  if (status === "S20") {
+    return "Containment and Impact/Risk";
+  }
+
+  return status;
 }
 
 export default function CapaIntakeClient({
@@ -932,6 +952,50 @@ export default function CapaIntakeClient({
 
   const [workflowSubmissionMessage, setWorkflowSubmissionMessage] =
     useState<string | null>(null);
+
+  const [
+    scopeApprovalAttempt,
+    setScopeApprovalAttempt,
+  ] =
+    useState<CapaScopeApprovalAttempt | null>(
+      null,
+    );
+
+  const [
+    scopeApprovalConfirmationOpen,
+    setScopeApprovalConfirmationOpen,
+  ] = useState(false);
+
+  const [
+    scopeApprovalConfirmationConfirmed,
+    setScopeApprovalConfirmationConfirmed,
+  ] = useState(false);
+
+  const [
+    isSubmittingScopeApproval,
+    setIsSubmittingScopeApproval,
+  ] = useState(false);
+
+  const [
+    scopeApprovalError,
+    setScopeApprovalError,
+  ] =
+    useState<string | null>(
+      null,
+    );
+
+  const [
+    scopeApprovalMessage,
+    setScopeApprovalMessage,
+  ] =
+    useState<string | null>(
+      null,
+    );
+
+  const [
+    scopeStepUpOpen,
+    setScopeStepUpOpen,
+  ] = useState(false);
 
   const [advisoryFocus, setAdvisoryFocus] =
     useState("");
@@ -1110,6 +1174,39 @@ export default function CapaIntakeClient({
   useEffect(() => {
     void loadCases("replace");
   }, [loadCases]);
+
+  useEffect(() => {
+    setScopeApprovalAttempt(
+      null,
+    );
+
+    setScopeApprovalConfirmationOpen(
+      false,
+    );
+
+    setScopeApprovalConfirmationConfirmed(
+      false,
+    );
+
+    setIsSubmittingScopeApproval(
+      false,
+    );
+
+    setScopeStepUpOpen(
+      false,
+    );
+
+    setScopeApprovalError(
+      null,
+    );
+
+    setScopeApprovalMessage(
+      null,
+    );
+  }, [
+    createdCapa?.capaCaseId,
+    createdCapa?.currentVersionId,
+  ]);
 
   const charactersRemaining =
     INPUT_LIMITS.initiatingEvent -
@@ -1511,6 +1608,432 @@ export default function CapaIntakeClient({
     } finally {
       setOpeningCaseId(null);
     }
+  }
+
+  function beginScopeApproval(
+    scope:
+      CapaScopeContent,
+
+    approvalRationale:
+      string,
+  ) {
+    const capaCase =
+      createdCapa;
+
+    if (
+      capaCase === null ||
+      capaCase.status !== "S10" ||
+      scopeApprovalAttempt !== null ||
+      isSubmittingScopeApproval ||
+      scopeStepUpOpen
+    ) {
+      return;
+    }
+
+    const attempt =
+      createCapaScopeApprovalAttempt({
+        capaCaseId:
+          capaCase.capaCaseId,
+
+        caseNumber:
+          capaCase.caseNumber,
+
+        recordVersion:
+          capaCase.recordVersion,
+
+        currentVersionId:
+          capaCase.currentVersionId,
+
+        idempotencyKey:
+          createTraceId(),
+
+        scope,
+
+        rationale:
+          approvalRationale,
+      });
+
+    if (attempt === null) {
+      setScopeApprovalError(
+        "The controlled G-01 approval request could not be prepared from the current CAPA version.",
+      );
+      return;
+    }
+
+    setScopeApprovalAttempt(
+      attempt,
+    );
+
+    setScopeApprovalConfirmationConfirmed(
+      false,
+    );
+
+    setScopeApprovalConfirmationOpen(
+      true,
+    );
+
+    setScopeStepUpOpen(
+      false,
+    );
+
+    setScopeApprovalError(
+      null,
+    );
+
+    setScopeApprovalMessage(
+      null,
+    );
+  }
+
+  function cancelScopeApprovalConfirmation() {
+    if (
+      isSubmittingScopeApproval
+    ) {
+      return;
+    }
+
+    setScopeApprovalAttempt(
+      null,
+    );
+
+    setScopeApprovalConfirmationOpen(
+      false,
+    );
+
+    setScopeApprovalConfirmationConfirmed(
+      false,
+    );
+
+    setScopeApprovalError(
+      null,
+    );
+  }
+
+  function cancelScopeStepUp() {
+    if (
+      isSubmittingScopeApproval
+    ) {
+      return;
+    }
+
+    setScopeStepUpOpen(
+      false,
+    );
+
+    setScopeApprovalConfirmationOpen(
+      false,
+    );
+
+    setScopeApprovalConfirmationConfirmed(
+      false,
+    );
+
+    setScopeApprovalAttempt(
+      null,
+    );
+
+    setScopeApprovalError(
+      "Fresh authenticator verification was cancelled. No G-01 scope approval was recorded.",
+    );
+  }
+
+  async function submitScopeApprovalAttempt(
+    attempt:
+      CapaScopeApprovalAttempt,
+  ) {
+    if (
+      isSubmittingScopeApproval
+    ) {
+      return;
+    }
+
+    setIsSubmittingScopeApproval(
+      true,
+    );
+
+    setScopeApprovalError(
+      null,
+    );
+
+    const correlationId =
+      createTraceId();
+
+    try {
+      const response =
+        await fetch(
+          "/api/capa/" +
+            encodeURIComponent(
+              attempt.capaCaseId,
+            ) +
+            "/approve-scope",
+          {
+            method:
+              "POST",
+
+            headers: {
+              "content-type":
+                "application/json",
+
+              "x-request-id":
+                createTraceId(),
+
+              "x-correlation-id":
+                correlationId,
+
+              "idempotency-key":
+                attempt
+                  .idempotencyKey,
+            },
+
+            /*
+             * This is the immutable serialized body captured when the human
+             * began G-01 confirmation. Never rebuild it from mutable form
+             * state, including after MFA step-up.
+             */
+            body:
+              attempt.requestBody,
+          },
+        );
+
+      const body =
+        await readJson(
+          response,
+        );
+
+      if (!response.ok) {
+        const failure =
+          parseCapaScopeApprovalFailure(
+            body,
+          );
+
+        if (
+          failure.kind ===
+          "step_up_required"
+        ) {
+          /*
+           * The browser treats successful MFA only as a UX signal.
+           * The exact same frozen request will be sent again and the server
+           * must independently re-evaluate trusted JWT AAL/AMR recency.
+           */
+          setScopeApprovalConfirmationOpen(
+            false,
+          );
+
+          setScopeStepUpOpen(
+            true,
+          );
+
+          return;
+        }
+
+        let message =
+          failure.message;
+
+        if (
+          failure.kind ===
+            "gate_blocked" &&
+          failure.blockerCodes
+            .length > 0
+        ) {
+          message +=
+            " Blockers: " +
+            failure.blockerCodes
+              .join(", ") +
+            ".";
+        }
+
+        setScopeApprovalError(
+          message,
+        );
+
+        /*
+         * A controlled server rejection means a changed request must receive
+         * a new idempotency key. Release the frozen attempt so the human may
+         * revise the scope and explicitly confirm again.
+         */
+        setScopeApprovalAttempt(
+          null,
+        );
+
+        setScopeApprovalConfirmationOpen(
+          false,
+        );
+
+        setScopeApprovalConfirmationConfirmed(
+          false,
+        );
+
+        setScopeStepUpOpen(
+          false,
+        );
+
+        return;
+      }
+
+      const approved =
+        parseCapaScopeApprovalSuccess(
+          body,
+          attempt.capaCaseId,
+        );
+
+      if (approved === null) {
+        /*
+         * Fail closed. Retain the immutable attempt so a retry is safe under
+         * the same server-side idempotency key.
+         */
+        throw new Error(
+          "The server response could not be verified as a committed S20 G-01 approval. The frozen request has been retained for a safe retry.",
+        );
+      }
+
+      setScopeApprovalMessage(
+        approved.replayed
+          ? approved.caseNumber +
+              " G-01 scope approval was already committed."
+          : approved.caseNumber +
+              " scope was accepted at G-01 and advanced to S20.",
+      );
+
+      setScopeApprovalConfirmationOpen(
+        false,
+      );
+
+      setScopeApprovalConfirmationConfirmed(
+        false,
+      );
+
+      setScopeStepUpOpen(
+        false,
+      );
+
+      setScopeApprovalAttempt(
+        null,
+      );
+
+      /*
+       * Refresh the opened record through the existing authoritative GET
+       * path. The stale list item is used only to identify the CAPA; the GET
+       * response remains authoritative for current state and version.
+       */
+      const refreshTarget =
+        listedCases.find(
+          (item) =>
+            item.capaCaseId ===
+            approved.capaCaseId,
+        );
+
+      if (
+        refreshTarget !==
+        undefined
+      ) {
+        await openExistingCase(
+          refreshTarget,
+        );
+      } else {
+        /*
+         * Defensive fallback for a just-created case that is not yet present
+         * in the current list page. Use only the server-validated approval
+         * response until the authoritative list refresh below completes.
+         */
+        setCreatedCapa(
+          (current) =>
+            current?.capaCaseId ===
+            approved.capaCaseId
+              ? {
+                  ...current,
+
+                  caseNumber:
+                    approved
+                      .caseNumber,
+
+                  status:
+                    approved.status,
+
+                  recordVersion:
+                    approved
+                      .recordVersion,
+
+                  currentVersionId:
+                    approved
+                      .currentVersionId,
+                }
+              : current,
+        );
+      }
+
+      await loadCases(
+        "replace",
+      );
+    } catch (error) {
+      /*
+       * Network errors and unverifiable success envelopes retain the exact
+       * immutable request. Re-opening confirmation therefore performs a safe
+       * idempotent retry instead of manufacturing a new request.
+       */
+      setScopeApprovalError(
+        error instanceof Error
+          ? error.message
+          : "The G-01 scope approval request could not be completed.",
+      );
+
+      setScopeStepUpOpen(
+        false,
+      );
+
+      if (
+        scopeApprovalAttempt !==
+        null
+      ) {
+        setScopeApprovalConfirmationOpen(
+          true,
+        );
+      }
+    } finally {
+      setIsSubmittingScopeApproval(
+        false,
+      );
+    }
+  }
+
+  async function confirmScopeApproval() {
+    const attempt =
+      scopeApprovalAttempt;
+
+    if (
+      attempt === null ||
+      !scopeApprovalConfirmationConfirmed ||
+      isSubmittingScopeApproval
+    ) {
+      return;
+    }
+
+    await submitScopeApprovalAttempt(
+      attempt,
+    );
+  }
+
+  function handleVerifiedScopeStepUp() {
+    const attempt =
+      scopeApprovalAttempt;
+
+    setScopeStepUpOpen(
+      false,
+    );
+
+    if (attempt === null) {
+      setScopeApprovalError(
+        "The frozen G-01 request is no longer available. Review the scope and begin approval again.",
+      );
+      return;
+    }
+
+    /*
+     * FreshTotpStepUp.onVerified is a UX signal only. Authorization is not
+     * granted here. The server independently verifies the subsequent request.
+     */
+    void submitScopeApprovalAttempt(
+      attempt,
+    );
   }
 
   function beginIntakeSubmission(
@@ -2574,8 +3097,10 @@ export default function CapaIntakeClient({
           [
             "3",
             createdCapa?.status === "S10"
-              ? "Intake submitted"
-              : "Draft created",
+              ? "Triage and scope"
+              : createdCapa?.status === "S20"
+                ? "Scope accepted"
+                : "Draft created",
             "created",
           ],
         ].map(
@@ -4033,6 +4558,62 @@ export default function CapaIntakeClient({
             </section>
           ) : null}
 
+          {scopeApprovalMessage !== null ? (
+            <div
+              role="status"
+              className="mt-6 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-200"
+            >
+              {scopeApprovalMessage}
+            </div>
+          ) : null}
+
+          {scopeApprovalError !== null ? (
+            <div
+              role="alert"
+              className="mt-6 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-200"
+            >
+              {scopeApprovalError}
+            </div>
+          ) : null}
+
+          {createdCapa.status === "S10" ? (
+            <CapaScopeReviewPanel
+              key={
+                createdCapa
+                  .currentVersionId
+              }
+              caseNumber={
+                createdCapa
+                  .caseNumber
+              }
+              busy={
+                scopeApprovalAttempt !==
+                  null ||
+                isSubmittingScopeApproval ||
+                scopeStepUpOpen
+              }
+              onReview={
+                beginScopeApproval
+              }
+            />
+          ) : null}
+
+          {createdCapa.status === "S20" ? (
+            <section className="mt-8 rounded-3xl border border-emerald-400/20 bg-emerald-500/[0.05] p-5 sm:p-7">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">
+                G-01 complete
+              </p>
+
+              <h2 className="mt-2 text-2xl font-semibold text-zinc-100">
+                CAPA scope accepted
+              </h2>
+
+              <p className="mt-3 text-sm leading-6 text-zinc-400">
+                The controlled CAPA is now in S20 — Containment and Impact/Risk. G-01 was a human-controlled workflow decision; AI did not approve or advance the case.
+              </p>
+            </section>
+          ) : null}
+
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <Link
               href="/chat"
@@ -4072,6 +4653,180 @@ export default function CapaIntakeClient({
             ) : null}
           </div>
         </section>
+      ) : null}
+
+      <FreshTotpStepUp
+        open={
+          scopeStepUpOpen
+        }
+        title="Verify identity for G-01"
+        description="Enter the current code from your enrolled authenticator. Successful verification does not authorize CAPA approval in the browser; the server will independently verify the retried G-01 request."
+        onCancel={
+          cancelScopeStepUp
+        }
+        onVerified={
+          handleVerifiedScopeStepUp
+        }
+      />
+
+      {scopeApprovalConfirmationOpen &&
+      scopeApprovalAttempt !== null ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+              event.currentTarget
+            ) {
+              cancelScopeApprovalConfirmation();
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-scope-approval-heading"
+            className="w-full max-w-xl rounded-3xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl sm:p-7"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+              G-01 · Human-controlled approval
+            </p>
+
+            <h2
+              id="confirm-scope-approval-heading"
+              className="mt-2 text-2xl font-semibold text-zinc-100"
+            >
+              Accept{" "}
+              {
+                scopeApprovalAttempt
+                  .caseNumber
+              }{" "}
+              scope?
+            </h2>
+
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              This controlled action accepts the reviewed CAPA scope and advances the case from S10 — Triage and Scope to S20 — Containment and Impact/Risk. The server will create an immutable scope version, approval audit event, and state-transition audit event.
+            </p>
+
+            <dl className="mt-5 grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-zinc-500">
+                  Current state
+                </dt>
+
+                <dd className="mt-1 font-medium text-zinc-100">
+                  S10 — Triage and Scope
+                </dd>
+              </div>
+
+              <div>
+                <dt className="text-zinc-500">
+                  Record version
+                </dt>
+
+                <dd className="mt-1 font-mono text-zinc-100">
+                  {
+                    scopeApprovalAttempt
+                      .recordVersion
+                  }
+                </dd>
+              </div>
+
+              <div className="sm:col-span-2">
+                <dt className="text-zinc-500">
+                  Reviewed case version
+                </dt>
+
+                <dd className="mt-1 break-all font-mono text-xs text-zinc-100">
+                  {
+                    scopeApprovalAttempt
+                      .currentVersionId
+                  }
+                </dd>
+              </div>
+            </dl>
+
+            <div className="mt-5 rounded-2xl border border-amber-400/25 bg-amber-500/10 p-4">
+              <p className="text-sm font-semibold text-amber-200">
+                Human decision required
+              </p>
+
+              <p className="mt-1 text-xs leading-5 text-amber-100/75">
+                AI may provide advisory analysis but cannot make this approval, determine authoritative CAPA applicability, or transition workflow.
+              </p>
+            </div>
+
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-700 bg-zinc-900/70 p-4">
+              <input
+                type="checkbox"
+                checked={
+                  scopeApprovalConfirmationConfirmed
+                }
+                disabled={
+                  isSubmittingScopeApproval
+                }
+                onChange={(event) =>
+                  setScopeApprovalConfirmationConfirmed(
+                    event.target.checked,
+                  )
+                }
+                className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-blue-600 focus:ring-blue-500"
+              />
+
+              <span>
+                <span className="block text-sm font-medium text-zinc-100">
+                  I reviewed the CAPA scope and confirm this is my human G-01 decision to accept it.
+                </span>
+
+                <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                  I understand this action creates controlled records and advances the CAPA to S20.
+                </span>
+              </span>
+            </label>
+
+            {scopeApprovalError !== null ? (
+              <div
+                role="alert"
+                className="mt-5 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-200"
+              >
+                {scopeApprovalError}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={
+                  isSubmittingScopeApproval
+                }
+                onClick={
+                  cancelScopeApprovalConfirmation
+                }
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  isSubmittingScopeApproval ||
+                  !scopeApprovalConfirmationConfirmed
+                }
+                onClick={() =>
+                  void confirmScopeApproval()
+                }
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+              >
+                {
+                  isSubmittingScopeApproval
+                    ? "Accepting scope..."
+                    : "Confirm G-01 acceptance"
+                }
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {reviewConfirmationOpen &&
