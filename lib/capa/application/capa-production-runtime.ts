@@ -10,6 +10,10 @@ import type {
   ReleaseCapaInvestigationDependencies,
 } from "./release-capa-investigation";
 
+import type {
+  SubmitCapaRootCausePackageDependencies,
+} from "./submit-capa-root-cause-package";
+
 import { randomUUID } from "node:crypto";
 
 import type postgres from "postgres";
@@ -801,6 +805,11 @@ export function createCapaProductionRuntime(
       participantEligibilityRepository,
   };
 
+  const submitRootCauseDependencies:
+    SubmitCapaRootCausePackageDependencies = {
+    ...submitIntakeDependencies,
+  };
+
   const knowledgeRepository =
     new SupabaseCapaKnowledgeRepository(
       sql,
@@ -1035,6 +1044,9 @@ export function createCapaProductionRuntime(
 
     release_investigation_dependencies:
       releaseInvestigationDependencies,
+
+    submit_root_cause_dependencies:
+      submitRootCauseDependencies,
 
     prompt_assembly_service:
       promptAssemblyService,

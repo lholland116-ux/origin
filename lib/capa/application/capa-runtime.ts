@@ -11,6 +11,10 @@ import type {
 } from "./release-capa-investigation";
 
 import type {
+  SubmitCapaRootCausePackageDependencies,
+} from "./submit-capa-root-cause-package";
+
+import type {
   CreateCapaDependencies,
 } from "./create-capa";
 
@@ -154,6 +158,10 @@ export interface CapaRuntime {
   /** Human-controlled G-03 S30 to S40 investigation release dependencies. */
   readonly release_investigation_dependencies:
     ReleaseCapaInvestigationDependencies;
+
+  /** Human-controlled S40 to S50 root-cause submission dependencies. */
+  readonly submit_root_cause_dependencies:
+    SubmitCapaRootCausePackageDependencies;
 
   /**
    * Controlled provider-neutral prompt assembly. This boundary does not

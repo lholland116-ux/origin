@@ -293,6 +293,37 @@ function investigationReleaseRequest(
   });
 }
 
+function rootCauseSubmissionRequest(
+  roleId: string = "CAPA_OWNER",
+  workflowState:
+    CapaCaseStatus =
+      "S40" as CapaCaseStatus,
+): CapaPolicyEvaluationRequest {
+  return policyRequest({
+    operation: "submit_for_review",
+    tenant: tenantContext({
+      role_assignments: [
+        assignment({
+          role_id:
+            roleId as RoleId,
+        }),
+      ],
+    }),
+    resource: {
+      organization_id:
+        ORGANIZATION_A,
+      resource_type:
+        controlled("CAPA_CASE"),
+      workflow_state:
+        workflowState,
+    },
+    purpose:
+      controlled(
+        "CAPA_WORKFLOW_TRANSITION",
+      ),
+  });
+}
+
 function membershipRow(
   overrides:
     Record<string, unknown> = {},
@@ -736,6 +767,102 @@ describe("G-03 investigation release authorization", () => {
     },
   );
 });
+
+describe(
+  "S40 root-cause submission authorization",
+  () => {
+    it.each([
+      "CAPA_OWNER",
+      "CAPA_CONTRIBUTOR",
+    ])(
+      "allows %s to submit for review with capa.case.submit",
+      async (roleId) => {
+        const { result } =
+          await evaluateWithAuthority(
+            rootCauseSubmissionRequest(
+              roleId,
+            ),
+            [membershipRow()],
+            [
+              authorityRow({
+                role_id:
+                  roleId,
+                permissions: [
+                  "capa.case.submit",
+                ],
+              }),
+            ],
+          );
+        expect(result).toMatchObject({
+          decision: "allow",
+        });
+      },
+    );
+
+    it(
+      "denies approval permission alone and denies the wrong source state",
+      async () => {
+        let evaluated =
+          await evaluateWithAuthority(
+            rootCauseSubmissionRequest(
+              "CAPA_APPROVER",
+            ),
+            [membershipRow()],
+            [
+              authorityRow({
+                role_id:
+                  "CAPA_APPROVER",
+                permissions: [
+                  "capa.gate.approve",
+                ],
+              }),
+            ],
+          );
+        expect(
+          evaluated.result,
+        ).toMatchObject({
+          decision: "deny",
+          reason_code:
+            "REQUIRED_PERMISSION_NOT_GRANTED",
+        });
+
+        evaluated =
+          await evaluateWithAuthority(
+            rootCauseSubmissionRequest(
+              "CAPA_OWNER",
+              "S30" as CapaCaseStatus,
+            ),
+            [],
+            [],
+          );
+        expect(
+          evaluated.result,
+        ).toMatchObject({
+          decision: "deny",
+          reason_code:
+            "WORKFLOW_STATE_NOT_AUTHORIZED",
+        });
+      },
+    );
+
+    it(
+      "keeps G-04 approval as a separate S50 operation",
+      () => {
+        expect(
+          approvalRequest(),
+        ).toMatchObject({
+          operation:
+            "approve_root_cause",
+          purpose:
+            "CAPA_GATE_DECISION",
+          resource: {
+            workflow_state: "S50",
+          },
+        });
+      },
+    );
+  },
+);
 
 describe(
   "SupabaseCapaAuthorizationPolicy workflow and segregation controls",

@@ -353,6 +353,38 @@ describe(
         );
 
         expect(
+          runtime.submit_root_cause_dependencies
+            .transaction_manager,
+        ).toBe(
+          runtime.submit_intake_dependencies
+            .transaction_manager,
+        );
+        expect(
+          runtime.submit_root_cause_dependencies
+            .capa_repository,
+        ).toBe(runtime.database);
+        expect(
+          runtime.submit_root_cause_dependencies
+            .audit_repository,
+        ).toBe(
+          runtime.submit_intake_dependencies
+            .audit_repository,
+        );
+        expect(
+          runtime.submit_root_cause_dependencies
+            .workflow_idempotency_repository,
+        ).toBe(
+          runtime.submit_intake_dependencies
+            .workflow_idempotency_repository,
+        );
+        expect(
+          runtime.submit_root_cause_dependencies
+            .configuration,
+        ).toEqual(
+          runtime.submit_intake_dependencies.configuration,
+        );
+
+        expect(
           runtime.knowledge_repository,
         ).toBeInstanceOf(
           SupabaseCapaKnowledgeRepository,

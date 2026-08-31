@@ -10,6 +10,10 @@ import {
   releaseCapaInvestigation,
 } from "../application/release-capa-investigation";
 
+import {
+  submitCapaRootCausePackage,
+} from "../application/submit-capa-root-cause-package";
+
 import type {
   CapaCaseId,
   CapaCaseVersionId,
@@ -594,6 +598,48 @@ function parsedReleaseInvestigationBody(
     application_body: Object.freeze({
       investigation_plan: body.investigation_plan,
       release: body.release,
+    }),
+  };
+}
+
+interface ParsedSubmitRootCauseBody {
+  readonly expected_record_version: number;
+  readonly expected_current_version_id: CapaCaseVersionId;
+  readonly application_body: Readonly<{
+    readonly evidence_assumption_ledger: unknown;
+    readonly root_cause_package: unknown;
+  }>;
+}
+
+function parsedSubmitRootCauseBody(
+  value: unknown
+): ParsedSubmitRootCauseBody | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return null;
+  const body = value as Readonly<Record<string, unknown>>;
+  if (
+    Object.keys(body).length !== 4 ||
+    !Object.prototype.hasOwnProperty.call(body, "expected_record_version") ||
+    !Object.prototype.hasOwnProperty.call(
+      body,
+      "expected_current_version_id"
+    ) ||
+    !Object.prototype.hasOwnProperty.call(body, "evidence_assumption_ledger") ||
+    !Object.prototype.hasOwnProperty.call(body, "root_cause_package") ||
+    !Number.isSafeInteger(body.expected_record_version) ||
+    (body.expected_record_version as number) < 1 ||
+    typeof body.expected_current_version_id !== "string"
+  )
+    return null;
+  const versionId = normalizedUuid(body.expected_current_version_id);
+  if (versionId === null || versionId !== body.expected_current_version_id)
+    return null;
+  return {
+    expected_record_version: body.expected_record_version as number,
+    expected_current_version_id: versionId as CapaCaseVersionId,
+    application_body: Object.freeze({
+      evidence_assumption_ledger: body.evidence_assumption_ledger,
+      root_cause_package: body.root_cause_package,
     }),
   };
 }
@@ -1881,5 +1927,182 @@ export async function handleCapaReleaseInvestigation(
     const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
     if (contextResponse !== null) return contextResponse;
     return safeUnexpectedError(dependencies, trace, "investigation release", error);
+  }
+}
+
+/** Framework-neutral POST handler for controlled S40 root-cause submission. */
+export async function handleCapaSubmitRootCause(
+  request: Request,
+  capaCaseId: string,
+  dependencies: CapaApiHandlerDependencies
+): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  try {
+    const context = await authenticatedContext(dependencies);
+    if (context === null)
+      return errorResponse(
+        trace,
+        401,
+        "UNAUTHORIZED",
+        "Authentication is required."
+      );
+    const normalizedCaseId = normalizedUuid(capaCaseId);
+    if (normalizedCaseId === null || normalizedCaseId !== capaCaseId)
+      return errorResponse(
+        trace,
+        400,
+        "INVALID_CAPA_CASE_ID",
+        "A valid CAPA case identifier is required."
+      );
+    const key = request.headers.get("idempotency-key");
+    if (
+      key === null ||
+      key.length === 0 ||
+      key.length > MAX_IDEMPOTENCY_KEY_LENGTH ||
+      key.trim() !== key
+    )
+      return errorResponse(
+        trace,
+        400,
+        "INVALID_IDEMPOTENCY_KEY",
+        "A valid idempotency key is required."
+      );
+    const parsedJson = await parseJsonBody(request);
+    if (!parsedJson.valid)
+      return errorResponse(
+        trace,
+        400,
+        "INVALID_JSON",
+        "The request body must be valid JSON."
+      );
+    const body = parsedSubmitRootCauseBody(parsedJson.body);
+    if (body === null)
+      return errorResponse(
+        trace,
+        400,
+        "INVALID_CAPA_ROOT_CAUSE_SUBMISSION",
+        "The root-cause submission request is invalid."
+      );
+    const result = await submitCapaRootCausePackage(
+      dependencies.get_runtime().submit_root_cause_dependencies,
+      {
+        authentication: context.authentication,
+        tenant: context.tenant,
+        capa_case_id: normalizedCaseId as CapaCaseId,
+        expected_record_version: body.expected_record_version,
+        expected_current_version_id: body.expected_current_version_id,
+        request_trace: { ...trace, idempotency_key: key as IdempotencyKey },
+        body: body.application_body,
+      }
+    );
+    if (result.status === "validation_failed") {
+      const issues: Array<{ readonly path: string; readonly message: string }> =
+        [{ path: "submission", message: result.reason_code }];
+      if (result.evidence_assumption_ledger_reason_code !== undefined)
+        issues.push({
+          path: "evidence_assumption_ledger",
+          message: result.evidence_assumption_ledger_reason_code,
+        });
+      if (result.root_cause_package_reason_code !== undefined)
+        issues.push({
+          path: "root_cause_package",
+          message: result.root_cause_package_reason_code,
+        });
+      return errorResponse(
+        trace,
+        400,
+        "CAPA_ROOT_CAUSE_SUBMISSION_VALIDATION_FAILED",
+        "The root-cause submission did not pass controlled validation.",
+        issues
+      );
+    }
+    if (result.status === "submission_blocked") {
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_ROOT_CAUSE_SUBMISSION_BLOCKED",
+        "The investigation does not satisfy root-cause submission readiness.",
+        [
+          ...result.reason_codes.map((code) => ({
+            path: "readiness.reason_codes",
+            message: code,
+          })),
+          ...result.canonical_blocker_codes.map((code) => ({
+            path: "readiness.canonical_blocker_codes",
+            message: code,
+          })),
+        ]
+      );
+    }
+    if (result.status === "authorization_denied")
+      return errorResponse(
+        trace,
+        403,
+        "CAPA_ACCESS_DENIED",
+        "The CAPA operation is not authorized."
+      );
+    if (result.status === "not_found_or_not_authorized")
+      return errorResponse(
+        trace,
+        404,
+        "CAPA_NOT_FOUND",
+        "The CAPA case was not found."
+      );
+    if (result.status === "idempotency_conflict")
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_IDEMPOTENCY_CONFLICT",
+        "The idempotency key was already used for a different CAPA request."
+      );
+    if (result.status === "concurrency_conflict")
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_CONCURRENCY_CONFLICT",
+        "The CAPA record changed before root-cause submission could be completed."
+      );
+    if (result.status === "workflow_conflict")
+      return errorResponse(
+        trace,
+        409,
+        "CAPA_WORKFLOW_CONFLICT",
+        "The CAPA case is not in S40 Investigation Active."
+      );
+    return jsonResponse(
+      {
+        capa: {
+          capa_case_id: result.capa_case.capa_case_id,
+          case_number: result.capa_case.case_number,
+          status: result.capa_case.status,
+          record_version: result.capa_case.record_version,
+          current_version_id: result.capa_case.current_version_id,
+          submitted_version_id: result.case_version.case_version_id,
+          evidence_assumption_ledger_section_version_id:
+            result.evidence_assumption_ledger_section_version
+              .section_version_id,
+          root_cause_package_section_version_id:
+            result.root_cause_package_section_version.section_version_id,
+          submitted_at: result.case_version.effective_at,
+          transition_audit_event_id: result.transition_audit_event_id,
+        },
+        replayed: result.status === "already_submitted",
+        correlation_id: trace.correlation_id,
+      },
+      200
+    );
+  } catch (error) {
+    const contextResponse = contextResolutionErrorResponse(
+      dependencies,
+      trace,
+      error
+    );
+    if (contextResponse !== null) return contextResponse;
+    return safeUnexpectedError(
+      dependencies,
+      trace,
+      "root-cause submission",
+      error
+    );
   }
 }
