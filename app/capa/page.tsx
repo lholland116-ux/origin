@@ -45,6 +45,7 @@ export default async function CapaPage() {
 
       <div className="relative">
         <CapaIntakeClient
+          currentUserId={user.id}
           userEmail={user.email ?? ""}
         />
       </div>

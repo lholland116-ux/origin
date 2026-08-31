@@ -5,6 +5,7 @@ import Link from "next/link";
 import type {
   CapaScopeContent,
 } from "@/lib/capa/domain/capa-scope";
+import { CAPA_STATE_DEFINITIONS } from "@/lib/capa/domain/capa-state";
 
 import type {
   CapaContainmentRiskContent,
@@ -18,6 +19,7 @@ import {
 import CapaScopeReviewPanel from "./CapaScopeReviewPanel";
 import CapaContainmentRiskReviewPanel from "./CapaContainmentRiskReviewPanel";
 import FreshTotpStepUp from "./FreshTotpStepUp";
+import CapaInvestigationPlanPanel from "./CapaInvestigationPlanPanel";
 
 import {
   createCapaScopeApprovalAttempt,
@@ -74,6 +76,7 @@ type WorkflowStep =
   | "created";
 
 interface CapaIntakeClientProps {
+  readonly currentUserId: string;
   readonly userEmail: string;
 }
 
@@ -897,10 +900,19 @@ function statusName(
     return "Containment and Impact/Risk";
   }
 
+  if (status === "S30") {
+    return CAPA_STATE_DEFINITIONS.S30.name;
+  }
+
+  if (status === "S40") {
+    return CAPA_STATE_DEFINITIONS.S40.name;
+  }
+
   return status;
 }
 
 export default function CapaIntakeClient({
+  currentUserId,
   userEmail,
 }: CapaIntakeClientProps) {
   const [step, setStep] =
@@ -3573,7 +3585,11 @@ export default function CapaIntakeClient({
               ? "Triage and scope"
               : createdCapa?.status === "S20"
                 ? "Scope accepted"
-                : "Draft created",
+                : createdCapa?.status === "S30"
+                  ? CAPA_STATE_DEFINITIONS.S30.name
+                  : createdCapa?.status === "S40"
+                    ? CAPA_STATE_DEFINITIONS.S40.name
+                    : "Draft created",
             "created",
           ],
         ].map(
@@ -4107,7 +4123,9 @@ export default function CapaIntakeClient({
                 <p className="text-sm font-medium uppercase tracking-[0.18em] text-emerald-300">
                   {createdCapa.status === "S10"
                     ? "CAPA intake submitted"
-                    : "CAPA draft created"}
+                    : createdCapa.status === "S40"
+                      ? CAPA_STATE_DEFINITIONS.S40.name
+                      : "CAPA draft created"}
                 </p>
 
                 <h2 className="mt-2 text-3xl font-semibold">
@@ -4119,7 +4137,9 @@ export default function CapaIntakeClient({
                 <p className="mt-3 text-sm text-emerald-100/80">
                   {createdCapa.status === "S10"
                     ? "The submitted version and its audit event were committed atomically."
-                    : "The draft record and its audit event were committed atomically."}
+                    : createdCapa.status === "S40"
+                      ? "The authoritative CAPA is in active investigation execution."
+                      : "The draft record and its audit event were committed atomically."}
                 </p>
               </div>
 
@@ -5086,13 +5106,25 @@ export default function CapaIntakeClient({
           ) : null}
 
           {createdCapa.status === "S30" ? (
-            <section className="mt-8 rounded-3xl border border-emerald-400/20 bg-emerald-500/[0.05] p-5 sm:p-7">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">G-02 complete</p>
-              <h2 className="mt-2 text-2xl font-semibold text-zinc-100">Investigation Planning</h2>
-              <p className="mt-3 text-sm leading-6 text-zinc-400">
-                The authoritative CAPA state is S30 — Investigation Planning. An authorized human accepted containment/risk at G-02; this is not represented as an electronic signature or an AI decision.
-              </p>
-            </section>
+            <CapaInvestigationPlanPanel
+              caseId={createdCapa.capaCaseId}
+              caseNumber={createdCapa.caseNumber}
+              recordVersion={createdCapa.recordVersion}
+              currentVersionId={createdCapa.currentVersionId}
+              currentUserId={currentUserId}
+              onAuthoritativeRefresh={async () => {
+                await openExistingCase({
+                  capaCaseId: createdCapa.capaCaseId,
+                  caseNumber: createdCapa.caseNumber,
+                  status: createdCapa.status,
+                  recordVersion: createdCapa.recordVersion,
+                  currentVersionId: createdCapa.currentVersionId,
+                  createdAt: createdCapa.createdAt,
+                  updatedAt: createdCapa.createdAt,
+                });
+                await loadCases("replace");
+              }}
+            />
           ) : null}
 
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
