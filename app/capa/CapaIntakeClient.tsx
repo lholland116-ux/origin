@@ -6,12 +6,17 @@ import type {
   CapaScopeContent,
 } from "@/lib/capa/domain/capa-scope";
 
+import type {
+  CapaContainmentRiskContent,
+} from "@/lib/capa/domain/capa-containment-risk";
+
 import {
   parseCapaExistingCaseResponse,
   type CapaExistingCaseSummary,
 } from "./capa-existing-case-client";
 
 import CapaScopeReviewPanel from "./CapaScopeReviewPanel";
+import CapaContainmentRiskReviewPanel from "./CapaContainmentRiskReviewPanel";
 import FreshTotpStepUp from "./FreshTotpStepUp";
 
 import {
@@ -20,6 +25,13 @@ import {
   parseCapaScopeApprovalSuccess,
   type CapaScopeApprovalAttempt,
 } from "./capa-scope-approval-client";
+
+import {
+  createCapaContainmentRiskAcceptanceAttempt,
+  parseCapaContainmentRiskAcceptanceFailure,
+  parseCapaContainmentRiskAcceptanceSuccess,
+  type CapaContainmentRiskAcceptanceAttempt,
+} from "./capa-containment-risk-acceptance-client";
 
 import {
   parseCapaIntakeAdvisorySnapshot,
@@ -997,6 +1009,23 @@ export default function CapaIntakeClient({
     setScopeStepUpOpen,
   ] = useState(false);
 
+  const [containmentRiskAttempt, setContainmentRiskAttempt] =
+    useState<CapaContainmentRiskAcceptanceAttempt | null>(null);
+  const [containmentRiskConfirmationOpen, setContainmentRiskConfirmationOpen] =
+    useState(false);
+  const [containmentRiskConfirmationConfirmed, setContainmentRiskConfirmationConfirmed] =
+    useState(false);
+  const [isSubmittingContainmentRisk, setIsSubmittingContainmentRisk] =
+    useState(false);
+  const [containmentRiskError, setContainmentRiskError] =
+    useState<string | null>(null);
+  const [containmentRiskMessage, setContainmentRiskMessage] =
+    useState<string | null>(null);
+  const [containmentRiskBlockers, setContainmentRiskBlockers] =
+    useState<readonly string[]>([]);
+  const [containmentRiskStepUpOpen, setContainmentRiskStepUpOpen] =
+    useState(false);
+
   const [advisoryFocus, setAdvisoryFocus] =
     useState("");
 
@@ -1592,6 +1621,13 @@ export default function CapaIntakeClient({
       setAdvisoryError(null);
       setAdvisoryCorrelationId(null);
       resetAiOutputReviewState();
+      setContainmentRiskAttempt(null);
+      setContainmentRiskConfirmationOpen(false);
+      setContainmentRiskConfirmationConfirmed(false);
+      setContainmentRiskError(null);
+      setContainmentRiskMessage(null);
+      setContainmentRiskBlockers([]);
+      setContainmentRiskStepUpOpen(false);
 
       setStep("created");
 
@@ -2035,6 +2071,436 @@ export default function CapaIntakeClient({
       attempt,
     );
   }
+
+  function beginContainmentRiskAcceptance(
+    containmentRisk:
+      CapaContainmentRiskContent,
+
+    approvalRationale:
+      string,
+  ) {
+    const capaCase =
+      createdCapa;
+
+    if (
+      capaCase === null ||
+      capaCase.status !== "S20" ||
+      containmentRiskAttempt !== null ||
+      isSubmittingContainmentRisk ||
+      containmentRiskStepUpOpen
+    ) {
+      return;
+    }
+
+    const attempt =
+      createCapaContainmentRiskAcceptanceAttempt({
+        capaCaseId:
+          capaCase.capaCaseId,
+
+        caseNumber:
+          capaCase.caseNumber,
+
+        recordVersion:
+          capaCase.recordVersion,
+
+        currentVersionId:
+          capaCase.currentVersionId,
+
+        idempotencyKey:
+          createTraceId(),
+
+        containmentRisk,
+
+        rationale:
+          approvalRationale,
+      });
+
+    if (attempt === null) {
+      setContainmentRiskError(
+        "The controlled G-02 approval request could not be prepared from the current CAPA version.",
+      );
+      return;
+    }
+
+    setContainmentRiskAttempt(
+      attempt,
+    );
+
+    setContainmentRiskConfirmationConfirmed(
+      false,
+    );
+
+    setContainmentRiskConfirmationOpen(
+      true,
+    );
+
+    setContainmentRiskStepUpOpen(
+      false,
+    );
+
+    setContainmentRiskError(
+      null,
+    );
+
+    setContainmentRiskMessage(
+      null,
+    );
+    setContainmentRiskBlockers([]);
+  }
+
+  function cancelContainmentRiskAcceptanceConfirmation() {
+    if (
+      isSubmittingContainmentRisk
+    ) {
+      return;
+    }
+
+    setContainmentRiskAttempt(
+      null,
+    );
+
+    setContainmentRiskConfirmationOpen(
+      false,
+    );
+
+    setContainmentRiskConfirmationConfirmed(
+      false,
+    );
+
+    setContainmentRiskError(
+      null,
+    );
+  }
+
+  function cancelContainmentRiskStepUp() {
+    if (
+      isSubmittingContainmentRisk
+    ) {
+      return;
+    }
+
+    setContainmentRiskStepUpOpen(
+      false,
+    );
+
+    setContainmentRiskConfirmationOpen(
+      false,
+    );
+
+    setContainmentRiskConfirmationConfirmed(
+      false,
+    );
+
+    setContainmentRiskAttempt(
+      null,
+    );
+
+    setContainmentRiskError(
+      "Fresh authenticator verification was cancelled. No G-02 containment/risk acceptance was recorded.",
+    );
+  }
+
+  async function submitContainmentRiskAcceptanceAttempt(
+    attempt:
+      CapaContainmentRiskAcceptanceAttempt,
+  ) {
+    if (
+      isSubmittingContainmentRisk
+    ) {
+      return;
+    }
+
+    setIsSubmittingContainmentRisk(
+      true,
+    );
+
+    setContainmentRiskError(
+      null,
+    );
+
+    const correlationId =
+      createTraceId();
+
+    try {
+      const response =
+        await fetch(
+          "/api/capa/" +
+            encodeURIComponent(
+              attempt.capaCaseId,
+            ) +
+            "/accept-containment-risk",
+          {
+            method:
+              "POST",
+
+            headers: {
+              "content-type":
+                "application/json",
+
+              "x-request-id":
+                createTraceId(),
+
+              "x-correlation-id":
+                correlationId,
+
+              "idempotency-key":
+                attempt
+                  .idempotencyKey,
+            },
+
+            /*
+             * This is the immutable serialized body captured when the human
+             * began G-02 confirmation. Never rebuild it from mutable form
+             * state, including after MFA step-up.
+             */
+            body:
+              attempt.requestBody,
+          },
+        );
+
+      const body =
+        await readJson(
+          response,
+        );
+
+      if (!response.ok) {
+        const failure =
+          parseCapaContainmentRiskAcceptanceFailure(
+            body,
+          );
+
+        if (
+          failure.kind ===
+          "step_up_required"
+        ) {
+          /*
+           * The browser treats successful MFA only as a UX signal.
+           * The exact same frozen request will be sent again and the server
+           * must independently re-evaluate trusted JWT AAL/AMR recency.
+           */
+          setContainmentRiskConfirmationOpen(
+            false,
+          );
+
+          setContainmentRiskStepUpOpen(
+            true,
+          );
+
+          return;
+        }
+
+        let message =
+          failure.message;
+
+        if (
+          failure.kind ===
+            "gate_blocked" &&
+          failure.blockerCodes
+            .length > 0
+        ) {
+          setContainmentRiskBlockers(failure.blockerCodes);
+          message +=
+            " Blockers: " +
+            failure.blockerCodes
+              .join(", ") +
+            ".";
+        }
+
+        setContainmentRiskError(
+          message,
+        );
+
+        /*
+         * A controlled server rejection means a changed request must receive
+         * a new idempotency key. Release the frozen attempt so the human may
+         * revise the scope and explicitly confirm again.
+         */
+        setContainmentRiskAttempt(
+          null,
+        );
+
+        setContainmentRiskConfirmationOpen(
+          false,
+        );
+
+        setContainmentRiskConfirmationConfirmed(
+          false,
+        );
+
+        setContainmentRiskStepUpOpen(
+          false,
+        );
+
+        return;
+      }
+
+      const accepted =
+        parseCapaContainmentRiskAcceptanceSuccess(
+          body,
+          attempt.capaCaseId,
+        );
+
+      if (accepted === null) {
+        /*
+         * Fail closed. Retain the immutable attempt so a retry is safe under
+         * the same server-side idempotency key.
+         */
+        throw new Error(
+          "The server response could not be verified as a committed S30 G-02 approval. The frozen request has been retained for a safe retry.",
+        );
+      }
+
+      setContainmentRiskMessage(
+        accepted.replayed
+          ? accepted.caseNumber +
+              " G-02 containment/risk acceptance was already committed."
+          : accepted.caseNumber +
+              " containment/risk was accepted at G-02 and advanced to S30.",
+      );
+
+      setContainmentRiskConfirmationOpen(
+        false,
+      );
+
+      setContainmentRiskConfirmationConfirmed(
+        false,
+      );
+
+      setContainmentRiskStepUpOpen(
+        false,
+      );
+
+      setContainmentRiskAttempt(
+        null,
+      );
+      setContainmentRiskBlockers([]);
+
+      /*
+       * Refresh the opened record through the existing authoritative GET
+       * path. The stale list item is used only to identify the CAPA; the GET
+       * response remains authoritative for current state and version.
+       */
+      const refreshTarget =
+        listedCases.find(
+          (item) =>
+            item.capaCaseId ===
+            accepted.capaCaseId,
+        );
+
+      if (
+        refreshTarget !==
+        undefined
+      ) {
+        await openExistingCase(
+          refreshTarget,
+        );
+      } else {
+        /*
+         * Defensive fallback for a just-created case that is not yet present
+         * in the current list page. Use only the server-validated approval
+         * response until the authoritative list refresh below completes.
+         */
+        setCreatedCapa(
+          (current) =>
+            current?.capaCaseId ===
+            accepted.capaCaseId
+              ? {
+                  ...current,
+
+                  caseNumber:
+                    accepted
+                      .caseNumber,
+
+                  status:
+                    accepted.status,
+
+                  recordVersion:
+                    accepted
+                      .recordVersion,
+
+                  currentVersionId:
+                    accepted
+                      .currentVersionId,
+                }
+              : current,
+        );
+      }
+
+      await loadCases(
+        "replace",
+      );
+    } catch (error) {
+      /*
+       * Network errors and unverifiable success envelopes retain the exact
+       * immutable request. Re-opening confirmation therefore performs a safe
+       * idempotent retry instead of manufacturing a new request.
+       */
+      setContainmentRiskError(
+        error instanceof Error
+          ? error.message
+          : "The G-02 containment/risk acceptance request could not be completed.",
+      );
+
+      setContainmentRiskStepUpOpen(
+        false,
+      );
+
+      if (
+        containmentRiskAttempt !==
+        null
+      ) {
+        setContainmentRiskConfirmationOpen(
+          true,
+        );
+      }
+    } finally {
+      setIsSubmittingContainmentRisk(
+        false,
+      );
+    }
+  }
+
+  async function confirmContainmentRiskAcceptance() {
+    const attempt =
+      containmentRiskAttempt;
+
+    if (
+      attempt === null ||
+      !containmentRiskConfirmationConfirmed ||
+      isSubmittingContainmentRisk
+    ) {
+      return;
+    }
+
+    await submitContainmentRiskAcceptanceAttempt(
+      attempt,
+    );
+  }
+
+  function handleVerifiedContainmentRiskStepUp() {
+    const attempt =
+      containmentRiskAttempt;
+
+    setContainmentRiskStepUpOpen(
+      false,
+    );
+
+    if (attempt === null) {
+      setContainmentRiskError(
+        "The frozen G-02 request is no longer available. Review the scope and begin approval again.",
+      );
+      return;
+    }
+
+    /*
+     * FreshTotpStepUp.onVerified is a UX signal only. Authorization is not
+     * granted here. The server independently verifies the subsequent request.
+     */
+    void submitContainmentRiskAcceptanceAttempt(
+      attempt,
+    );
+  }
+
 
   function beginIntakeSubmission(
     capaCase: Pick<
@@ -2814,6 +3280,13 @@ export default function CapaIntakeClient({
     setAdvisoryCorrelationId(null);
 
     resetAiOutputReviewState();
+    setContainmentRiskAttempt(null);
+    setContainmentRiskConfirmationOpen(false);
+    setContainmentRiskConfirmationConfirmed(false);
+    setContainmentRiskError(null);
+    setContainmentRiskMessage(null);
+    setContainmentRiskBlockers([]);
+    setContainmentRiskStepUpOpen(false);
 
     setStep("edit");
 
@@ -4599,17 +5072,25 @@ export default function CapaIntakeClient({
           ) : null}
 
           {createdCapa.status === "S20" ? (
+            <>
+              {containmentRiskMessage !== null ? <div role="status" className="mt-6 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{containmentRiskMessage}</div> : null}
+              {containmentRiskError !== null ? <div role="alert" className="mt-6 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">{containmentRiskError}</div> : null}
+              <CapaContainmentRiskReviewPanel
+                key={createdCapa.currentVersionId}
+                caseNumber={createdCapa.caseNumber}
+                busy={containmentRiskAttempt !== null || isSubmittingContainmentRisk || containmentRiskStepUpOpen}
+                blockerCodes={containmentRiskBlockers}
+                onReview={beginContainmentRiskAcceptance}
+              />
+            </>
+          ) : null}
+
+          {createdCapa.status === "S30" ? (
             <section className="mt-8 rounded-3xl border border-emerald-400/20 bg-emerald-500/[0.05] p-5 sm:p-7">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">
-                G-01 complete
-              </p>
-
-              <h2 className="mt-2 text-2xl font-semibold text-zinc-100">
-                CAPA scope accepted
-              </h2>
-
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">G-02 complete</p>
+              <h2 className="mt-2 text-2xl font-semibold text-zinc-100">Investigation Planning</h2>
               <p className="mt-3 text-sm leading-6 text-zinc-400">
-                The controlled CAPA is now in S20 — Containment and Impact/Risk. G-01 was a human-controlled workflow decision; AI did not approve or advance the case.
+                The authoritative CAPA state is S30 — Investigation Planning. An authorized human accepted containment/risk at G-02; this is not represented as an electronic signature or an AI decision.
               </p>
             </section>
           ) : null}
@@ -4668,6 +5149,51 @@ export default function CapaIntakeClient({
           handleVerifiedScopeStepUp
         }
       />
+
+      <FreshTotpStepUp
+        open={containmentRiskStepUpOpen}
+        title="Verify identity for G-02"
+        description="Enter the current code from your enrolled authenticator. Verification is only a retry signal; the server independently reauthorizes the exact frozen G-02 request."
+        onCancel={cancelContainmentRiskStepUp}
+        onVerified={handleVerifiedContainmentRiskStepUp}
+      />
+
+      {containmentRiskConfirmationOpen && containmentRiskAttempt !== null ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="confirm-containment-risk-heading"
+            className="w-full max-w-xl rounded-3xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl sm:p-7">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-300">G-02 · Human-controlled acceptance</p>
+            <h2 id="confirm-containment-risk-heading" className="mt-2 text-2xl font-semibold text-zinc-100">
+              Accept {containmentRiskAttempt.caseNumber} containment and risk?
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              This explicit human decision accepts the reviewed S20 record and advances the CAPA to S30 — Investigation Planning. Server blockers cannot be bypassed.
+            </p>
+            <dl className="mt-5 grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm sm:grid-cols-2">
+              <div><dt className="text-zinc-500">Current state</dt><dd className="mt-1 text-zinc-100">S20 — Containment and Impact/Risk</dd></div>
+              <div><dt className="text-zinc-500">Record version</dt><dd className="mt-1 font-mono text-zinc-100">{containmentRiskAttempt.recordVersion}</dd></div>
+              <div className="sm:col-span-2"><dt className="text-zinc-500">Reviewed case version</dt><dd className="mt-1 break-all font-mono text-xs text-zinc-100">{containmentRiskAttempt.currentVersionId}</dd></div>
+            </dl>
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-700 bg-zinc-900/70 p-4">
+              <input type="checkbox" checked={containmentRiskConfirmationConfirmed}
+                disabled={isSubmittingContainmentRisk}
+                onChange={(event) => setContainmentRiskConfirmationConfirmed(event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-amber-500 focus:ring-amber-400" />
+              <span className="text-sm text-zinc-100">I reviewed the S20 controlled record and confirm this is my human G-02 decision. Approval is not preselected.</span>
+            </label>
+            {containmentRiskError !== null ? <div role="alert" className="mt-5 rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">{containmentRiskError}</div> : null}
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button type="button" disabled={isSubmittingContainmentRisk} onClick={cancelContainmentRiskAcceptanceConfirmation}
+                className="min-h-11 rounded-xl border border-zinc-700 px-5 py-2.5 text-sm text-zinc-200">Cancel</button>
+              <button type="button" disabled={isSubmittingContainmentRisk || !containmentRiskConfirmationConfirmed}
+                onClick={() => void confirmContainmentRiskAcceptance()}
+                className="min-h-11 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-zinc-950 disabled:opacity-50">
+                {isSubmittingContainmentRisk ? "Accepting..." : "Confirm G-02 acceptance"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {scopeApprovalConfirmationOpen &&
       scopeApprovalAttempt !== null ? (
