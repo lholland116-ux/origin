@@ -336,6 +336,13 @@ describe(
         });
 
         expect(
+          runtime.release_investigation_dependencies
+            .configuration,
+        ).toEqual(
+          runtime.submit_intake_dependencies.configuration,
+        );
+
+        expect(
           runtime.approve_scope_dependencies
             .configuration
             .step_up_maximum_age_ms,

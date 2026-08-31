@@ -45,6 +45,7 @@ export type CapaAuthorizationOperation =
   | "review_ai_intake_advisory"
   | "approve_scope"
   | "accept_containment_risk"
+  | "release_investigation"
   | "approve_root_cause"
   | "approve_action_plan"
   | "accept_implementation"
@@ -70,6 +71,7 @@ export const HUMAN_ONLY_CAPA_OPERATIONS =
     "review_ai_intake_advisory",
     "approve_scope",
     "accept_containment_risk",
+    "release_investigation",
     "approve_root_cause",
     "approve_action_plan",
     "accept_implementation",

@@ -276,6 +276,23 @@ function approvalRequest(
   });
 }
 
+function investigationReleaseRequest(
+  roleId: string = "CAPA_OWNER",
+): CapaPolicyEvaluationRequest {
+  return policyRequest({
+    operation: "release_investigation",
+    tenant: tenantContext({
+      role_assignments: [assignment({ role_id: roleId as RoleId })],
+    }),
+    resource: {
+      organization_id: ORGANIZATION_A,
+      resource_type: controlled("CAPA_CASE"),
+      workflow_state: "S30" as CapaCaseStatus,
+    },
+    purpose: controlled("CAPA_WORKFLOW_TRANSITION"),
+  });
+}
+
 function membershipRow(
   overrides:
     Record<string, unknown> = {},
@@ -682,6 +699,43 @@ describe(
     );
   },
 );
+
+describe("G-03 investigation release authorization", () => {
+  it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR"])(
+    "allows %s with capa.case.submit",
+    async (roleId) => {
+      const { result } = await evaluateWithAuthority(
+        investigationReleaseRequest(roleId),
+        [membershipRow()],
+        [authorityRow({
+          role_id: roleId,
+          permissions: ["capa.case.submit"],
+        })],
+      );
+      expect(result).toMatchObject({ decision: "allow" });
+    },
+  );
+
+  it.each(["CAPA_REVIEWER", "CAPA_APPROVER"])(
+    "denies %s without an independent capa.case.submit grant",
+    async (roleId) => {
+      const { result } = await evaluateWithAuthority(
+        investigationReleaseRequest(roleId),
+        [membershipRow()],
+        [authorityRow({
+          role_id: roleId,
+          permissions: roleId === "CAPA_REVIEWER"
+            ? ["capa.review.disposition"]
+            : ["capa.gate.approve", "capa.review.disposition"],
+        })],
+      );
+      expect(result).toMatchObject({
+        decision: "deny",
+        reason_code: "REQUIRED_PERMISSION_NOT_GRANTED",
+      });
+    },
+  );
+});
 
 describe(
   "SupabaseCapaAuthorizationPolicy workflow and segregation controls",

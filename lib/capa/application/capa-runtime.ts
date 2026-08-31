@@ -7,6 +7,10 @@ import type {
 } from "./accept-capa-containment-risk";
 
 import type {
+  ReleaseCapaInvestigationDependencies,
+} from "./release-capa-investigation";
+
+import type {
   CreateCapaDependencies,
 } from "./create-capa";
 
@@ -144,6 +148,10 @@ export interface CapaRuntime {
   /** Human-controlled G-02 S20 to S30 acceptance dependencies. */
   readonly accept_containment_risk_dependencies:
     AcceptCapaContainmentRiskDependencies;
+
+  /** Human-controlled G-03 S30 to S40 investigation release dependencies. */
+  readonly release_investigation_dependencies:
+    ReleaseCapaInvestigationDependencies;
 
   /**
    * Controlled provider-neutral prompt assembly. This boundary does not

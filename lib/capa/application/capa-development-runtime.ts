@@ -6,6 +6,10 @@ import type {
   AcceptCapaContainmentRiskDependencies,
 } from "./accept-capa-containment-risk";
 
+import type {
+  ReleaseCapaInvestigationDependencies,
+} from "./release-capa-investigation";
+
 import {
   randomUUID,
 } from "node:crypto";
@@ -240,6 +244,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_ACCEPT_CONTAINMENT_RISK_ALLOWED",
       );
 
+    case "release_investigation":
+      return controlled(
+        "DEVELOPMENT_RELEASE_INVESTIGATION_ALLOWED",
+      );
+
     case "review_knowledge_citation":
       return controlled(
         "DEVELOPMENT_KNOWLEDGE_CITATION_REVIEW_ALLOWED",
@@ -298,6 +307,8 @@ function developmentAuthorizationPolicy():
           "approve_scope" ||
         request.operation ===
           "accept_containment_risk" ||
+        request.operation ===
+          "release_investigation" ||
         request.operation ===
           "review_knowledge_citation" ||
         request.operation ===
@@ -653,6 +664,11 @@ export function createCapaDevelopmentRuntime(
     ...approveScopeDependencies,
   };
 
+  const releaseInvestigationDependencies:
+    ReleaseCapaInvestigationDependencies = {
+    ...submitIntakeDependencies,
+  };
+
   const knowledgeRepository =
     new InMemoryCapaKnowledgeDatabase({
       generate_transaction_id: () =>
@@ -814,6 +830,9 @@ export function createCapaDevelopmentRuntime(
 
     accept_containment_risk_dependencies:
       acceptContainmentRiskDependencies,
+
+    release_investigation_dependencies:
+      releaseInvestigationDependencies,
     prompt_assembly_service:
       promptAssemblyService,
 

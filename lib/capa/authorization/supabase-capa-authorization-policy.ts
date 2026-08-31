@@ -76,6 +76,8 @@ const OPERATION_PERMISSION = {
     "capa.review.disposition",
   accept_containment_risk:
     "capa.review.disposition",
+  release_investigation:
+    "capa.case.submit",
   approve_root_cause:
     "capa.gate.approve",
   approve_action_plan:
@@ -122,6 +124,8 @@ const OPERATION_PURPOSE = {
     "CAPA_GATE_DECISION",
   accept_containment_risk:
     "CAPA_GATE_DECISION",
+  release_investigation:
+    "CAPA_WORKFLOW_TRANSITION",
   approve_root_cause:
     "CAPA_GATE_DECISION",
   approve_action_plan:
@@ -206,6 +210,11 @@ const REQUIRED_WORKFLOW_STATES:
       new Set([
         CAPA_STATE
           .CONTAINMENT_AND_IMPACT_RISK,
+      ]),
+
+    release_investigation:
+      new Set([
+        CAPA_STATE.INVESTIGATION_PLANNING,
       ]),
 
     approve_root_cause:

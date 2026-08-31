@@ -154,6 +154,14 @@ describe("CAPA operation classifications", () => {
     expect(
       STEP_UP_CAPA_OPERATIONS.has("cancel_case"),
     ).toBe(true);
+
+    expect(
+      requiresHumanAuthority("release_investigation"),
+    ).toBe(true);
+
+    expect(
+      requiresStepUpAuthentication("release_investigation"),
+    ).toBe(false);
   });
 });
 
