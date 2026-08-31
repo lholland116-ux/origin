@@ -318,15 +318,32 @@ describe(
             .capa_repository,
         ).toBe(runtime.database);
         expect(
+          runtime.approve_scope_dependencies
+            .configuration,
+        ).toMatchObject({
+          step_up_maximum_age_ms: 60 * 60 * 1000,
+        });
+
+        expect(
           runtime.accept_containment_risk_dependencies
             .configuration,
         ).toMatchObject({
           workflow_version: "workflow-1.0.0",
           audit_schema_version: "audit-schema-1.0.0",
-          step_up_maximum_age_ms: 10 * 60 * 1000,
+          step_up_maximum_age_ms: 60 * 60 * 1000,
           required_step_up_assurance: "MFA",
           approval_rationale_required: true,
         });
+
+        expect(
+          runtime.approve_scope_dependencies
+            .configuration
+            .step_up_maximum_age_ms,
+        ).toBe(
+          runtime.accept_containment_risk_dependencies
+            .configuration
+            .step_up_maximum_age_ms,
+        );
 
         expect(
           runtime.knowledge_repository,
@@ -532,6 +549,18 @@ describe(
           audit_schema_version:
             "audit-schema-2.0.0",
         });
+
+        expect(
+          runtime.approve_scope_dependencies
+            .configuration
+            .step_up_maximum_age_ms,
+        ).toBe(0);
+
+        expect(
+          runtime.accept_containment_risk_dependencies
+            .configuration
+            .step_up_maximum_age_ms,
+        ).toBe(0);
       },
     );
 

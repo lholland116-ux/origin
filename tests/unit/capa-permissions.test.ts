@@ -285,6 +285,46 @@ describe("mandatory authorization preconditions", () => {
     });
   });
 
+  it("accepts step-up evidence at the exact configured boundary", () => {
+    const result = evaluateCapaAuthorizationPreconditions(
+      request({
+        authentication: humanAuthentication({
+          reauthenticated_at: iso(
+            "2026-08-11T14:00:00.000Z",
+          ),
+        }),
+        operation: "approve_scope",
+        step_up_maximum_age_ms: 60 * 60 * 1000,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "requires_policy_evaluation",
+      reason_code:
+        "MANDATORY_PRECONDITIONS_SATISFIED",
+    });
+  });
+
+  it("rejects step-up evidence one millisecond outside the configured boundary", () => {
+    const result = evaluateCapaAuthorizationPreconditions(
+      request({
+        authentication: humanAuthentication({
+          reauthenticated_at: iso(
+            "2026-08-11T13:59:59.999Z",
+          ),
+        }),
+        operation: "accept_containment_risk",
+        step_up_maximum_age_ms: 60 * 60 * 1000,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "denied",
+      reason_code:
+        "STEP_UP_REAUTHENTICATION_REQUIRED",
+    });
+  });
+
   it("passes mandatory checks for a permitted service operation", () => {
     const result = evaluateCapaAuthorizationPreconditions(
       request({

@@ -193,7 +193,7 @@ const DEFAULT_AUDIT_SCHEMA_VERSION =
   "audit-schema-1.0.0";
 
 const DEFAULT_STEP_UP_MAXIMUM_AGE_MS =
-  10 * 60 * 1_000;
+  60 * 60 * 1_000;
 
 const VERSION_PATTERN =
   /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
