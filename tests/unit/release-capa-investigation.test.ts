@@ -44,6 +44,10 @@ function dependencies(): ReleaseCapaInvestigationDependencies {
     } as never,
     audit_repository: {} as never,
     workflow_idempotency_repository: {} as never,
+    participant_eligibility_repository: {
+      listEligibleInvestigationOwners: vi.fn(),
+      findIneligibleInvestigationOwnerIds: vi.fn().mockResolvedValue([]),
+    },
     authorization_policy: {
       evaluate: vi.fn().mockResolvedValue({
         decision: "deny",
@@ -213,6 +217,55 @@ describe("G-03 investigation release application boundary", () => {
     const result = await releaseCapaInvestigation(deps, command(body()));
     expect(result).toEqual({ status: "not_found_or_not_authorized" });
     expect(deps.capa_repository.findCaseById).toHaveBeenCalledOnce();
+  });
+
+  it("blocks an ineligible owner inside the transaction before material writes", async () => {
+    const sourceSectionId = "70000000-0000-4000-8000-000000000001";
+    const insertSectionVersion = vi.fn();
+    const appendEvent = vi.fn();
+    const base = dependencies();
+    const authorizationPolicy = { evaluate: vi.fn().mockResolvedValue({
+      decision: "allow", reason_code: "AUTHORIZED", policy_version: "policy-1",
+      evaluated_at: "2026-09-01T12:00:00.000Z", relied_on_role_assignment_ids: [],
+    }) };
+    const capaRepository = {
+      findCaseById: vi.fn().mockResolvedValue({ organization_id: ORG, capa_case_id: CASE,
+        current_version_id: VERSION, status: "S30", record_version: 3 }),
+      findCaseVersionById: vi.fn().mockResolvedValue({ organization_id: ORG, capa_case_id: CASE,
+        case_version_id: VERSION, status: "S30", section_version_ids: [sourceSectionId], version_number: 3 }),
+      findSectionVersionById: vi.fn().mockResolvedValue({ organization_id: ORG, capa_case_id: CASE,
+        section_version_id: sourceSectionId, section_type: "CAPA.CONTAINMENT_RISK" }),
+      insertSectionVersion,
+    } as never;
+    const workflowRepository = {
+      claimWorkflowOperation: vi.fn().mockResolvedValue({ status: "claimed" }),
+    } as never;
+    const participantRepository = {
+      listEligibleInvestigationOwners: vi.fn(),
+      findIneligibleInvestigationOwnerIds: vi.fn().mockResolvedValue([USER]),
+    };
+    const transactionManager = { runInTransaction: vi.fn(async (trace, work) => work({
+      transaction_id: "transaction", started_at: "2026-09-01T12:00:00.000Z", request_trace: trace,
+    })) } as never;
+    const idGenerator = {
+      generateCaseVersionId: vi.fn().mockReturnValue("40000000-0000-4000-8000-000000000002"),
+      generateSectionVersionId: vi.fn().mockReturnValue("70000000-0000-4000-8000-000000000002"),
+      generateAuditEventId: vi.fn().mockReturnValue("80000000-0000-4000-8000-000000000001"),
+    } as never;
+    const deps: ReleaseCapaInvestigationDependencies = {
+      ...base, authorization_policy: authorizationPolicy,
+      capa_repository: capaRepository,
+      workflow_idempotency_repository: workflowRepository,
+      participant_eligibility_repository: participantRepository,
+      transaction_manager: transactionManager,
+      audit_repository: { appendEvent } as never,
+      id_generator: idGenerator,
+    };
+    await expect(releaseCapaInvestigation(deps, command(body()))).resolves.toEqual({
+      status: "owner_eligibility_failed", reason_code: "INELIGIBLE_INVESTIGATION_PLAN_OWNER",
+    });
+    expect(insertSectionVersion).not.toHaveBeenCalled();
+    expect(appendEvent).not.toHaveBeenCalled();
   });
 
   it.each([

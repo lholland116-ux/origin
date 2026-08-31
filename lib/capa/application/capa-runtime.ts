@@ -57,6 +57,7 @@ import type {
 import type {
   CapaRequestContext,
 } from "../../security/supabase-capa-context";
+import type { CapaParticipantEligibilityRepository } from "../../database/repositories/capa-participant-eligibility-repository";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -69,6 +70,7 @@ import type {
  * environments.
  */
 export interface CapaRuntime {
+  readonly participant_eligibility_repository: CapaParticipantEligibilityRepository;
   /**
    * Tenant-scoped repository used by read operations.
    */

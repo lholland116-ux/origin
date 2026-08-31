@@ -1843,6 +1843,9 @@ export async function handleCapaReleaseInvestigation(
     if (result.status === "gate_blocked") {
       return errorResponse(trace, 409, "CAPA_INVESTIGATION_RELEASE_GATE_BLOCKED", "The investigation plan does not satisfy G-03 readiness.", result.blocker_codes.map((code) => ({ path: "investigation_plan", message: code })));
     }
+    if (result.status === "owner_eligibility_failed") {
+      return errorResponse(trace, 409, "CAPA_INVESTIGATION_OWNER_INELIGIBLE", "The investigation plan contains an owner who is not currently eligible for assignment.", [{ path: "investigation_plan.items.owner_user_id", message: result.reason_code }]);
+    }
     if (result.status === "authorization_denied") {
       return errorResponse(trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.");
     }

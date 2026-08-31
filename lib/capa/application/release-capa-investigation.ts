@@ -36,6 +36,7 @@ import type {
   CapaWorkflowRequestFingerprint,
 } from "../../database/repositories/capa-workflow-idempotency-repository";
 import type { TransactionManager } from "../../database/transactions";
+import type { CapaParticipantEligibilityRepository } from "../../database/repositories/capa-participant-eligibility-repository";
 import type { CreateCapaClock, CreateCapaIdGenerator } from "./create-capa";
 import { AuditEventAppendConflictError } from "./create-capa";
 
@@ -62,6 +63,7 @@ export interface ReleaseCapaInvestigationDependencies {
   readonly capa_repository: CapaRepository;
   readonly audit_repository: AuditRepository;
   readonly workflow_idempotency_repository: CapaWorkflowIdempotencyRepository;
+  readonly participant_eligibility_repository: CapaParticipantEligibilityRepository;
   readonly authorization_policy: CapaAuthorizationPolicy;
   readonly id_generator: CreateCapaIdGenerator;
   readonly clock: CreateCapaClock;
@@ -109,6 +111,10 @@ export type ReleaseCapaInvestigationResult =
       readonly status: "gate_blocked";
       readonly blocker_codes: readonly CapaInvestigationPlanGateBlockerCode[];
     }
+  | {
+      readonly status: "owner_eligibility_failed";
+      readonly reason_code: "INELIGIBLE_INVESTIGATION_PLAN_OWNER";
+    }
   | { readonly status: "not_found_or_not_authorized" }
   | {
       readonly status: "authorization_denied";
@@ -155,6 +161,7 @@ class ReleaseConcurrencyError extends Error {
 }
 
 class ReleaseWorkflowError extends Error {}
+class ReleaseOwnerEligibilityError extends Error {}
 
 function controlled(value: string): ControlledCode {
   return value as ControlledCode;
@@ -386,7 +393,7 @@ export async function releaseCapaInvestigation(
       policy_version: policy.policy_version,
     };
   }
-  if (sourceVersion.status !== SOURCE_STATE || capaCase.status !== SOURCE_STATE) {
+  if (sourceVersion.status !== SOURCE_STATE) {
     return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };
   }
 
@@ -443,6 +450,19 @@ export async function releaseCapaInvestigation(
         });
         if (claim.status === "conflict") return { kind: "conflict" as const };
         if (claim.status === "already_claimed") return { kind: "replay" as const, record: claim.record };
+        const ownerUserIds = Object.freeze([...new Set(
+          validated.value.investigation_plan.items
+            .map((item) => item.owner_user_id)
+            .filter((id): id is import("../domain/capa-types").UserId => id !== null),
+        )]);
+        const ineligibleOwnerIds = await dependencies.participant_eligibility_repository
+          .findIneligibleInvestigationOwnerIds(
+            transaction,
+            organizationId,
+            ownerUserIds,
+            trustedNow,
+          );
+        if (ineligibleOwnerIds.length > 0) throw new ReleaseOwnerEligibilityError();
         if (capaCase.status !== SOURCE_STATE) throw new ReleaseWorkflowError();
         if (capaCase.record_version !== command.expected_record_version) {
           throw new ReleaseConcurrencyError("RECORD_VERSION_CONFLICT");
@@ -541,6 +561,9 @@ export async function releaseCapaInvestigation(
     }
     if (error instanceof ReleaseWorkflowError) {
       return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };
+    }
+    if (error instanceof ReleaseOwnerEligibilityError) {
+      return { status: "owner_eligibility_failed", reason_code: "INELIGIBLE_INVESTIGATION_PLAN_OWNER" };
     }
     throw error;
   }

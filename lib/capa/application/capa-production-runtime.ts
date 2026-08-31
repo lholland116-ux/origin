@@ -141,6 +141,7 @@ import {
 import {
   SupabaseCapaWorkflowIdempotencyRepository,
 } from "../../database/supabase/supabase-capa-workflow-idempotency-repository";
+import { SupabaseCapaParticipantEligibilityRepository } from "../../database/supabase/supabase-capa-participant-eligibility-repository";
 
 import {
   SupabaseCapaIntakeAdvisoryOutputRepository,
@@ -642,6 +643,9 @@ export function createCapaProductionRuntime(
   const workflowIdempotencyRepository =
     new SupabaseCapaWorkflowIdempotencyRepository();
 
+  const participantEligibilityRepository =
+    new SupabaseCapaParticipantEligibilityRepository(sql);
+
   const caseNumberAllocator =
     new SupabaseCapaCaseNumberAllocator();
 
@@ -793,6 +797,8 @@ export function createCapaProductionRuntime(
   const releaseInvestigationDependencies:
     ReleaseCapaInvestigationDependencies = {
     ...submitIntakeDependencies,
+    participant_eligibility_repository:
+      participantEligibilityRepository,
   };
 
   const knowledgeRepository =
@@ -909,6 +915,9 @@ export function createCapaProductionRuntime(
   return {
     database:
       capaRepository,
+
+    participant_eligibility_repository:
+      participantEligibilityRepository,
 
     knowledge_repository:
       knowledgeRepository,

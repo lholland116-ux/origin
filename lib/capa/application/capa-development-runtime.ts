@@ -129,6 +129,7 @@ import {
 import type {
   TransactionId,
 } from "../../database/transactions";
+import { InMemoryCapaParticipantEligibilityRepository } from "../../database/in-memory/in-memory-capa-participant-eligibility-repository";
 
 /**
  * Development-only CAPA runtime.
@@ -667,6 +668,8 @@ export function createCapaDevelopmentRuntime(
   const releaseInvestigationDependencies:
     ReleaseCapaInvestigationDependencies = {
     ...submitIntakeDependencies,
+    participant_eligibility_repository:
+      new InMemoryCapaParticipantEligibilityRepository(),
   };
 
   const knowledgeRepository =
@@ -749,6 +752,8 @@ export function createCapaDevelopmentRuntime(
 
   return {
     database,
+    participant_eligibility_repository:
+      releaseInvestigationDependencies.participant_eligibility_repository,
     knowledge_repository:
       knowledgeRepository,
     knowledge_retrieval_service:
