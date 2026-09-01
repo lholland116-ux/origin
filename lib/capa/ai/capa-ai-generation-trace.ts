@@ -5,7 +5,15 @@ import {
 import type {
   CapaControlledPromptPackage,
   ControlledVersion,
+  CapaAiRunId,
+  CapaPromptPackageId,
 } from "./capa-prompt-contract";
+
+import type {
+  CorrelationId,
+  IsoDateTime,
+  RequestId,
+} from "../domain/capa-types";
 
 import type {
   CapaIntakeAdvisoryResponse,
@@ -199,7 +207,7 @@ export interface CapaContainmentRiskAdvisoryGovernance { readonly advisory_only:
 export interface CapaContainmentRiskAdvisoryEvidenceManifest { readonly evidence_manifest_schema_version: typeof CAPA_CONTAINMENT_RISK_EVIDENCE_MANIFEST_SCHEMA_VERSION; readonly retrieval_performed: false; readonly item_count: 0; readonly items: readonly []; }
 export interface CapaContainmentRiskAdvisoryPolicyManifest { readonly policy_manifest_schema_version: typeof CAPA_CONTAINMENT_RISK_POLICY_MANIFEST_SCHEMA_VERSION; readonly agent: Readonly<{ agent_id: "AG-INTAKE"; agent_version: "ag-intake-1.0.0" }>; readonly workflow_state: "S20"; readonly operation: "analyze_containment_impact_risk"; readonly requested_output: "containment_risk_analysis"; readonly output_schema_version: "capa-containment-risk-advisory-1.0.0"; readonly generation: Readonly<{ model_profile_version: string; output_schema_name: string; output_schema_sha256: string }>; readonly authority: CapaContainmentRiskAdvisoryGovernance; readonly prohibitions: readonly string[]; }
 export interface CapaContainmentRiskAdvisoryGenerationFingerprints { readonly algorithm: typeof CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM; readonly prompt_package_sha256: string; readonly rendered_prompt_sha256: string; readonly evidence_manifest_sha256: string; readonly policy_manifest_sha256: string; readonly output_schema_sha256: string; }
-export interface CapaContainmentRiskAdvisoryPromptPackage { readonly package_schema_version: typeof CAPA_CONTAINMENT_RISK_PROMPT_PACKAGE_SCHEMA_VERSION; readonly scope: Readonly<{ organization_id: string; capa_case_id: string; case_version_id: string; record_version: number; workflow_state: "S20" }>; readonly agent: Readonly<{ agent_id: "AG-INTAKE"; agent_version: string }>; readonly generation_contract: CapaContainmentRiskAdvisoryGenerationContract; readonly context_provenance: CapaContainmentRiskAdvisoryContextProvenance; readonly governance: CapaContainmentRiskAdvisoryGovernance; }
+export interface CapaContainmentRiskAdvisoryPromptPackage { readonly package_schema_version: typeof CAPA_CONTAINMENT_RISK_PROMPT_PACKAGE_SCHEMA_VERSION; readonly scope: Readonly<{ organization_id: string; capa_case_id: string; case_version_id: string; record_version: number; workflow_state: "S20" }>; readonly agent: Readonly<{ agent_id: "AG-INTAKE"; agent_version: string }>; readonly trace: Readonly<{ readonly run_id: CapaAiRunId; readonly prompt_package_id: CapaPromptPackageId; readonly request_id: RequestId; readonly correlation_id: CorrelationId; readonly assembled_at: IsoDateTime; }>; readonly generation_contract: CapaContainmentRiskAdvisoryGenerationContract; readonly context_provenance: CapaContainmentRiskAdvisoryContextProvenance; readonly governance: CapaContainmentRiskAdvisoryGovernance; }
 export type CapaContainmentRiskAdvisoryPromptPackageInput = Omit<CapaContainmentRiskAdvisoryPromptPackage, "package_schema_version" | "generation_contract">;
 export type CapaContainmentRiskAdvisoryPolicyManifestInput = { readonly agent: Readonly<{ agent_id: "AG-INTAKE" | string; agent_version: "ag-intake-1.0.0" | string }>; readonly workflow_state: "S20"; readonly operation: "analyze_containment_impact_risk" | string; readonly requested_output: "containment_risk_analysis" | string; readonly output_schema_version: "capa-containment-risk-advisory-1.0.0" | string; readonly generation: Readonly<{ model_profile_version: string; output_schema_name: string }> ; readonly authority: CapaContainmentRiskAdvisoryGovernance; readonly prohibitions: readonly string[] };
 export interface CapaContainmentRiskAdvisoryGenerationTraceCapture {
