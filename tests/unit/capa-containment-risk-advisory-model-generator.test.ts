@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CapaContainmentRiskAdvisoryModelGenerator } from "../../lib/capa/ai/capa-containment-risk-advisory-model-generator";
-import type { CapaAiRunId, CapaPromptPackageId } from "../../lib/capa/ai/capa-prompt-contract";
+import type { CapaAiOutputId, CapaAiRunId, CapaPromptPackageId } from "../../lib/capa/ai/capa-prompt-contract";
 import type { CorrelationId, IsoDateTime, RequestId } from "../../lib/capa/domain/capa-types";
 
 const persisted: any = { actions: [], impact_scope: { products: ["repository"], processes: [], data: [], customers: [], patients: [] }, risk_evaluation: null, missing_risk_information: [], escalations: [] };
@@ -12,13 +12,15 @@ const correlation_id = "correlation-1" as CorrelationId;
 const run_id = "run-1" as CapaAiRunId;
 const prompt_package_id = "package-1" as CapaPromptPackageId;
 const assembled_at = "2026-09-01T00:00:00.000Z" as IsoDateTime;
+const output_id = "output-1" as CapaAiOutputId;
 
 function fixture(output = valid) {
   const model_client = { generateStructured: vi.fn().mockResolvedValue({ output_text: output }) };
   const createRunId = vi.fn(() => run_id);
   const createPromptPackageId = vi.fn(() => prompt_package_id);
   const now = vi.fn(() => assembled_at);
-  return { model_client, createRunId, createPromptPackageId, now, generator: new CapaContainmentRiskAdvisoryModelGenerator({ model_client, createRunId, createPromptPackageId, now }) };
+  const createOutputId = vi.fn(() => output_id);
+  return { model_client, createRunId, createPromptPackageId, now, createOutputId, generator: new CapaContainmentRiskAdvisoryModelGenerator({ model_client, createRunId, createPromptPackageId, now, createOutputId }) };
 }
 
 function generate(subject: ReturnType<typeof fixture>, focus: string | null = null) {
@@ -32,6 +34,18 @@ describe("S20 generator trusted identity lifecycle", () => {
     expect(subject.createRunId).toHaveBeenCalledTimes(1);
     expect(subject.createPromptPackageId).toHaveBeenCalledTimes(1);
     expect(subject.now).toHaveBeenCalledTimes(1);
+    expect(subject.createOutputId).toHaveBeenCalledTimes(1);
+    expect(result.response.run_id).toBe(result.trace.package.trace.run_id);
+    expect(result.response.output_id).toBe(output_id);
+    expect(result.response.output_schema_version).toBe("capa-containment-risk-advisory-1.0.0");
+    expect(result.response.status).toBe("completed_draft");
+    expect(result.response.containment_summary).toEqual([]);
+    expect(result.response.citations).toEqual([]);
+    expect(result.response.warnings).toEqual([]);
+    expect(Object.isFrozen(result.response)).toBe(true);
+    expect(Object.isFrozen(result.response.containment_summary)).toBe(true);
+    expect(Object.isFrozen(result.response.citations)).toBe(true);
+    expect(Object.isFrozen(result.response.warnings)).toBe(true);
     expect(result.trace.package.trace).toEqual({ run_id, prompt_package_id, request_id, correlation_id, assembled_at });
     expect(Object.isFrozen(result.trace.package.trace)).toBe(true);
     expect(subject.model_client.generateStructured).toHaveBeenCalledTimes(1);
@@ -42,12 +56,14 @@ describe("S20 generator trusted identity lifecycle", () => {
     subject[factory].mockImplementation(() => { throw new Error("identity failure"); });
     await expect(generate(subject)).rejects.toThrow("identity failure");
     expect(subject.model_client.generateStructured).not.toHaveBeenCalled();
+    expect(subject.createOutputId).not.toHaveBeenCalled();
   });
 
   it("does not call the provider when prompt construction fails", async () => {
     const subject = fixture();
     await expect(generate(subject, "x".repeat(121_000))).rejects.toThrow("CONTROLLED_CAPA_PROMPT_INVALID");
     expect(subject.model_client.generateStructured).not.toHaveBeenCalled();
+    expect(subject.createOutputId).not.toHaveBeenCalled();
   });
 
   it("does not call the provider when governed trace construction fails", async () => {
@@ -59,12 +75,20 @@ describe("S20 generator trusted identity lifecycle", () => {
 
   it("preserves validated raw advisory behavior", async () => {
     const subject = fixture();
-    await expect(generate(subject)).resolves.toMatchObject({ advisory: { advisory_only: true, workflow_mutated: false, human_acceptance_required: true } });
+    await expect(generate(subject)).resolves.toMatchObject({ response: { advisory_only: true, workflow_mutated: false, human_acceptance_required: true } });
   });
 
   it("rejects invalid raw advisory output after provider invocation", async () => {
     const subject = fixture("{}");
     await expect(generate(subject)).rejects.toThrow();
     expect(subject.model_client.generateStructured).toHaveBeenCalledTimes(1);
+    expect(subject.createOutputId).not.toHaveBeenCalled();
+  });
+
+  it("does not create an output ID when the provider fails", async () => {
+    const subject = fixture();
+    subject.model_client.generateStructured.mockRejectedValue(new Error("provider failure"));
+    await expect(generate(subject)).rejects.toThrow("provider failure");
+    expect(subject.createOutputId).not.toHaveBeenCalled();
   });
 });
