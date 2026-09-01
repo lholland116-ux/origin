@@ -70,6 +70,8 @@ const OPERATION_PERMISSION = {
     "capa.knowledge.citation.review",
   request_ai_intake_advisory:
     "capa.ai.intake.advise",
+  request_ai_containment_risk_advisory:
+    "capa.ai.intake.advise",
   review_ai_intake_advisory:
     "capa.ai.intake.review",
   approve_scope:
@@ -118,6 +120,8 @@ const OPERATION_PURPOSE = {
     "CAPA_KNOWLEDGE_CITATION_REVIEW",
   request_ai_intake_advisory:
     "CAPA_AI_INTAKE_ADVISORY",
+  request_ai_containment_risk_advisory:
+    "CAPA_AI_CONTAINMENT_RISK_ADVISORY",
   review_ai_intake_advisory:
     "CAPA_AI_INTAKE_ADVISORY_REVIEW",
   approve_scope:
@@ -186,6 +190,11 @@ const REQUIRED_WORKFLOW_STATES:
     request_ai_intake_advisory:
       new Set([
         CAPA_STATE.TRIAGE_AND_SCOPE,
+      ]),
+
+    request_ai_containment_risk_advisory:
+      new Set([
+        CAPA_STATE.CONTAINMENT_AND_IMPACT_RISK,
       ]),
 
     review_ai_intake_advisory:
