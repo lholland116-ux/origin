@@ -13,6 +13,32 @@ export interface CapaContainmentRiskAdvisoryAuthorizer { authorize(input: { read
 export interface CapaContainmentRiskAdvisoryAgentGate { evaluate(input: { readonly context: AuthoritativeS20ContainmentRiskContext; readonly agent: typeof CAPA_CONTAINMENT_RISK_ADVISORY_AGENT; readonly operation: typeof CAPA_CONTAINMENT_RISK_ADVISORY_OPERATION }): boolean; }
 export interface CapaContainmentRiskAdvisoryGenerator { generate(input: { readonly context: CapaContainmentRiskAdvisoryContextAssembly; readonly focus: string | null; readonly request_id: RequestId; readonly correlation_id: CorrelationId }): Promise<{ readonly response: CapaContainmentRiskAdvisoryResponse; readonly trace: unknown }>; }
 export interface CapaContainmentRiskAdvisoryServiceDependencies { readonly context_resolver: CapaContainmentRiskAdvisoryContextResolver; readonly authorizer: CapaContainmentRiskAdvisoryAuthorizer; readonly agent_gate: CapaContainmentRiskAdvisoryAgentGate; readonly generator: CapaContainmentRiskAdvisoryGenerator; }
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function hasGeneratedIdentityConsistency(
+  response: CapaContainmentRiskAdvisoryResponse,
+  generatedTrace: unknown,
+  invocation: CapaContainmentRiskAdvisoryInvocation,
+  context: AuthoritativeS20ContainmentRiskContext,
+): boolean {
+  if (!isRecord(generatedTrace)) return false;
+  const packageValue = generatedTrace.package;
+  if (!isRecord(packageValue)) return false;
+  const traceValue = packageValue.trace;
+  const scopeValue = packageValue.scope;
+  if (!isRecord(traceValue) || !isRecord(scopeValue)) return false;
+  if (!hasText(traceValue.run_id) || !hasText(traceValue.prompt_package_id) || !hasText(traceValue.request_id) || !hasText(traceValue.correlation_id) || !hasText(traceValue.assembled_at)) return false;
+  if (!hasText(scopeValue.organization_id) || !hasText(scopeValue.capa_case_id) || !hasText(scopeValue.case_version_id) || !Number.isSafeInteger(scopeValue.record_version) || scopeValue.workflow_state !== "S20") return false;
+  return response.run_id === traceValue.run_id && traceValue.request_id === invocation.request_id && traceValue.correlation_id === invocation.correlation_id && scopeValue.organization_id === context.organization_id && scopeValue.capa_case_id === context.capa_case_id && scopeValue.case_version_id === context.case_version_id && scopeValue.record_version === context.record_version;
+}
+
 export class CapaContainmentRiskAdvisoryService {
   constructor(private readonly dependencies: CapaContainmentRiskAdvisoryServiceDependencies) {}
   async execute(invocation: CapaContainmentRiskAdvisoryInvocation): Promise<{ readonly advisory: CapaContainmentRiskAdvisoryResponse; readonly snapshot: Readonly<{ capa_case_id: CapaCaseId; case_version_id: CapaCaseVersionId; record_version: number }> }> {
@@ -31,6 +57,9 @@ export class CapaContainmentRiskAdvisoryService {
     try {
       if (!response || response.output_schema_version !== "capa-containment-risk-advisory-1.0.0" || response.status !== "completed_draft" || response.proposal == null || !Array.isArray(response.containment_summary) || response.containment_summary.length !== 0 || !Array.isArray(response.citations) || response.citations.length !== 0 || !Array.isArray(response.warnings) || response.warnings.length !== 0 || response.advisory_only !== true || response.workflow_mutated !== false || response.human_acceptance_required !== true) throw new Error("INVALID_ADVISORY_ENVELOPE");
       validated = validateCapaContainmentRiskAdvisoryModelOutput(JSON.stringify({ proposal: response.proposal, assumptions: response.assumptions, uncertainty_and_limitations: response.uncertainty_and_limitations, citations: response.citations, advisory_only: response.advisory_only, workflow_mutated: response.workflow_mutated, human_acceptance_required: response.human_acceptance_required }));
+    } catch { throw new CapaContainmentRiskAdvisoryServiceError("INVALID_ADVISORY_RESULT"); }
+    try {
+      if (!hasGeneratedIdentityConsistency(response, generated.trace, invocation, context)) throw new Error("INVALID_GENERATED_IDENTITY");
     } catch { throw new CapaContainmentRiskAdvisoryServiceError("INVALID_ADVISORY_RESULT"); }
     let unchanged = false; try { unchanged = await this.dependencies.context_resolver.assertCaseUnchanged(context); } catch { unchanged = false; }
     if (!unchanged) throw new CapaContainmentRiskAdvisoryServiceError("WORKFLOW_MUTATION_DETECTED");
