@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CapaContainmentRiskAdvisoryService } from "../../lib/capa/ai/capa-containment-risk-advisory-service";
+import type { TransactionContext, TransactionManager } from "../../lib/database/transactions";
+import type { RequestTrace } from "../../lib/capa/domain/capa-types";
 
 const advisory: any = { proposal: { missing_risk_inputs: [], missing_impact_dimensions: [], human_review_questions: ["Is additional evidence required?"], evidence_provenance_gaps: [] }, assumptions: [], uncertainty_and_limitations: [], citations: [], advisory_only: true, workflow_mutated: false, human_acceptance_required: true };
 const response: any = { run_id: "run-1", output_id: "output-1", output_schema_version: "capa-containment-risk-advisory-1.0.0", status: "completed_draft", ...advisory, containment_summary: [], warnings: [] };
@@ -13,7 +15,11 @@ function fixture() {
   const authorizer = { authorize: vi.fn().mockResolvedValue(true) };
   const agent_gate = { evaluate: vi.fn().mockReturnValue(true) };
   const generator = { generate: vi.fn().mockResolvedValue({ response, trace }) };
-  return { context_resolver, authorizer, agent_gate, generator, service: new CapaContainmentRiskAdvisoryService({ context_resolver, authorizer, agent_gate, generator }) };
+  const transaction = { transaction_id: "transaction", started_at: "2026-09-01T00:00:00.000Z", request_trace: { request_id: invocation.request_id, correlation_id: invocation.correlation_id } } as TransactionContext;
+  const output_repository = { save: vi.fn().mockResolvedValue("saved") };
+  const runInTransaction = vi.fn(async <Result>(_requestTrace: RequestTrace, work: (value: TransactionContext) => Promise<Result>): Promise<Result> => work(transaction));
+  const transaction_manager = { runInTransaction } as unknown as TransactionManager;
+  return { context_resolver, authorizer, agent_gate, generator, output_repository, transaction_manager, transaction_manager_mock: runInTransaction, transaction, service: new CapaContainmentRiskAdvisoryService({ context_resolver, authorizer, agent_gate, generator, output_repository, transaction_manager }) };
 }
 
 describe("S20 advisory service", () => {
@@ -25,6 +31,9 @@ describe("S20 advisory service", () => {
     expect(result.advisory).toBe(response);
     expect(result.snapshot).toEqual({ capa_case_id: "case", case_version_id: "version", record_version: 2 });
     expect(Object.isFrozen(result)).toBe(true);
+    expect(subject.transaction_manager_mock).toHaveBeenCalledTimes(1);
+    expect(subject.transaction_manager_mock).toHaveBeenCalledWith({ request_id: invocation.request_id, correlation_id: invocation.correlation_id }, expect.any(Function));
+    expect(subject.output_repository.save).toHaveBeenCalledWith(subject.transaction, { context: context.authoritative, response, generation_trace: trace, request_id: invocation.request_id, correlation_id: invocation.correlation_id });
   });
 
   it("accepts matching response, trace, request, correlation, and scope identities", async () => {
@@ -58,6 +67,7 @@ describe("S20 advisory service", () => {
     subject.generator.generate.mockResolvedValue({ response: { ...response, ...(responseRunId ? { run_id: responseRunId } : {}) }, trace: traceWith(change) });
     await expect(subject.service.execute(invocation)).rejects.toMatchObject({ reason_code: "INVALID_ADVISORY_RESULT" });
     expect(subject.context_resolver.assertCaseUnchanged).not.toHaveBeenCalled();
+    expect(subject.transaction_manager_mock).not.toHaveBeenCalled();
   });
 
   it.each([["trace", "trace"], ["package", "package"], ["package.trace", "package.trace"], ["package.scope", "package.scope"]] as const)("rejects missing %s structure fail-closed", async (_name, missing) => {
@@ -65,6 +75,7 @@ describe("S20 advisory service", () => {
     subject.generator.generate.mockResolvedValue({ response, trace: traceWith({ missing }) });
     await expect(subject.service.execute(invocation)).rejects.toMatchObject({ reason_code: "INVALID_ADVISORY_RESULT" });
     expect(subject.context_resolver.assertCaseUnchanged).not.toHaveBeenCalled();
+    expect(subject.transaction_manager_mock).not.toHaveBeenCalled();
   });
 
   it("preserves output and governed trace identities without rewriting them", async () => {
@@ -89,6 +100,41 @@ describe("S20 advisory service", () => {
     const subject = fixture();
     subject.context_resolver.assertCaseUnchanged.mockResolvedValue(false);
     await expect(subject.service.execute(invocation)).rejects.toMatchObject({ reason_code: "WORKFLOW_MUTATION_DETECTED" });
+  });
+
+  it("does not start persistence when the pre-transaction stale check fails", async () => {
+    const subject = fixture();
+    subject.context_resolver.assertCaseUnchanged.mockResolvedValue(false);
+    await expect(subject.service.execute(invocation)).rejects.toMatchObject({ reason_code: "WORKFLOW_MUTATION_DETECTED" });
+    expect(subject.transaction_manager_mock).not.toHaveBeenCalled();
+    expect(subject.output_repository.save).not.toHaveBeenCalled();
+  });
+
+  it("maps transactional case changes to workflow mutation", async () => {
+    const subject = fixture();
+    subject.output_repository.save.mockResolvedValue("case_changed");
+    await expect(subject.service.execute(invocation)).rejects.toMatchObject({ reason_code: "WORKFLOW_MUTATION_DETECTED" });
+    expect(subject.output_repository.save).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps transaction and repository failures without retrying", async () => {
+    const transactionFailure = fixture();
+    transactionFailure.transaction_manager_mock.mockRejectedValue(new Error("transaction"));
+    await expect(transactionFailure.service.execute(invocation)).rejects.toMatchObject({ reason_code: "ADVISORY_PERSISTENCE_FAILED" });
+    expect(transactionFailure.output_repository.save).not.toHaveBeenCalled();
+    const repositoryFailure = fixture();
+    repositoryFailure.output_repository.save.mockRejectedValue(new Error("repository"));
+    await expect(repositoryFailure.service.execute(invocation)).rejects.toMatchObject({ reason_code: "ADVISORY_PERSISTENCE_FAILED" });
+    expect(repositoryFailure.output_repository.save).toHaveBeenCalledTimes(1);
+    expect(repositoryFailure.generator.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not persist when generation fails", async () => {
+    const subject = fixture();
+    subject.generator.generate.mockRejectedValue(new Error("generation"));
+    await expect(subject.service.execute(invocation)).rejects.toMatchObject({ reason_code: "ADVISORY_GENERATION_FAILED" });
+    expect(subject.transaction_manager_mock).not.toHaveBeenCalled();
+    expect(subject.output_repository.save).not.toHaveBeenCalled();
   });
 
   it.each([
