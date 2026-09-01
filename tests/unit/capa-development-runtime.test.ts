@@ -1023,6 +1023,77 @@ describe(
       });
     });
 
+    it("allows controlled S40 investigation progress editing", async () => {
+      const request = policyRequest();
+      const decision = await createPolicy().evaluate({
+        ...request,
+        operation: "edit_case",
+        resource: {
+          organization_id: request.tenant.organization_id,
+          resource_type: controlled("CAPA_CASE"),
+          workflow_state: "S40",
+        },
+        purpose: controlled("CAPA_CASE_EDIT"),
+      });
+      expect(decision).toEqual({
+        decision: "allow",
+        reason_code: "DEVELOPMENT_EDIT_CASE_ALLOWED",
+        policy_version: "development-policy-1.0.0",
+        evaluated_at: "2026-08-12T14:00:00.000Z",
+        relied_on_role_assignment_ids: [`development-role:${USER_ID}`],
+      });
+    });
+
+    it("allows controlled S40 root-cause submission for review", async () => {
+      const request = policyRequest();
+      const decision = await createPolicy().evaluate({
+        ...request,
+        operation: "submit_for_review",
+        resource: {
+          organization_id: request.tenant.organization_id,
+          resource_type: controlled("CAPA_CASE"),
+          workflow_state: "S40",
+        },
+        purpose: controlled("CAPA_WORKFLOW_TRANSITION"),
+      });
+      expect(decision).toEqual({
+        decision: "allow",
+        reason_code: "DEVELOPMENT_SUBMIT_FOR_REVIEW_ALLOWED",
+        policy_version: "development-policy-1.0.0",
+        evaluated_at: "2026-08-12T14:00:00.000Z",
+        relied_on_role_assignment_ids: [`development-role:${USER_ID}`],
+      });
+    });
+
+    it.each([
+      ["edit_case", "CAPA_CASE_EDIT"],
+      ["submit_for_review", "CAPA_WORKFLOW_TRANSITION"],
+    ] as const)("keeps %s fail-closed outside the valid development boundary", async (operation, purpose) => {
+      const request = policyRequest();
+      const base = {
+        ...request,
+        operation,
+        resource: {
+          organization_id: request.tenant.organization_id,
+          resource_type: controlled("CAPA_CASE"),
+          workflow_state: "S40" as const,
+        },
+        purpose: controlled(purpose),
+      };
+      await expect(createPolicy().evaluate({
+        ...base,
+        tenant: { ...base.tenant, role_assignments: [] },
+      })).resolves.toMatchObject({ decision: "deny", reason_code: "DEVELOPMENT_POLICY_DENIED" });
+      await expect(createPolicy().evaluate({
+        ...base,
+        resource: { ...base.resource, organization_id: OTHER_ORGANIZATION_ID },
+      })).resolves.toMatchObject({ decision: "deny", reason_code: "DEVELOPMENT_POLICY_DENIED" });
+      await expect(createPolicy().evaluate({
+        ...base,
+        tenant: { ...base.tenant, access_path: controlled("HUMAN_MEMBERSHIP") },
+      })).resolves.toMatchObject({ decision: "deny", reason_code: "DEVELOPMENT_POLICY_DENIED" });
+    });
+
     it(
       "allows governed development AI intake advisory requests",
       async () => {
@@ -1132,7 +1203,7 @@ describe(
             ...request,
 
             operation:
-              "edit_case",
+              "approve_root_cause",
           };
         },
       },

@@ -20,6 +20,8 @@ import CapaScopeReviewPanel from "./CapaScopeReviewPanel";
 import CapaContainmentRiskReviewPanel from "./CapaContainmentRiskReviewPanel";
 import FreshTotpStepUp from "./FreshTotpStepUp";
 import CapaInvestigationPlanPanel from "./CapaInvestigationPlanPanel";
+import CapaRootCauseWorkspace from "./CapaRootCauseWorkspace";
+import { capaRootCauseWorkspaceKey } from "./capa-root-cause-draft";
 
 import {
   createCapaScopeApprovalAttempt,
@@ -906,6 +908,10 @@ function statusName(
 
   if (status === "S40") {
     return CAPA_STATE_DEFINITIONS.S40.name;
+  }
+
+  if (status === "S50") {
+    return CAPA_STATE_DEFINITIONS.S50.name;
   }
 
   return status;
@@ -3589,6 +3595,8 @@ export default function CapaIntakeClient({
                   ? CAPA_STATE_DEFINITIONS.S30.name
                   : createdCapa?.status === "S40"
                     ? CAPA_STATE_DEFINITIONS.S40.name
+                    : createdCapa?.status === "S50"
+                      ? CAPA_STATE_DEFINITIONS.S50.name
                     : "Draft created",
             "created",
           ],
@@ -4125,6 +4133,8 @@ export default function CapaIntakeClient({
                     ? "CAPA intake submitted"
                     : createdCapa.status === "S40"
                       ? CAPA_STATE_DEFINITIONS.S40.name
+                      : createdCapa.status === "S50"
+                        ? CAPA_STATE_DEFINITIONS.S50.name
                       : "CAPA draft created"}
                 </p>
 
@@ -4139,6 +4149,8 @@ export default function CapaIntakeClient({
                     ? "The submitted version and its audit event were committed atomically."
                     : createdCapa.status === "S40"
                       ? "The authoritative CAPA is in active investigation execution."
+                      : createdCapa.status === "S50"
+                        ? "The authoritative investigation and root-cause package are submitted for review."
                       : "The draft record and its audit event were committed atomically."}
                 </p>
               </div>
@@ -5112,6 +5124,34 @@ export default function CapaIntakeClient({
               recordVersion={createdCapa.recordVersion}
               currentVersionId={createdCapa.currentVersionId}
               currentUserId={currentUserId}
+              onAuthoritativeRefresh={async () => {
+                await openExistingCase({
+                  capaCaseId: createdCapa.capaCaseId,
+                  caseNumber: createdCapa.caseNumber,
+                  status: createdCapa.status,
+                  recordVersion: createdCapa.recordVersion,
+                  currentVersionId: createdCapa.currentVersionId,
+                  createdAt: createdCapa.createdAt,
+                  updatedAt: createdCapa.createdAt,
+                });
+                await loadCases("replace");
+              }}
+            />
+          ) : null}
+
+          {(createdCapa.status === "S40" || createdCapa.status === "S50") &&
+          createdCapa.investigationPlan ? (
+            <CapaRootCauseWorkspace
+              key={capaRootCauseWorkspaceKey(createdCapa.capaCaseId, createdCapa.status)}
+              caseId={createdCapa.capaCaseId}
+              caseNumber={createdCapa.caseNumber}
+              plan={createdCapa.investigationPlan}
+              recordVersion={createdCapa.recordVersion}
+              currentVersionId={createdCapa.currentVersionId}
+              currentUserId={currentUserId}
+              mode={createdCapa.status}
+              authoritativeLedger={createdCapa.evidenceAssumptionLedger}
+              authoritativeRootCausePackage={createdCapa.rootCausePackage}
               onAuthoritativeRefresh={async () => {
                 await openExistingCase({
                   capaCaseId: createdCapa.capaCaseId,

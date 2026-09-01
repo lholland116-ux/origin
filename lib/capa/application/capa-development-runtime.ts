@@ -258,6 +258,16 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_RELEASE_INVESTIGATION_ALLOWED",
       );
 
+    case "edit_case":
+      return controlled(
+        "DEVELOPMENT_EDIT_CASE_ALLOWED",
+      );
+
+    case "submit_for_review":
+      return controlled(
+        "DEVELOPMENT_SUBMIT_FOR_REVIEW_ALLOWED",
+      );
+
     case "review_knowledge_citation":
       return controlled(
         "DEVELOPMENT_KNOWLEDGE_CITATION_REVIEW_ALLOWED",
@@ -318,6 +328,10 @@ function developmentAuthorizationPolicy():
           "accept_containment_risk" ||
         request.operation ===
           "release_investigation" ||
+        request.operation ===
+          "edit_case" ||
+        request.operation ===
+          "submit_for_review" ||
         request.operation ===
           "review_knowledge_citation" ||
         request.operation ===

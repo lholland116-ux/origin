@@ -1,3 +1,22 @@
+import {
+  CAPA_INVESTIGATION_PLAN_SCHEMA_VERSION,
+  CAPA_INVESTIGATION_PLAN_SECTION_TYPE,
+  validateCapaInvestigationPlan,
+  type CapaInvestigationPlanContent,
+} from "../../lib/capa/domain/capa-investigation-plan";
+import {
+  CAPA_EVIDENCE_ASSUMPTION_LEDGER_SCHEMA_VERSION,
+  CAPA_EVIDENCE_ASSUMPTION_LEDGER_SECTION_TYPE,
+  validateCapaEvidenceAssumptionLedger,
+  type CapaEvidenceAssumptionLedgerContent,
+} from "../../lib/capa/domain/capa-evidence-assumption-ledger";
+import {
+  CAPA_ROOT_CAUSE_PACKAGE_SCHEMA_VERSION,
+  CAPA_ROOT_CAUSE_PACKAGE_SECTION_TYPE,
+  validateCapaRootCausePackage,
+  type CapaRootCausePackageContent,
+} from "../../lib/capa/domain/capa-root-cause-package";
+
 export interface CapaExistingCaseSummary {
   readonly capaCaseId: string;
   readonly caseNumber: string;
@@ -12,6 +31,34 @@ export interface CapaExistingCaseSummary {
   readonly organizationReference?: string;
   readonly correlationId: string;
   readonly retrievalVerified: boolean;
+  readonly investigationPlan?: CapaInvestigationPlanContent;
+  readonly investigationPlanSectionVersionId?: string;
+  readonly evidenceAssumptionLedger?: CapaEvidenceAssumptionLedgerContent;
+  readonly evidenceAssumptionLedgerSectionVersionId?: string;
+  readonly rootCausePackage?: CapaRootCausePackageContent;
+  readonly rootCausePackageSectionVersionId?: string;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function controlledSection(
+  sections: readonly unknown[],
+  sectionType: string,
+  schemaVersion: string,
+): Readonly<Record<string, unknown>> | null | false {
+  const matches = sections.filter(
+    (section) => isRecord(section) && section.section_type === sectionType,
+  );
+  if (matches.length === 0) return null;
+  if (matches.length !== 1) return false;
+  const section = matches[0];
+  if (
+    !isRecord(section) ||
+    section.schema_version !== schemaVersion ||
+    typeof section.section_version_id !== "string" ||
+    !UUID.test(section.section_version_id)
+  ) return false;
+  return section;
 }
 
 export interface ParseCapaExistingCaseOptions {
@@ -161,6 +208,45 @@ export function parseCapaExistingCaseResponse(
       ? value.correlation_id
       : options.fallbackCorrelationId;
 
+  const planSection = controlledSection(
+    capa.sections,
+    CAPA_INVESTIGATION_PLAN_SECTION_TYPE,
+    CAPA_INVESTIGATION_PLAN_SCHEMA_VERSION,
+  );
+  const ledgerSection = controlledSection(
+    capa.sections,
+    CAPA_EVIDENCE_ASSUMPTION_LEDGER_SECTION_TYPE,
+    CAPA_EVIDENCE_ASSUMPTION_LEDGER_SCHEMA_VERSION,
+  );
+  const packageSection = controlledSection(
+    capa.sections,
+    CAPA_ROOT_CAUSE_PACKAGE_SECTION_TYPE,
+    CAPA_ROOT_CAUSE_PACKAGE_SCHEMA_VERSION,
+  );
+  if (planSection === false || ledgerSection === false || packageSection === false) return null;
+
+  const plan = planSection === null
+    ? null
+    : validateCapaInvestigationPlan(planSection.content);
+  const ledger = ledgerSection === null
+    ? null
+    : validateCapaEvidenceAssumptionLedger(ledgerSection.content);
+  if (
+    (plan !== null && plan.status === "invalid") ||
+    (ledger !== null && ledger.status === "invalid")
+  ) return null;
+  const rootPackage = packageSection === null || ledger === null || ledger.status !== "valid"
+    ? null
+    : validateCapaRootCausePackage(packageSection.content, ledger.value);
+  if (packageSection !== null && (rootPackage === null || rootPackage.status === "invalid")) return null;
+  if (capa.status === "S40" && (plan === null || plan.status !== "valid")) return null;
+  if (
+    capa.status === "S50" &&
+    (plan === null || plan.status !== "valid" ||
+      ledger === null || ledger.status !== "valid" ||
+      rootPackage === null || rootPackage.status !== "valid")
+  ) return null;
+
   return Object.freeze({
     capaCaseId:
       capa.capa_case_id,
@@ -191,5 +277,17 @@ export function parseCapaExistingCaseResponse(
         }),
     correlationId,
     retrievalVerified: true,
+    ...(planSection !== null && plan !== null && plan.status === "valid" ? {
+      investigationPlan: plan.value,
+      investigationPlanSectionVersionId: planSection.section_version_id as string,
+    } : {}),
+    ...(ledgerSection !== null && ledger !== null && ledger.status === "valid" ? {
+      evidenceAssumptionLedger: ledger.value,
+      evidenceAssumptionLedgerSectionVersionId: ledgerSection.section_version_id as string,
+    } : {}),
+    ...(packageSection !== null && rootPackage !== null && rootPackage.status === "valid" ? {
+      rootCausePackage: rootPackage.value,
+      rootCausePackageSectionVersionId: packageSection.section_version_id as string,
+    } : {}),
   });
 }
