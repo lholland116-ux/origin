@@ -16,6 +16,13 @@ export interface RepositoryCapaContainmentRiskAdvisoryContextResolverDependencie
 export class RepositoryCapaContainmentRiskAdvisoryContextResolver {
   constructor(private readonly dependencies: RepositoryCapaContainmentRiskAdvisoryContextResolverDependencies) {}
 
+  async assertCaseUnchanged(context: import("./capa-containment-risk-advisory-context").AuthoritativeS20ContainmentRiskContext): Promise<boolean> {
+    try {
+      const current = await this.dependencies.repository.findCaseById(context.organization_id, context.capa_case_id);
+      return current !== null && current.organization_id === context.organization_id && current.capa_case_id === context.capa_case_id && current.current_version_id === context.case_version_id && current.record_version === context.record_version && current.status === "S20";
+    } catch { return false; }
+  }
+
   async resolve(invocation: CapaContainmentRiskAdvisoryContextInvocation): Promise<CapaContainmentRiskAdvisoryContextAssembly | null> {
     const principal = this.dependencies.authentication.principal;
     if (principal.principal_type !== "human" || invocation.organization_id !== this.dependencies.tenant.organization_id) return null;
