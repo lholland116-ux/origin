@@ -297,6 +297,31 @@ describe(
         );
 
         expect(
+          runtime.update_investigation_progress_dependencies
+            .transaction_manager,
+        ).toBe(runtime.database);
+        expect(
+          runtime.update_investigation_progress_dependencies
+            .capa_repository,
+        ).toBe(runtime.database);
+        expect(
+          runtime.update_investigation_progress_dependencies
+            .audit_repository,
+        ).toBe(runtime.database);
+        expect(
+          runtime.update_investigation_progress_dependencies
+            .workflow_idempotency_repository,
+        ).toBe(runtime.database);
+        expect(
+          runtime.update_investigation_progress_dependencies
+            .configuration.authorization_purpose,
+        ).toBe("CAPA_CASE_EDIT");
+        expect(
+          "participant_eligibility_repository" in
+            runtime.update_investigation_progress_dependencies,
+        ).toBe(false);
+
+        expect(
           runtime.submit_root_cause_dependencies
             .transaction_manager,
         ).toBe(runtime.database);

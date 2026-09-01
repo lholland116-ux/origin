@@ -14,6 +14,10 @@ import type {
   SubmitCapaRootCausePackageDependencies,
 } from "./submit-capa-root-cause-package";
 
+import type {
+  UpdateCapaInvestigationProgressDependencies,
+} from "./update-capa-investigation-progress";
+
 import {
   randomUUID,
 } from "node:crypto";
@@ -681,6 +685,15 @@ export function createCapaDevelopmentRuntime(
     ...submitIntakeDependencies,
   };
 
+  const updateInvestigationProgressDependencies:
+    UpdateCapaInvestigationProgressDependencies = {
+    ...submitIntakeDependencies,
+    configuration: {
+      ...submitIntakeDependencies.configuration,
+      authorization_purpose: controlled("CAPA_CASE_EDIT"),
+    },
+  };
+
   const knowledgeRepository =
     new InMemoryCapaKnowledgeDatabase({
       generate_transaction_id: () =>
@@ -847,6 +860,9 @@ export function createCapaDevelopmentRuntime(
 
     release_investigation_dependencies:
       releaseInvestigationDependencies,
+
+    update_investigation_progress_dependencies:
+      updateInvestigationProgressDependencies,
 
     submit_root_cause_dependencies:
       submitRootCauseDependencies,

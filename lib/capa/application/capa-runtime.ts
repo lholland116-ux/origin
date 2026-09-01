@@ -15,6 +15,10 @@ import type {
 } from "./submit-capa-root-cause-package";
 
 import type {
+  UpdateCapaInvestigationProgressDependencies,
+} from "./update-capa-investigation-progress";
+
+import type {
   CreateCapaDependencies,
 } from "./create-capa";
 
@@ -158,6 +162,10 @@ export interface CapaRuntime {
   /** Human-controlled G-03 S30 to S40 investigation release dependencies. */
   readonly release_investigation_dependencies:
     ReleaseCapaInvestigationDependencies;
+
+  /** Human-controlled same-state S40 investigation progress dependencies. */
+  readonly update_investigation_progress_dependencies:
+    UpdateCapaInvestigationProgressDependencies;
 
   /** Human-controlled S40 to S50 root-cause submission dependencies. */
   readonly submit_root_cause_dependencies:

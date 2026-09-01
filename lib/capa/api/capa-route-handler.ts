@@ -14,6 +14,14 @@ import {
   submitCapaRootCausePackage,
 } from "../application/submit-capa-root-cause-package";
 
+import {
+  updateCapaInvestigationProgress,
+} from "../application/update-capa-investigation-progress";
+
+import type {
+  CapaInvestigationPlanItemStatus,
+} from "../domain/capa-investigation-plan";
+
 import type {
   CapaCaseId,
   CapaCaseVersionId,
@@ -641,6 +649,59 @@ function parsedSubmitRootCauseBody(
       evidence_assumption_ledger: body.evidence_assumption_ledger,
       root_cause_package: body.root_cause_package,
     }),
+  };
+}
+
+interface ParsedInvestigationProgressBody {
+  readonly expected_record_version: number;
+  readonly expected_current_version_id: CapaCaseVersionId;
+  readonly item_id: string;
+  readonly new_status: CapaInvestigationPlanItemStatus;
+  readonly disposition: string | null;
+  readonly disposition_rationale: string | null;
+}
+
+function parsedInvestigationProgressBody(
+  value: unknown
+): ParsedInvestigationProgressBody | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return null;
+  const body = value as Readonly<Record<string, unknown>>;
+  const expectedKeys = [
+    "expected_record_version",
+    "expected_current_version_id",
+    "item_id",
+    "new_status",
+    "disposition",
+    "disposition_rationale",
+  ];
+  if (
+    Object.keys(body).length !== expectedKeys.length ||
+    expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(body, key)) ||
+    !Number.isSafeInteger(body.expected_record_version) ||
+    (body.expected_record_version as number) < 1 ||
+    typeof body.expected_current_version_id !== "string" ||
+    typeof body.item_id !== "string" ||
+    body.item_id.length === 0 ||
+    body.item_id.trim() !== body.item_id ||
+    (body.new_status !== "planned" &&
+      body.new_status !== "in_progress" &&
+      body.new_status !== "completed" &&
+      body.new_status !== "dispositioned" &&
+      body.new_status !== "cancelled") ||
+    (body.disposition !== null && typeof body.disposition !== "string") ||
+    (body.disposition_rationale !== null && typeof body.disposition_rationale !== "string")
+  ) return null;
+  const versionId = normalizedUuid(body.expected_current_version_id);
+  if (versionId === null || versionId !== body.expected_current_version_id)
+    return null;
+  return {
+    expected_record_version: body.expected_record_version as number,
+    expected_current_version_id: versionId as CapaCaseVersionId,
+    item_id: body.item_id,
+    new_status: body.new_status,
+    disposition: body.disposition,
+    disposition_rationale: body.disposition_rationale,
   };
 }
 
@@ -1927,6 +1988,88 @@ export async function handleCapaReleaseInvestigation(
     const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
     if (contextResponse !== null) return contextResponse;
     return safeUnexpectedError(dependencies, trace, "investigation release", error);
+  }
+}
+
+/** Framework-neutral POST handler for controlled same-state S40 progress. */
+export async function handleCapaInvestigationProgress(
+  request: Request,
+  capaCaseId: string,
+  dependencies: CapaApiHandlerDependencies
+): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  try {
+    const context = await authenticatedContext(dependencies);
+    if (context === null)
+      return errorResponse(trace, 401, "UNAUTHORIZED", "Authentication is required.");
+    const normalizedCaseId = normalizedUuid(capaCaseId);
+    if (normalizedCaseId === null || normalizedCaseId !== capaCaseId)
+      return errorResponse(trace, 400, "INVALID_CAPA_CASE_ID", "A valid CAPA case identifier is required.");
+    const key = request.headers.get("idempotency-key");
+    if (key === null || key.length === 0 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH || key.trim() !== key)
+      return errorResponse(trace, 400, "INVALID_IDEMPOTENCY_KEY", "A valid idempotency key is required.");
+    const parsedJson = await parseJsonBody(request);
+    if (!parsedJson.valid)
+      return errorResponse(trace, 400, "INVALID_JSON", "The request body must be valid JSON.");
+    const body = parsedInvestigationProgressBody(parsedJson.body);
+    if (body === null)
+      return errorResponse(trace, 400, "INVALID_CAPA_INVESTIGATION_PROGRESS", "The investigation-progress request is invalid.");
+    const result = await updateCapaInvestigationProgress(
+      dependencies.get_runtime().update_investigation_progress_dependencies,
+      {
+        authentication: context.authentication,
+        tenant: context.tenant,
+        capa_case_id: normalizedCaseId as CapaCaseId,
+        expected_record_version: body.expected_record_version,
+        expected_current_version_id: body.expected_current_version_id,
+        item_id: body.item_id,
+        new_status: body.new_status,
+        disposition: body.disposition,
+        disposition_rationale: body.disposition_rationale,
+        request_trace: { ...trace, idempotency_key: key as IdempotencyKey },
+      }
+    );
+    if (result.status === "validation_failed") {
+      const issues: Array<{ readonly path: string; readonly message: string }> =
+        [{ path: "investigation_progress", message: result.reason_code }];
+      if (result.investigation_plan_reason_code !== undefined)
+        issues.push({ path: "investigation_plan", message: result.investigation_plan_reason_code });
+      return errorResponse(trace, 400, "CAPA_INVESTIGATION_PROGRESS_VALIDATION_FAILED", "The investigation-progress request did not pass controlled validation.", issues);
+    }
+    if (result.status === "transition_conflict")
+      return errorResponse(trace, 409, "CAPA_INVESTIGATION_PROGRESS_TRANSITION_CONFLICT", "The requested investigation-item transition is not permitted.", [{ path: "item_id", message: result.reason_code }]);
+    if (result.status === "authorization_denied")
+      return errorResponse(trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.");
+    if (result.status === "not_found_or_not_authorized")
+      return errorResponse(trace, 404, "CAPA_NOT_FOUND", "The CAPA case was not found.");
+    if (result.status === "idempotency_conflict")
+      return errorResponse(trace, 409, "CAPA_IDEMPOTENCY_CONFLICT", "The idempotency key was already used for a different CAPA request.");
+    if (result.status === "concurrency_conflict")
+      return errorResponse(trace, 409, "CAPA_CONCURRENCY_CONFLICT", "The CAPA record changed before investigation progress could be completed.");
+    if (result.status === "workflow_conflict")
+      return errorResponse(trace, 409, "CAPA_WORKFLOW_CONFLICT", "The CAPA case is not in S40 Investigation Active.");
+    return jsonResponse({
+      capa: {
+        capa_case_id: result.capa_case.capa_case_id,
+        case_number: result.capa_case.case_number,
+        status: result.capa_case.status,
+        record_version: result.capa_case.record_version,
+        current_version_id: result.capa_case.current_version_id,
+        investigation_plan_section_version_id:
+          result.investigation_plan_section_version.section_version_id,
+        updated_item_id: result.updated_item_id,
+        previous_item_status: result.previous_item_status,
+        new_item_status: result.new_item_status,
+        updated_at: result.case_version.effective_at,
+        audit_event_id: result.audit_event_id,
+      },
+      replayed: result.status === "already_updated",
+      correlation_id: trace.correlation_id,
+    }, 200);
+  } catch (error) {
+    const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
+    if (contextResponse !== null) return contextResponse;
+    return safeUnexpectedError(dependencies, trace, "investigation progress", error);
   }
 }
 
