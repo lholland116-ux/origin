@@ -9,7 +9,21 @@ import {
   canonicalJson,
   fingerprintCanonicalJson,
   sha256Utf8,
+  createCapaContainmentRiskAdvisoryGenerationTrace,
+  CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
 } from "../../lib/capa/ai/capa-ai-generation-trace";
+
+it("captures immutable S20 trace with truthful evidence and schema fingerprint", () => {
+  const input = { rendered_prompt: "prompt", model_profile_version: "profile", output_schema_name: "schema", output_schema: { type: "object" }, maximum_output_characters: 30000, package: { scope: { organization_id: "o", capa_case_id: "c", case_version_id: "v", record_version: 1, workflow_state: "S20" as const }, agent: { agent_id: "AG-INTAKE" as const, agent_version: "v" }, context_provenance: { authoritative_server_context: {}, untrusted_human_draft: null, focus: null }, governance: { advisory_only: true as const, workflow_mutated: false as const, human_acceptance_required: true as const } }, policy_manifest: { policy_manifest_schema_version: "capa-containment-risk-policy-manifest-1.0.0", agent: { agent_id: "AG-INTAKE", agent_version: "v" }, workflow_state: "S20" as const, operation: "op", requested_output: "out", output_schema_version: "v", generation: { model_profile_version: "p", output_schema_name: "s", output_schema_sha256: "0".repeat(64) }, authority: { advisory_only: true as const, workflow_mutated: false as const, human_acceptance_required: true as const }, prohibitions: [] } };
+  const trace = createCapaContainmentRiskAdvisoryGenerationTrace(input);
+  expect(trace.trace_schema_version).toBe(CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION);
+  expect(trace.evidence_manifest).toMatchObject({ retrieval_performed: false, item_count: 0, items: [] });
+  expect(trace.fingerprints.output_schema_sha256).toHaveLength(64);
+  expect(Object.isFrozen(trace)).toBe(true);
+  expect(Object.isFrozen(trace.package)).toBe(true);
+  expect(Object.isFrozen(trace.evidence_manifest)).toBe(true);
+  expect(Object.isFrozen(trace.policy_manifest)).toBe(true);
+});
 
 describe(
   "CAPA AI generation trace fingerprints",

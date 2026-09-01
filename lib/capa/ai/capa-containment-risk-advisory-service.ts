@@ -11,7 +11,7 @@ export interface CapaContainmentRiskAdvisoryInvocation { readonly organization_i
 export interface CapaContainmentRiskAdvisoryContextResolver { resolve(input: { readonly organization_id: string; readonly capa_case_id: string; readonly untrusted_human_draft: unknown }): Promise<CapaContainmentRiskAdvisoryContextAssembly | null>; assertCaseUnchanged(context: AuthoritativeS20ContainmentRiskContext): Promise<boolean>; }
 export interface CapaContainmentRiskAdvisoryAuthorizer { authorize(input: { readonly context: AuthoritativeS20ContainmentRiskContext; readonly operation: typeof CAPA_CONTAINMENT_RISK_ADVISORY_OPERATION }): Promise<boolean>; }
 export interface CapaContainmentRiskAdvisoryAgentGate { evaluate(input: { readonly context: AuthoritativeS20ContainmentRiskContext; readonly agent: typeof CAPA_CONTAINMENT_RISK_ADVISORY_AGENT; readonly operation: typeof CAPA_CONTAINMENT_RISK_ADVISORY_OPERATION }): boolean; }
-export interface CapaContainmentRiskAdvisoryGenerator { generate(input: { readonly context: CapaContainmentRiskAdvisoryContextAssembly; readonly focus: string | null }): Promise<RawCapaContainmentRiskAdvisoryModelOutput>; }
+export interface CapaContainmentRiskAdvisoryGenerator { generate(input: { readonly context: CapaContainmentRiskAdvisoryContextAssembly; readonly focus: string | null }): Promise<{ readonly advisory: RawCapaContainmentRiskAdvisoryModelOutput; readonly trace: unknown }>; }
 export interface CapaContainmentRiskAdvisoryServiceDependencies { readonly context_resolver: CapaContainmentRiskAdvisoryContextResolver; readonly authorizer: CapaContainmentRiskAdvisoryAuthorizer; readonly agent_gate: CapaContainmentRiskAdvisoryAgentGate; readonly generator: CapaContainmentRiskAdvisoryGenerator; }
 export class CapaContainmentRiskAdvisoryService {
   constructor(private readonly dependencies: CapaContainmentRiskAdvisoryServiceDependencies) {}
@@ -24,8 +24,9 @@ export class CapaContainmentRiskAdvisoryService {
     if (context.trust !== "authoritative_server_context" || context.organization_id !== invocation.organization_id || context.capa_case_id !== invocation.capa_case_id || context.actor !== invocation.user_id || context.workflow_state !== "S20" || !Number.isSafeInteger(context.record_version) || context.record_version <= 0 || typeof context.case_version_id !== "string" || context.case_version_id.length === 0 || !Array.isArray(context.active_roles) || context.active_roles.length === 0) throw new CapaContainmentRiskAdvisoryServiceError("CASE_NOT_IN_CONTAINMENT_RISK");
     if (!await this.dependencies.authorizer.authorize({ context, operation: CAPA_CONTAINMENT_RISK_ADVISORY_OPERATION })) throw new CapaContainmentRiskAdvisoryServiceError("ADVISORY_ACCESS_DENIED");
     if (!this.dependencies.agent_gate.evaluate({ context, agent: CAPA_CONTAINMENT_RISK_ADVISORY_AGENT, operation: CAPA_CONTAINMENT_RISK_ADVISORY_OPERATION })) throw new CapaContainmentRiskAdvisoryServiceError("AGENT_NOT_ELIGIBLE");
-    let advisory: RawCapaContainmentRiskAdvisoryModelOutput;
-    try { advisory = await this.dependencies.generator.generate({ context: assembly, focus: invocation.request.focus }); } catch { throw new CapaContainmentRiskAdvisoryServiceError("ADVISORY_GENERATION_FAILED"); }
+    let generated: { readonly advisory: RawCapaContainmentRiskAdvisoryModelOutput; readonly trace: unknown };
+    try { generated = await this.dependencies.generator.generate({ context: assembly, focus: invocation.request.focus }); } catch { throw new CapaContainmentRiskAdvisoryServiceError("ADVISORY_GENERATION_FAILED"); }
+    const advisory = generated.advisory;
     let validated: RawCapaContainmentRiskAdvisoryModelOutput;
     try { validated = validateCapaContainmentRiskAdvisoryModelOutput(JSON.stringify(advisory)); } catch { throw new CapaContainmentRiskAdvisoryServiceError("INVALID_ADVISORY_RESULT"); }
     let unchanged = false; try { unchanged = await this.dependencies.context_resolver.assertCaseUnchanged(context); } catch { unchanged = false; }

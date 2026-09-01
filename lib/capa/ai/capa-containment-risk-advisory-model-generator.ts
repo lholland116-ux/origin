@@ -2,6 +2,7 @@ import type { RawCapaContainmentRiskAdvisoryModelOutput } from "./capa-containme
 import { validateCapaContainmentRiskAdvisoryModelOutput } from "./capa-containment-risk-advisory-output-validator";
 import type { CapaContainmentRiskAdvisoryContextAssembly } from "./capa-containment-risk-advisory-context";
 import { buildCapaContainmentRiskAdvisoryPrompt } from "./capa-containment-risk-advisory-prompt";
+import { createCapaContainmentRiskAdvisoryGenerationTrace } from "./capa-ai-generation-trace";
 import { CAPA_CONTAINMENT_RISK_ADVISORY_EVIDENCE_GAP_CATEGORIES, CAPA_CONTAINMENT_RISK_ADVISORY_IMPACT_DIMENSIONS, CAPA_CONTAINMENT_RISK_ADVISORY_RISK_INPUT_TOPICS, CAPA_CONTAINMENT_RISK_ADVISORY_ASSUMPTION_AREAS, CAPA_CONTAINMENT_RISK_ADVISORY_UNCERTAINTY_CATEGORIES } from "./capa-containment-risk-advisory-contract";
 
 export const CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE = Object.freeze({ profile_version: "capa-model-profile-1.0.0" as const, output_schema_name: "capa_containment_risk_advisory_1_0_0" as const, maximum_output_characters: 30_000 });
@@ -12,10 +13,12 @@ export interface CapaContainmentRiskAdvisoryGenerationInput { readonly context: 
 export interface CapaContainmentRiskAdvisoryModelGeneratorDependencies { readonly model_client: CapaContainmentRiskAdvisoryStructuredModelClient; }
 export class CapaContainmentRiskAdvisoryModelGenerator {
   constructor(private readonly dependencies: CapaContainmentRiskAdvisoryModelGeneratorDependencies) {}
-  async generate(input: CapaContainmentRiskAdvisoryGenerationInput): Promise<RawCapaContainmentRiskAdvisoryModelOutput> {
+  async generate(input: CapaContainmentRiskAdvisoryGenerationInput): Promise<{ readonly advisory: RawCapaContainmentRiskAdvisoryModelOutput; readonly trace: import("./capa-ai-generation-trace").CapaContainmentRiskAdvisoryGenerationTraceCapture }> {
     const prompt = buildCapaContainmentRiskAdvisoryPrompt(input);
     if (typeof prompt !== "string" || prompt.trim().length === 0 || prompt.length > 120_000) throw new Error("CONTROLLED_CAPA_PROMPT_INVALID");
+    const trace = createCapaContainmentRiskAdvisoryGenerationTrace({ rendered_prompt: prompt, model_profile_version: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.profile_version, output_schema_name: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.output_schema_name, output_schema: CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA, maximum_output_characters: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.maximum_output_characters, package: { scope: { ...input.context.authoritative }, agent: { agent_id: "AG-INTAKE", agent_version: "ag-intake-1.0.0" }, context_provenance: { authoritative_server_context: input.context.authoritative, untrusted_human_draft: input.context.untrusted_human_draft, focus: input.focus ?? null }, governance: { advisory_only: true, workflow_mutated: false, human_acceptance_required: true } }, policy_manifest: { agent: { agent_id: "AG-INTAKE", agent_version: "ag-intake-1.0.0" }, workflow_state: "S20", operation: "analyze_containment_impact_risk", requested_output: "containment_risk_analysis", output_schema_version: "capa-containment-risk-advisory-1.0.0", generation: { model_profile_version: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.profile_version, output_schema_name: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.output_schema_name }, authority: { advisory_only: true, workflow_mutated: false, human_acceptance_required: true }, prohibitions: ["risk acceptance", "approval", "release", "distribution", "continued use", "recall", "field action", "reportability", "containment approval", "G-02", "controlled-record mutation", "workflow advancement", "evidence verification", "review disposition"] } });
     const raw = await this.dependencies.model_client.generateStructured({ prompt, model_profile_version: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.profile_version, output_schema_name: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.output_schema_name, output_schema: CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA, maximum_output_characters: CAPA_CONTAINMENT_RISK_ADVISORY_MODEL_PROFILE.maximum_output_characters, store: false });
-    return validateCapaContainmentRiskAdvisoryModelOutput(raw.output_text);
+    const advisory = validateCapaContainmentRiskAdvisoryModelOutput(raw.output_text);
+    return Object.freeze({ advisory, trace });
   }
 }
