@@ -30,6 +30,15 @@ function generate(subject: ReturnType<typeof fixture>, focus: string | null = nu
 describe("S20 generator trusted identity lifecycle", () => {
   it("uses a valid typed zero-citation schema", () => {
     const citations = CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA.properties.citations;
+    const assumptions = CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA.properties.assumptions;
+    const advisoryOnly = CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA.properties.advisory_only;
+    const workflowMutated = CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA.properties.workflow_mutated;
+    const humanAcceptanceRequired = CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA.properties.human_acceptance_required;
+
+    expect(assumptions.items.properties.unverified).toEqual({ type: "boolean", const: true });
+    expect(advisoryOnly).toEqual({ type: "boolean", const: true });
+    expect(workflowMutated).toEqual({ type: "boolean", const: false });
+    expect(humanAcceptanceRequired).toEqual({ type: "boolean", const: true });
     expect(citations.type).toBe("array");
     expect(citations.maxItems).toBe(0);
     expect(citations.items).toEqual({ type: "string" });
