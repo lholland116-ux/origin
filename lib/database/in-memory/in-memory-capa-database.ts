@@ -65,6 +65,27 @@ import type {
   CapaIntakeAdvisoryResponse,
 } from "../../capa/ai/capa-intake-advisory-contract";
 
+import type {
+  CapaContainmentRiskAdvisoryResponse,
+} from "../../capa/ai/capa-containment-risk-advisory-contract";
+
+import type {
+  CapaContainmentRiskAdvisoryGenerationTraceCapture,
+} from "../../capa/ai/capa-ai-generation-trace";
+
+import type {
+  AuthoritativeS20ContainmentRiskContext,
+} from "../../capa/ai/capa-containment-risk-advisory-context";
+
+import {
+  CAPA_CONTAINMENT_RISK_ADVISORY_AGENT,
+} from "../../capa/ai/capa-containment-risk-advisory-service";
+
+import type {
+  CapaContainmentRiskAdvisoryOutputRepository,
+  CapaContainmentRiskAdvisoryOutputSaveResult,
+} from "../repositories/capa-containment-risk-advisory-output-repository";
+
 /**
  * Development and integration-test CAPA persistence adapter.
  *
@@ -115,6 +136,28 @@ interface InMemoryCapaIntakeAdvisoryOutputRecord {
   readonly created_at:
     IsoDateTime;
 }
+
+interface InMemoryCapaContainmentRiskAdvisoryOutputRecord {
+  readonly organization_id:
+    OrganizationId;
+  readonly capa_case_id:
+    CapaCaseId;
+  readonly case_version_id:
+    CapaCaseVersionId;
+  readonly record_version: number;
+  readonly request_trace:
+    RequestTrace;
+  readonly response:
+    CapaContainmentRiskAdvisoryResponse;
+  readonly generation_trace:
+    CapaContainmentRiskAdvisoryGenerationTraceCapture;
+  readonly created_at:
+    IsoDateTime;
+}
+
+type InMemoryCapaAdvisoryOutputRecord =
+  | InMemoryCapaIntakeAdvisoryOutputRecord
+  | InMemoryCapaContainmentRiskAdvisoryOutputRecord;
 
 interface InMemoryState {
   readonly revision: number;
@@ -171,7 +214,7 @@ interface InMemoryState {
   readonly advisory_outputs:
     Map<
       string,
-      InMemoryCapaIntakeAdvisoryOutputRecord
+      InMemoryCapaAdvisoryOutputRecord
     >;
 
   /**
@@ -261,6 +304,18 @@ export class InMemoryIntegrityError
 
     this.name =
       "InMemoryIntegrityError";
+  }
+}
+
+export class InMemoryCapaContainmentRiskAdvisoryPersistenceError
+  extends Error {
+  constructor() {
+    super(
+      "The governed CAPA containment/risk advisory output could not be persisted.",
+    );
+
+    this.name =
+      "InMemoryCapaContainmentRiskAdvisoryPersistenceError";
   }
 }
 
@@ -542,6 +597,178 @@ function requireMaximumCaseNumber(
   return resolved;
 }
 
+type InMemoryCapaIntakeAdvisorySaveInput =
+  Parameters<
+    CapaIntakeAdvisoryOutputRepository["save"]
+  >[1];
+
+type InMemoryCapaContainmentRiskAdvisorySaveInput =
+  Parameters<
+    CapaContainmentRiskAdvisoryOutputRepository["save"]
+  >[1];
+
+type InMemoryCapaAdvisorySaveInput =
+  | InMemoryCapaIntakeAdvisorySaveInput
+  | InMemoryCapaContainmentRiskAdvisorySaveInput;
+
+function isS20AdvisorySaveInput(
+  input:
+    InMemoryCapaAdvisorySaveInput,
+): input is InMemoryCapaContainmentRiskAdvisorySaveInput {
+  return input.context.workflow_state === "S20";
+}
+
+function isNonEmptyString(
+  value: unknown,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0
+  );
+}
+
+function isValidIsoDateTime(
+  value: unknown,
+): value is IsoDateTime {
+  if (!isNonEmptyString(value)) {
+    return false;
+  }
+
+  const date = new Date(value);
+
+  return (
+    Number.isFinite(date.getTime()) &&
+    date.toISOString() === value
+  );
+}
+
+function isObjectRecord(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+function rejectInvalidS20AdvisoryInput(): never {
+  throw new InMemoryCapaContainmentRiskAdvisoryPersistenceError();
+}
+
+function validateS20AdvisoryInput(
+  input:
+    InMemoryCapaContainmentRiskAdvisorySaveInput,
+): void {
+  try {
+    const context = input.context;
+    const response = input.response;
+    const promptPackage =
+      input.generation_trace.package;
+    const traceIdentity =
+      promptPackage.trace;
+    const traceScope =
+      promptPackage.scope;
+
+    if (
+      context.trust !== "authoritative_server_context" ||
+      !isNonEmptyString(
+        context.organization_id,
+      ) ||
+      !isNonEmptyString(
+        context.capa_case_id,
+      ) ||
+      !isNonEmptyString(
+        context.case_version_id,
+      ) ||
+      !Number.isSafeInteger(
+        context.record_version,
+      ) ||
+      context.record_version <= 0 ||
+      context.workflow_state !== "S20" ||
+      !isNonEmptyString(input.request_id) ||
+      !isNonEmptyString(input.correlation_id)
+    ) {
+      rejectInvalidS20AdvisoryInput();
+    }
+
+    if (
+      !isNonEmptyString(response.run_id) ||
+      !isNonEmptyString(response.output_id) ||
+      response.output_schema_version !==
+        "capa-containment-risk-advisory-1.0.0" ||
+      response.status !== "completed_draft" ||
+      !isObjectRecord(response.proposal) ||
+      !Array.isArray(response.containment_summary) ||
+      !Array.isArray(response.citations) ||
+      !Array.isArray(response.warnings) ||
+      response.advisory_only !== true ||
+      response.workflow_mutated !== false ||
+      response.human_acceptance_required !== true
+    ) {
+      rejectInvalidS20AdvisoryInput();
+    }
+
+    if (
+      !isNonEmptyString(traceIdentity.run_id) ||
+      !isNonEmptyString(
+        traceIdentity.prompt_package_id,
+      ) ||
+      !isNonEmptyString(traceIdentity.request_id) ||
+      !isNonEmptyString(
+        traceIdentity.correlation_id,
+      ) ||
+      !isValidIsoDateTime(
+        traceIdentity.assembled_at,
+      ) ||
+      !isNonEmptyString(
+        traceScope.organization_id,
+      ) ||
+      !isNonEmptyString(traceScope.capa_case_id) ||
+      !isNonEmptyString(
+        traceScope.case_version_id,
+      ) ||
+      !Number.isSafeInteger(
+        traceScope.record_version,
+      ) ||
+      traceScope.record_version <= 0 ||
+      traceScope.workflow_state !== "S20" ||
+      promptPackage.agent.agent_id !==
+        CAPA_CONTAINMENT_RISK_ADVISORY_AGENT.agent_id ||
+      promptPackage.agent.agent_version !==
+        CAPA_CONTAINMENT_RISK_ADVISORY_AGENT.agent_version
+    ) {
+      rejectInvalidS20AdvisoryInput();
+    }
+
+    if (
+      response.run_id !== traceIdentity.run_id ||
+      traceIdentity.request_id !== input.request_id ||
+      traceIdentity.correlation_id !==
+        input.correlation_id ||
+      traceScope.organization_id !==
+        context.organization_id ||
+      traceScope.capa_case_id !==
+        context.capa_case_id ||
+      traceScope.case_version_id !==
+        context.case_version_id ||
+      traceScope.record_version !==
+        context.record_version
+    ) {
+      rejectInvalidS20AdvisoryInput();
+    }
+  } catch (error) {
+    if (
+      error instanceof
+      InMemoryCapaContainmentRiskAdvisoryPersistenceError
+    ) {
+      throw error;
+    }
+
+    rejectInvalidS20AdvisoryInput();
+  }
+}
+
 export class InMemoryCapaDatabase
   implements
     TransactionManager,
@@ -672,24 +899,43 @@ export class InMemoryCapaDatabase
     }
   }
 
-  /**
-   * Persists one governed intake advisory inside an active CAPA transaction.
-   *
-   * The transaction-owned case snapshot is rechecked immediately before the
-   * output is stored. A stale workflow/version returns "case_changed" rather
-   * than persisting an advisory against a superseded CAPA state.
-   */
+  /** Persist a governed S10 or S20 advisory in the active transaction. */
   async save(
     transaction: TransactionContext,
-    input: Parameters<
-      CapaIntakeAdvisoryOutputRepository["save"]
-    >[1],
-  ): Promise<CapaIntakeAdvisoryOutputSaveResult> {
-    const state =
-      this.transactionState(
-        transaction,
-      );
+    input: InMemoryCapaIntakeAdvisorySaveInput,
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult>;
 
+  async save(
+    transaction: TransactionContext,
+    input: InMemoryCapaContainmentRiskAdvisorySaveInput,
+  ): Promise<CapaContainmentRiskAdvisoryOutputSaveResult>;
+
+  async save(
+    transaction: TransactionContext,
+    input: InMemoryCapaAdvisorySaveInput,
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult> {
+    const state = this.transactionState(transaction);
+
+    if (isS20AdvisorySaveInput(input)) {
+      return this.saveS20Advisory(
+        transaction,
+        state,
+        input,
+      );
+    }
+
+    return this.saveS10Advisory(
+      transaction,
+      state,
+      input,
+    );
+  }
+
+  private async saveS10Advisory(
+    transaction: TransactionContext,
+    state: InMemoryState,
+    input: InMemoryCapaIntakeAdvisorySaveInput,
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult> {
     if (
       transaction.request_trace
         .request_id !==
@@ -797,6 +1043,92 @@ export class InMemoryCapaDatabase
     state.advisory_runs.set(
       runKey,
       response.output_id,
+    );
+
+    return "saved";
+  }
+
+  private async saveS20Advisory(
+    transaction: TransactionContext,
+    state: InMemoryState,
+    input: InMemoryCapaContainmentRiskAdvisorySaveInput,
+  ): Promise<CapaContainmentRiskAdvisoryOutputSaveResult> {
+    if (
+      transaction.request_trace.request_id !==
+        input.request_id ||
+      transaction.request_trace.correlation_id !==
+        input.correlation_id
+    ) {
+      throw new InMemoryCapaContainmentRiskAdvisoryPersistenceError();
+    }
+
+    validateS20AdvisoryInput(input);
+
+    const capaCase = state.cases.get(
+      recordKey(
+        input.context.organization_id,
+        input.context.capa_case_id,
+      ),
+    );
+
+    if (
+      capaCase === undefined ||
+      capaCase.current_version_id !==
+        input.context.case_version_id ||
+      capaCase.record_version !==
+        input.context.record_version ||
+      capaCase.status !== "S20"
+    ) {
+      return "case_changed";
+    }
+
+    const outputKey = recordKey(
+      input.context.organization_id,
+      input.response.output_id,
+    );
+    const runKey = recordKey(
+      input.context.organization_id,
+      input.response.run_id,
+    );
+
+    if (
+      state.advisory_outputs.has(outputKey) ||
+      state.advisory_runs.has(runKey)
+    ) {
+      throw new InMemoryDuplicateRecordError(
+        "CAPA AI advisory output",
+      );
+    }
+
+    const record:
+      InMemoryCapaContainmentRiskAdvisoryOutputRecord = {
+      organization_id:
+        input.context.organization_id,
+      capa_case_id:
+        input.context.capa_case_id,
+      case_version_id:
+        input.context.case_version_id,
+      record_version:
+        input.context.record_version,
+      request_trace: {
+        request_id: input.request_id,
+        correlation_id: input.correlation_id,
+      },
+      response: cloneValue(input.response),
+      generation_trace: cloneValue(
+        input.generation_trace,
+      ),
+      created_at: transaction.started_at,
+    };
+
+    state.advisory_outputs.set(
+      outputKey,
+      cloneValue(record),
+    );
+
+    state.advisory_runs.set(
+      runKey,
+      input.response.output_id,
     );
 
     return "saved";
