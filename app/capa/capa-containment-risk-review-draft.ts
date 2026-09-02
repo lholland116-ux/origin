@@ -53,6 +53,17 @@ export type BuildCapaContainmentRiskReviewSubmissionResult =
       readonly message: string;
     };
 
+export type BuildCapaContainmentRiskAdvisoryDraftResult =
+  | {
+      readonly valid: true;
+      readonly content: CapaContainmentRiskContent | null;
+    }
+  | {
+      readonly valid: false;
+      readonly field: Exclude<keyof CapaContainmentRiskReviewDraft, "approvalRationale">;
+      readonly message: string;
+    };
+
 function lines(value: string): readonly string[] {
   return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
 }
@@ -160,6 +171,73 @@ export function buildCapaContainmentRiskReviewSubmission(
         escalations,
       },
       approvalRationale,
+    },
+  };
+}
+
+/** Builds only unsaved S20 working data for the advisory endpoint. */
+export function buildCapaContainmentRiskAdvisoryDraft(
+  draft: CapaContainmentRiskReviewDraft,
+): BuildCapaContainmentRiskAdvisoryDraftResult {
+  const hasWorkingData = [
+    draft.actionRows,
+    draft.products,
+    draft.processes,
+    draft.dataImpact,
+    draft.customerImpact,
+    draft.patientImpact,
+    draft.riskMethod,
+    draft.riskTerminologyVersion,
+    draft.riskResult,
+    draft.riskRationale,
+    draft.missingRiskInformation,
+    draft.escalationRows,
+  ].some((value) => value.trim().length > 0);
+
+  if (!hasWorkingData) return { valid: true, content: null };
+
+  const actions = parseActions(draft.actionRows);
+  if (actions === null) return {
+    valid: false,
+    field: "actionRows",
+    message: "Actions must use the documented ten-column controlled format.",
+  };
+
+  const escalations = parseEscalations(draft.escalationRows);
+  if (escalations === null) return {
+    valid: false,
+    field: "escalationRows",
+    message: "Escalations must use: process | reference | status | rationale.",
+  };
+
+  const riskParts = [draft.riskMethod, draft.riskResult, draft.riskRationale]
+    .map((item) => item.trim());
+  const riskStarted = riskParts.some(Boolean) || draft.riskTerminologyVersion.trim().length > 0;
+  if (riskStarted && riskParts.some((item) => item.length === 0)) return {
+    valid: false,
+    field: "riskRationale",
+    message: "Risk method, result, and rationale are all required when a risk evaluation is recorded.",
+  };
+
+  return {
+    valid: true,
+    content: {
+      actions,
+      impact_scope: {
+        products: lines(draft.products),
+        processes: lines(draft.processes),
+        data: lines(draft.dataImpact),
+        customers: lines(draft.customerImpact),
+        patients: lines(draft.patientImpact),
+      },
+      risk_evaluation: riskStarted ? {
+        method: riskParts[0]!,
+        terminology_version: nullable(draft.riskTerminologyVersion),
+        result: riskParts[1]!,
+        rationale: riskParts[2]!,
+      } : null,
+      missing_risk_information: lines(draft.missingRiskInformation),
+      escalations,
     },
   };
 }

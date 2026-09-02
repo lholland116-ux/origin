@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCapaContainmentRiskAdvisoryDraft,
   buildCapaContainmentRiskReviewSubmission,
   EMPTY_CAPA_CONTAINMENT_RISK_REVIEW_DRAFT,
 } from "../../app/capa/capa-containment-risk-review-draft";
@@ -25,6 +26,47 @@ function completeDraft() {
 }
 
 describe("CAPA containment/risk review draft", () => {
+  it("builds an advisory draft without requiring or including approval rationale", () => {
+    const result = buildCapaContainmentRiskAdvisoryDraft({
+      ...completeDraft(),
+      approvalRationale: "Human-only G-02 rationale",
+    });
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.content).not.toBeNull();
+      expect(JSON.stringify(result.content)).not.toContain("Human-only G-02 rationale");
+    }
+  });
+
+  it("returns null content for an empty or approval-rationale-only draft", () => {
+    expect(buildCapaContainmentRiskAdvisoryDraft(EMPTY_CAPA_CONTAINMENT_RISK_REVIEW_DRAFT)).toEqual({ valid: true, content: null });
+    expect(buildCapaContainmentRiskAdvisoryDraft({
+      ...EMPTY_CAPA_CONTAINMENT_RISK_REVIEW_DRAFT,
+      approvalRationale: "Human-only G-02 rationale",
+    })).toEqual({ valid: true, content: null });
+  });
+
+  it("preserves valid unresolved advisory working data", () => {
+    const result = buildCapaContainmentRiskAdvisoryDraft({
+      ...completeDraft(),
+      approvalRationale: "",
+      missingRiskInformation: "Distribution scope remains unresolved.",
+    });
+    expect(result.valid).toBe(true);
+    if (result.valid) expect(result.content?.missing_risk_information).toEqual(["Distribution scope remains unresolved."]);
+  });
+
+  it("rejects malformed escalation rows and partial risk evaluations", () => {
+    expect(buildCapaContainmentRiskAdvisoryDraft({
+      ...EMPTY_CAPA_CONTAINMENT_RISK_REVIEW_DRAFT,
+      escalationRows: "malformed",
+    }).valid).toBe(false);
+    expect(buildCapaContainmentRiskAdvisoryDraft({
+      ...EMPTY_CAPA_CONTAINMENT_RISK_REVIEW_DRAFT,
+      riskMethod: "QP-17",
+    }).valid).toBe(false);
+  });
+
   it("maps S20 working data to the existing controlled contract", () => {
     const result = buildCapaContainmentRiskReviewSubmission(completeDraft());
     expect(result.valid).toBe(true);

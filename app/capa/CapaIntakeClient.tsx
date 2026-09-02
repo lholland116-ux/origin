@@ -5109,7 +5109,10 @@ export default function CapaIntakeClient({
               {containmentRiskError !== null ? <div role="alert" className="mt-6 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">{containmentRiskError}</div> : null}
               <CapaContainmentRiskReviewPanel
                 key={createdCapa.currentVersionId}
+                caseId={createdCapa.capaCaseId}
                 caseNumber={createdCapa.caseNumber}
+                currentVersionId={createdCapa.currentVersionId}
+                recordVersion={createdCapa.recordVersion}
                 busy={containmentRiskAttempt !== null || isSubmittingContainmentRisk || containmentRiskStepUpOpen}
                 blockerCodes={containmentRiskBlockers}
                 onReview={beginContainmentRiskAcceptance}

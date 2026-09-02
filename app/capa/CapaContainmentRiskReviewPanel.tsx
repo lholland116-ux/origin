@@ -7,9 +7,13 @@ import {
   EMPTY_CAPA_CONTAINMENT_RISK_REVIEW_DRAFT,
   type CapaContainmentRiskReviewDraft,
 } from "./capa-containment-risk-review-draft";
+import CapaContainmentRiskAdvisoryPanel from "./CapaContainmentRiskAdvisoryPanel";
 
 export interface CapaContainmentRiskReviewPanelProps {
+  readonly caseId: string;
   readonly caseNumber: string;
+  readonly currentVersionId: string;
+  readonly recordVersion: number;
   readonly busy: boolean;
   readonly blockerCodes: readonly string[];
   readonly onReview: (
@@ -29,22 +33,23 @@ const BLOCKER_LABELS: Readonly<Record<string, string>> = {
 };
 
 export default function CapaContainmentRiskReviewPanel({
-  caseNumber, busy, blockerCodes, onReview,
+  caseId, caseNumber, currentVersionId, recordVersion, busy, blockerCodes, onReview,
 }: CapaContainmentRiskReviewPanelProps) {
   const [draft, setDraft] = useState<CapaContainmentRiskReviewDraft>(
     EMPTY_CAPA_CONTAINMENT_RISK_REVIEW_DRAFT,
   );
   const [error, setError] = useState<string | null>(null);
+  const [advisoryRequesting, setAdvisoryRequesting] = useState(false);
 
   function update(field: keyof CapaContainmentRiskReviewDraft, value: string) {
-    if (busy) return;
+    if (busy || advisoryRequesting) return;
     setDraft((current) => ({ ...current, [field]: value }));
     setError(null);
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || advisoryRequesting) return;
     const built = buildCapaContainmentRiskReviewSubmission(draft);
     if (!built.valid) {
       setError(built.message);
@@ -67,6 +72,16 @@ export default function CapaContainmentRiskReviewPanel({
         and separate escalations for <span className="font-medium text-zinc-200">{caseNumber}</span>.
         AI does not determine the authoritative risk conclusion or accept G-02.
       </p>
+
+      <CapaContainmentRiskAdvisoryPanel
+        caseId={caseId}
+        caseNumber={caseNumber}
+        currentVersionId={currentVersionId}
+        recordVersion={recordVersion}
+        draft={draft}
+        disabled={busy}
+        onRequestingChange={setAdvisoryRequesting}
+      />
 
       <div className="mt-6 rounded-2xl border border-zinc-700 bg-zinc-900/60 p-4">
         <h3 className="text-sm font-semibold text-zinc-100">G-02 review summary</h3>
@@ -114,7 +129,7 @@ export default function CapaContainmentRiskReviewPanel({
           onChange={(v) => update("approvalRationale", v)} rows={3} />
 
         {error !== null ? <div role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">{error}</div> : null}
-        <button type="submit" disabled={busy}
+        <button type="submit" disabled={busy || advisoryRequesting}
           className="inline-flex min-h-11 items-center justify-center rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50">
           Review for G-02 acceptance
         </button>
