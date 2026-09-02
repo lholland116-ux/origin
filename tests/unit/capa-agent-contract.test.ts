@@ -51,13 +51,11 @@ describe(
     );
 
     it(
-      "defines one narrow operation per logical agent",
+      "defines controlled unique operations",
       () => {
         expect(
           CAPA_AGENT_OPERATIONS,
-        ).toHaveLength(
-          CAPA_AGENT_IDS.length,
-        );
+        ).toContain("analyze_containment_impact_risk");
         expect(
           new Set(
             CAPA_AGENT_OPERATIONS,

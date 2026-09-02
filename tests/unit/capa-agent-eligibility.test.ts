@@ -382,5 +382,24 @@ describe(
         );
       },
     );
+
+    it("allows the bound S20 containment/risk capability for owner and contributor", () => {
+      for (const role of ["CAPA_OWNER", "CAPA_CONTRIBUTOR"] as const) {
+        const result = evaluateCapaAgentEligibility(createInitialCapaAgentRegistry(), request({ workflow_state: "S20", operation: "analyze_containment_impact_risk", active_role_ids: [role as RoleId], requested_tool_ids: ["TOOL-CASE-READ", "TOOL-STRUCTURED-DRAFT"], output_schema_version: "capa-containment-risk-advisory-1.0.0" as never }));
+        expect(result.reason_code).toBe("AGENT_ELIGIBLE");
+      }
+    });
+
+    it.each([
+      ["S10 with S20 operation", { workflow_state: "S10", operation: "analyze_containment_impact_risk", output_schema_version: "capa-containment-risk-advisory-1.0.0" as never }],
+      ["S20 with intake operation", { workflow_state: "S20", operation: "draft_intake_analysis" }],
+      ["S20 with intake schema", { workflow_state: "S20", operation: "analyze_containment_impact_risk", output_schema_version: "capa-intake-draft-output-1.0.0" as never }],
+      ["S10 with S20 schema", { workflow_state: "S10", output_schema_version: "capa-containment-risk-advisory-1.0.0" as never }],
+      ["S20 retrieve tool", { workflow_state: "S20", operation: "analyze_containment_impact_risk", requested_tool_ids: ["TOOL-RETRIEVE"] }],
+      ["S20 feedback tool", { workflow_state: "S20", operation: "analyze_containment_impact_risk", requested_tool_ids: ["TOOL-FEEDBACK"] }],
+    ] as const)("denies capability cross-binding: %s", (_name, overrides) => {
+      const result = evaluateCapaAgentEligibility(createInitialCapaAgentRegistry(), request(overrides));
+      expect(result.reason_code).toMatch(/OPERATION_NOT_ELIGIBLE|OUTPUT_SCHEMA_MISMATCH|TOOL_NOT_ALLOWED/);
+    });
   },
 );

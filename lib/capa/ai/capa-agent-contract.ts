@@ -55,6 +55,7 @@ export type CapaAgentStatus =
 export const CAPA_AGENT_OPERATIONS = [
   "orchestrate_assistance",
   "draft_intake_analysis",
+  "analyze_containment_impact_risk",
   "draft_investigation_plan",
   "analyze_evidence",
   "facilitate_root_cause",
@@ -162,6 +163,13 @@ export const CAPA_AGENT_OUTPUT_FIELDS = [
 export type CapaAgentOutputField =
   (typeof CAPA_AGENT_OUTPUT_FIELDS)[number];
 
+export interface CapaAgentActivationCapability {
+  readonly eligible_states: readonly CapaStateId[];
+  readonly operation: CapaAgentOperation;
+  readonly allowed_tools: readonly CapaAgentToolId[];
+  readonly output_schema_version: ControlledVersion;
+}
+
 export interface CapaAgentDefinition {
   readonly agent_id: CapaAgentId;
   readonly logical_agent_id:
@@ -194,6 +202,8 @@ export interface CapaAgentDefinition {
     ControlledVersion;
   readonly evaluation_suite_version:
     ControlledVersion;
+  readonly activation_capabilities:
+    readonly CapaAgentActivationCapability[];
 }
 
 export interface CapaAgentRegistrySnapshot {

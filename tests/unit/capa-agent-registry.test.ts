@@ -115,6 +115,17 @@ describe(
       },
     );
 
+    it("binds AG-INTAKE S10 and S20 capabilities without broadening tools", () => {
+      const intake = createInitialCapaAgentRegistry().findExact("AG-INTAKE", "ag-intake-1.0.0");
+      expect(intake?.activation_capabilities).toHaveLength(2);
+      expect(intake?.activation_capabilities[0]).toMatchObject({ eligible_states: ["S00", "S10"], operation: "draft_intake_analysis", output_schema_version: "capa-intake-draft-output-1.0.0" });
+      expect(intake?.activation_capabilities[1]).toMatchObject({ eligible_states: ["S20"], operation: "analyze_containment_impact_risk", output_schema_version: "capa-containment-risk-advisory-1.0.0", allowed_tools: ["TOOL-CASE-READ", "TOOL-STRUCTURED-DRAFT"] });
+      expect(intake?.activation_capabilities[1].allowed_tools).not.toContain("TOOL-RETRIEVE");
+      expect(intake?.activation_capabilities[1].allowed_tools).not.toContain("TOOL-FEEDBACK");
+      expect(Object.isFrozen(intake?.activation_capabilities)).toBe(true);
+      expect(Object.isFrozen(intake?.activation_capabilities[0])).toBe(true);
+    });
+
     it(
       "does not grant organization administrators case-agent access",
       () => {

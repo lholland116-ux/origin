@@ -165,5 +165,15 @@ describe(
         );
       },
     );
+
+    it("activates the exact approved S20 containment capability", () => {
+      const result = createCapaAgentActivationService().evaluate({ ...intakeRequest(), workflow_state: "S20", operation: "analyze_containment_impact_risk", requested_tool_ids: ["TOOL-CASE-READ", "TOOL-STRUCTURED-DRAFT"], output_schema_version: "capa-containment-risk-advisory-1.0.0" as never });
+      expect(result).toMatchObject({ eligible: true, reason_code: "AGENT_ELIGIBLE", definition: { logical_agent_id: "AG-INTAKE", agent_version: "ag-intake-1.0.0" } });
+    });
+
+    it("rejects S20 intake-operation cross-binding", () => {
+      const result = createCapaAgentActivationService().evaluate({ ...intakeRequest(), workflow_state: "S20", operation: "draft_intake_analysis" });
+      expect(result.reason_code).toBe("OPERATION_NOT_ELIGIBLE");
+    });
   },
 );

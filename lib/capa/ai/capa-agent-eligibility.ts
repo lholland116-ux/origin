@@ -88,21 +88,15 @@ export function evaluateCapaAgentEligibility(
     );
   }
 
-  if (
-    !definition.eligible_states.includes(
-      request.workflow_state,
-    )
-  ) {
+  const stateCapability = definition.activation_capabilities.find((capability) => capability.eligible_states.includes(request.workflow_state));
+  if (stateCapability === undefined) {
     return denied(
       "WORKFLOW_STATE_NOT_ELIGIBLE",
     );
   }
 
-  if (
-    !definition.allowed_operations.includes(
-      request.operation,
-    )
-  ) {
+  const capability = definition.activation_capabilities.find((candidate) => candidate.eligible_states.includes(request.workflow_state) && candidate.operation === request.operation);
+  if (capability === undefined) {
     return denied("OPERATION_NOT_ELIGIBLE");
   }
 
@@ -124,7 +118,7 @@ export function evaluateCapaAgentEligibility(
   if (
     request.requested_tool_ids.some(
       (toolId) =>
-        !definition.allowed_tools.includes(
+        !capability.allowed_tools.includes(
           toolId,
         ),
     )
@@ -134,7 +128,7 @@ export function evaluateCapaAgentEligibility(
 
   if (
     request.output_schema_version !==
-      definition.output_schema_version
+      capability.output_schema_version
   ) {
     return denied("OUTPUT_SCHEMA_MISMATCH");
   }

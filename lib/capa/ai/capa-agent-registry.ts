@@ -10,6 +10,7 @@ import {
   CAPA_AGENT_IDS,
   CAPA_AGENT_PROHIBITIONS,
   type CapaAgentDefinition,
+  type CapaAgentActivationCapability,
   type CapaAgentOperation,
   type CapaAgentOutputField,
   type CapaAgentStatus,
@@ -79,11 +80,14 @@ interface DefinitionInput {
   readonly output_schema_version?: string;
   readonly output_fields:
     readonly CapaAgentOutputField[];
+  readonly activation_capabilities?: readonly CapaAgentActivationCapability[];
 }
 
 function definition(
   input: DefinitionInput,
 ): CapaAgentDefinition {
+  const activationCapabilities = input.activation_capabilities ?? [{ eligible_states: input.states, operation: input.operation, allowed_tools: input.tools, output_schema_version: (input.output_schema_version ?? `${input.output_type.toLowerCase()}-1.0.0`) as never }];
+  const frozenCapabilities = Object.freeze(activationCapabilities.map((capability) => Object.freeze({ eligible_states: Object.freeze([...capability.eligible_states]), operation: capability.operation, allowed_tools: Object.freeze([...capability.allowed_tools]), output_schema_version: capability.output_schema_version })));
   return Object.freeze({
     agent_id: input.agent_id as never,
     logical_agent_id: input.agent_id,
@@ -125,6 +129,7 @@ function definition(
       "capa-model-profile-1.0.0" as never,
     evaluation_suite_version:
       "capa-ai-evaluation-1.0.0" as never,
+    activation_capabilities: frozenCapabilities,
   });
 }
 
@@ -177,6 +182,10 @@ const DEFINITIONS = [
       "missing_dimensions",
       "containment_risk_questions",
       "assumptions",
+    ],
+    activation_capabilities: [
+      { eligible_states: ["S00", "S10"], operation: "draft_intake_analysis", allowed_tools: ["TOOL-CASE-READ", "TOOL-RETRIEVE", "TOOL-STRUCTURED-DRAFT", "TOOL-FEEDBACK"], output_schema_version: "capa-intake-draft-output-1.0.0" as never },
+      { eligible_states: ["S20"], operation: "analyze_containment_impact_risk", allowed_tools: ["TOOL-CASE-READ", "TOOL-STRUCTURED-DRAFT"], output_schema_version: "capa-containment-risk-advisory-1.0.0" as never },
     ],
   }),
   definition({
