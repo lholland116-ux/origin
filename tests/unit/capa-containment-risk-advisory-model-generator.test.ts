@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { CapaContainmentRiskAdvisoryModelGenerator } from "../../lib/capa/ai/capa-containment-risk-advisory-model-generator";
+import { CapaContainmentRiskAdvisoryModelGenerator, CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA } from "../../lib/capa/ai/capa-containment-risk-advisory-model-generator";
 import type { CapaAiOutputId, CapaAiRunId, CapaPromptPackageId } from "../../lib/capa/ai/capa-prompt-contract";
 import type { CorrelationId, IsoDateTime, RequestId } from "../../lib/capa/domain/capa-types";
 
@@ -28,6 +28,14 @@ function generate(subject: ReturnType<typeof fixture>, focus: string | null = nu
 }
 
 describe("S20 generator trusted identity lifecycle", () => {
+  it("uses a valid typed zero-citation schema", () => {
+    const citations = CAPA_CONTAINMENT_RISK_ADVISORY_JSON_SCHEMA.properties.citations;
+    expect(citations.type).toBe("array");
+    expect(citations.maxItems).toBe(0);
+    expect(citations.items).toEqual({ type: "string" });
+    expect(citations.items).not.toEqual({});
+  });
+
   it("creates server identity once before the provider and freezes its trace", async () => {
     const subject = fixture();
     const result = await generate(subject, "risk");
