@@ -59,6 +59,10 @@ import type {
 } from "../ai/capa-intake-advisory-service";
 
 import type {
+  CapaContainmentRiskAdvisoryService,
+} from "../ai/capa-containment-risk-advisory-service";
+
+import type {
   CapaAiOutputReviewService,
 } from "./capa-ai-output-review-runtime-factory";
 
@@ -130,6 +134,16 @@ export interface CapaRuntime {
   readonly create_intake_advisory_service: (
     context: CapaRequestContext,
   ) => CapaIntakeAdvisoryService;
+
+  /**
+   * Creates one request-scoped S20 containment/risk advisory service from
+   * trusted server authentication and tenant context. This AI advisory-only
+   * capability is separate from human-controlled G-02 acceptance and cannot
+   * advance workflow or perform G-02.
+   */
+  readonly create_containment_risk_advisory_service: (
+    context: CapaRequestContext,
+  ) => CapaContainmentRiskAdvisoryService;
 
   /**
    * Application dependencies used by controlled CAPA commands.

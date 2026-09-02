@@ -56,9 +56,17 @@ import {
   createRequestScopedCapaIntakeAdvisoryService,
 } from "./capa-intake-advisory-runtime-factory";
 
+import {
+  createRequestScopedCapaContainmentRiskAdvisoryService,
+} from "./capa-containment-risk-advisory-runtime-factory";
+
 import type {
   CapaIntakeAdvisoryStructuredModelClient,
 } from "../ai/capa-intake-advisory-model-generator";
+
+import type {
+  CapaContainmentRiskAdvisoryStructuredModelClient,
+} from "../ai/capa-containment-risk-advisory-model-generator";
 
 import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
@@ -67,6 +75,10 @@ import type {
 import {
   createOpenAICapaIntakeAdvisoryStructuredModelClient,
 } from "../ai/openai-capa-intake-advisory-structured-model-client";
+
+import {
+  createOpenAICapaContainmentRiskAdvisoryStructuredModelClient,
+} from "../ai/openai-capa-containment-risk-advisory-structured-model-client";
 
 import {
   CAPA_KNOWLEDGE_QUERY_CONSTRUCTION_VERSION,
@@ -175,6 +187,11 @@ export interface CapaDevelopmentIntakeAdvisoryConfiguration {
     CapaIntakeAdvisoryStructuredModelClient;
 }
 
+export interface CapaDevelopmentContainmentRiskAdvisoryConfiguration {
+  readonly structured_model_client:
+    CapaContainmentRiskAdvisoryStructuredModelClient;
+}
+
 export interface CapaDevelopmentRuntimeOptions {
   readonly environment?: string;
   readonly now?: () => Date;
@@ -182,6 +199,9 @@ export interface CapaDevelopmentRuntimeOptions {
 
   readonly intake_advisory?:
     CapaDevelopmentIntakeAdvisoryConfiguration;
+
+  readonly containment_risk_advisory?:
+    CapaDevelopmentContainmentRiskAdvisoryConfiguration;
 }
 
 export class CapaDevelopmentRuntimeDisabledError
@@ -278,6 +298,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_INTAKE_ADVISORY_ALLOWED",
       );
 
+    case "request_ai_containment_risk_advisory":
+      return controlled(
+        "DEVELOPMENT_AI_CONTAINMENT_RISK_ADVISORY_ALLOWED",
+      );
+
     default:
       return controlled(
         "DEVELOPMENT_POLICY_DENIED",
@@ -335,7 +360,9 @@ function developmentAuthorizationPolicy():
         request.operation ===
           "review_knowledge_citation" ||
         request.operation ===
-          "request_ai_intake_advisory";
+          "request_ai_intake_advisory" ||
+        request.operation ===
+          "request_ai_containment_risk_advisory";
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -517,6 +544,49 @@ function developmentIntakeAdvisoryConfigurationFromEnvironment():
   };
 }
 
+function developmentContainmentRiskAdvisoryConfigurationFromEnvironment():
+  CapaDevelopmentContainmentRiskAdvisoryConfiguration | undefined {
+  const enabled =
+    process.env.CAPA_CONTAINMENT_RISK_ADVISORY_DEVELOPMENT_ENABLED;
+
+  if (
+    enabled === undefined ||
+    enabled.trim().length === 0 ||
+    enabled === "false"
+  ) {
+    return undefined;
+  }
+
+  if (enabled !== "true") {
+    throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  }
+
+  const model =
+    process.env.CAPA_CONTAINMENT_RISK_ADVISORY_MODEL;
+  const apiKey =
+    process.env.OPENAI_API_KEY;
+
+  if (
+    typeof model !== "string" ||
+    model.trim().length === 0 ||
+    typeof apiKey !== "string" ||
+    apiKey.trim().length === 0
+  ) {
+    throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  }
+
+  const openaiClient =
+    new OpenAI({ apiKey });
+
+  return {
+    structured_model_client:
+      createOpenAICapaContainmentRiskAdvisoryStructuredModelClient(
+        openaiClient,
+        { model },
+      ),
+  };
+}
+
 /**
  * Creates an isolated development runtime.
  *
@@ -543,6 +613,9 @@ export function createCapaDevelopmentRuntime(
 
   const intakeAdvisoryConfiguration =
     options.intake_advisory;
+
+  const containmentRiskAdvisoryConfiguration =
+    options.containment_risk_advisory;
 
   const database =
     new InMemoryCapaDatabase({
@@ -862,6 +935,36 @@ export function createCapaDevelopmentRuntime(
       });
     },
 
+    create_containment_risk_advisory_service(context) {
+      if (
+        containmentRiskAdvisoryConfiguration ===
+          undefined
+      ) {
+        throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+      }
+
+      return createRequestScopedCapaContainmentRiskAdvisoryService(
+        context,
+        {
+          capa_repository: database,
+          authorization_policy:
+            dependencies.authorization_policy,
+          agent_activation_service:
+            agentActivationService,
+          structured_model_client:
+            containmentRiskAdvisoryConfiguration
+              .structured_model_client,
+          output_repository: database,
+          transaction_manager: database,
+          intake_section_type:
+            dependencies.configuration
+              .intake_section_type,
+          now,
+          generate_uuid: generateUuid,
+        },
+      );
+    },
+
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,
@@ -926,6 +1029,9 @@ export function getCapaDevelopmentRuntime():
 
         intake_advisory:
           developmentIntakeAdvisoryConfigurationFromEnvironment(),
+
+        containment_risk_advisory:
+          developmentContainmentRiskAdvisoryConfigurationFromEnvironment(),
       });
   }
 

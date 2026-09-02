@@ -47,6 +47,10 @@ import type {
 } from "../../lib/capa/ai/capa-intake-advisory-model-generator";
 
 import type {
+  CapaContainmentRiskAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-containment-risk-advisory-model-generator";
+
+import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
 } from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
@@ -139,6 +143,17 @@ function structuredModelClient():
     async generateStructured() {
       throw new Error(
         "The production runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
+function containmentRiskStructuredModelClient():
+  CapaContainmentRiskAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The production S20 runtime-composition test must not invoke the model.",
       );
     },
   };
@@ -708,8 +723,52 @@ describe(
         ).toThrow(
           CapaProductionRuntimeConfigurationError,
         );
+
+        expect(
+          () =>
+            runtime
+              .create_containment_risk_advisory_service(
+                requestContext(),
+              ),
+        ).toThrow(
+          CapaProductionRuntimeConfigurationError,
+        );
       },
     );
+
+    it("creates request-scoped S20 advisory services from an injected client without an OpenAI key", () => {
+      const previousApiKey = process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+
+      try {
+        const runtime = createCapaProductionRuntime({
+          sql: SQL,
+          now: () => NOW,
+          generate_uuid: uuidGenerator(),
+          containment_risk_advisory: {
+            model: "test-controlled-model",
+            structured_model_client:
+              containmentRiskStructuredModelClient(),
+          },
+        });
+
+        const first = runtime.create_containment_risk_advisory_service(requestContext());
+        const second = runtime.create_containment_risk_advisory_service(requestContext());
+
+        expect(first).not.toBe(second);
+        expect(first.execute).toEqual(expect.any(Function));
+        expect(second.execute).toEqual(expect.any(Function));
+        expect(runtime.create_intake_advisory_service).toEqual(expect.any(Function));
+        expect(() => runtime.create_intake_advisory_service(requestContext())).toThrow(CapaProductionRuntimeConfigurationError);
+      } finally {
+        if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = previousApiKey;
+      }
+    });
+
+    it.each(["", "   "])("rejects invalid S20 model configuration '%s'", (model) => {
+      expect(() => createCapaProductionRuntime({ sql: SQL, containment_risk_advisory: { model } })).toThrow(CapaProductionRuntimeConfigurationError);
+    });
 
     it(
       "uses an injected provider-neutral model client without requiring an OpenAI API key",

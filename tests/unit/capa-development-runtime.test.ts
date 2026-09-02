@@ -26,6 +26,10 @@ import type {
 } from "../../lib/capa/ai/capa-intake-advisory-model-generator";
 
 import type {
+  CapaContainmentRiskAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-containment-risk-advisory-model-generator";
+
+import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
 } from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
@@ -109,6 +113,17 @@ function structuredModelClient():
     async generateStructured() {
       throw new Error(
         "The runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
+function containmentRiskStructuredModelClient():
+  CapaContainmentRiskAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The development S20 runtime-composition test must not invoke the model.",
       );
     },
   };
@@ -699,8 +714,38 @@ describe(
         ).toThrow(
           CapaDevelopmentRuntimeAdvisoryConfigurationError,
         );
+
+        expect(
+          () =>
+            runtime
+              .create_containment_risk_advisory_service(
+                developmentContext(),
+              ),
+        ).toThrow(
+          CapaDevelopmentRuntimeAdvisoryConfigurationError,
+        );
       },
     );
+
+    it("creates fresh request-scoped S20 advisory services from an injected client", () => {
+      const runtime = createCapaDevelopmentRuntime({
+        environment: "test",
+        now: () => NOW,
+        generate_uuid: createUuidGenerator(),
+        containment_risk_advisory: {
+          structured_model_client:
+            containmentRiskStructuredModelClient(),
+        },
+      });
+
+      const first = runtime.create_containment_risk_advisory_service(developmentContext());
+      const second = runtime.create_containment_risk_advisory_service(developmentContext());
+
+      expect(first).not.toBe(second);
+      expect(first.execute).toEqual(expect.any(Function));
+      expect(second.execute).toEqual(expect.any(Function));
+      expect(() => runtime.create_intake_advisory_service(developmentContext())).toThrow(CapaDevelopmentRuntimeAdvisoryConfigurationError);
+    });
 
     it(
       "creates a fresh request-scoped advisory service from injected development configuration",
@@ -1147,6 +1192,28 @@ describe(
         });
       },
     );
+
+    it("allows governed development S20 containment-risk advisory requests", async () => {
+      const request = policyRequest();
+      const decision = await createPolicy().evaluate({
+        ...request,
+        operation: "request_ai_containment_risk_advisory",
+        resource: {
+          organization_id: request.tenant.organization_id,
+          resource_type: controlled("CAPA_CASE"),
+          workflow_state: "S20",
+        },
+        purpose: controlled("CAPA_AI_CONTAINMENT_RISK_ADVISORY"),
+      });
+
+      expect(decision).toEqual({
+        decision: "allow",
+        reason_code: "DEVELOPMENT_AI_CONTAINMENT_RISK_ADVISORY_ALLOWED",
+        policy_version: "development-policy-1.0.0",
+        evaluated_at: "2026-08-12T14:00:00.000Z",
+        relied_on_role_assignment_ids: [`development-role:${USER_ID}`],
+      });
+    });
 
     it.each([
       {
