@@ -11,19 +11,15 @@ begin
   update public.capa_roles
   set
     role_version = '1.1.0',
-    permissions = array[
-      'capa.case.view',
-      'capa.case.edit',
-      'capa.case.submit',
-      'capa.evidence.link'
-    ]::text[]
+    permissions = case
+      when permissions @> array['capa.case.submit']::text[]
+        then permissions
+      else array_append(permissions, 'capa.case.submit')
+    end
   where role_id = 'CAPA_CONTRIBUTOR'
     and status = 'active'
-    and permissions = array[
-      'capa.case.view',
-      'capa.case.edit',
-      'capa.evidence.link'
-    ]::text[];
+    and human_authority = true
+    and role_version = '1.1.0';
 
   get diagnostics affected_rows = row_count;
   if affected_rows <> 1 then

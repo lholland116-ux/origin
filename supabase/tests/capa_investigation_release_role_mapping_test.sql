@@ -1,5 +1,5 @@
 begin;
-select plan(6);
+select plan(7);
 
 select ok(
   (select 'capa.case.submit' = any(permissions) from public.capa_roles where role_id = 'CAPA_OWNER'),
@@ -8,6 +8,10 @@ select ok(
 select ok(
   (select 'capa.case.submit' = any(permissions) from public.capa_roles where role_id = 'CAPA_CONTRIBUTOR'),
   'CAPA_CONTRIBUTOR receives investigation-release permission'
+);
+select ok(
+  (select 'capa.ai.intake.advise' = any(permissions) from public.capa_roles where role_id = 'CAPA_CONTRIBUTOR'),
+  'CAPA_CONTRIBUTOR retains intake advisory permission'
 );
 select ok(
   not (select 'capa.case.submit' = any(permissions) from public.capa_roles where role_id = 'CAPA_REVIEWER'),
