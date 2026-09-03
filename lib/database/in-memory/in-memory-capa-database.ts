@@ -100,6 +100,21 @@ import type {
 } from "../../capa/ai/capa-investigation-planning-advisory-contract";
 
 import {
+  constructCapaInvestigationPlanningAdoption,
+} from "../../capa/ai/capa-investigation-planning-adoption-validator";
+
+import type {
+  CapaInvestigationPlanningAdoptionId,
+} from "../../capa/ai/capa-investigation-planning-adoption-contract";
+
+import type {
+  AppendCapaInvestigationPlanningAdoptionResult,
+  CapaInvestigationPlanningAdoptionPersistenceInput,
+  CapaInvestigationPlanningAdoptionRepository,
+  PersistedCapaInvestigationPlanningAdoption,
+} from "../repositories/capa-investigation-planning-adoption-repository";
+
+import {
   CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM,
   CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
   CAPA_INVESTIGATION_PLANNING_EVIDENCE_MANIFEST_SCHEMA_VERSION,
@@ -193,6 +208,9 @@ interface InMemoryCapaInvestigationPlanningAdvisoryOutputRecord {
   readonly created_at: IsoDateTime;
 }
 
+type InMemoryCapaInvestigationPlanningAdoptionRecord =
+  PersistedCapaInvestigationPlanningAdoption;
+
 type InMemoryCapaAdvisoryOutputRecord =
   | InMemoryCapaIntakeAdvisoryOutputRecord
   | InMemoryCapaContainmentRiskAdvisoryOutputRecord
@@ -262,6 +280,10 @@ interface InMemoryState {
    */
   readonly advisory_runs:
     Map<string, string>;
+
+  /** Transaction-owned immutable S30 proposal-adoption evidence. */
+  readonly investigation_planning_adoptions:
+    Map<string, InMemoryCapaInvestigationPlanningAdoptionRecord>;
 }
 
 interface ActiveTransaction {
@@ -501,6 +523,14 @@ function workflowIdempotencyKey(
   return `${organizationId}:${idempotencyKey}`;
 }
 
+function adoptionIdempotencyKey(
+  organizationId: OrganizationId,
+  idempotencyKey: string,
+  proposalKey: string,
+): string {
+  return `${organizationId}:${idempotencyKey}:${proposalKey}`;
+}
+
 function formatCaseNumber(
   value: number,
 ): string {
@@ -586,6 +616,11 @@ function cloneState(
       new Map(
         state.advisory_runs,
       ),
+
+    investigation_planning_adoptions:
+      cloneMap(
+        state.investigation_planning_adoptions,
+      ),
   };
 }
 
@@ -622,6 +657,9 @@ function emptyState():
       new Map(),
 
     advisory_runs:
+      new Map(),
+
+    investigation_planning_adoptions:
       new Map(),
   };
 }
@@ -678,6 +716,16 @@ function isS30AdvisorySaveInput(
   input: InMemoryCapaAdvisorySaveInput,
 ): input is InMemoryCapaInvestigationPlanningAdvisorySaveInput {
   return input.context.workflow_state === "S30";
+}
+
+function isS30AdvisoryOutputRecord(
+  record: unknown,
+): record is InMemoryCapaInvestigationPlanningAdvisoryOutputRecord {
+  return isObjectRecord(record) &&
+    "generation_trace" in record &&
+    isObjectRecord(record.response) &&
+    record.response.output_schema_version ===
+      CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION;
 }
 
 function isNonEmptyString(
@@ -966,6 +1014,73 @@ function validateS30AdvisoryInput(
   }
 }
 
+function rejectInvalidInvestigationPlanningAdoptionInput(): never {
+  throw new InMemoryIntegrityError(
+    "The S30 investigation-planning adoption persistence input is invalid.",
+  );
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function validateInvestigationPlanningAdoptionInput(
+  transaction: TransactionContext,
+  input: CapaInvestigationPlanningAdoptionPersistenceInput,
+): void {
+  try {
+    if (
+      !isSha256(input.request_fingerprint) ||
+      !isSha256(input.record_fingerprint) ||
+      !UUID_PATTERN.test(input.audit_event_id)
+    ) {
+      rejectInvalidInvestigationPlanningAdoptionInput();
+    }
+
+    const adoption = input.adoption;
+    const canonical = constructCapaInvestigationPlanningAdoption({
+      adoption_id: adoption.adoption_id,
+      organization_id: adoption.organization_id,
+      capa_case_id: adoption.capa_case_id,
+      case_version_id: adoption.case_version_id,
+      record_version: adoption.record_version,
+      output_id: adoption.output_id,
+      adopted_item: adoption.adopted_item,
+      adopted_at: adoption.adopted_at,
+      adopted_by: adoption.adopted_by,
+      request_id: adoption.request_id,
+      correlation_id: adoption.correlation_id,
+      idempotency_key: adoption.idempotency_key,
+      adoption_policy_version: adoption.adoption_policy_version,
+    });
+    if (!isDeepStrictEqual(canonical, adoption)) {
+      rejectInvalidInvestigationPlanningAdoptionInput();
+    }
+  } catch (error) {
+    if (error instanceof InMemoryIntegrityError) throw error;
+    rejectInvalidInvestigationPlanningAdoptionInput();
+  }
+}
+
+function hasS30ProposalKey(
+  response: CapaInvestigationPlanAdvisoryResponse,
+  proposalKey: string,
+): boolean {
+  const proposal = response.proposal;
+  if (!isObjectRecord(proposal)) return false;
+  return [
+    proposal.investigation_questions,
+    proposal.evidence_requests,
+    proposal.method_suggestions,
+    proposal.dependencies,
+    proposal.proposed_owner_role,
+  ].some((items) =>
+    Array.isArray(items) && items.some((item) =>
+      isObjectRecord(item) && item.proposal_key === proposalKey,
+    ),
+  );
+}
+
 export class InMemoryCapaDatabase
   implements
     TransactionManager,
@@ -975,7 +1090,8 @@ export class InMemoryCapaDatabase
     CapaCreationIdempotencyRepository,
     CapaWorkflowIdempotencyRepository,
     CapaIntakeAdvisoryOutputRepository,
-    CapaInvestigationPlanningAdvisoryOutputRepository
+    CapaInvestigationPlanningAdvisoryOutputRepository,
+    CapaInvestigationPlanningAdoptionRepository
 {
   private committed_state:
     InMemoryState =
@@ -1404,6 +1520,162 @@ export class InMemoryCapaDatabase
     state.advisory_runs.set(runKey, input.response.output_id);
 
     return "saved";
+  }
+
+  async appendAdoption(
+    transaction: TransactionContext,
+    input: CapaInvestigationPlanningAdoptionPersistenceInput,
+  ): Promise<AppendCapaInvestigationPlanningAdoptionResult> {
+    const state = this.transactionState(transaction);
+    validateInvestigationPlanningAdoptionInput(transaction, input);
+
+    const adoption = input.adoption;
+    const adoptionKey = recordKey(
+      adoption.organization_id,
+      adoption.adoption_id,
+    );
+    const idempotencyKey = adoptionIdempotencyKey(
+      adoption.organization_id,
+      adoption.idempotency_key,
+      adoption.proposal_key,
+    );
+
+    const existingByIdempotency = [...state.investigation_planning_adoptions.values()]
+      .find((record) =>
+        adoptionIdempotencyKey(
+          record.adoption.organization_id,
+          record.adoption.idempotency_key,
+          record.adoption.proposal_key,
+        ) === idempotencyKey,
+      );
+
+    if (existingByIdempotency !== undefined) {
+      if (existingByIdempotency.request_fingerprint === input.request_fingerprint) {
+        return {
+          status: "already_recorded",
+          record: cloneValue(existingByIdempotency),
+        };
+      }
+      return {
+        status: "conflict",
+        reason_code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST",
+        record: cloneValue(existingByIdempotency),
+      };
+    }
+
+    const existingByAdoptionId = state.investigation_planning_adoptions.get(adoptionKey);
+    if (existingByAdoptionId !== undefined) {
+      return {
+        status: "conflict",
+        reason_code: "ADOPTION_ID_REUSED_WITH_DIFFERENT_CONTENT",
+        record: cloneValue(existingByAdoptionId),
+      };
+    }
+
+    const existingByAudit = [...state.investigation_planning_adoptions.values()]
+      .find((record) =>
+        record.audit_event_id === input.audit_event_id &&
+        record.adoption.organization_id === adoption.organization_id,
+      );
+    if (existingByAudit !== undefined) {
+      return {
+        status: "conflict",
+        reason_code: "AUDIT_EVENT_ID_REUSED_WITH_DIFFERENT_ADOPTION",
+        record: cloneValue(existingByAudit),
+      };
+    }
+
+    if (
+      transaction.request_trace.request_id !== adoption.request_id ||
+      transaction.request_trace.correlation_id !== adoption.correlation_id
+    ) {
+      rejectInvalidInvestigationPlanningAdoptionInput();
+    }
+
+    const output = state.advisory_outputs.get(
+      recordKey(adoption.organization_id, adoption.output_id),
+    );
+    if (output === undefined) {
+      return { status: "output_not_found_or_not_authorized" };
+    }
+
+    if (
+      !isS30AdvisoryOutputRecord(output) ||
+      output.capa_case_id !== adoption.capa_case_id ||
+      output.case_version_id !== adoption.case_version_id ||
+      output.record_version !== adoption.record_version ||
+      output.response.status !== "completed_draft" ||
+      output.response.output_schema_version !== CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION ||
+      output.response.advisory_only !== true ||
+      output.response.workflow_mutated !== false ||
+      output.response.human_acceptance_required !== true ||
+      output.generation_trace.package.agent.agent_id !== "AG-PLAN" ||
+      output.generation_trace.package.agent.agent_version !== "ag-plan-1.0.0"
+    ) {
+      return { status: "output_not_adoptable" };
+    }
+
+    if (!hasS30ProposalKey(output.response, adoption.proposal_key)) {
+      return { status: "output_not_adoptable" };
+    }
+
+    const capaCase = state.cases.get(
+      recordKey(adoption.organization_id, adoption.capa_case_id),
+    );
+    if (
+      capaCase === undefined ||
+      capaCase.current_version_id !== adoption.case_version_id ||
+      capaCase.record_version !== adoption.record_version ||
+      capaCase.status !== "S30"
+    ) {
+      return { status: "case_changed" };
+    }
+
+    const auditEvent = state.audit_events.get(
+      recordKey(adoption.organization_id, input.audit_event_id),
+    );
+    if (auditEvent === undefined) {
+      throw new InMemoryIntegrityError(
+        "A S30 investigation-planning adoption references a missing audit event.",
+      );
+    }
+
+    const persisted: PersistedCapaInvestigationPlanningAdoption = cloneValue({
+      adoption,
+      request_fingerprint: input.request_fingerprint,
+      record_fingerprint: input.record_fingerprint,
+      audit_event_id: input.audit_event_id,
+    });
+    state.investigation_planning_adoptions.set(adoptionKey, persisted);
+    return { status: "saved", record: cloneValue(persisted) };
+  }
+
+  async findAdoptionById(
+    organizationId: OrganizationId,
+    adoptionId: CapaInvestigationPlanningAdoptionId,
+  ): Promise<PersistedCapaInvestigationPlanningAdoption | null> {
+    const record = this.committed_state.investigation_planning_adoptions.get(
+      recordKey(organizationId, adoptionId),
+    );
+    return record === undefined ? null : cloneValue(record);
+  }
+
+  async listAdoptionsForOutput(
+    organizationId: OrganizationId,
+    outputId: string,
+  ): Promise<readonly PersistedCapaInvestigationPlanningAdoption[]> {
+    return Object.freeze(
+      [...this.committed_state.investigation_planning_adoptions.values()]
+        .filter((record) =>
+          record.adoption.organization_id === organizationId &&
+          record.adoption.output_id === outputId,
+        )
+        .sort((left, right) =>
+          left.adoption.adopted_at.localeCompare(right.adoption.adopted_at) ||
+          left.adoption.adoption_id.localeCompare(right.adoption.adoption_id),
+        )
+        .map((record) => cloneValue(record)),
+    );
   }
 
   async listCases(
@@ -2419,6 +2691,43 @@ export class InMemoryCapaDatabase
             "A CAPA case version references an invalid section version.",
           );
         }
+      }
+    }
+
+    for (
+      const persisted
+      of state.investigation_planning_adoptions.values()
+    ) {
+      const adoption = persisted.adoption;
+      const capaCase = state.cases.get(
+        recordKey(adoption.organization_id, adoption.capa_case_id),
+      );
+      const output = state.advisory_outputs.get(
+        recordKey(adoption.organization_id, adoption.output_id),
+      );
+      const auditEvent = state.audit_events.get(
+        recordKey(adoption.organization_id, persisted.audit_event_id),
+      );
+
+      if (
+        capaCase === undefined ||
+        auditEvent === undefined ||
+        !isS30AdvisoryOutputRecord(output) ||
+        output.capa_case_id !== adoption.capa_case_id ||
+        output.case_version_id !== adoption.case_version_id ||
+        output.record_version !== adoption.record_version ||
+        output.response.status !== "completed_draft" ||
+        !hasS30ProposalKey(output.response, adoption.proposal_key) ||
+        adoption.adopted_by.actor_type !== "human" ||
+        adoption.workflow_mutated !== false ||
+        adoption.controlled_record_mutated !== false ||
+        adoption.gate_approved !== false ||
+        !isSha256(persisted.request_fingerprint) ||
+        !isSha256(persisted.record_fingerprint)
+      ) {
+        throw new InMemoryIntegrityError(
+          "A S30 investigation-planning adoption references an invalid immutable record.",
+        );
       }
     }
   }
