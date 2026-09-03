@@ -21,6 +21,10 @@ import type {
 import {
   randomUUID,
 } from "node:crypto";
+import {
+  isAbsolute,
+  resolve,
+} from "node:path";
 
 import OpenAI from "openai";
 
@@ -166,6 +170,12 @@ import type {
   TransactionId,
 } from "../../database/transactions";
 import { InMemoryCapaParticipantEligibilityRepository } from "../../database/in-memory/in-memory-capa-participant-eligibility-repository";
+import {
+  CapaDevelopmentFileStateStore,
+} from "../../database/development/capa-development-file-state-store";
+import type {
+  CapaDevelopmentStateSnapshot,
+} from "../../database/development/capa-development-state-snapshot";
 
 /**
  * Development-only CAPA runtime.
@@ -213,10 +223,18 @@ export interface CapaDevelopmentInvestigationPlanningAdvisoryConfiguration {
     CapaInvestigationPlanningAdvisoryStructuredModelClient;
 }
 
+export interface CapaDevelopmentPersistenceConfiguration {
+  readonly state_store: CapaDevelopmentFileStateStore;
+  readonly initial_snapshot?: CapaDevelopmentStateSnapshot;
+}
+
 export interface CapaDevelopmentRuntimeOptions {
   readonly environment?: string;
   readonly now?: () => Date;
   readonly generate_uuid?: () => string;
+
+  /** Explicit opt-in; ordinary factory calls remain process-local only. */
+  readonly persistence?: CapaDevelopmentPersistenceConfiguration;
 
   readonly intake_advisory?:
     CapaDevelopmentIntakeAdvisoryConfiguration;
@@ -252,6 +270,13 @@ export class CapaDevelopmentRuntimeAdvisoryConfigurationError
   }
 }
 
+export class CapaDevelopmentRuntimePersistenceConfigurationError extends Error {
+  constructor(message = "The CAPA development file-persistence configuration is invalid.") {
+    super(message);
+    this.name = "CapaDevelopmentRuntimePersistenceConfigurationError";
+  }
+}
+
 function controlled(
   value: string,
 ): ControlledCode {
@@ -265,6 +290,44 @@ function assertDevelopmentRuntimeAllowed(
   if (environment === "production") {
     throw new CapaDevelopmentRuntimeDisabledError();
   }
+}
+
+export function resolveCapaDevelopmentPersistencePath(
+  configuredPath: string | undefined,
+): string {
+  if (configuredPath !== undefined && isAbsolute(configuredPath)) {
+    return configuredPath;
+  }
+
+  return resolve(
+    /* turbopackIgnore: true */ process.cwd(),
+    configuredPath ?? ".local/capa-development-state.json",
+  );
+}
+
+function developmentPersistenceConfigurationFromEnvironment(
+  environment: string | undefined,
+): CapaDevelopmentPersistenceConfiguration | undefined {
+  const enabled = process.env.CAPA_DEVELOPMENT_PERSISTENCE_ENABLED;
+  if (enabled === undefined || enabled.length === 0 || enabled === "false") return undefined;
+  if (environment === "production") {
+    throw new CapaDevelopmentRuntimeDisabledError();
+  }
+  if (enabled !== "true") {
+    throw new CapaDevelopmentRuntimePersistenceConfigurationError(
+      "CAPA_DEVELOPMENT_PERSISTENCE_ENABLED must be true or false.",
+    );
+  }
+  const configuredPath = process.env.CAPA_DEVELOPMENT_PERSISTENCE_PATH;
+  if (configuredPath !== undefined &&
+    (configuredPath.length === 0 || configuredPath.trim() !== configuredPath)) {
+    throw new CapaDevelopmentRuntimePersistenceConfigurationError(
+      "CAPA_DEVELOPMENT_PERSISTENCE_PATH must be a non-empty path.",
+    );
+  }
+  const statePath = resolveCapaDevelopmentPersistencePath(configuredPath);
+  const stateStore = new CapaDevelopmentFileStateStore({ state_path: statePath });
+  return { state_store: stateStore, initial_snapshot: stateStore.loadSync() ?? undefined };
 }
 
 function developmentAllowReasonCode(
@@ -700,6 +763,13 @@ export function createCapaDevelopmentRuntime(
       },
 
       now,
+
+      initial_snapshot: options.persistence?.initial_snapshot ??
+        options.persistence?.state_store.loadSync() ?? undefined,
+
+      before_commit: options.persistence === undefined
+        ? undefined
+        : (snapshot) => options.persistence!.state_store.save(snapshot),
     });
 
   const dependencies:
@@ -1135,8 +1205,12 @@ export function getCapaDevelopmentRuntime():
   if (
     developmentGlobal
       .__lvt_capa_development_runtime__ ===
-    undefined
+      undefined
   ) {
+    const persistence =
+      developmentPersistenceConfigurationFromEnvironment(
+        process.env.NODE_ENV,
+      );
     developmentGlobal
       .__lvt_capa_development_runtime__ =
       createCapaDevelopmentRuntime({
@@ -1150,6 +1224,8 @@ export function getCapaDevelopmentRuntime():
           developmentContainmentRiskAdvisoryConfigurationFromEnvironment(),
         investigation_planning_advisory:
           developmentInvestigationPlanningAdvisoryConfigurationFromEnvironment(),
+
+        persistence,
       });
   }
 

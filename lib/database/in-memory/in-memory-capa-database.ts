@@ -126,6 +126,14 @@ import {
   CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT,
   CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION,
 } from "../../capa/ai/capa-investigation-planning-advisory-contract";
+import {
+  CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION,
+  CapaDevelopmentStateSnapshotError,
+  validateCapaDevelopmentStateSnapshot,
+  type CapaDevelopmentStateSnapshot,
+} from "../development/capa-development-state-snapshot";
+
+export type InMemoryCapaDatabaseSnapshot = CapaDevelopmentStateSnapshot;
 
 /**
  * Development and integration-test CAPA persistence adapter.
@@ -316,6 +324,14 @@ export interface InMemoryCapaDatabaseOptions {
    */
   readonly maximum_case_number?:
     number;
+
+  /** Optional hydrated state for a development process restart. */
+  readonly initial_snapshot?: InMemoryCapaDatabaseSnapshot;
+
+  /** Runs after candidate validation and before the candidate is published. */
+  readonly before_commit?: (
+    snapshot: InMemoryCapaDatabaseSnapshot,
+  ) => Promise<void>;
 }
 
 export class InMemoryTransactionConflictError
@@ -661,6 +677,48 @@ function emptyState():
 
     investigation_planning_adoptions:
       new Map(),
+  };
+}
+
+function stateFromSnapshot(
+  source: InMemoryCapaDatabaseSnapshot,
+): InMemoryState {
+  const snapshot = validateCapaDevelopmentStateSnapshot(source);
+  return {
+    revision: snapshot.revision,
+    cases: new Map(snapshot.cases.map(([key, value]) => [key, cloneValue(value)])),
+    case_numbers: new Map(snapshot.case_numbers),
+    case_number_counters: new Map(snapshot.case_number_counters),
+    case_versions: new Map(snapshot.case_versions.map(([key, value]) => [key, cloneValue(value)])),
+    section_versions: new Map(snapshot.section_versions.map(([key, value]) => [key, cloneValue(value)])),
+    audit_events: new Map(snapshot.audit_events.map(([key, value]) => [key, cloneValue(value)])),
+    creation_idempotency: new Map(snapshot.creation_idempotency.map(([key, value]) => [key, cloneValue(value)])),
+    workflow_idempotency: new Map(snapshot.workflow_idempotency.map(([key, value]) => [key, cloneValue(value)])),
+    advisory_outputs: new Map(snapshot.advisory_outputs.map(([key, value]) => [key, cloneValue(value)])),
+    advisory_runs: new Map(snapshot.advisory_runs),
+    investigation_planning_adoptions: new Map(snapshot.investigation_planning_adoptions.map(([key, value]) => [key, cloneValue(value)])),
+  };
+}
+
+function snapshotFromState(state: InMemoryState): InMemoryCapaDatabaseSnapshot {
+  const entries = <Value>(source: ReadonlyMap<string, Value>) =>
+    [...source.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, cloneValue(value)] as const);
+  return {
+    schema_version: CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION,
+    revision: state.revision,
+    cases: entries(state.cases),
+    case_numbers: entries(state.case_numbers),
+    case_number_counters: entries(state.case_number_counters),
+    case_versions: entries(state.case_versions),
+    section_versions: entries(state.section_versions),
+    audit_events: entries(state.audit_events),
+    creation_idempotency: entries(state.creation_idempotency),
+    workflow_idempotency: entries(state.workflow_idempotency),
+    advisory_outputs: entries(state.advisory_outputs),
+    advisory_runs: entries(state.advisory_runs),
+    investigation_planning_adoptions: entries(state.investigation_planning_adoptions),
   };
 }
 
@@ -1094,8 +1152,7 @@ export class InMemoryCapaDatabase
     CapaInvestigationPlanningAdoptionRepository
 {
   private committed_state:
-    InMemoryState =
-      emptyState();
+    InMemoryState;
 
   private readonly active_transactions =
     new Map<
@@ -1114,6 +1171,26 @@ export class InMemoryCapaDatabase
       requireMaximumCaseNumber(
         options.maximum_case_number,
       );
+    const initialState = options.initial_snapshot === undefined
+      ? emptyState()
+      : stateFromSnapshot(options.initial_snapshot);
+    try {
+      this.validateState(initialState);
+    } catch (error) {
+      if (options.initial_snapshot !== undefined) {
+        throw new CapaDevelopmentStateSnapshotError(
+          "INVALID_SNAPSHOT",
+          "The CAPA development state snapshot is internally inconsistent.",
+        );
+      }
+      throw error;
+    }
+    this.committed_state = initialState;
+  }
+
+  /** Returns a defensive, deterministic JSON-safe snapshot of committed state. */
+  exportSnapshot(): InMemoryCapaDatabaseSnapshot {
+    return snapshotFromState(this.committed_state);
   }
 
   async runInTransaction<Result>(
@@ -1198,12 +1275,18 @@ export class InMemoryCapaDatabase
         throw new InMemoryTransactionConflictError();
       }
 
-      this.committed_state = {
+      const candidateState: InMemoryState = {
         ...workingState,
 
         revision:
           workingState.revision + 1,
       };
+
+      await this.options.before_commit?.(
+        snapshotFromState(candidateState),
+      );
+
+      this.committed_state = candidateState;
 
       return result;
     } finally {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   ActorReference,
@@ -36,6 +36,7 @@ import {
   InMemoryTransactionConflictError,
   InMemoryTransactionNotActiveError,
 } from "../../lib/database/in-memory/in-memory-capa-database";
+import { CapaDevelopmentStateSnapshotError } from "../../lib/database/development/capa-development-state-snapshot";
 
 import type {
   AuditCursor,
@@ -255,6 +256,77 @@ async function seedValidCase(
 }
 
 describe("InMemoryCapaDatabase transactions", () => {
+  it("round-trips empty and valid state snapshots defensively", async () => {
+    const empty = createDatabase();
+    const emptyHydrated = new InMemoryCapaDatabase({
+      generate_transaction_id: () => "hydrated-empty" as TransactionId,
+      now: () => NOW,
+      initial_snapshot: empty.exportSnapshot(),
+    });
+    expect(emptyHydrated.exportSnapshot()).toEqual(empty.exportSnapshot());
+
+    const seeded = createDatabase();
+    await seedValidCase(seeded);
+    const snapshot = seeded.exportSnapshot();
+    const mutated = snapshot as unknown as { cases: [string, { case_number: string }][] };
+    mutated.cases[0]![1].case_number = "MUTATED";
+    expect((await seeded.findCaseById(ORGANIZATION_ID, CASE_ID))?.case_number).toBe("CAPA-000001");
+    const hydrated = new InMemoryCapaDatabase({
+      generate_transaction_id: () => "hydrated-valid" as TransactionId,
+      now: () => NOW,
+      initial_snapshot: seeded.exportSnapshot(),
+    });
+    expect(await hydrated.findCaseById(ORGANIZATION_ID, CASE_ID)).toEqual(await seeded.findCaseById(ORGANIZATION_ID, CASE_ID));
+  });
+
+  it("runs before_commit once on the candidate before publishing it", async () => {
+    let database!: InMemoryCapaDatabase;
+    const beforeCommit = vi.fn(async (snapshot) => {
+      expect(snapshot.revision).toBe(1);
+      expect(database.exportSnapshot().revision).toBe(0);
+    });
+    database = new InMemoryCapaDatabase({
+      generate_transaction_id: () => "hook-1" as TransactionId,
+      now: () => NOW,
+      before_commit: beforeCommit,
+    });
+    await database.runInTransaction(requestTrace(), async () => "committed");
+    expect(beforeCommit).toHaveBeenCalledTimes(1);
+    expect(database.exportSnapshot().revision).toBe(1);
+  });
+
+  it("rejects a failed before_commit without publishing candidate state", async () => {
+    const database = new InMemoryCapaDatabase({
+      generate_transaction_id: () => "hook-failure" as TransactionId,
+      now: () => NOW,
+      before_commit: async () => { throw new Error("disk unavailable"); },
+    });
+    await expect(database.runInTransaction(requestTrace(), async () => "not committed")).rejects.toThrow("disk unavailable");
+    expect(database.exportSnapshot().revision).toBe(0);
+  });
+
+  it("does not invoke before_commit when transaction work fails", async () => {
+    const beforeCommit = vi.fn(async () => undefined);
+    const database = new InMemoryCapaDatabase({
+      generate_transaction_id: () => "work-failure" as TransactionId,
+      now: () => NOW,
+      before_commit: beforeCommit,
+    });
+    await expect(database.runInTransaction(requestTrace(), async () => { throw new Error("work failed"); })).rejects.toThrow("work failed");
+    expect(beforeCommit).not.toHaveBeenCalled();
+    expect(database.exportSnapshot().revision).toBe(0);
+  });
+
+  it("rejects malformed, unsupported, and referentially corrupt snapshots", () => {
+    const snapshot = createDatabase().exportSnapshot();
+    expect(() => new InMemoryCapaDatabase({ generate_transaction_id: () => "bad-1" as TransactionId, now: () => NOW,
+      initial_snapshot: { ...snapshot, revision: -1 } as never })).toThrow(CapaDevelopmentStateSnapshotError);
+    expect(() => new InMemoryCapaDatabase({ generate_transaction_id: () => "bad-2" as TransactionId, now: () => NOW,
+      initial_snapshot: { ...snapshot, schema_version: "unsupported" } as never })).toThrow(CapaDevelopmentStateSnapshotError);
+    expect(() => new InMemoryCapaDatabase({ generate_transaction_id: () => "bad-3" as TransactionId, now: () => NOW,
+      initial_snapshot: { ...snapshot, cases: [["broken", {}]] } as never })).toThrow(CapaDevelopmentStateSnapshotError);
+  });
+
   it("returns the work result and supplies transaction metadata", async () => {
     const database = createDatabase();
 
