@@ -69,4 +69,3 @@ export type CapaInvestigationPlanningAdvisoryAuthentication =
 export type CapaInvestigationPlanningAdvisoryTenant = TenantContext;
 
 export type CapaInvestigationPlanningAdvisorySectionType = ControlledCode;
-
