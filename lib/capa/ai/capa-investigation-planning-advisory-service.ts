@@ -29,6 +29,11 @@ import {
   CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
   CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION,
 } from "./capa-ai-generation-trace";
+import type { TransactionManager } from "../../database/transactions";
+import type {
+  CapaInvestigationPlanningAdvisoryOutputRepository,
+  CapaInvestigationPlanningAdvisoryOutputSaveResult,
+} from "../../database/repositories/capa-investigation-planning-advisory-output-repository";
 
 export {
   CAPA_INVESTIGATION_PLANNING_ADVISORY_AGENT,
@@ -42,6 +47,7 @@ export const CAPA_INVESTIGATION_PLANNING_ADVISORY_SERVICE_REASON_CODES = [
   "AGENT_NOT_ELIGIBLE",
   "ADVISORY_GENERATION_FAILED",
   "INVALID_ADVISORY_RESULT",
+  "ADVISORY_PERSISTENCE_FAILED",
   "WORKFLOW_MUTATION_DETECTED",
 ] as const;
 
@@ -107,6 +113,8 @@ export interface CapaInvestigationPlanningAdvisoryServiceDependencies {
   readonly authorizer: CapaInvestigationPlanningAdvisoryAuthorizer;
   readonly agent_gate: CapaInvestigationPlanningAdvisoryAgentGate;
   readonly generator: CapaInvestigationPlanningAdvisoryGenerator;
+  readonly output_repository: CapaInvestigationPlanningAdvisoryOutputRepository;
+  readonly transaction_manager: TransactionManager;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -388,6 +396,35 @@ export class CapaInvestigationPlanningAdvisoryService {
       unchanged = false;
     }
     if (!unchanged) {
+      throw new CapaInvestigationPlanningAdvisoryServiceError(
+        "WORKFLOW_MUTATION_DETECTED",
+      );
+    }
+
+    let persistenceResult: CapaInvestigationPlanningAdvisoryOutputSaveResult;
+    try {
+      persistenceResult =
+        await this.dependencies.transaction_manager.runInTransaction(
+          {
+            request_id: invocation.request_id,
+            correlation_id: invocation.correlation_id,
+          },
+          (transaction) =>
+            this.dependencies.output_repository.save(transaction, {
+              context,
+              response: generated.response,
+              generation_trace: generated.trace,
+              request_id: invocation.request_id,
+              correlation_id: invocation.correlation_id,
+            }),
+        );
+    } catch {
+      throw new CapaInvestigationPlanningAdvisoryServiceError(
+        "ADVISORY_PERSISTENCE_FAILED",
+      );
+    }
+
+    if (persistenceResult === "case_changed") {
       throw new CapaInvestigationPlanningAdvisoryServiceError(
         "WORKFLOW_MUTATION_DETECTED",
       );

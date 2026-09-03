@@ -100,13 +100,35 @@ function fixture() {
   const generator = {
     generate: vi.fn().mockResolvedValue({ response, trace }),
   };
+  const output_repository = {
+    save: vi.fn().mockResolvedValue("saved"),
+  };
+  const transaction_manager = {
+    runInTransaction: vi.fn(async (_requestTrace: any, work: any) =>
+      work({
+        transaction_id: "transaction-1",
+        started_at: "2026-09-01T00:00:00.000Z",
+        request_trace: _requestTrace,
+      }),
+    ),
+  };
   const service = new CapaInvestigationPlanningAdvisoryService({
     context_resolver,
     authorizer,
     agent_gate,
     generator,
+    output_repository,
+    transaction_manager,
   });
-  return { context_resolver, authorizer, agent_gate, generator, service };
+  return {
+    context_resolver,
+    authorizer,
+    agent_gate,
+    generator,
+    output_repository,
+    transaction_manager,
+    service,
+  };
 }
 
 function traceWith(change: {
@@ -202,6 +224,28 @@ describe("S30 investigation-planning advisory service", () => {
     expect(test.context_resolver.assertCaseUnchanged).toHaveBeenCalledWith(
       context.authoritative,
     );
+    expect(test.transaction_manager.runInTransaction).toHaveBeenCalledWith(
+      {
+        request_id: invocation.request_id,
+        correlation_id: invocation.correlation_id,
+      },
+      expect.any(Function),
+    );
+    expect(test.output_repository.save).toHaveBeenCalledWith(
+      expect.any(Object),
+      {
+        context: context.authoritative,
+        response,
+        generation_trace: trace,
+        request_id: invocation.request_id,
+        correlation_id: invocation.correlation_id,
+      },
+    );
+    expect(
+      test.context_resolver.assertCaseUnchanged.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      test.transaction_manager.runInTransaction.mock.invocationCallOrder[0],
+    );
     expect(result.advisory).toBe(response);
     expect(result.snapshot).toEqual({
       capa_case_id: "case-1",
@@ -225,6 +269,8 @@ describe("S30 investigation-planning advisory service", () => {
       reason_code: "ADVISORY_ACCESS_DENIED",
     });
     expect(unauthorized.agent_gate.evaluate).not.toHaveBeenCalled();
+    expect(unauthorized.transaction_manager.runInTransaction).not.toHaveBeenCalled();
+    expect(unauthorized.output_repository.save).not.toHaveBeenCalled();
 
     const ineligible = fixture();
     ineligible.agent_gate.evaluate.mockReturnValue(false);
@@ -232,12 +278,16 @@ describe("S30 investigation-planning advisory service", () => {
       reason_code: "AGENT_NOT_ELIGIBLE",
     });
     expect(ineligible.generator.generate).not.toHaveBeenCalled();
+    expect(ineligible.transaction_manager.runInTransaction).not.toHaveBeenCalled();
+    expect(ineligible.output_repository.save).not.toHaveBeenCalled();
 
     const generationFailure = fixture();
     generationFailure.generator.generate.mockRejectedValue(new Error("generation"));
     await expect(generationFailure.service.execute(invocation)).rejects.toMatchObject({
       reason_code: "ADVISORY_GENERATION_FAILED",
     });
+    expect(generationFailure.transaction_manager.runInTransaction).not.toHaveBeenCalled();
+    expect(generationFailure.output_repository.save).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -338,6 +388,8 @@ describe("S30 investigation-planning advisory service", () => {
     await expect(stale.service.execute(invocation)).rejects.toMatchObject({
       reason_code: "WORKFLOW_MUTATION_DETECTED",
     });
+    expect(stale.transaction_manager.runInTransaction).not.toHaveBeenCalled();
+    expect(stale.output_repository.save).not.toHaveBeenCalled();
 
     const thrown = fixture();
     thrown.context_resolver.assertCaseUnchanged.mockRejectedValue(
@@ -345,6 +397,33 @@ describe("S30 investigation-planning advisory service", () => {
     );
     await expect(thrown.service.execute(invocation)).rejects.toMatchObject({
       reason_code: "WORKFLOW_MUTATION_DETECTED",
+    });
+    expect(thrown.transaction_manager.runInTransaction).not.toHaveBeenCalled();
+    expect(thrown.output_repository.save).not.toHaveBeenCalled();
+  });
+
+  it("maps transaction CAS and persistence failures without retrying generation", async () => {
+    const stale = fixture();
+    stale.output_repository.save.mockResolvedValue("case_changed");
+    await expect(stale.service.execute(invocation)).rejects.toMatchObject({
+      reason_code: "WORKFLOW_MUTATION_DETECTED",
+    });
+    expect(stale.generator.generate).toHaveBeenCalledTimes(1);
+
+    const transactionFailure = fixture();
+    transactionFailure.transaction_manager.runInTransaction.mockRejectedValue(
+      new Error("database failure"),
+    );
+    await expect(transactionFailure.service.execute(invocation)).rejects.toMatchObject({
+      reason_code: "ADVISORY_PERSISTENCE_FAILED",
+    });
+
+    const repositoryFailure = fixture();
+    repositoryFailure.output_repository.save.mockRejectedValue(
+      new Error("repository failure"),
+    );
+    await expect(repositoryFailure.service.execute(invocation)).rejects.toMatchObject({
+      reason_code: "ADVISORY_PERSISTENCE_FAILED",
     });
   });
 

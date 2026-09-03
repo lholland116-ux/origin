@@ -74,6 +74,10 @@ import type {
 } from "../../capa/ai/capa-ai-generation-trace";
 
 import type {
+  CapaInvestigationPlanningAdvisoryGenerationTraceCapture,
+} from "../../capa/ai/capa-ai-generation-trace";
+
+import type {
   AuthoritativeS20ContainmentRiskContext,
 } from "../../capa/ai/capa-containment-risk-advisory-context";
 
@@ -85,6 +89,28 @@ import type {
   CapaContainmentRiskAdvisoryOutputRepository,
   CapaContainmentRiskAdvisoryOutputSaveResult,
 } from "../repositories/capa-containment-risk-advisory-output-repository";
+
+import type {
+  CapaInvestigationPlanningAdvisoryOutputRepository,
+  CapaInvestigationPlanningAdvisoryOutputSaveResult,
+} from "../repositories/capa-investigation-planning-advisory-output-repository";
+
+import type {
+  CapaInvestigationPlanAdvisoryResponse,
+} from "../../capa/ai/capa-investigation-planning-advisory-contract";
+
+import {
+  CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM,
+  CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
+  CAPA_INVESTIGATION_PLANNING_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+  CAPA_INVESTIGATION_PLANNING_POLICY_MANIFEST_SCHEMA_VERSION,
+  CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION,
+} from "../../capa/ai/capa-ai-generation-trace";
+
+import {
+  CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT,
+  CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION,
+} from "../../capa/ai/capa-investigation-planning-advisory-contract";
 
 /**
  * Development and integration-test CAPA persistence adapter.
@@ -155,9 +181,22 @@ interface InMemoryCapaContainmentRiskAdvisoryOutputRecord {
     IsoDateTime;
 }
 
+interface InMemoryCapaInvestigationPlanningAdvisoryOutputRecord {
+  readonly organization_id: OrganizationId;
+  readonly capa_case_id: CapaCaseId;
+  readonly case_version_id: CapaCaseVersionId;
+  readonly record_version: number;
+  readonly request_trace: RequestTrace;
+  readonly response: CapaInvestigationPlanAdvisoryResponse;
+  readonly generation_trace:
+    CapaInvestigationPlanningAdvisoryGenerationTraceCapture;
+  readonly created_at: IsoDateTime;
+}
+
 type InMemoryCapaAdvisoryOutputRecord =
   | InMemoryCapaIntakeAdvisoryOutputRecord
-  | InMemoryCapaContainmentRiskAdvisoryOutputRecord;
+  | InMemoryCapaContainmentRiskAdvisoryOutputRecord
+  | InMemoryCapaInvestigationPlanningAdvisoryOutputRecord;
 
 interface InMemoryState {
   readonly revision: number;
@@ -316,6 +355,17 @@ export class InMemoryCapaContainmentRiskAdvisoryPersistenceError
 
     this.name =
       "InMemoryCapaContainmentRiskAdvisoryPersistenceError";
+  }
+}
+
+export class InMemoryCapaInvestigationPlanningAdvisoryPersistenceError
+  extends Error {
+  constructor() {
+    super(
+      "The governed CAPA investigation-planning advisory output could not be persisted.",
+    );
+    this.name =
+      "InMemoryCapaInvestigationPlanningAdvisoryPersistenceError";
   }
 }
 
@@ -607,15 +657,27 @@ type InMemoryCapaContainmentRiskAdvisorySaveInput =
     CapaContainmentRiskAdvisoryOutputRepository["save"]
   >[1];
 
+type InMemoryCapaInvestigationPlanningAdvisorySaveInput =
+  Parameters<
+    CapaInvestigationPlanningAdvisoryOutputRepository["save"]
+  >[1];
+
 type InMemoryCapaAdvisorySaveInput =
   | InMemoryCapaIntakeAdvisorySaveInput
-  | InMemoryCapaContainmentRiskAdvisorySaveInput;
+  | InMemoryCapaContainmentRiskAdvisorySaveInput
+  | InMemoryCapaInvestigationPlanningAdvisorySaveInput;
 
 function isS20AdvisorySaveInput(
   input:
     InMemoryCapaAdvisorySaveInput,
 ): input is InMemoryCapaContainmentRiskAdvisorySaveInput {
   return input.context.workflow_state === "S20";
+}
+
+function isS30AdvisorySaveInput(
+  input: InMemoryCapaAdvisorySaveInput,
+): input is InMemoryCapaInvestigationPlanningAdvisorySaveInput {
+  return input.context.workflow_state === "S30";
 }
 
 function isNonEmptyString(
@@ -769,6 +831,141 @@ function validateS20AdvisoryInput(
   }
 }
 
+function rejectInvalidS30AdvisoryInput(): never {
+  throw new InMemoryCapaInvestigationPlanningAdvisoryPersistenceError();
+}
+
+function validateS30AdvisoryInput(
+  input: InMemoryCapaInvestigationPlanningAdvisorySaveInput,
+): void {
+  try {
+    const context = input.context;
+    const response = input.response;
+    const trace = input.generation_trace;
+    const promptPackage = trace.package;
+    const traceIdentity = promptPackage.trace;
+    const scope = promptPackage.scope;
+    const generation = promptPackage.generation_contract;
+    const evidence = trace.evidence_manifest;
+    const policy = trace.policy_manifest;
+    const responseFields = [
+      "run_id",
+      "output_id",
+      "output_schema_version",
+      "status",
+      "proposal",
+      "assumptions",
+      "uncertainty_and_limitations",
+      "citations",
+      "warnings",
+      "advisory_only",
+      "workflow_mutated",
+      "human_acceptance_required",
+    ];
+
+    if (
+      context.trust !== "authoritative_server_context" ||
+      !UUID_PATTERN.test(context.organization_id) ||
+      !UUID_PATTERN.test(context.capa_case_id) ||
+      !UUID_PATTERN.test(context.case_version_id) ||
+      !Number.isSafeInteger(context.record_version) ||
+      context.record_version <= 0 ||
+      context.workflow_state !== "S30" ||
+      !UUID_PATTERN.test(input.request_id) ||
+      !UUID_PATTERN.test(input.correlation_id)
+    ) {
+      rejectInvalidS30AdvisoryInput();
+    }
+
+    if (
+      !isObjectRecord(response) ||
+      Object.keys(response).length !== responseFields.length ||
+      responseFields.some((field) => !Object.hasOwn(response, field)) ||
+      !UUID_PATTERN.test(response.run_id) ||
+      !UUID_PATTERN.test(response.output_id) ||
+      response.output_schema_version !==
+        CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION ||
+      response.status !== "completed_draft" ||
+      !isObjectRecord(response.proposal) ||
+      !Array.isArray(response.assumptions) ||
+      !Array.isArray(response.uncertainty_and_limitations) ||
+      !Array.isArray(response.citations) ||
+      response.citations.length !== 0 ||
+      !Array.isArray(response.warnings) ||
+      response.warnings.length !== 0 ||
+      response.advisory_only !== true ||
+      response.workflow_mutated !== false ||
+      response.human_acceptance_required !== true
+    ) {
+      rejectInvalidS30AdvisoryInput();
+    }
+
+    if (
+      trace.trace_schema_version !== CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION ||
+      !UUID_PATTERN.test(traceIdentity.run_id) ||
+      !UUID_PATTERN.test(traceIdentity.prompt_package_id) ||
+      !UUID_PATTERN.test(traceIdentity.request_id) ||
+      !UUID_PATTERN.test(traceIdentity.correlation_id) ||
+      !isNonEmptyString(traceIdentity.assembled_at) ||
+      promptPackage.package_schema_version !==
+        CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION ||
+      !UUID_PATTERN.test(scope.organization_id) ||
+      !UUID_PATTERN.test(scope.capa_case_id) ||
+      !UUID_PATTERN.test(scope.case_version_id) ||
+      !Number.isSafeInteger(scope.record_version) ||
+      scope.record_version <= 0 ||
+      scope.workflow_state !== "S30" ||
+      promptPackage.agent.agent_id !== "AG-PLAN" ||
+      promptPackage.agent.agent_version !== "ag-plan-1.0.0" ||
+      generation.operation !== "draft_investigation_plan" ||
+      generation.requested_output !== CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT ||
+      generation.output_schema_version !==
+        CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION ||
+      generation.store !== false ||
+      trace.store !== false ||
+      evidence.evidence_manifest_schema_version !==
+        CAPA_INVESTIGATION_PLANNING_EVIDENCE_MANIFEST_SCHEMA_VERSION ||
+      evidence.retrieval_performed !== false ||
+      evidence.item_count !== 0 ||
+      !Array.isArray(evidence.items) ||
+      evidence.items.length !== 0 ||
+      policy.policy_manifest_schema_version !==
+        CAPA_INVESTIGATION_PLANNING_POLICY_MANIFEST_SCHEMA_VERSION ||
+      policy.agent.agent_id !== "AG-PLAN" ||
+      policy.agent.agent_version !== "ag-plan-1.0.0" ||
+      policy.workflow_state !== "S30" ||
+      policy.operation !== "draft_investigation_plan" ||
+      policy.requested_output !== CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT ||
+      policy.output_schema_version !==
+        CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION ||
+      policy.authority.advisory_only !== true ||
+      policy.authority.workflow_mutated !== false ||
+      policy.authority.human_acceptance_required !== true ||
+      trace.fingerprints.algorithm !== CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM
+    ) {
+      rejectInvalidS30AdvisoryInput();
+    }
+
+    if (
+      traceIdentity.run_id !== response.run_id ||
+      traceIdentity.request_id !== input.request_id ||
+      traceIdentity.correlation_id !== input.correlation_id ||
+      scope.organization_id !== context.organization_id ||
+      scope.capa_case_id !== context.capa_case_id ||
+      scope.case_version_id !== context.case_version_id ||
+      scope.record_version !== context.record_version ||
+      scope.workflow_state !== context.workflow_state
+    ) {
+      rejectInvalidS30AdvisoryInput();
+    }
+  } catch (error) {
+    if (error instanceof InMemoryCapaInvestigationPlanningAdvisoryPersistenceError) {
+      throw error;
+    }
+    rejectInvalidS30AdvisoryInput();
+  }
+}
+
 export class InMemoryCapaDatabase
   implements
     TransactionManager,
@@ -777,7 +974,8 @@ export class InMemoryCapaDatabase
     CapaCaseNumberAllocator,
     CapaCreationIdempotencyRepository,
     CapaWorkflowIdempotencyRepository,
-    CapaIntakeAdvisoryOutputRepository
+    CapaIntakeAdvisoryOutputRepository,
+    CapaInvestigationPlanningAdvisoryOutputRepository
 {
   private committed_state:
     InMemoryState =
@@ -912,9 +1110,18 @@ export class InMemoryCapaDatabase
 
   async save(
     transaction: TransactionContext,
+    input: InMemoryCapaInvestigationPlanningAdvisorySaveInput,
+  ): Promise<CapaInvestigationPlanningAdvisoryOutputSaveResult>;
+
+  async save(
+    transaction: TransactionContext,
     input: InMemoryCapaAdvisorySaveInput,
-  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult> {
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult | CapaInvestigationPlanningAdvisoryOutputSaveResult> {
     const state = this.transactionState(transaction);
+
+    if (isS30AdvisorySaveInput(input)) {
+      return this.saveS30Advisory(transaction, state, input);
+    }
 
     if (isS20AdvisorySaveInput(input)) {
       return this.saveS20Advisory(
@@ -1130,6 +1337,71 @@ export class InMemoryCapaDatabase
       runKey,
       input.response.output_id,
     );
+
+    return "saved";
+  }
+
+  private async saveS30Advisory(
+    transaction: TransactionContext,
+    state: InMemoryState,
+    input: InMemoryCapaInvestigationPlanningAdvisorySaveInput,
+  ): Promise<CapaInvestigationPlanningAdvisoryOutputSaveResult> {
+    if (
+      transaction.request_trace.request_id !== input.request_id ||
+      transaction.request_trace.correlation_id !== input.correlation_id
+    ) {
+      throw new InMemoryCapaInvestigationPlanningAdvisoryPersistenceError();
+    }
+
+    validateS30AdvisoryInput(input);
+
+    const capaCase = state.cases.get(
+      recordKey(input.context.organization_id, input.context.capa_case_id),
+    );
+
+    if (
+      capaCase === undefined ||
+      capaCase.current_version_id !== input.context.case_version_id ||
+      capaCase.record_version !== input.context.record_version ||
+      capaCase.status !== "S30"
+    ) {
+      return "case_changed";
+    }
+
+    const outputKey = recordKey(
+      input.context.organization_id,
+      input.response.output_id,
+    );
+    const runKey = recordKey(
+      input.context.organization_id,
+      input.response.run_id,
+    );
+
+    if (
+      state.advisory_outputs.has(outputKey) ||
+      state.advisory_runs.has(runKey)
+    ) {
+      throw new InMemoryDuplicateRecordError(
+        "CAPA AI advisory output",
+      );
+    }
+
+    const record: InMemoryCapaInvestigationPlanningAdvisoryOutputRecord = {
+      organization_id: input.context.organization_id,
+      capa_case_id: input.context.capa_case_id,
+      case_version_id: input.context.case_version_id,
+      record_version: input.context.record_version,
+      request_trace: {
+        request_id: input.request_id,
+        correlation_id: input.correlation_id,
+      },
+      response: cloneValue(input.response),
+      generation_trace: cloneValue(input.generation_trace),
+      created_at: transaction.started_at,
+    };
+
+    state.advisory_outputs.set(outputKey, cloneValue(record));
+    state.advisory_runs.set(runKey, input.response.output_id);
 
     return "saved";
   }
