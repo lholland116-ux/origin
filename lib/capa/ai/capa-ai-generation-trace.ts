@@ -18,6 +18,10 @@ import type {
 import type {
   CapaIntakeAdvisoryResponse,
 } from "./capa-intake-advisory-contract";
+import {
+  CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT,
+  CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION,
+} from "./capa-investigation-planning-advisory-contract";
 
 /**
  * Durable-generation-trace schema identity.
@@ -677,5 +681,256 @@ export function createCapaAiGenerationTraceArtifacts(
       fingerprintCanonicalJson(
         policyManifest,
       ),
+  });
+}
+
+export const CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION =
+  "capa-investigation-planning-prompt-package-1.0.0" as const;
+export const CAPA_INVESTIGATION_PLANNING_EVIDENCE_MANIFEST_SCHEMA_VERSION =
+  "capa-investigation-planning-evidence-manifest-1.0.0" as const;
+export const CAPA_INVESTIGATION_PLANNING_POLICY_MANIFEST_SCHEMA_VERSION =
+  "capa-investigation-planning-policy-manifest-1.0.0" as const;
+
+export interface CapaInvestigationPlanningAdvisoryGenerationContract {
+  readonly operation: "draft_investigation_plan";
+  readonly requested_output:
+    typeof CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT;
+  readonly output_schema_version:
+    typeof CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION;
+  readonly model_profile_version: string;
+  readonly output_schema_name: string;
+  readonly output_schema_sha256: string;
+  readonly store: false;
+  readonly maximum_output_characters: number;
+}
+
+export interface CapaInvestigationPlanningAdvisoryContextProvenance {
+  readonly authoritative_server_context: unknown;
+  readonly untrusted_human_draft: unknown;
+  readonly focus: string | null;
+}
+
+export interface CapaInvestigationPlanningAdvisoryGovernance {
+  readonly advisory_only: true;
+  readonly workflow_mutated: false;
+  readonly human_acceptance_required: true;
+}
+
+export interface CapaInvestigationPlanningAdvisoryEvidenceManifest {
+  readonly evidence_manifest_schema_version:
+    typeof CAPA_INVESTIGATION_PLANNING_EVIDENCE_MANIFEST_SCHEMA_VERSION;
+  readonly retrieval_performed: false;
+  readonly item_count: 0;
+  readonly items: readonly [];
+}
+
+export interface CapaInvestigationPlanningAdvisoryPolicyManifest {
+  readonly policy_manifest_schema_version:
+    typeof CAPA_INVESTIGATION_PLANNING_POLICY_MANIFEST_SCHEMA_VERSION;
+  readonly agent: Readonly<{
+    readonly agent_id: "AG-PLAN";
+    readonly agent_version: "ag-plan-1.0.0";
+  }>;
+  readonly workflow_state: "S30";
+  readonly operation: "draft_investigation_plan";
+  readonly requested_output:
+    typeof CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT;
+  readonly output_schema_version:
+    typeof CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION;
+  readonly generation: Readonly<{
+    readonly model_profile_version: string;
+    readonly output_schema_name: string;
+    readonly output_schema_sha256: string;
+  }>;
+  readonly authority: CapaInvestigationPlanningAdvisoryGovernance;
+  readonly prohibitions: readonly string[];
+}
+
+export interface CapaInvestigationPlanningAdvisoryGenerationFingerprints {
+  readonly algorithm:
+    typeof CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM;
+  readonly prompt_package_sha256: string;
+  readonly rendered_prompt_sha256: string;
+  readonly evidence_manifest_sha256: string;
+  readonly policy_manifest_sha256: string;
+  readonly output_schema_sha256: string;
+}
+
+export interface CapaInvestigationPlanningAdvisoryPromptPackage {
+  readonly package_schema_version:
+    typeof CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION;
+  readonly scope: Readonly<{
+    readonly organization_id: string;
+    readonly capa_case_id: string;
+    readonly case_version_id: string;
+    readonly record_version: number;
+    readonly workflow_state: "S30";
+  }>;
+  readonly agent: Readonly<{
+    readonly agent_id: "AG-PLAN";
+    readonly agent_version: "ag-plan-1.0.0";
+  }>;
+  readonly trace: Readonly<{
+    readonly run_id: CapaAiRunId;
+    readonly prompt_package_id: CapaPromptPackageId;
+    readonly request_id: RequestId;
+    readonly correlation_id: CorrelationId;
+    readonly assembled_at: IsoDateTime;
+  }>;
+  readonly generation_contract:
+    CapaInvestigationPlanningAdvisoryGenerationContract;
+  readonly context_provenance:
+    CapaInvestigationPlanningAdvisoryContextProvenance;
+  readonly governance: CapaInvestigationPlanningAdvisoryGovernance;
+}
+
+export type CapaInvestigationPlanningAdvisoryPromptPackageInput = Omit<
+  CapaInvestigationPlanningAdvisoryPromptPackage,
+  "package_schema_version" | "generation_contract"
+>;
+
+export interface CapaInvestigationPlanningAdvisoryGenerationTraceCapture {
+  readonly trace_schema_version:
+    typeof CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION;
+  readonly package: CapaInvestigationPlanningAdvisoryPromptPackage;
+  readonly rendered_prompt: string;
+  readonly model_profile_version: string;
+  readonly output_schema_name: string;
+  readonly output_schema: unknown;
+  readonly store: false;
+  readonly maximum_output_characters: number;
+  readonly evidence_manifest:
+    CapaInvestigationPlanningAdvisoryEvidenceManifest;
+  readonly policy_manifest:
+    CapaInvestigationPlanningAdvisoryPolicyManifest;
+  readonly fingerprints:
+    CapaInvestigationPlanningAdvisoryGenerationFingerprints;
+}
+
+function freezeInvestigationPlanningTrace<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      freezeInvestigationPlanningTrace(child);
+    }
+  }
+
+  return value;
+}
+
+function snapshotInvestigationPlanningTrace<T>(value: T): T {
+  return JSON.parse(canonicalJson(value)) as T;
+}
+
+const CAPA_INVESTIGATION_PLANNING_PROHIBITIONS = Object.freeze([
+  "G-03 release",
+  "investigation-plan approval",
+  "workflow advancement",
+  "S30 to S40 transition",
+  "controlled-record mutation",
+  "human adoption",
+  "adoption identity",
+  "adoption timestamp",
+  "authoritative item-ID creation",
+  "authoritative user assignment",
+  "authoritative due-date commitment",
+  "investigation execution",
+  "evidence verification",
+  "root-cause conclusion",
+  "final causal determination",
+  "disposition",
+  "audit-event creation",
+  "authorization decisions",
+] as const);
+
+export function createCapaInvestigationPlanningAdvisoryGenerationTrace(input: {
+  readonly rendered_prompt: string;
+  readonly model_profile_version: string;
+  readonly output_schema_name: string;
+  readonly output_schema: unknown;
+  readonly maximum_output_characters: number;
+  readonly package:
+    CapaInvestigationPlanningAdvisoryPromptPackageInput;
+}): CapaInvestigationPlanningAdvisoryGenerationTraceCapture {
+  const outputSchema = freezeInvestigationPlanningTrace(
+    snapshotInvestigationPlanningTrace(input.output_schema),
+  );
+  const outputSchemaSha256 = fingerprintCanonicalJson(outputSchema);
+  const governance: CapaInvestigationPlanningAdvisoryGovernance = {
+    advisory_only: true,
+    workflow_mutated: false,
+    human_acceptance_required: true,
+  };
+  const generationContract = {
+    operation: "draft_investigation_plan" as const,
+    requested_output: CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT,
+    output_schema_version:
+      CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION,
+    model_profile_version: input.model_profile_version,
+    output_schema_name: input.output_schema_name,
+    output_schema_sha256: outputSchemaSha256,
+    store: false as const,
+    maximum_output_characters: input.maximum_output_characters,
+  };
+  const pkg = freezeInvestigationPlanningTrace(
+    snapshotInvestigationPlanningTrace({
+      ...input.package,
+      package_schema_version:
+        CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION,
+      generation_contract: generationContract,
+    }),
+  ) as CapaInvestigationPlanningAdvisoryPromptPackage;
+  const evidenceManifest = freezeInvestigationPlanningTrace(
+    snapshotInvestigationPlanningTrace({
+      evidence_manifest_schema_version:
+        CAPA_INVESTIGATION_PLANNING_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+      retrieval_performed: false as const,
+      item_count: 0 as const,
+      items: [] as const,
+    }),
+  ) as CapaInvestigationPlanningAdvisoryEvidenceManifest;
+  const policyManifest = freezeInvestigationPlanningTrace(
+    snapshotInvestigationPlanningTrace({
+      policy_manifest_schema_version:
+        CAPA_INVESTIGATION_PLANNING_POLICY_MANIFEST_SCHEMA_VERSION,
+      agent: {
+        agent_id: "AG-PLAN" as const,
+        agent_version: "ag-plan-1.0.0" as const,
+      },
+      workflow_state: "S30" as const,
+      operation: "draft_investigation_plan" as const,
+      requested_output: CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT,
+      output_schema_version:
+        CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION,
+      generation: {
+        model_profile_version: input.model_profile_version,
+        output_schema_name: input.output_schema_name,
+        output_schema_sha256: outputSchemaSha256,
+      },
+      authority: governance,
+      prohibitions: CAPA_INVESTIGATION_PLANNING_PROHIBITIONS,
+    }),
+  ) as CapaInvestigationPlanningAdvisoryPolicyManifest;
+  const fingerprints = Object.freeze({
+    algorithm: CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM,
+    prompt_package_sha256: fingerprintCanonicalJson(pkg),
+    rendered_prompt_sha256: sha256Utf8(input.rendered_prompt),
+    evidence_manifest_sha256: fingerprintCanonicalJson(evidenceManifest),
+    policy_manifest_sha256: fingerprintCanonicalJson(policyManifest),
+    output_schema_sha256: outputSchemaSha256,
+  });
+
+  return freezeInvestigationPlanningTrace({
+    trace_schema_version: CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
+    package: pkg,
+    rendered_prompt: input.rendered_prompt,
+    model_profile_version: input.model_profile_version,
+    output_schema_name: input.output_schema_name,
+    output_schema: outputSchema,
+    store: false as const,
+    maximum_output_characters: input.maximum_output_characters,
+    evidence_manifest: evidenceManifest,
+    policy_manifest: policyManifest,
+    fingerprints,
   });
 }
