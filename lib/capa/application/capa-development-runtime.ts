@@ -390,6 +390,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_CONTAINMENT_RISK_ADVISORY_ALLOWED",
       );
 
+    case "request_ai_investigation_planning_advisory":
+      return controlled(
+        "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADVISORY_ALLOWED",
+      );
+
     case "adopt_ai_investigation_planning_proposal":
       return controlled(
         "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADOPTION_ALLOWED",
@@ -455,6 +460,8 @@ function developmentAuthorizationPolicy():
           "request_ai_intake_advisory" ||
         request.operation ===
           "request_ai_containment_risk_advisory" ||
+        request.operation ===
+          "request_ai_investigation_planning_advisory" ||
         request.operation ===
           "adopt_ai_investigation_planning_proposal";
 
