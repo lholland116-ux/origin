@@ -254,20 +254,67 @@ describe("S30 investigation-planning context resolver", () => {
       })(),
     ).toBeNull();
 
-    const wrongSectionBinding = setup();
-    wrongSectionBinding.repository.findSectionVersionById.mockImplementation(
+    const wrongSectionId = setup();
+    wrongSectionId.repository.findSectionVersionById.mockImplementation(
       async (_organizationId: any, _caseId: any, sectionVersionId: any) => {
         const section = makeSections().find((candidate: any) =>
           candidate.section_version_id === sectionVersionId,
         );
         return section?.section_version_id === INTAKE
-          ? { ...section, version_number: 1 }
+          ? { ...section, section_version_id: "80000000-0000-4000-8000-000000000001" }
           : section ?? null;
       },
     );
     expect(
-      await wrongSectionBinding.resolver.resolve(invocation()),
+      await wrongSectionId.resolver.resolve(invocation()),
     ).toBeNull();
+
+    const wrongSectionOrganization = setup();
+    wrongSectionOrganization.repository.findSectionVersionById.mockImplementation(
+      async (_organizationId: any, _caseId: any, sectionVersionId: any) => {
+        const section = makeSections().find((candidate: any) =>
+          candidate.section_version_id === sectionVersionId,
+        );
+        return section?.section_version_id === INTAKE
+          ? { ...section, organization_id: "other-org" }
+          : section ?? null;
+      },
+    );
+    expect(
+      await wrongSectionOrganization.resolver.resolve(invocation()),
+    ).toBeNull();
+
+    const wrongSectionCase = setup();
+    wrongSectionCase.repository.findSectionVersionById.mockImplementation(
+      async (_organizationId: any, _caseId: any, sectionVersionId: any) => {
+        const section = makeSections().find((candidate: any) =>
+          candidate.section_version_id === sectionVersionId,
+        );
+        return section?.section_version_id === INTAKE
+          ? { ...section, capa_case_id: "other-case" }
+          : section ?? null;
+      },
+    );
+    expect(
+      await wrongSectionCase.resolver.resolve(invocation()),
+    ).toBeNull();
+  });
+
+  it("accepts immutable section versions carried into a newer S30 case version", async () => {
+    const sections = makeSections().map((section) => ({
+      ...section,
+      version_number: 1,
+    }));
+    const result = await setup({
+      sections,
+      capaCase: { record_version: 4 },
+      version: { version_number: 4 },
+    }).resolver.resolve(invocation());
+
+    expect(result?.authoritative).toMatchObject({
+      record_version: 4,
+      workflow_state: "S30",
+    });
   });
 
   it("fails closed for missing, duplicate, or malformed authoritative sections", async () => {

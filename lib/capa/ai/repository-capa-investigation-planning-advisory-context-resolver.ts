@@ -357,8 +357,7 @@ export class RepositoryCapaInvestigationPlanningAdvisoryContextResolver {
           section === null ||
           section.section_version_id !== caseVersion.section_version_ids[index] ||
           section.organization_id !== invocation.organization_id ||
-          section.capa_case_id !== invocation.capa_case_id ||
-          section.version_number !== caseVersion.version_number
+          section.capa_case_id !== invocation.capa_case_id
         )
       ) {
         return null;
