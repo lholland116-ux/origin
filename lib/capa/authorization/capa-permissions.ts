@@ -43,6 +43,7 @@ export type CapaAuthorizationOperation =
   | "review_knowledge_citation"
   | "request_ai_intake_advisory"
   | "request_ai_containment_risk_advisory"
+  | "request_ai_investigation_planning_advisory"
   | "review_ai_intake_advisory"
   | "approve_scope"
   | "accept_containment_risk"
@@ -70,6 +71,7 @@ export const HUMAN_ONLY_CAPA_OPERATIONS =
     "review_knowledge_citation",
     "request_ai_intake_advisory",
     "request_ai_containment_risk_advisory",
+    "request_ai_investigation_planning_advisory",
     "review_ai_intake_advisory",
     "approve_scope",
     "accept_containment_risk",
