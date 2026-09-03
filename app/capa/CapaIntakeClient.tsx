@@ -57,6 +57,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -87,6 +88,10 @@ interface IntakeFields {
   readonly sourceType: string;
   readonly sourceReference: string;
   readonly organizationReference: string;
+}
+
+interface OpenExistingCaseOptions {
+  readonly scrollToWorkspace?: boolean;
 }
 
 interface CapaAiOutputReviewRevisionEditor {
@@ -943,6 +948,12 @@ export default function CapaIntakeClient({
       null,
     );
 
+  const activeCapaWorkspaceRef =
+    useRef<HTMLElement | null>(null);
+
+  const [shouldScrollToActiveWorkspace, setShouldScrollToActiveWorkspace] =
+    useState(false);
+
   const [listedCases, setListedCases] =
     useState<readonly CapaListItem[]>(
       [],
@@ -1255,6 +1266,28 @@ export default function CapaIntakeClient({
     createdCapa?.currentVersionId,
   ]);
 
+  const activeCapaCaseId =
+    createdCapa?.capaCaseId;
+
+  useEffect(() => {
+    if (
+      !shouldScrollToActiveWorkspace ||
+      activeCapaCaseId === undefined
+    ) {
+      return;
+    }
+
+    activeCapaWorkspaceRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+
+    setShouldScrollToActiveWorkspace(false);
+  }, [
+    activeCapaCaseId,
+    shouldScrollToActiveWorkspace,
+  ]);
+
   const charactersRemaining =
     INPUT_LIMITS.initiatingEvent -
     fields.initiatingEvent.length;
@@ -1561,6 +1594,7 @@ export default function CapaIntakeClient({
 
   async function openExistingCase(
     capaCase: CapaListItem,
+    options: OpenExistingCaseOptions = {},
   ) {
     if (
       openingCaseId !== null ||
@@ -1625,6 +1659,10 @@ export default function CapaIntakeClient({
         );
       }
 
+      if (options.scrollToWorkspace) {
+        setShouldScrollToActiveWorkspace(true);
+      }
+
       setCreatedCapa(
         parsedCase,
       );
@@ -1648,11 +1686,6 @@ export default function CapaIntakeClient({
       setContainmentRiskStepUpOpen(false);
 
       setStep("created");
-
-      window.scrollTo({
-        top: 0,
-        behavior: "smooth",
-      });
     } catch (error) {
       setOpenCaseError(
         error instanceof Error
@@ -3524,6 +3557,10 @@ export default function CapaIntakeClient({
                         onClick={() =>
                           void openExistingCase(
                             capaCase,
+                            {
+                              scrollToWorkspace:
+                                true,
+                            },
                           )
                         }
                         className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-600 bg-zinc-900/80 px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:border-zinc-500 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-wait disabled:opacity-50"
@@ -4124,7 +4161,11 @@ export default function CapaIntakeClient({
 
       {step === "created" &&
       createdCapa ? (
-        <section className="mx-auto max-w-4xl space-y-6">
+        <section
+          id="active-capa-workspace"
+          ref={activeCapaWorkspaceRef}
+          className="mx-auto max-w-4xl space-y-6"
+        >
           <div className="rounded-3xl border border-emerald-400/25 bg-emerald-500/10 p-6 sm:p-8">
             <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
