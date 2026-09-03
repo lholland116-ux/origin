@@ -19,6 +19,10 @@ import type {
 } from "@/lib/capa/api/capa-containment-risk-advisory-route-handler";
 
 import type {
+  CapaInvestigationPlanningAdvisoryApiDependencies,
+} from "@/lib/capa/api/capa-investigation-planning-advisory-route-handler";
+
+import type {
   CapaAiOutputReviewApiDependencies,
 } from "@/lib/capa/api/capa-ai-output-review-route-handler";
 
@@ -238,6 +242,24 @@ export function createCapaContainmentRiskAdvisoryApiDependencies():
       return dependencies
         .get_runtime()
         .create_containment_risk_advisory_service(
+          context,
+        );
+    },
+  };
+}
+
+export function createCapaInvestigationPlanningAdvisoryApiDependencies():
+  CapaInvestigationPlanningAdvisoryApiDependencies {
+  const dependencies =
+    createCapaApiHandlerDependencies();
+
+  return {
+    ...dependencies,
+
+    create_advisory_service(context) {
+      return dependencies
+        .get_runtime()
+        .create_investigation_planning_advisory_service(
           context,
         );
     },
