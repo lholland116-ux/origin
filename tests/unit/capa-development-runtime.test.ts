@@ -30,6 +30,10 @@ import type {
 } from "../../lib/capa/ai/capa-containment-risk-advisory-model-generator";
 
 import type {
+  CapaInvestigationPlanningAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-investigation-planning-advisory-model-profile";
+
+import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
 } from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
@@ -124,6 +128,17 @@ function containmentRiskStructuredModelClient():
     async generateStructured() {
       throw new Error(
         "The development S20 runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
+function investigationPlanningStructuredModelClient():
+  CapaInvestigationPlanningAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The development S30 runtime-composition test must not invoke the model.",
       );
     },
   };
@@ -724,6 +739,13 @@ describe(
         ).toThrow(
           CapaDevelopmentRuntimeAdvisoryConfigurationError,
         );
+
+        expect(
+          () =>
+            runtime.create_investigation_planning_advisory_service(
+              developmentContext(),
+            ),
+        ).toThrow(CapaDevelopmentRuntimeAdvisoryConfigurationError);
       },
     );
 
@@ -745,6 +767,30 @@ describe(
       expect(first.execute).toEqual(expect.any(Function));
       expect(second.execute).toEqual(expect.any(Function));
       expect(() => runtime.create_intake_advisory_service(developmentContext())).toThrow(CapaDevelopmentRuntimeAdvisoryConfigurationError);
+    });
+
+    it("creates request-scoped S30 services using the same in-memory repository and transaction manager", () => {
+      const runtime = createCapaDevelopmentRuntime({
+        environment: "test",
+        now: () => NOW,
+        generate_uuid: createUuidGenerator(),
+        investigation_planning_advisory: {
+          structured_model_client:
+            investigationPlanningStructuredModelClient(),
+        },
+      });
+
+      const first = runtime.create_investigation_planning_advisory_service(
+        developmentContext(),
+      );
+      const second = runtime.create_investigation_planning_advisory_service(
+        developmentContext(),
+      );
+
+      expect(first).not.toBe(second);
+      expect(first.execute).toEqual(expect.any(Function));
+      expect((first as any).dependencies.output_repository).toBe(runtime.database);
+      expect((first as any).dependencies.transaction_manager).toBe(runtime.database);
     });
 
     it(

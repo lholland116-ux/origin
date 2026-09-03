@@ -51,6 +51,10 @@ import type {
 } from "../../lib/capa/ai/capa-containment-risk-advisory-model-generator";
 
 import type {
+  CapaInvestigationPlanningAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-investigation-planning-advisory-model-profile";
+
+import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
 } from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
@@ -85,6 +89,10 @@ import {
 import {
   SupabaseTransactionManager,
 } from "../../lib/database/supabase/supabase-transactions";
+
+import {
+  SupabaseCapaInvestigationPlanningAdvisoryOutputRepository,
+} from "../../lib/database/supabase/supabase-capa-investigation-planning-advisory-output-repository";
 
 const NOW =
   new Date(
@@ -154,6 +162,17 @@ function containmentRiskStructuredModelClient():
     async generateStructured() {
       throw new Error(
         "The production S20 runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
+function investigationPlanningStructuredModelClient():
+  CapaInvestigationPlanningAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The production S30 runtime-composition test must not invoke the model.",
       );
     },
   };
@@ -733,6 +752,13 @@ describe(
         ).toThrow(
           CapaProductionRuntimeConfigurationError,
         );
+
+        expect(
+          () =>
+            runtime.create_investigation_planning_advisory_service(
+              requestContext(),
+            ),
+        ).toThrow(CapaProductionRuntimeConfigurationError);
       },
     );
 
@@ -768,6 +794,62 @@ describe(
 
     it.each(["", "   "])("rejects invalid S20 model configuration '%s'", (model) => {
       expect(() => createCapaProductionRuntime({ sql: SQL, containment_risk_advisory: { model } })).toThrow(CapaProductionRuntimeConfigurationError);
+    });
+
+    it("creates request-scoped S30 advisory services from an injected client", () => {
+      const previousApiKey = process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+
+      try {
+        const runtime = createCapaProductionRuntime({
+          sql: SQL,
+          now: () => NOW,
+          generate_uuid: uuidGenerator(),
+          investigation_planning_advisory: {
+            model: "test-controlled-model",
+            structured_model_client:
+              investigationPlanningStructuredModelClient(),
+          },
+        });
+
+        const first = runtime.create_investigation_planning_advisory_service(
+          requestContext(),
+        );
+        const second = runtime.create_investigation_planning_advisory_service(
+          requestContext(),
+        );
+
+        expect(first).not.toBe(second);
+        expect(first.execute).toEqual(expect.any(Function));
+        expect((first as any).dependencies.output_repository).toBeInstanceOf(
+          SupabaseCapaInvestigationPlanningAdvisoryOutputRepository,
+        );
+        expect((first as any).dependencies.transaction_manager).toBeInstanceOf(
+          SupabaseTransactionManager,
+        );
+      } finally {
+        if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = previousApiKey;
+      }
+    });
+
+    it("requires OPENAI_API_KEY only when S30 uses the real model adapter", () => {
+      const previousApiKey = process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+
+      try {
+        expect(() =>
+          createCapaProductionRuntime({
+            sql: SQL,
+            investigation_planning_advisory: {
+              model: "test-controlled-model",
+            },
+          }),
+        ).toThrow(CapaProductionRuntimeConfigurationError);
+      } finally {
+        if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = previousApiKey;
+      }
     });
 
     it(

@@ -63,6 +63,10 @@ import type {
 } from "../ai/capa-containment-risk-advisory-service";
 
 import type {
+  CapaInvestigationPlanningAdvisoryService,
+} from "../ai/capa-investigation-planning-advisory-service";
+
+import type {
   CapaAiOutputReviewService,
 } from "./capa-ai-output-review-runtime-factory";
 
@@ -144,6 +148,17 @@ export interface CapaRuntime {
   readonly create_containment_risk_advisory_service: (
     context: CapaRequestContext,
   ) => CapaContainmentRiskAdvisoryService;
+
+  /**
+   * Creates one request-scoped S30 investigation-planning advisory service.
+   *
+   * This capability is advisory-only. It cannot adopt a proposal, perform
+   * G-03, advance S30 to S40, or replace the human-controlled release
+   * operation.
+   */
+  readonly create_investigation_planning_advisory_service: (
+    context: CapaRequestContext,
+  ) => CapaInvestigationPlanningAdvisoryService;
 
   /**
    * Application dependencies used by controlled CAPA commands.
