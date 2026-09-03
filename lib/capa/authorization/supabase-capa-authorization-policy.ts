@@ -74,6 +74,8 @@ const OPERATION_PERMISSION = {
     "capa.ai.intake.advise",
   request_ai_investigation_planning_advisory:
     "capa.ai.intake.advise",
+  adopt_ai_investigation_planning_proposal:
+    "capa.review.disposition",
   review_ai_intake_advisory:
     "capa.ai.intake.review",
   approve_scope:
@@ -126,6 +128,8 @@ const OPERATION_PURPOSE = {
     "CAPA_AI_CONTAINMENT_RISK_ADVISORY",
   request_ai_investigation_planning_advisory:
     "CAPA_AI_INVESTIGATION_PLANNING_ADVISORY",
+  adopt_ai_investigation_planning_proposal:
+    "CAPA_AI_INVESTIGATION_PLANNING_ADOPTION",
   review_ai_intake_advisory:
     "CAPA_AI_INTAKE_ADVISORY_REVIEW",
   approve_scope:
@@ -202,6 +206,11 @@ const REQUIRED_WORKFLOW_STATES:
       ]),
 
     request_ai_investigation_planning_advisory:
+      new Set([
+        CAPA_STATE.INVESTIGATION_PLANNING,
+      ]),
+
+    adopt_ai_investigation_planning_proposal:
       new Set([
         CAPA_STATE.INVESTIGATION_PLANNING,
       ]),

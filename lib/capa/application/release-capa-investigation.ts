@@ -39,6 +39,12 @@ import type { TransactionManager } from "../../database/transactions";
 import type { CapaParticipantEligibilityRepository } from "../../database/repositories/capa-participant-eligibility-repository";
 import type { CreateCapaClock, CreateCapaIdGenerator } from "./create-capa";
 import { AuditEventAppendConflictError } from "./create-capa";
+import {
+  verifyCapaInvestigationPlanningAdoptionProvenance,
+} from "./capa-investigation-planning-adoption-verifier";
+import type {
+  CapaInvestigationPlanningAdoptionRepository,
+} from "../../database/repositories/capa-investigation-planning-adoption-repository";
 
 const SOURCE_STATE = CAPA_STATE.INVESTIGATION_PLANNING;
 const TARGET_STATE = CAPA_STATE.INVESTIGATION_ACTIVE;
@@ -62,6 +68,7 @@ export interface ReleaseCapaInvestigationDependencies {
   readonly transaction_manager: TransactionManager;
   readonly capa_repository: CapaRepository;
   readonly audit_repository: AuditRepository;
+  readonly adoption_repository: CapaInvestigationPlanningAdoptionRepository;
   readonly workflow_idempotency_repository: CapaWorkflowIdempotencyRepository;
   readonly participant_eligibility_repository: CapaParticipantEligibilityRepository;
   readonly authorization_policy: CapaAuthorizationPolicy;
@@ -395,6 +402,18 @@ export async function releaseCapaInvestigation(
   }
   if (sourceVersion.status !== SOURCE_STATE) {
     return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };
+  }
+
+  const provenance = await verifyCapaInvestigationPlanningAdoptionProvenance({
+    repository: dependencies.adoption_repository,
+    organization_id: organizationId,
+    capa_case_id: capaCase.capa_case_id,
+    expected_case_version_id: sourceVersion.case_version_id,
+    expected_record_version: command.expected_record_version,
+    plan: validated.value.investigation_plan,
+  });
+  if (provenance.status === "blocked") {
+    return { status: "gate_blocked", blocker_codes: [provenance.blocker_code] };
   }
 
   const sections = await sourceSections(dependencies, capaCase, sourceVersion);

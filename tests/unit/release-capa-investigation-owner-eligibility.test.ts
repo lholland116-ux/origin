@@ -78,6 +78,7 @@ function harness(ineligible: readonly string[] = []) {
         capa_case_id: CASE, section_version_id: PRIOR_SECTION, section_type: "CAPA.CONTAINMENT_RISK" }),
       insertSectionVersion, insertCaseVersion, advanceCurrentVersion } as never,
     audit_repository: { appendEvent, findEventById } as never,
+    adoption_repository: {} as never,
     workflow_idempotency_repository: { claimWorkflowOperation: claim } as never,
     participant_eligibility_repository: { listEligibleInvestigationOwners: vi.fn(),
       findIneligibleInvestigationOwnerIds: eligibility },

@@ -845,6 +845,16 @@ describe(
       },
     );
 
+    it("wires a request-scoped adoption service to the in-memory repository", () => {
+      const runtime = createCapaDevelopmentRuntime({ environment: "test" });
+      const service = runtime.create_investigation_planning_adoption_service(
+        developmentContext(),
+      );
+      expect(service.adopt).toEqual(expect.any(Function));
+      expect(runtime.release_investigation_dependencies.adoption_repository)
+        .toBe(runtime.database);
+    });
+
     it(
       "blocks creation in a production environment",
       () => {

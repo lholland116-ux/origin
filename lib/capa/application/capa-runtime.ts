@@ -74,6 +74,9 @@ import type {
   CapaRequestContext,
 } from "../../security/supabase-capa-context";
 import type { CapaParticipantEligibilityRepository } from "../../database/repositories/capa-participant-eligibility-repository";
+import type {
+  CapaInvestigationPlanningAdoptionService,
+} from "./capa-investigation-planning-adoption-runtime-factory";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -159,6 +162,11 @@ export interface CapaRuntime {
   readonly create_investigation_planning_advisory_service: (
     context: CapaRequestContext,
   ) => CapaInvestigationPlanningAdvisoryService;
+
+  /** Creates one request-scoped human S30 AI-proposal adoption service. */
+  readonly create_investigation_planning_adoption_service: (
+    context: CapaRequestContext,
+  ) => CapaInvestigationPlanningAdoptionService;
 
   /**
    * Application dependencies used by controlled CAPA commands.

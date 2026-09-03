@@ -79,6 +79,10 @@ import {
 } from "../../lib/database/supabase/supabase-capa-workflow-idempotency-repository";
 
 import {
+  SupabaseCapaInvestigationPlanningAdoptionRepository,
+} from "../../lib/database/supabase/supabase-capa-investigation-planning-adoption-repository";
+
+import {
   SupabaseCapaRepository,
 } from "../../lib/database/supabase/supabase-capa-repository";
 
@@ -831,6 +835,16 @@ describe(
         if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
         else process.env.OPENAI_API_KEY = previousApiKey;
       }
+    });
+
+    it("wires a request-scoped adoption service to the Supabase repository", () => {
+      const runtime = createCapaProductionRuntime({ sql: SQL });
+      const service = runtime.create_investigation_planning_adoption_service(
+        requestContext(),
+      );
+      expect(service.adopt).toEqual(expect.any(Function));
+      expect(runtime.release_investigation_dependencies.adoption_repository)
+        .toBeInstanceOf(SupabaseCapaInvestigationPlanningAdoptionRepository);
     });
 
     it("requires OPENAI_API_KEY only when S30 uses the real model adapter", () => {

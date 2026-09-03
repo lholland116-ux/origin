@@ -124,6 +124,7 @@ async function lifecycleHarness() {
   }) };
   const common = {
     transaction_manager: database, capa_repository: database, audit_repository: database,
+    adoption_repository: database,
     workflow_idempotency_repository: database, authorization_policy,
     clock: { now: () => new Date(NOW) },
     configuration: { workflow_version: "workflow-1", audit_schema_version: "audit-1", authorization_purpose: "CAPA_WORKFLOW_TRANSITION" as never },

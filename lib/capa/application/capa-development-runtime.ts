@@ -64,6 +64,10 @@ import {
   createRequestScopedCapaInvestigationPlanningAdvisoryService,
 } from "./capa-investigation-planning-advisory-runtime-factory";
 
+import {
+  createRequestScopedCapaInvestigationPlanningAdoptionService,
+} from "./capa-investigation-planning-adoption-runtime-factory";
+
 import type {
   CapaIntakeAdvisoryStructuredModelClient,
 } from "../ai/capa-intake-advisory-model-generator";
@@ -323,6 +327,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_CONTAINMENT_RISK_ADVISORY_ALLOWED",
       );
 
+    case "adopt_ai_investigation_planning_proposal":
+      return controlled(
+        "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADOPTION_ALLOWED",
+      );
+
     default:
       return controlled(
         "DEVELOPMENT_POLICY_DENIED",
@@ -382,7 +391,9 @@ function developmentAuthorizationPolicy():
         request.operation ===
           "request_ai_intake_advisory" ||
         request.operation ===
-          "request_ai_containment_risk_advisory";
+          "request_ai_containment_risk_advisory" ||
+        request.operation ===
+          "adopt_ai_investigation_planning_proposal";
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -827,6 +838,7 @@ export function createCapaDevelopmentRuntime(
   const releaseInvestigationDependencies:
     ReleaseCapaInvestigationDependencies = {
     ...submitIntakeDependencies,
+    adoption_repository: database,
     participant_eligibility_repository:
       new InMemoryCapaParticipantEligibilityRepository(),
   };
@@ -1053,6 +1065,19 @@ export function createCapaDevelopmentRuntime(
           dependencies.configuration.intake_schema_version,
         now,
         generate_uuid: generateUuid,
+      });
+    },
+
+    create_investigation_planning_adoption_service(context) {
+      return createRequestScopedCapaInvestigationPlanningAdoptionService({
+        request_context: context,
+        transaction_manager: database,
+        adoption_repository: database,
+        audit_repository: database,
+        authorization_policy: dependencies.authorization_policy,
+        now,
+        generate_uuid: generateUuid,
+        audit_schema_version: dependencies.configuration.audit_schema_version,
       });
     },
 

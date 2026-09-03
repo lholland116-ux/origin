@@ -26,6 +26,10 @@ import type {
   CapaAiOutputReviewApiDependencies,
 } from "@/lib/capa/api/capa-ai-output-review-route-handler";
 
+import type {
+  CapaInvestigationPlanningAdoptionApiDependencies,
+} from "@/lib/capa/api/capa-investigation-planning-adoption-route-handler";
+
 import {
   selectCapaRuntime,
 } from "@/lib/capa/application/capa-runtime-selection";
@@ -262,6 +266,20 @@ export function createCapaInvestigationPlanningAdvisoryApiDependencies():
         .create_investigation_planning_advisory_service(
           context,
         );
+    },
+  };
+}
+
+export function createCapaInvestigationPlanningAdoptionApiDependencies():
+  CapaInvestigationPlanningAdoptionApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+
+  return {
+    ...dependencies,
+    create_adoption_service(context) {
+      return dependencies
+        .get_runtime()
+        .create_investigation_planning_adoption_service(context);
     },
   };
 }

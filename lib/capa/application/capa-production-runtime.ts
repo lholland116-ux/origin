@@ -58,6 +58,10 @@ import {
 } from "./capa-investigation-planning-advisory-runtime-factory";
 
 import {
+  createRequestScopedCapaInvestigationPlanningAdoptionService,
+} from "./capa-investigation-planning-adoption-runtime-factory";
+
+import {
   createRequestScopedCapaAiOutputReviewService,
 } from "./capa-ai-output-review-runtime-factory";
 
@@ -129,6 +133,10 @@ import {
 import {
   SupabaseCapaRepository,
 } from "../../database/supabase/supabase-capa-repository";
+
+import {
+  SupabaseCapaInvestigationPlanningAdoptionRepository,
+} from "../../database/supabase/supabase-capa-investigation-planning-adoption-repository";
 
 import {
   SupabaseCapaKnowledgeRepository,
@@ -771,6 +779,9 @@ export function createCapaProductionRuntime(
       sql,
     );
 
+  const adoptionRepository =
+    new SupabaseCapaInvestigationPlanningAdoptionRepository(sql);
+
   const auditRepository =
     new SupabaseAuditRepository(
       sql,
@@ -936,6 +947,7 @@ export function createCapaProductionRuntime(
   const releaseInvestigationDependencies:
     ReleaseCapaInvestigationDependencies = {
     ...submitIntakeDependencies,
+    adoption_repository: adoptionRepository,
     participant_eligibility_repository:
       participantEligibilityRepository,
   };
@@ -1325,6 +1337,19 @@ export function createCapaProductionRuntime(
           dependencies.configuration.intake_schema_version,
         now,
         generate_uuid: generateUuid,
+      });
+    },
+
+    create_investigation_planning_adoption_service(context) {
+      return createRequestScopedCapaInvestigationPlanningAdoptionService({
+        request_context: context,
+        transaction_manager: transactionManager,
+        adoption_repository: adoptionRepository,
+        audit_repository: auditRepository,
+        authorization_policy: authorizationPolicy,
+        now,
+        generate_uuid: generateUuid,
+        audit_schema_version: auditSchemaVersion,
       });
     },
 

@@ -43,6 +43,7 @@ function dependencies(): ReleaseCapaInvestigationDependencies {
       findCaseById: vi.fn().mockResolvedValue(null),
     } as never,
     audit_repository: {} as never,
+    adoption_repository: {} as never,
     workflow_idempotency_repository: {} as never,
     participant_eligibility_repository: {
       listEligibleInvestigationOwners: vi.fn(),
