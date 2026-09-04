@@ -8,6 +8,11 @@ import {
   CAPA_INVESTIGATION_PLAN_ADVISORY_MODEL_PROFILE,
 } from "../../lib/capa/ai/capa-investigation-planning-advisory-model-profile";
 import {
+  CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
+  CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION,
+  fingerprintCanonicalJson,
+} from "../../lib/capa/ai/capa-ai-generation-trace";
+import {
   CapaInvestigationPlanningAdvisoryModelGenerator,
 } from "../../lib/capa/ai/capa-investigation-planning-advisory-model-generator";
 import type {
@@ -57,6 +62,29 @@ const validOutput = JSON.stringify({
     dependencies: [],
     proposed_owner_role: [],
     gaps: [],
+  },
+  assumptions: [],
+  uncertainty_and_limitations: [],
+  citations: [],
+  advisory_only: true,
+  workflow_mutated: false,
+  human_acceptance_required: true,
+});
+
+const secondValidOutput = JSON.stringify({
+  proposal: {
+    investigation_questions: [],
+    evidence_requests: [],
+    method_suggestions: [],
+    dependencies: [],
+    proposed_owner_role: [],
+    gaps: [
+      {
+        gap: "The approved scope does not identify an evidence custodian.",
+        human_review_question:
+          "Should the team identify an evidence custodian?",
+      },
+    ],
   },
   assumptions: [],
   uncertainty_and_limitations: [],
@@ -156,7 +184,14 @@ describe("S30 investigation-planning advisory model generator", () => {
           .maximum_output_characters,
       store: false,
     });
+    expect(subject.model_client.generateStructured).toHaveBeenCalledTimes(1);
     expect(result.trace.package.trace.run_id).toBe(runId);
+    expect(result.trace.trace_schema_version).toBe(
+      CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
+    );
+    expect(result.trace.package.package_schema_version).toBe(
+      CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION,
+    );
     expect(Object.isFrozen(result.response)).toBe(true);
     expect(Object.isFrozen(result.response.proposal)).toBe(true);
     expect(Object.isFrozen(result.response.assumptions)).toBe(true);
@@ -175,7 +210,92 @@ describe("S30 investigation-planning advisory model generator", () => {
     ]);
   });
 
-  it("does not create output identity when setup, trace, provider, or validation fails", async () => {
+  it("retries one controlled validation failure with the exact same governed input", async () => {
+    const subject = fixture();
+    subject.model_client.generateStructured
+      .mockResolvedValueOnce({ output_text: "{}" })
+      .mockResolvedValueOnce({ output_text: secondValidOutput });
+
+    const result = await generate(subject, "Review the accepted scope");
+
+    expect(subject.model_client.generateStructured).toHaveBeenCalledTimes(2);
+    const firstInput = subject.model_client.generateStructured.mock.calls[0]?.[0];
+    const secondInput = subject.model_client.generateStructured.mock.calls[1]?.[0];
+    expect(secondInput).toBe(firstInput);
+    expect(secondInput).toEqual(firstInput);
+    expect(result.response.proposal).toMatchObject({
+      gaps: [
+        {
+          gap: "The approved scope does not identify an evidence custodian.",
+          human_review_question:
+            "Should the team identify an evidence custodian?",
+        },
+      ],
+    });
+    expect(result.trace.package.trace).toMatchObject({
+      run_id: runId,
+      prompt_package_id: promptPackageId,
+      request_id: requestId,
+      correlation_id: correlationId,
+      assembled_at: assembledAt,
+    });
+    expect(result.trace.trace_schema_version).toBe(
+      CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
+    );
+    expect(result.trace.package.package_schema_version).toBe(
+      CAPA_INVESTIGATION_PLANNING_PROMPT_PACKAGE_SCHEMA_VERSION,
+    );
+    expect(result.trace.fingerprints.prompt_package_sha256).toBe(
+      fingerprintCanonicalJson(result.trace.package),
+    );
+    expect(result.trace.fingerprints.rendered_prompt_sha256).toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+    expect(result.trace).not.toHaveProperty("attempt");
+    expect(result.trace.package).not.toHaveProperty("attempt");
+    expect(subject.createRunId).toHaveBeenCalledTimes(1);
+    expect(subject.createPromptPackageId).toHaveBeenCalledTimes(1);
+    expect(subject.now).toHaveBeenCalledTimes(1);
+    expect(subject.createOutputId).toHaveBeenCalledTimes(1);
+    expect(subject.createOutputId.mock.invocationCallOrder[0]).toBeGreaterThan(
+      subject.model_client.generateStructured.mock.invocationCallOrder[1] ?? 0,
+    );
+  });
+
+  it("rethrows the second controlled validation failure without a third model call", async () => {
+    const subject = fixture("{}");
+
+    await expect(generate(subject)).rejects.toMatchObject({
+      name: "CapaInvestigationPlanAdvisoryOutputValidationError",
+      reason_code: "MISSING_MODEL_OUTPUT_FIELD",
+    });
+    expect(subject.model_client.generateStructured).toHaveBeenCalledTimes(2);
+    expect(subject.createOutputId).not.toHaveBeenCalled();
+  });
+
+  it("does not retry model-client failures", async () => {
+    const subject = fixture();
+    const transportError = new Error("provider failure");
+    subject.model_client.generateStructured.mockRejectedValueOnce(transportError);
+
+    await expect(generate(subject)).rejects.toBe(transportError);
+    expect(subject.model_client.generateStructured).toHaveBeenCalledTimes(1);
+    expect(subject.createOutputId).not.toHaveBeenCalled();
+  });
+
+  it("propagates a second model-client failure after one controlled validation retry", async () => {
+    const subject = fixture();
+    const transportError = new Error("second provider failure");
+    subject.model_client.generateStructured
+      .mockResolvedValueOnce({ output_text: "{}" })
+      .mockRejectedValueOnce(transportError);
+
+    await expect(generate(subject)).rejects.toBe(transportError);
+    expect(subject.model_client.generateStructured).toHaveBeenCalledTimes(2);
+    expect(subject.createOutputId).not.toHaveBeenCalled();
+  });
+
+  it("does not create output identity when setup, trace, or provider fails", async () => {
     for (const factory of ["createRunId", "createPromptPackageId", "now"] as const) {
       const subject = fixture();
       subject[factory].mockImplementation(() => {
@@ -213,11 +333,7 @@ describe("S30 investigation-planning advisory model generator", () => {
       new Error("provider failure"),
     );
     await expect(generate(providerFailure)).rejects.toThrow("provider failure");
+    expect(providerFailure.model_client.generateStructured).toHaveBeenCalledTimes(1);
     expect(providerFailure.createOutputId).not.toHaveBeenCalled();
-
-    const invalidOutput = fixture("{}");
-    await expect(generate(invalidOutput)).rejects.toThrow();
-    expect(invalidOutput.model_client.generateStructured).toHaveBeenCalledTimes(1);
-    expect(invalidOutput.createOutputId).not.toHaveBeenCalled();
   });
 });

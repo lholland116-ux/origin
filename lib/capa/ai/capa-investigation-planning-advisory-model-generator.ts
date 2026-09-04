@@ -20,6 +20,7 @@ import {
   type CapaInvestigationPlanAdvisoryResponse,
 } from "./capa-investigation-planning-advisory-contract";
 import {
+  CapaInvestigationPlanAdvisoryOutputValidationError,
   validateCapaInvestigationPlanAdvisoryModelOutput,
 } from "./capa-investigation-planning-advisory-output-validator";
 import {
@@ -131,7 +132,7 @@ export class CapaInvestigationPlanningAdvisoryModelGenerator {
       },
     });
 
-    const raw = await this.dependencies.model_client.generateStructured({
+    const model_generation_input = Object.freeze({
       prompt,
       model_profile_version:
         CAPA_INVESTIGATION_PLAN_ADVISORY_MODEL_PROFILE.profile_version,
@@ -143,9 +144,35 @@ export class CapaInvestigationPlanningAdvisoryModelGenerator {
           .maximum_output_characters,
       store: false,
     });
-    const advisory = validateCapaInvestigationPlanAdvisoryModelOutput(
-      raw.output_text,
-    );
+
+    let advisory:
+      | ReturnType<typeof validateCapaInvestigationPlanAdvisoryModelOutput>
+      | undefined;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const raw = await this.dependencies.model_client.generateStructured(
+        model_generation_input,
+      );
+
+      try {
+        advisory = validateCapaInvestigationPlanAdvisoryModelOutput(
+          raw.output_text,
+        );
+        break;
+      } catch (error) {
+        if (
+          !(error instanceof CapaInvestigationPlanAdvisoryOutputValidationError) ||
+          attempt === 1
+        ) {
+          throw error;
+        }
+      }
+    }
+
+    if (advisory === undefined) {
+      throw new Error("CONTROLLED_CAPA_ADVISORY_VALIDATION_RETRY_EXHAUSTED");
+    }
+
     const output_id = this.dependencies.createOutputId();
     const response = deepFreeze({
       run_id,

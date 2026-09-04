@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  AuditEvent,
   CapaCase,
   CapaCaseId,
   CapaCaseVersion,
@@ -77,6 +78,31 @@ function caseVersion(): CapaCaseVersion {
     effective_at: NOW,
     created_at: NOW,
     created_by: { actor_type: "human", actor_id: "seed" },
+  };
+}
+
+function auditEvent(): AuditEvent {
+  return {
+    organization_id: ORG,
+    event_id: AUDIT as never,
+    event_type: "EVT-AI-PROPOSAL-ADOPTED" as never,
+    schema_version: "audit-1.0.0",
+    aggregate_type: "CAPA_CASE" as never,
+    aggregate_id: CASE_ID,
+    aggregate_version: 2,
+    actor: { actor_type: "human", actor_id: "human-1" },
+    occurred_at: NOW,
+    request_id: REQUEST,
+    correlation_id: CORRELATION,
+    action: "ADOPT_CAPA_INVESTIGATION_PLANNING_AI_PROPOSALS" as never,
+    target: {
+      object_type: "CAPA_INVESTIGATION_PLANNING_ADOPTION" as never,
+      object_id: adoption().adoption_id,
+      object_version_id: VERSION,
+    },
+    outcome: "succeeded",
+    configuration_versions: { audit: "audit-1.0.0" },
+    metadata: {},
   };
 }
 
@@ -201,6 +227,29 @@ describe("in-memory S30 investigation-planning adoption repository", () => {
     expect((await db.listAdoptionsForOutput(ORG, OUTPUT))).toHaveLength(1);
   });
 
+  it("defers adoption audit-event integrity until transaction commit", async () => {
+    const db = await seededDatabase();
+    const state = (db as unknown as {
+      committed_state: { audit_events: Map<string, unknown> };
+    }).committed_state;
+    state.audit_events.clear();
+
+    await db.runInTransaction(trace(), async (transaction) => {
+      await expect(db.appendAdoption(transaction, input())).resolves.toMatchObject({
+        status: "saved",
+      });
+      await expect(db.appendEvent(transaction, auditEvent())).resolves.toEqual({
+        status: "appended",
+        event_id: AUDIT,
+      });
+    });
+
+    expect(await db.findAdoptionById(ORG, adoption().adoption_id)).toMatchObject({
+      adoption: { adoption_id: adoption().adoption_id },
+      audit_event_id: AUDIT,
+    });
+  });
+
   it("supports batch-level idempotent replay and preserves independent identity conflicts", async () => {
     const db = await seededDatabase();
     const first = await db.runInTransaction(trace(), (transaction) =>
@@ -277,10 +326,9 @@ describe("in-memory S30 investigation-planning adoption repository", () => {
     await expect(db.appendAdoption(completed as never, input())).rejects.toThrow(InMemoryTransactionNotActiveError);
   });
 
-  it("fails closed for missing audit evidence and caller mutation", async () => {
+  it("fails missing adoption audit evidence at commit and rolls back", async () => {
     const db = await seededDatabase();
-    const record = adoption();
-    const supplied = input(record);
+    const supplied = input(adoption());
     const before = JSON.stringify(supplied);
     const state = (db as unknown as {
       committed_state: {
@@ -288,9 +336,14 @@ describe("in-memory S30 investigation-planning adoption repository", () => {
       };
     }).committed_state;
     state.audit_events.clear();
-    await expect(db.runInTransaction(trace(), (transaction) =>
-      db.appendAdoption(transaction, supplied),
-    )).rejects.toThrow(InMemoryIntegrityError);
+
+    await expect(db.runInTransaction(trace(), async (transaction) => {
+      await expect(db.appendAdoption(transaction, supplied)).resolves.toMatchObject({
+        status: "saved",
+      });
+    })).rejects.toThrow(InMemoryIntegrityError);
+
+    expect(await db.findAdoptionById(ORG, adoption().adoption_id)).toBeNull();
     expect(JSON.stringify(supplied)).toBe(before);
   });
 });

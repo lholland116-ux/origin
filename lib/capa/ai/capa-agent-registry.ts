@@ -192,7 +192,7 @@ const DEFINITIONS = [
     agent_id: "AG-PLAN",
     name: "Investigation Planner",
     version: "ag-plan-1.0.0",
-    status: "evaluation",
+    status: "approved",
     purpose:
       "Propose investigation questions, evidence needs, methods, owners, dependencies and due-date prompts.",
     states: ["S30"],

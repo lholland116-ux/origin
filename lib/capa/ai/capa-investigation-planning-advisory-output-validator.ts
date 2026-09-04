@@ -95,10 +95,13 @@ const PROHIBITED_S30_DECISION_CLAIM =
   /\b(?:g[\s-]?03|s30\s*(?:to|->|→)\s*s40)\b|\bworkflow\s+(?:state\s+)?(?:was|has been|is|should be)\s+(?:transitioned|advanced)|\b(?:approve|approved|approval|release|released|adopt|adopted|adoption|advance|advanced|transition|transitioned)\s+(?:this|the|a|an|plan|workflow|case|record)\b|\b(?:this|the|a|an)\s+(?:plan|workflow|case|record)\s+(?:is|was|has been)\s+(?:approved|released|adopted|advanced|transitioned)\b/i;
 
 const QUESTION_ASSERTION_SEPARATOR =
-  /[.!?;,\:\n\r\u2028\u2029]|\s-\s|\band\b|\s+[—–]\s+|\b(?:but|however|although|though|yet|while|because|since|therefore|thus)\b/i;
+  /[.!?;,\:\n\r\u2028\u2029]|\s-\s|\s+[—–]\s+|\b(?:but|however|although|though|yet|while|because|since|therefore|thus)\b/i;
 
 const QUESTION_START =
   /^(?:does|do|did|is|are|was|were|may|might|can|could|should|must|what|which|who|whom|whose|why|how|when|where|whether)\b/i;
+
+const QUESTION_COMPOUND_AND_CLAUSE =
+  /\band\s+(?:does|do|did|is|are|was|were|may|might|can|could|should|must|what|which|who|whom|whose|why|how|when|where|whether)\b/i;
 
 export const CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_VALIDATION_REASON_CODES = [
   "EMPTY_MODEL_OUTPUT",
@@ -246,6 +249,7 @@ function question(
     !normalized.endsWith("?") ||
     normalized.indexOf("?") !== normalized.length - 1 ||
     QUESTION_ASSERTION_SEPARATOR.test(body) ||
+    QUESTION_COMPOUND_AND_CLAUSE.test(body) ||
     !QUESTION_START.test(body)
   ) {
     fail("INVALID_ADVISORY_QUESTION");

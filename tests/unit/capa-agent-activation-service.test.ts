@@ -44,6 +44,28 @@ function intakeRequest():
   };
 }
 
+function planRequest():
+  CapaAgentEligibilityRequest {
+  return {
+    agent_id: "AG-PLAN",
+    agent_version:
+      "ag-plan-1.0.0" as never,
+    workflow_state: "S30",
+    operation:
+      "draft_investigation_plan",
+    active_role_ids: [
+      "CAPA_OWNER" as RoleId,
+    ],
+    requested_tool_ids: [
+      "TOOL-CASE-READ",
+      "TOOL-STRUCTURED-DRAFT",
+      "TOOL-FEEDBACK",
+    ],
+    output_schema_version:
+      "capa_investigation_plan_draft-1.0.0" as never,
+  };
+}
+
 describe(
   "controlled CAPA agent activation service",
   () => {
@@ -93,6 +115,13 @@ describe(
         const service =
           createCapaAgentActivationService();
 
+        expect(
+          createInitialCapaAgentRegistry().findExact(
+            "AG-RCA",
+            "ag-rca-1.0.0",
+          )?.status,
+        ).toBe("evaluation");
+
         const result = service.evaluate({
           ...intakeRequest(),
           agent_id: "AG-RCA",
@@ -112,6 +141,31 @@ describe(
         });
       },
     );
+
+    it("activates the exact approved AG-PLAN S30 request", () => {
+      const result = createCapaAgentActivationService().evaluate(
+        planRequest(),
+      );
+
+      expect(result).toMatchObject({
+        eligible: true,
+        reason_code: "AGENT_ELIGIBLE",
+        definition: {
+          logical_agent_id: "AG-PLAN",
+          agent_version: "ag-plan-1.0.0",
+          status: "approved",
+          eligible_states: ["S30"],
+          allowed_operations: ["draft_investigation_plan"],
+          allowed_requester_roles: ["CAPA_OWNER", "CAPA_CONTRIBUTOR"],
+          allowed_tools: [
+            "TOOL-CASE-READ",
+            "TOOL-STRUCTURED-DRAFT",
+            "TOOL-FEEDBACK",
+          ],
+          output_schema_version: "capa_investigation_plan_draft-1.0.0",
+        },
+      });
+    });
 
     it(
       "delegates every request to one supplied registry snapshot",

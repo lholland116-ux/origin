@@ -50,7 +50,7 @@ describe(
     );
 
     it(
-      "makes only AG-INTAKE runtime approved",
+      "makes only AG-INTAKE and AG-PLAN runtime approved",
       () => {
         const registry =
           createInitialCapaAgentRegistry();
@@ -73,9 +73,41 @@ describe(
             (status) =>
               status === "approved",
           ),
-        ).toEqual(["approved"]);
+        ).toEqual(["approved", "approved"]);
       },
     );
+
+    it("keeps the approved AG-PLAN S30 activation bindings exact", () => {
+      const plan = createInitialCapaAgentRegistry().findExact(
+        "AG-PLAN",
+        "ag-plan-1.0.0",
+      );
+
+      expect(plan).toMatchObject({
+        logical_agent_id: "AG-PLAN",
+        agent_version: "ag-plan-1.0.0",
+        status: "approved",
+        eligible_states: ["S30"],
+        allowed_operations: ["draft_investigation_plan"],
+        allowed_requester_roles: ["CAPA_OWNER", "CAPA_CONTRIBUTOR"],
+        allowed_tools: [
+          "TOOL-CASE-READ",
+          "TOOL-STRUCTURED-DRAFT",
+          "TOOL-FEEDBACK",
+        ],
+        output_schema_version: "capa_investigation_plan_draft-1.0.0",
+        activation_capabilities: [{
+          eligible_states: ["S30"],
+          operation: "draft_investigation_plan",
+          allowed_tools: [
+            "TOOL-CASE-READ",
+            "TOOL-STRUCTURED-DRAFT",
+            "TOOL-FEEDBACK",
+          ],
+          output_schema_version: "capa_investigation_plan_draft-1.0.0",
+        }],
+      });
+    });
 
     it(
       "resolves AG-INTAKE only by exact version",

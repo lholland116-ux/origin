@@ -301,4 +301,27 @@ describe("CAPA investigation-planning advisory raw output validation", () => {
       "The cause was equipment wear.";
     expectReason(malformedQuestion, "INVALID_ADVISORY_QUESTION");
   });
+
+  it("allows noun-phrase coordination but rejects compound and-clauses", () => {
+    for (const question of [
+      "Which process and equipment factors should be reviewed?",
+      "What records and samples should be compared?",
+    ]) {
+      const output = validOutput();
+      output.proposal.investigation_questions[0].investigation_question = question;
+      expect(() => validateCapaInvestigationPlanAdvisoryModelOutput(
+        JSON.stringify(output),
+      )).not.toThrow();
+    }
+
+    for (const question of [
+      "What failed and why did it fail?",
+      "Does the record show wear and does the equipment show drift?",
+      "Is the parameter correct and is the inspection result acceptable?",
+    ]) {
+      const output = validOutput();
+      output.proposal.investigation_questions[0].investigation_question = question;
+      expectReason(output, "INVALID_ADVISORY_QUESTION");
+    }
+  });
 });

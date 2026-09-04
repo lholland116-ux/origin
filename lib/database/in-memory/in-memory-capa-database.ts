@@ -1714,15 +1714,6 @@ export class InMemoryCapaDatabase
       return { status: "case_changed" };
     }
 
-    const auditEvent = state.audit_events.get(
-      recordKey(adoption.organization_id, input.audit_event_id),
-    );
-    if (auditEvent === undefined) {
-      throw new InMemoryIntegrityError(
-        "A S30 investigation-planning adoption references a missing audit event.",
-      );
-    }
-
     const persisted: PersistedCapaInvestigationPlanningAdoption = cloneValue({
       adoption,
       request_fingerprint: input.request_fingerprint,
