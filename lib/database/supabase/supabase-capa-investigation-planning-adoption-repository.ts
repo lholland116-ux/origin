@@ -286,7 +286,7 @@ export class SupabaseCapaInvestigationPlanningAdoptionRepository
     const outputRows = await sql<Row[]>`
       select
         output_id, capa_case_id, case_version_id, record_version, status,
-        agent_id, agent_version, output_schema_version, proposal,
+        agent_id, agent_version, output_schema_version, output_payload,
         advisory_only, workflow_mutated, human_acceptance_required
       from public.capa_ai_outputs
       where organization_id = ${input.adoption.organization_id}
@@ -304,6 +304,8 @@ export class SupabaseCapaInvestigationPlanningAdoptionRepository
     ) {
       return { status: "output_not_adoptable" };
     }
+    const outputPayload = output.output_payload;
+
     if (
       output.status !== "completed_draft" ||
       output.agent_id !== "AG-PLAN" ||
@@ -312,7 +314,8 @@ export class SupabaseCapaInvestigationPlanningAdoptionRepository
       output.advisory_only !== true ||
       output.workflow_mutated !== false ||
       output.human_acceptance_required !== true ||
-      !hasProposalKey(output.proposal, input.adoption.proposal_key)
+      !isObject(outputPayload) ||
+      !hasProposalKey(outputPayload.proposal, input.adoption.proposal_key)
     ) {
       return { status: "output_not_adoptable" };
     }

@@ -112,13 +112,15 @@ function outputRow(overrides: Record<string, unknown> = {}) {
     agent_id: "AG-PLAN",
     agent_version: "ag-plan-1.0.0",
     output_schema_version: "capa_investigation_plan_draft-1.0.0",
-    proposal: {
-      investigation_questions: [{ proposal_key: "P1" }],
-      evidence_requests: [],
-      method_suggestions: [],
-      dependencies: [],
-      proposed_owner_role: [],
-      gaps: [],
+    output_payload: {
+      proposal: {
+        investigation_questions: [{ proposal_key: "P1" }],
+        evidence_requests: [],
+        method_suggestions: [],
+        dependencies: [],
+        proposed_owner_role: [],
+        gaps: [],
+      },
     },
     advisory_only: true,
     workflow_mutated: false,
@@ -241,6 +243,22 @@ describe("Supabase S30 investigation-planning adoption repository", () => {
     const result = await new SupabaseCapaInvestigationPlanningAdoptionRepository({} as never)
       .appendAdoption(h.transaction, persistenceInput());
     expect(result).toEqual({ status: expected });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it("rejects a legacy top-level proposal when canonical output_payload is missing", async () => {
+    const h = harness([], [outputRow({
+      output_payload: null,
+      proposal: {
+        investigation_questions: [{ proposal_key: "P1" }],
+      },
+    })]);
+
+    const result =
+      await new SupabaseCapaInvestigationPlanningAdoptionRepository({} as never)
+        .appendAdoption(h.transaction, persistenceInput());
+
+    expect(result).toEqual({ status: "output_not_adoptable" });
     expect(h.calls).toHaveLength(2);
   });
 
