@@ -76,6 +76,9 @@ import type {
 import type {
   CapaInvestigationPlanningAdvisoryGenerationTraceCapture,
 } from "../../capa/ai/capa-ai-generation-trace";
+import type {
+  CapaInvestigationActiveAdvisoryGenerationTraceCapture,
+} from "../../capa/ai/capa-ai-generation-trace";
 
 import type {
   AuthoritativeS20ContainmentRiskContext,
@@ -98,6 +101,20 @@ import type {
 import type {
   CapaInvestigationPlanAdvisoryResponse,
 } from "../../capa/ai/capa-investigation-planning-advisory-contract";
+import type {
+  CapaInvestigationActiveAdvisoryResponse,
+} from "../../capa/ai/capa-investigation-active-advisory-contract";
+import type {
+  CapaInvestigationActiveAdvisoryOutputRepository,
+  CapaInvestigationActiveAdvisoryOutputSaveResult,
+  CapaInvestigationActiveAdvisoryOutputRecord,
+} from "../repositories/capa-investigation-active-advisory-output-repository";
+import {
+  createCapaInvestigationActiveAdvisoryReferenceManifest,
+} from "../../capa/ai/capa-investigation-active-advisory-reference-manifest";
+import {
+  validateCapaInvestigationActiveAdvisoryModelOutput,
+} from "../../capa/ai/capa-investigation-active-advisory-output-validator";
 
 import {
   constructCapaInvestigationPlanningAdoption,
@@ -106,6 +123,9 @@ import {
 import type {
   CapaInvestigationPlanningAdoptionId,
 } from "../../capa/ai/capa-investigation-planning-adoption-contract";
+import type {
+  CapaInvestigationActiveAdoptionId,
+} from "../../capa/ai/capa-investigation-active-adoption-contract";
 
 import type {
   AppendCapaInvestigationPlanningAdoptionResult,
@@ -113,6 +133,23 @@ import type {
   CapaInvestigationPlanningAdoptionRepository,
   PersistedCapaInvestigationPlanningAdoption,
 } from "../repositories/capa-investigation-planning-adoption-repository";
+import {
+  type AppendCapaInvestigationActiveAdoptionResult,
+  type CapaInvestigationActiveAdoptionPersistenceInput,
+  type CapaInvestigationActiveAdoptionRepository,
+  type PersistedCapaInvestigationActiveAdoption,
+} from "../repositories/capa-investigation-active-adoption-repository";
+import {
+  type CapaInvestigationActiveAdoptionCategory,
+} from "../../capa/ai/capa-investigation-active-adoption-contract";
+import {
+  validateCapaInvestigationActiveAdoptionRecord,
+} from "../../capa/ai/capa-investigation-active-adoption-validator";
+import {
+  CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM,
+  CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION,
+  validateCapaInvestigationActiveAdvisoryReferenceManifest,
+} from "../../capa/ai/capa-investigation-active-advisory-reference-manifest";
 
 import {
   CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM,
@@ -216,13 +253,32 @@ interface InMemoryCapaInvestigationPlanningAdvisoryOutputRecord {
   readonly created_at: IsoDateTime;
 }
 
+interface InMemoryCapaInvestigationActiveAdvisoryOutputRecord {
+  readonly organization_id: OrganizationId;
+  readonly capa_case_id: CapaCaseId;
+  readonly case_version_id: CapaCaseVersionId;
+  readonly record_version: number;
+  readonly request_trace: RequestTrace;
+  readonly response: CapaInvestigationActiveAdvisoryResponse;
+  readonly generation_trace: CapaInvestigationActiveAdvisoryGenerationTraceCapture;
+  readonly reference_manifest: ReturnType<typeof createCapaInvestigationActiveAdvisoryReferenceManifest>;
+  readonly created_at: IsoDateTime;
+}
+
 type InMemoryCapaInvestigationPlanningAdoptionRecord =
   PersistedCapaInvestigationPlanningAdoption;
+
+function isInvestigationActiveAdoptionInput(
+  input: CapaInvestigationPlanningAdoptionPersistenceInput | CapaInvestigationActiveAdoptionPersistenceInput,
+): input is CapaInvestigationActiveAdoptionPersistenceInput {
+  return Object.prototype.hasOwnProperty.call(input.adoption, "proposal_category");
+}
 
 type InMemoryCapaAdvisoryOutputRecord =
   | InMemoryCapaIntakeAdvisoryOutputRecord
   | InMemoryCapaContainmentRiskAdvisoryOutputRecord
-  | InMemoryCapaInvestigationPlanningAdvisoryOutputRecord;
+  | InMemoryCapaInvestigationPlanningAdvisoryOutputRecord
+  | InMemoryCapaInvestigationActiveAdvisoryOutputRecord;
 
 interface InMemoryState {
   readonly revision: number;
@@ -292,6 +348,8 @@ interface InMemoryState {
   /** Transaction-owned immutable S30 proposal-adoption evidence. */
   readonly investigation_planning_adoptions:
     Map<string, InMemoryCapaInvestigationPlanningAdoptionRecord>;
+  readonly investigation_active_adoptions:
+    Map<string, PersistedCapaInvestigationActiveAdoption>;
 }
 
 interface ActiveTransaction {
@@ -404,6 +462,13 @@ export class InMemoryCapaInvestigationPlanningAdvisoryPersistenceError
     );
     this.name =
       "InMemoryCapaInvestigationPlanningAdvisoryPersistenceError";
+  }
+}
+
+export class InMemoryCapaInvestigationActiveAdvisoryPersistenceError extends Error {
+  constructor() {
+    super("The governed CAPA investigation-active advisory output could not be persisted.");
+    this.name = "InMemoryCapaInvestigationActiveAdvisoryPersistenceError";
   }
 }
 
@@ -637,6 +702,9 @@ function cloneState(
       cloneMap(
         state.investigation_planning_adoptions,
       ),
+
+    investigation_active_adoptions:
+      cloneMap(state.investigation_active_adoptions),
   };
 }
 
@@ -677,6 +745,9 @@ function emptyState():
 
     investigation_planning_adoptions:
       new Map(),
+
+    investigation_active_adoptions:
+      new Map(),
   };
 }
 
@@ -697,6 +768,7 @@ function stateFromSnapshot(
     advisory_outputs: new Map(snapshot.advisory_outputs.map(([key, value]) => [key, cloneValue(value)])),
     advisory_runs: new Map(snapshot.advisory_runs),
     investigation_planning_adoptions: new Map(snapshot.investigation_planning_adoptions.map(([key, value]) => [key, cloneValue(value)])),
+    investigation_active_adoptions: new Map(snapshot.investigation_active_adoptions.map(([key, value]) => [key, cloneValue(value)])),
   };
 }
 
@@ -719,6 +791,7 @@ function snapshotFromState(state: InMemoryState): InMemoryCapaDatabaseSnapshot {
     advisory_outputs: entries(state.advisory_outputs),
     advisory_runs: entries(state.advisory_runs),
     investigation_planning_adoptions: entries(state.investigation_planning_adoptions),
+    investigation_active_adoptions: entries(state.investigation_active_adoptions),
   };
 }
 
@@ -758,10 +831,14 @@ type InMemoryCapaInvestigationPlanningAdvisorySaveInput =
     CapaInvestigationPlanningAdvisoryOutputRepository["save"]
   >[1];
 
+type InMemoryCapaInvestigationActiveAdvisorySaveInput =
+  Parameters<CapaInvestigationActiveAdvisoryOutputRepository["save"]>[1];
+
 type InMemoryCapaAdvisorySaveInput =
   | InMemoryCapaIntakeAdvisorySaveInput
   | InMemoryCapaContainmentRiskAdvisorySaveInput
-  | InMemoryCapaInvestigationPlanningAdvisorySaveInput;
+  | InMemoryCapaInvestigationPlanningAdvisorySaveInput
+  | InMemoryCapaInvestigationActiveAdvisorySaveInput;
 
 function isS20AdvisorySaveInput(
   input:
@@ -776,6 +853,12 @@ function isS30AdvisorySaveInput(
   return input.context.workflow_state === "S30";
 }
 
+function isS40AdvisorySaveInput(
+  input: InMemoryCapaAdvisorySaveInput,
+): input is InMemoryCapaInvestigationActiveAdvisorySaveInput {
+  return input.context.workflow_state === "S40";
+}
+
 function isS30AdvisoryOutputRecord(
   record: unknown,
 ): record is InMemoryCapaInvestigationPlanningAdvisoryOutputRecord {
@@ -784,6 +867,17 @@ function isS30AdvisoryOutputRecord(
     isObjectRecord(record.response) &&
     record.response.output_schema_version ===
       CAPA_INVESTIGATION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION;
+}
+
+function isS40AdvisoryOutputRecord(
+  record: unknown,
+): record is InMemoryCapaInvestigationActiveAdvisoryOutputRecord {
+  return isObjectRecord(record) &&
+    "reference_manifest" in record &&
+    "generation_trace" in record &&
+    isObjectRecord(record.response) &&
+    record.response.output_schema_version ===
+      "capa_investigation_analysis_draft-1.0.0";
 }
 
 function isNonEmptyString(
@@ -1072,6 +1166,74 @@ function validateS30AdvisoryInput(
   }
 }
 
+function validateS40AdvisoryInput(
+  input: InMemoryCapaInvestigationActiveAdvisorySaveInput,
+): ReturnType<typeof createCapaInvestigationActiveAdvisoryReferenceManifest> {
+  try {
+    const { context, response, generation_trace: trace } = input;
+    const scope = trace.package.scope;
+    const traceIdentity = trace.package.trace;
+    const responseFields = [
+      "run_id", "output_id", "output_schema_version", "status", "proposal",
+      "uncertainty_and_limitations", "citations", "warnings", "advisory_only",
+      "workflow_mutated", "human_acceptance_required",
+    ];
+    if (
+      context.trust !== "authoritative_server_context" || context.workflow_state !== "S40" ||
+      !UUID_PATTERN.test(context.organization_id) || !UUID_PATTERN.test(context.capa_case_id) ||
+      !UUID_PATTERN.test(context.case_version_id) || !Number.isSafeInteger(context.record_version) || context.record_version <= 0 ||
+      !UUID_PATTERN.test(input.request_id) || !UUID_PATTERN.test(input.correlation_id) ||
+      !UUID_PATTERN.test(response.output_id) || !UUID_PATTERN.test(response.run_id) ||
+      response.status !== "completed_draft" || response.output_schema_version !== "capa_investigation_analysis_draft-1.0.0" ||
+      response.advisory_only !== true || response.workflow_mutated !== false || response.human_acceptance_required !== true ||
+      !isObjectRecord(response) || Object.keys(response).length !== responseFields.length ||
+      responseFields.some((field) => !Object.hasOwn(response, field)) ||
+      !isObjectRecord(response.proposal) || !Array.isArray(response.uncertainty_and_limitations) ||
+      !Array.isArray(response.citations) || response.citations.length !== 0 || !Array.isArray(response.warnings) || response.warnings.length !== 0 ||
+      trace.trace_schema_version !== CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION || trace.store !== false ||
+      trace.package.package_schema_version !== "capa-investigation-active-prompt-package-1.0.0" ||
+      trace.package.agent.agent_id !== "AG-RCA" || trace.package.agent.agent_version !== "ag-rca-1.0.0" ||
+      trace.package.generation_contract.operation !== "facilitate_root_cause" ||
+      trace.package.generation_contract.requested_output !== "investigation_analysis_draft" ||
+      trace.package.generation_contract.output_schema_version !== "capa_investigation_analysis_draft-1.0.0" ||
+      traceIdentity.run_id !== response.run_id || traceIdentity.request_id !== input.request_id || traceIdentity.correlation_id !== input.correlation_id ||
+      scope.organization_id !== context.organization_id || scope.capa_case_id !== context.capa_case_id ||
+      scope.case_version_id !== context.case_version_id || scope.record_version !== context.record_version || scope.workflow_state !== "S40"
+    ) throw new Error();
+    const validatedOutput = validateCapaInvestigationActiveAdvisoryModelOutput(JSON.stringify({
+      proposal: response.proposal,
+      uncertainty_and_limitations: response.uncertainty_and_limitations,
+      citations: response.citations,
+      advisory_only: response.advisory_only,
+      workflow_mutated: response.workflow_mutated,
+      human_acceptance_required: response.human_acceptance_required,
+    }));
+    const manifest = createCapaInvestigationActiveAdvisoryReferenceManifest({
+      reference_manifest: input.reference_manifest,
+      model_safe_context: trace.package.context_provenance.model_safe_context as never,
+    });
+    const allowed = new Set(manifest.document.entries.map((entry) => entry.reference_key));
+    const used = [
+      ...validatedOutput.proposal.evidence_gaps.flatMap((item) => item.related_reference_keys),
+      ...validatedOutput.proposal.conflicting_information.flatMap((item) => item.conflicting_reference_keys),
+      ...validatedOutput.proposal.assumptions.flatMap((item) => item.related_reference_keys),
+      ...validatedOutput.proposal.causal_hypotheses.flatMap((item) => [
+        ...item.supporting_reference_keys,
+        ...item.contradictory_reference_keys,
+      ]),
+      ...validatedOutput.proposal.alternative_hypotheses.flatMap((item) => [
+        ...item.supporting_reference_keys,
+        ...item.contradictory_reference_keys,
+      ]),
+      ...validatedOutput.proposal.investigation_recommendations.flatMap((item) => item.related_reference_keys),
+    ];
+    if (used.some((referenceKey) => !allowed.has(referenceKey))) throw new Error();
+    return manifest;
+  } catch {
+    throw new InMemoryCapaInvestigationActiveAdvisoryPersistenceError();
+  }
+}
+
 function rejectInvalidInvestigationPlanningAdoptionInput(): never {
   throw new InMemoryIntegrityError(
     "The S30 investigation-planning adoption persistence input is invalid.",
@@ -1139,6 +1301,61 @@ function hasS30ProposalKey(
   );
 }
 
+function validateInvestigationActiveAdoptionInput(
+  transaction: TransactionContext,
+  input: CapaInvestigationActiveAdoptionPersistenceInput,
+): void {
+  try {
+    if (!isSha256(input.request_fingerprint) || !isSha256(input.record_fingerprint) || !UUID_PATTERN.test(input.audit_event_id)) throw new Error();
+    if (transaction.request_trace.request_id !== input.adoption.request_id || transaction.request_trace.correlation_id !== input.adoption.correlation_id) throw new Error();
+    const canonical = validateCapaInvestigationActiveAdoptionRecord(input.adoption);
+    if (!isDeepStrictEqual(canonical, input.adoption)) throw new Error();
+  } catch {
+    throw new InMemoryIntegrityError("The S40 investigation-active adoption persistence input is invalid.");
+  }
+}
+
+function independentlyResolveS40AdoptionSource(
+  output: InMemoryCapaAdvisoryOutputRecord,
+  adoption: import("../../capa/ai/capa-investigation-active-adoption-contract").CapaInvestigationActiveAdoptionRecord,
+): {
+  readonly category: CapaInvestigationActiveAdoptionCategory;
+  readonly bindings: readonly import("../../capa/ai/capa-investigation-active-adoption-contract").CapaInvestigationActiveResolvedReferenceBinding[];
+  readonly manifest_schema: string;
+  readonly manifest_algorithm: string;
+  readonly manifest_sha: string;
+} | null {
+  if (!isS40AdvisoryOutputRecord(output) || output.organization_id !== adoption.organization_id || output.capa_case_id !== adoption.capa_case_id || output.case_version_id !== adoption.case_version_id || output.record_version !== adoption.record_version || output.response.status !== "completed_draft" || output.response.output_schema_version !== "capa_investigation_analysis_draft-1.0.0" || output.response.advisory_only !== true || output.response.workflow_mutated !== false || output.response.human_acceptance_required !== true || output.generation_trace.package.agent.agent_id !== "AG-RCA" || output.generation_trace.package.agent.agent_version !== "ag-rca-1.0.0") return null;
+  let validated: ReturnType<typeof validateCapaInvestigationActiveAdvisoryModelOutput>;
+  try {
+    validated = validateCapaInvestigationActiveAdvisoryModelOutput(JSON.stringify({ proposal: output.response.proposal, uncertainty_and_limitations: output.response.uncertainty_and_limitations, citations: output.response.citations, advisory_only: output.response.advisory_only, workflow_mutated: output.response.workflow_mutated, human_acceptance_required: output.response.human_acceptance_required }));
+  } catch { return null; }
+  const modelSafe = output.generation_trace.package.context_provenance.model_safe_context as import("../../capa/ai/capa-investigation-active-advisory-context").CapaInvestigationActiveAdvisoryModelSafeContext;
+  let manifest: ReturnType<typeof createCapaInvestigationActiveAdvisoryReferenceManifest>;
+  try {
+    validateCapaInvestigationActiveAdvisoryReferenceManifest(output.reference_manifest.document, modelSafe);
+    manifest = createCapaInvestigationActiveAdvisoryReferenceManifest({ reference_manifest: output.reference_manifest.document.entries, model_safe_context: modelSafe });
+  } catch { return null; }
+  if (manifest.reference_manifest_sha256 !== output.reference_manifest.reference_manifest_sha256 || manifest.fingerprint_algorithm !== CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM || manifest.document.manifest_schema_version !== CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION) return null;
+  const candidates: { readonly key: string; readonly category: CapaInvestigationActiveAdoptionCategory; readonly references: readonly { readonly key: string; readonly relationship: "related" | "conflicting" | "supporting" | "contradictory" }[] }[] = [];
+  for (const item of validated.proposal.evidence_gaps) candidates.push({ key: item.proposal_key, category: "evidence_gap", references: item.related_reference_keys.map((key) => ({ key, relationship: "related" })) });
+  for (const item of validated.proposal.conflicting_information) candidates.push({ key: item.proposal_key, category: "conflicting_information", references: item.conflicting_reference_keys.map((key) => ({ key, relationship: "conflicting" })) });
+  for (const item of validated.proposal.assumptions) candidates.push({ key: item.proposal_key, category: "assumption", references: item.related_reference_keys.map((key) => ({ key, relationship: "related" })) });
+  for (const item of validated.proposal.causal_hypotheses) candidates.push({ key: item.proposal_key, category: "causal_hypothesis", references: [...item.supporting_reference_keys.map((key) => ({ key, relationship: "supporting" as const })), ...item.contradictory_reference_keys.map((key) => ({ key, relationship: "contradictory" as const }))] });
+  for (const item of validated.proposal.alternative_hypotheses) candidates.push({ key: item.proposal_key, category: "alternative_hypothesis", references: [...item.supporting_reference_keys.map((key) => ({ key, relationship: "supporting" as const })), ...item.contradictory_reference_keys.map((key) => ({ key, relationship: "contradictory" as const }))] });
+  for (const item of validated.proposal.investigation_recommendations) candidates.push({ key: item.proposal_key, category: "investigation_recommendation", references: item.related_reference_keys.map((key) => ({ key, relationship: "related" })) });
+  const matches = candidates.filter((candidate) => candidate.key === adoption.proposal_key);
+  if (matches.length !== 1 || matches[0]!.category !== adoption.proposal_category) return null;
+  const entries = new Map(manifest.document.entries.map((entry) => [entry.reference_key, entry]));
+  const bindings = matches[0]!.references.map((reference) => {
+    const entry = entries.get(reference.key as never);
+    if (entry === undefined) return null;
+    return { reference_key: entry.reference_key, relationship: reference.relationship, trust: entry.trust, source_kind: entry.source_kind, source_id: entry.source_id };
+  });
+  if (bindings.some((binding) => binding === null)) return null;
+  return { category: matches[0]!.category, bindings: bindings as never, manifest_schema: manifest.document.manifest_schema_version, manifest_algorithm: manifest.fingerprint_algorithm, manifest_sha: manifest.reference_manifest_sha256 };
+}
+
 export class InMemoryCapaDatabase
   implements
     TransactionManager,
@@ -1149,7 +1366,8 @@ export class InMemoryCapaDatabase
     CapaWorkflowIdempotencyRepository,
     CapaIntakeAdvisoryOutputRepository,
     CapaInvestigationPlanningAdvisoryOutputRepository,
-    CapaInvestigationPlanningAdoptionRepository
+    CapaInvestigationPlanningAdoptionRepository,
+    CapaInvestigationActiveAdoptionRepository
 {
   private committed_state:
     InMemoryState;
@@ -1314,12 +1532,21 @@ export class InMemoryCapaDatabase
 
   async save(
     transaction: TransactionContext,
+    input: InMemoryCapaInvestigationActiveAdvisorySaveInput,
+  ): Promise<CapaInvestigationActiveAdvisoryOutputSaveResult>;
+
+  async save(
+    transaction: TransactionContext,
     input: InMemoryCapaAdvisorySaveInput,
-  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult | CapaInvestigationPlanningAdvisoryOutputSaveResult> {
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult | CapaInvestigationPlanningAdvisoryOutputSaveResult | CapaInvestigationActiveAdvisoryOutputSaveResult> {
     const state = this.transactionState(transaction);
 
     if (isS30AdvisorySaveInput(input)) {
       return this.saveS30Advisory(transaction, state, input);
+    }
+
+    if (isS40AdvisorySaveInput(input)) {
+      return this.saveS40Advisory(transaction, state, input);
     }
 
     if (isS20AdvisorySaveInput(input)) {
@@ -1605,10 +1832,54 @@ export class InMemoryCapaDatabase
     return "saved";
   }
 
+  private async saveS40Advisory(
+    transaction: TransactionContext,
+    state: InMemoryState,
+    input: InMemoryCapaInvestigationActiveAdvisorySaveInput,
+  ): Promise<CapaInvestigationActiveAdvisoryOutputSaveResult> {
+    if (transaction.request_trace.request_id !== input.request_id || transaction.request_trace.correlation_id !== input.correlation_id) {
+      throw new InMemoryCapaInvestigationActiveAdvisoryPersistenceError();
+    }
+    const reference_manifest = validateS40AdvisoryInput(input);
+    const capaCase = state.cases.get(recordKey(input.context.organization_id, input.context.capa_case_id));
+    if (capaCase === undefined || capaCase.current_version_id !== input.context.case_version_id ||
+      capaCase.record_version !== input.context.record_version || capaCase.status !== "S40") return "case_changed";
+    const outputKey = recordKey(input.context.organization_id, input.response.output_id);
+    const runKey = recordKey(input.context.organization_id, input.response.run_id);
+    if (state.advisory_outputs.has(outputKey) || state.advisory_runs.has(runKey)) {
+      throw new InMemoryDuplicateRecordError("CAPA AI advisory output");
+    }
+    const record: InMemoryCapaInvestigationActiveAdvisoryOutputRecord = {
+      organization_id: input.context.organization_id,
+      capa_case_id: input.context.capa_case_id,
+      case_version_id: input.context.case_version_id,
+      record_version: input.context.record_version,
+      request_trace: { request_id: input.request_id, correlation_id: input.correlation_id },
+      response: cloneValue(input.response),
+      generation_trace: cloneValue(input.generation_trace),
+      reference_manifest: cloneValue(reference_manifest),
+      created_at: transaction.started_at,
+    };
+    state.advisory_outputs.set(outputKey, cloneValue(record));
+    state.advisory_runs.set(runKey, input.response.output_id);
+    return "saved";
+  }
+
   async appendAdoption(
     transaction: TransactionContext,
     input: CapaInvestigationPlanningAdoptionPersistenceInput,
-  ): Promise<AppendCapaInvestigationPlanningAdoptionResult> {
+  ): Promise<AppendCapaInvestigationPlanningAdoptionResult>;
+
+  async appendAdoption(
+    transaction: TransactionContext,
+    input: CapaInvestigationActiveAdoptionPersistenceInput,
+  ): Promise<AppendCapaInvestigationActiveAdoptionResult>;
+
+  async appendAdoption(
+    transaction: TransactionContext,
+    input: CapaInvestigationPlanningAdoptionPersistenceInput | CapaInvestigationActiveAdoptionPersistenceInput,
+  ): Promise<AppendCapaInvestigationPlanningAdoptionResult | AppendCapaInvestigationActiveAdoptionResult> {
+    if (isInvestigationActiveAdoptionInput(input)) return this.appendActiveAdoption(transaction, input);
     const state = this.transactionState(transaction);
     validateInvestigationPlanningAdoptionInput(transaction, input);
 
@@ -1724,14 +1995,75 @@ export class InMemoryCapaDatabase
     return { status: "saved", record: cloneValue(persisted) };
   }
 
+  private async appendActiveAdoption(
+    transaction: TransactionContext,
+    input: CapaInvestigationActiveAdoptionPersistenceInput,
+  ): Promise<AppendCapaInvestigationActiveAdoptionResult> {
+    const state = this.transactionState(transaction);
+    validateInvestigationActiveAdoptionInput(transaction, input);
+    const adoption = input.adoption;
+    const key = recordKey(adoption.organization_id, adoption.adoption_id);
+    const idempotencyKey = adoptionIdempotencyKey(adoption.organization_id, adoption.idempotency_key, adoption.proposal_key);
+    const existingByIdempotency = [...state.investigation_active_adoptions.values()].find((record) => adoptionIdempotencyKey(record.adoption.organization_id, record.adoption.idempotency_key, record.adoption.proposal_key) === idempotencyKey);
+    if (existingByIdempotency !== undefined) {
+      return existingByIdempotency.request_fingerprint === input.request_fingerprint
+        ? { status: "already_recorded", record: cloneValue(existingByIdempotency) }
+        : { status: "conflict", reason_code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST", record: cloneValue(existingByIdempotency) };
+    }
+    const existingById = state.investigation_active_adoptions.get(key);
+    if (existingById !== undefined) return { status: "conflict", reason_code: "ADOPTION_ID_REUSED_WITH_DIFFERENT_CONTENT", record: cloneValue(existingById) };
+    const existingByAudit = [...state.investigation_active_adoptions.values()].find((record) => record.audit_event_id === input.audit_event_id && record.adoption.organization_id === adoption.organization_id);
+    if (existingByAudit !== undefined) return { status: "conflict", reason_code: "AUDIT_EVENT_ID_REUSED_WITH_DIFFERENT_ADOPTION", record: cloneValue(existingByAudit) };
+    if (transaction.request_trace.request_id !== adoption.request_id || transaction.request_trace.correlation_id !== adoption.correlation_id) throw new InMemoryIntegrityError("The S40 adoption request trace is invalid.");
+    const output = state.advisory_outputs.get(recordKey(adoption.organization_id, adoption.output_id));
+    if (output === undefined) return { status: "output_not_found_or_not_authorized" };
+    const source = independentlyResolveS40AdoptionSource(output, adoption);
+    if (source === null) return { status: "output_not_adoptable" };
+    const capaCase = state.cases.get(recordKey(adoption.organization_id, adoption.capa_case_id));
+    if (capaCase === undefined || capaCase.current_version_id !== adoption.case_version_id || capaCase.record_version !== adoption.record_version || capaCase.status !== "S40") return { status: "case_changed" };
+    if (!isDeepStrictEqual(source.bindings, adoption.resolved_reference_bindings) || source.category !== adoption.proposal_category || source.manifest_sha !== adoption.reference_manifest_sha256 || source.manifest_schema !== adoption.reference_manifest_schema_version || source.manifest_algorithm !== adoption.reference_manifest_fingerprint_algorithm) return { status: "output_not_adoptable" };
+    const persisted = cloneValue({ adoption, request_fingerprint: input.request_fingerprint, record_fingerprint: input.record_fingerprint, audit_event_id: input.audit_event_id });
+    state.investigation_active_adoptions.set(key, persisted);
+    return { status: "saved", record: cloneValue(persisted) };
+  }
+
+  async listActiveAdoptionsForOutput(organizationId: import("../../capa/domain/capa-types").OrganizationId, outputId: string): Promise<readonly PersistedCapaInvestigationActiveAdoption[]> {
+    return Object.freeze([...this.committed_state.investigation_active_adoptions.values()].filter((record) => record.adoption.organization_id === organizationId && record.adoption.output_id === outputId).sort((left, right) => left.adoption.adopted_at.localeCompare(right.adoption.adopted_at) || left.adoption.adoption_id.localeCompare(right.adoption.adoption_id)).map(cloneValue));
+  }
+
+  async findAdoptionById(
+    organizationId: OrganizationId,
+    adoptionId: CapaInvestigationActiveAdoptionId,
+  ): Promise<PersistedCapaInvestigationActiveAdoption | null>;
+
   async findAdoptionById(
     organizationId: OrganizationId,
     adoptionId: CapaInvestigationPlanningAdoptionId,
-  ): Promise<PersistedCapaInvestigationPlanningAdoption | null> {
+  ): Promise<PersistedCapaInvestigationPlanningAdoption | null>;
+
+  async findAdoptionById(
+    organizationId: OrganizationId,
+    adoptionId: CapaInvestigationActiveAdoptionId | CapaInvestigationPlanningAdoptionId,
+  ): Promise<PersistedCapaInvestigationActiveAdoption | PersistedCapaInvestigationPlanningAdoption | null> {
+    const active = this.committed_state.investigation_active_adoptions.get(
+      recordKey(organizationId, adoptionId),
+    );
+    if (active !== undefined) return cloneValue(active);
     const record = this.committed_state.investigation_planning_adoptions.get(
       recordKey(organizationId, adoptionId),
     );
     return record === undefined ? null : cloneValue(record);
+  }
+
+  async findById(
+    organizationId: string,
+    outputId: string,
+  ): Promise<CapaInvestigationActiveAdvisoryOutputRecord | null> {
+    const output = this.committed_state.advisory_outputs.get(
+      recordKey(organizationId as OrganizationId, outputId),
+    );
+    if (!isS40AdvisoryOutputRecord(output)) return null;
+    return cloneValue(output) as unknown as CapaInvestigationActiveAdvisoryOutputRecord;
   }
 
   async listAdoptionsForOutput(
@@ -2801,6 +3133,43 @@ export class InMemoryCapaDatabase
       ) {
         throw new InMemoryIntegrityError(
           "A S30 investigation-planning adoption references an invalid immutable record.",
+        );
+      }
+    }
+
+    for (const persisted of state.investigation_active_adoptions.values()) {
+      const adoption = persisted.adoption;
+      const capaCase = state.cases.get(
+        recordKey(adoption.organization_id, adoption.capa_case_id),
+      );
+      const output = state.advisory_outputs.get(
+        recordKey(adoption.organization_id, adoption.output_id),
+      );
+      const auditEvent = state.audit_events.get(
+        recordKey(adoption.organization_id, persisted.audit_event_id),
+      );
+      const source = output === undefined
+        ? null
+        : independentlyResolveS40AdoptionSource(output, adoption);
+      if (
+        capaCase === undefined || auditEvent === undefined || source === null ||
+        capaCase.current_version_id !== adoption.case_version_id ||
+        capaCase.record_version !== adoption.record_version ||
+        capaCase.status !== "S40" ||
+        source.category !== adoption.proposal_category ||
+        !isDeepStrictEqual(source.bindings, adoption.resolved_reference_bindings) ||
+        source.manifest_schema !== adoption.reference_manifest_schema_version ||
+        source.manifest_algorithm !== adoption.reference_manifest_fingerprint_algorithm ||
+        source.manifest_sha !== adoption.reference_manifest_sha256 ||
+        adoption.adopted_by.actor_type !== "human" ||
+        adoption.workflow_mutated !== false ||
+        adoption.controlled_record_mutated !== false ||
+        adoption.gate_approved !== false ||
+        !isSha256(persisted.request_fingerprint) ||
+        !isSha256(persisted.record_fingerprint)
+      ) {
+        throw new InMemoryIntegrityError(
+          "An S40 investigation-active adoption references an invalid immutable record.",
         );
       }
     }

@@ -30,6 +30,14 @@ import type {
   CapaInvestigationPlanningAdoptionApiDependencies,
 } from "@/lib/capa/api/capa-investigation-planning-adoption-route-handler";
 
+import type {
+  CapaInvestigationActiveAdvisoryApiDependencies,
+} from "@/lib/capa/api/capa-investigation-active-advisory-route-handler";
+
+import type {
+  CapaInvestigationActiveAdoptionApiDependencies,
+} from "@/lib/capa/api/capa-investigation-active-adoption-route-handler";
+
 import {
   selectCapaRuntime,
 } from "@/lib/capa/application/capa-runtime-selection";
@@ -280,6 +288,28 @@ export function createCapaInvestigationPlanningAdoptionApiDependencies():
       return dependencies
         .get_runtime()
         .create_investigation_planning_adoption_service(context);
+    },
+  };
+}
+
+export function createCapaInvestigationActiveAdvisoryApiDependencies():
+  CapaInvestigationActiveAdvisoryApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return {
+    ...dependencies,
+    create_advisory_service(context) {
+      return dependencies.get_runtime().create_investigation_active_advisory_service(context);
+    },
+  };
+}
+
+export function createCapaInvestigationActiveAdoptionApiDependencies():
+  CapaInvestigationActiveAdoptionApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return {
+    ...dependencies,
+    create_adoption_service(context) {
+      return dependencies.get_runtime().create_investigation_active_adoption_service(context);
     },
   };
 }

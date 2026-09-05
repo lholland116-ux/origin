@@ -3,7 +3,7 @@ import { validateCapaEvidenceAssumptionLedger } from "../../lib/capa/domain/capa
 import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, addLedgerItem, capaRootCauseWorkspaceKey, createHypothesis,
   applyRootCauseDraftMutation, clearRootCauseNotConfirmed, createInitialLedgerDraft, createInitialRootCausePackageDraft, createLedgerItem, removeHypothesis,
   isValidCurrentUserId, removeLedgerItem, setRootCauseNotConfirmed,
-  updateHypothesis, updateLedgerItem, validateRootCauseDrafts } from "../../app/capa/capa-root-cause-draft";
+  updateHypothesis, updateLedgerItem, validateRootCauseDrafts, applyAdoptedCapaInvestigationActiveProposal } from "../../app/capa/capa-root-cause-draft";
 const USER = "10000000-0000-4000-8000-000000000001";
 const NOW = "2026-09-01T12:00:00.000Z";
 const plan = (status = "completed") => ({ items: [{ item_id: "INV-1", investigation_question: "Why?", evidence_target: "Record",
@@ -11,6 +11,29 @@ const plan = (status = "completed") => ({ items: [{ item_id: "INV-1", investigat
   scope_relationship: "Scope", status, disposition: null, disposition_rationale: null,
   draft_provenance: { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null } }] } as never);
 describe("root-cause browser draft helpers", () => {
+  it("maps an adopted S40 evidence gap to a fresh ledger item with immutable AI provenance", () => {
+    const result = applyAdoptedCapaInvestigationActiveProposal(createInitialLedgerDraft(), createInitialRootCausePackageDraft(), {
+      adoption_id: "20000000-0000-4000-8000-000000000001", proposal_key: "P1", proposal_category: "evidence_gap",
+      adopted_item: { proposal_key: "P1", adopted_content: { gap: "Missing record", why_it_matters: "It matters", recommended_next_step: "Review record" } },
+      adopted_at: NOW, adopted_by_user_id: USER,
+    }, undefined, () => "LED-NEW");
+    expect(result?.ledger.items[0]).toMatchObject({ item_id: "LED-NEW", information_class: "missing_information", statement: "Missing record", context: "It matters", recommended_next_step: "Review record", provenance: { source_type: "ai_proposal", source_reference: "20000000-0000-4000-8000-000000000001", adopted_by_user_id: USER, adopted_at: NOW } });
+  });
+  it("preserves a human not-confirmed conclusion when AI causal or alternative hypotheses are adopted", () => {
+    const pkg = setRootCauseNotConfirmed(createInitialRootCausePackageDraft(), { rationale: "Insufficient evidence", nextSteps: ["Collect more evidence"] }, USER, NOW);
+    for (const [category, role] of [["causal_hypothesis", "proposed_root_cause"], ["alternative_hypothesis", undefined]] as const) {
+      const result = applyAdoptedCapaInvestigationActiveProposal(createInitialLedgerDraft(), pkg, {
+        adoption_id: "20000000-0000-4000-8000-000000000001", proposal_key: category === "causal_hypothesis" ? "P1" : "P2", proposal_category: category,
+        adopted_item: { proposal_key: category === "causal_hypothesis" ? "P1" : "P2", adopted_content: { hypothesis: "Potential cause", rationale: "Requires human evaluation" } }, adopted_at: NOW, adopted_by_user_id: USER,
+      }, role, () => "LED-unused", () => `HYP-${category}`);
+      expect(result?.rootCausePackage.root_cause_not_confirmed).toBe(pkg.root_cause_not_confirmed);
+      expect(result?.rootCausePackage.root_cause_not_confirmed).toEqual(pkg.root_cause_not_confirmed);
+    }
+  });
+  it("keeps the ordinary human add-hypothesis conclusion-clearing behavior", () => {
+    const pkg = setRootCauseNotConfirmed(createInitialRootCausePackageDraft(), { rationale: "Insufficient evidence", nextSteps: ["Collect more evidence"] }, USER, NOW);
+    expect(addHypothesis(pkg, createHypothesis("H-human")).root_cause_not_confirmed).toBeNull();
+  });
   it("initializes all eight classes with class-aware controlled status and provenance", () => {
     expect(CAPA_LEDGER_INFORMATION_CLASSES).toHaveLength(8);
     for (const informationClass of CAPA_LEDGER_INFORMATION_CLASSES) {

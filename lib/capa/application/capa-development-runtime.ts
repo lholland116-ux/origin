@@ -71,6 +71,17 @@ import {
 import {
   createRequestScopedCapaInvestigationPlanningAdoptionService,
 } from "./capa-investigation-planning-adoption-runtime-factory";
+import {
+  createRequestScopedCapaInvestigationActiveAdvisoryService,
+} from "./capa-investigation-active-advisory-runtime-factory";
+import {
+  createRequestScopedCapaInvestigationActiveAdoptionService,
+} from "./capa-investigation-active-adoption-runtime-factory";
+import { RepositoryCapaInvestigationActiveAdoptionSourceResolver } from "./capa-investigation-active-adoption-source-resolver";
+import type {
+  CapaInvestigationActiveAdvisoryStructuredModelClient,
+} from "../ai/capa-investigation-active-advisory-model-profile";
+import { createOpenAICapaInvestigationActiveAdvisoryStructuredModelClient } from "../ai/openai-capa-investigation-active-advisory-structured-model-client";
 
 import type {
   CapaIntakeAdvisoryStructuredModelClient,
@@ -223,6 +234,10 @@ export interface CapaDevelopmentInvestigationPlanningAdvisoryConfiguration {
     CapaInvestigationPlanningAdvisoryStructuredModelClient;
 }
 
+export interface CapaDevelopmentInvestigationActiveAdvisoryConfiguration {
+  readonly structured_model_client: CapaInvestigationActiveAdvisoryStructuredModelClient;
+}
+
 export interface CapaDevelopmentPersistenceConfiguration {
   readonly state_store: CapaDevelopmentFileStateStore;
   readonly initial_snapshot?: CapaDevelopmentStateSnapshot;
@@ -244,6 +259,8 @@ export interface CapaDevelopmentRuntimeOptions {
 
   readonly investigation_planning_advisory?:
     CapaDevelopmentInvestigationPlanningAdvisoryConfiguration;
+  readonly investigation_active_advisory?:
+    CapaDevelopmentInvestigationActiveAdvisoryConfiguration;
 }
 
 export class CapaDevelopmentRuntimeDisabledError
@@ -395,6 +412,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADVISORY_ALLOWED",
       );
 
+    case "request_ai_investigation_active_advisory":
+      return controlled(
+        "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_ADVISORY_ALLOWED",
+      );
+
     case "adopt_ai_investigation_planning_proposal":
       return controlled(
         "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADOPTION_ALLOWED",
@@ -462,6 +484,8 @@ function developmentAuthorizationPolicy():
           "request_ai_containment_risk_advisory" ||
         request.operation ===
           "request_ai_investigation_planning_advisory" ||
+        request.operation ===
+          "request_ai_investigation_active_advisory" ||
         request.operation ===
           "adopt_ai_investigation_planning_proposal";
 
@@ -729,6 +753,16 @@ function developmentInvestigationPlanningAdvisoryConfigurationFromEnvironment():
   };
 }
 
+function developmentInvestigationActiveAdvisoryConfigurationFromEnvironment(): CapaDevelopmentInvestigationActiveAdvisoryConfiguration | undefined {
+  const enabled = process.env.CAPA_INVESTIGATION_ACTIVE_ADVISORY_DEVELOPMENT_ENABLED;
+  if (enabled === undefined || enabled.trim().length === 0 || enabled === "false") return undefined;
+  if (enabled !== "true") throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  const model = process.env.CAPA_INVESTIGATION_ACTIVE_ADVISORY_MODEL;
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (typeof model !== "string" || model.trim().length === 0 || typeof apiKey !== "string" || apiKey.trim().length === 0) throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  return { structured_model_client: createOpenAICapaInvestigationActiveAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model }) };
+}
+
 /**
  * Creates an isolated development runtime.
  *
@@ -761,6 +795,8 @@ export function createCapaDevelopmentRuntime(
 
   const investigationPlanningAdvisoryConfiguration =
     options.investigation_planning_advisory;
+  const investigationActiveAdvisoryConfiguration =
+    options.investigation_active_advisory;
 
   const database =
     new InMemoryCapaDatabase({
@@ -923,6 +959,7 @@ export function createCapaDevelopmentRuntime(
   const submitRootCauseDependencies:
     SubmitCapaRootCausePackageDependencies = {
     ...submitIntakeDependencies,
+    adoption_repository: database,
   };
 
   const updateInvestigationProgressDependencies:
@@ -1158,6 +1195,15 @@ export function createCapaDevelopmentRuntime(
       });
     },
 
+    create_investigation_active_advisory_service(context) {
+      if (investigationActiveAdvisoryConfiguration === undefined) throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+      return createRequestScopedCapaInvestigationActiveAdvisoryService({ request_context: context, capa_repository: database, authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: investigationActiveAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, now, generate_uuid: generateUuid });
+    },
+
+    create_investigation_active_adoption_service(context) {
+      return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: database, adoption_repository: database, audit_repository: database, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(database), authorization_policy: dependencies.authorization_policy, now, generate_uuid: generateUuid, audit_schema_version: dependencies.configuration.audit_schema_version });
+    },
+
     dependencies,
     submit_intake_dependencies:
       submitIntakeDependencies,
@@ -1231,6 +1277,8 @@ export function getCapaDevelopmentRuntime():
           developmentContainmentRiskAdvisoryConfigurationFromEnvironment(),
         investigation_planning_advisory:
           developmentInvestigationPlanningAdvisoryConfigurationFromEnvironment(),
+        investigation_active_advisory:
+          developmentInvestigationActiveAdvisoryConfigurationFromEnvironment(),
 
         persistence,
       });

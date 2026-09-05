@@ -14,8 +14,11 @@ import type { CapaWorkflowIdempotencyRecord } from "../repositories/capa-workflo
 import type { CapaIntakeAdvisoryResponse } from "../../capa/ai/capa-intake-advisory-contract";
 import type { CapaContainmentRiskAdvisoryResponse } from "../../capa/ai/capa-containment-risk-advisory-contract";
 import type { CapaInvestigationPlanAdvisoryResponse } from "../../capa/ai/capa-investigation-planning-advisory-contract";
-import type { CapaContainmentRiskAdvisoryGenerationTraceCapture, CapaInvestigationPlanningAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-ai-generation-trace";
+import type { CapaInvestigationActiveAdvisoryResponse } from "../../capa/ai/capa-investigation-active-advisory-contract";
+import type { CapaInvestigationActiveAdvisoryGenerationTraceCapture, CapaContainmentRiskAdvisoryGenerationTraceCapture, CapaInvestigationPlanningAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-ai-generation-trace";
+import type { CapaInvestigationActiveAdvisoryReferenceManifestDocument } from "../../capa/ai/capa-investigation-active-advisory-reference-manifest";
 import type { PersistedCapaInvestigationPlanningAdoption } from "../repositories/capa-investigation-planning-adoption-repository";
+import type { PersistedCapaInvestigationActiveAdoption } from "../repositories/capa-investigation-active-adoption-repository";
 
 export const CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION =
   "capa-development-state-1.0.0" as const;
@@ -54,10 +57,27 @@ export interface CapaDevelopmentInvestigationPlanningAdvisoryOutputSnapshotRecor
   readonly created_at: IsoDateTime;
 }
 
+export interface CapaDevelopmentInvestigationActiveAdvisoryOutputSnapshotRecord {
+  readonly organization_id: OrganizationId;
+  readonly capa_case_id: CapaCaseId;
+  readonly case_version_id: CapaCaseVersionId;
+  readonly record_version: number;
+  readonly request_trace: RequestTrace;
+  readonly response: CapaInvestigationActiveAdvisoryResponse;
+  readonly generation_trace: CapaInvestigationActiveAdvisoryGenerationTraceCapture;
+  readonly reference_manifest: Readonly<{
+    readonly document: CapaInvestigationActiveAdvisoryReferenceManifestDocument;
+    readonly fingerprint_algorithm: "sha256-canonical-json-v1";
+    readonly reference_manifest_sha256: string;
+  }>;
+  readonly created_at: IsoDateTime;
+}
+
 export type CapaDevelopmentAdvisoryOutputSnapshotRecord =
   | CapaDevelopmentIntakeAdvisoryOutputSnapshotRecord
   | CapaDevelopmentContainmentRiskAdvisoryOutputSnapshotRecord
-  | CapaDevelopmentInvestigationPlanningAdvisoryOutputSnapshotRecord;
+  | CapaDevelopmentInvestigationPlanningAdvisoryOutputSnapshotRecord
+  | CapaDevelopmentInvestigationActiveAdvisoryOutputSnapshotRecord;
 
 export interface CapaDevelopmentStateSnapshot {
   readonly schema_version: typeof CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION;
@@ -73,6 +93,7 @@ export interface CapaDevelopmentStateSnapshot {
   readonly advisory_outputs: readonly CapaDevelopmentStateMapEntry<CapaDevelopmentAdvisoryOutputSnapshotRecord>[];
   readonly advisory_runs: readonly CapaDevelopmentStateMapEntry<string>[];
   readonly investigation_planning_adoptions: readonly CapaDevelopmentStateMapEntry<PersistedCapaInvestigationPlanningAdoption>[];
+  readonly investigation_active_adoptions: readonly CapaDevelopmentStateMapEntry<PersistedCapaInvestigationActiveAdoption>[];
 }
 
 export class CapaDevelopmentStateSnapshotError extends Error {
@@ -90,7 +111,9 @@ const TOP_LEVEL_FIELDS = [
   "case_versions", "section_versions", "audit_events", "creation_idempotency",
   "workflow_idempotency", "advisory_outputs", "advisory_runs",
   "investigation_planning_adoptions",
+  "investigation_active_adoptions",
 ] as const;
+const LEGACY_TOP_LEVEL_FIELDS = TOP_LEVEL_FIELDS.filter((field) => field !== "investigation_active_adoptions");
 
 function objectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -119,8 +142,11 @@ function clone<Value>(value: Value): Value {
 
 /** Validates and defensively clones the JSON-parsed snapshot envelope. */
 export function validateCapaDevelopmentStateSnapshot(value: unknown): CapaDevelopmentStateSnapshot {
-  if (!objectRecord(value) || Object.keys(value).length !== TOP_LEVEL_FIELDS.length ||
-    TOP_LEVEL_FIELDS.some((field) => !Object.prototype.hasOwnProperty.call(value, field))) {
+  if (!objectRecord(value) ||
+    !(
+      (Object.keys(value).length === TOP_LEVEL_FIELDS.length && TOP_LEVEL_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field))) ||
+      (Object.keys(value).length === LEGACY_TOP_LEVEL_FIELDS.length && LEGACY_TOP_LEVEL_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field)))
+    )) {
     throw new CapaDevelopmentStateSnapshotError("INVALID_SNAPSHOT", "The CAPA development state snapshot shape is invalid.");
   }
   if (value.schema_version !== CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION) {
@@ -143,6 +169,7 @@ export function validateCapaDevelopmentStateSnapshot(value: unknown): CapaDevelo
     advisory_outputs: mapEntries<CapaDevelopmentAdvisoryOutputSnapshotRecord>(value.advisory_outputs, "advisory_outputs", "object"),
     advisory_runs: mapEntries<string>(value.advisory_runs, "advisory_runs", "string"),
     investigation_planning_adoptions: mapEntries<PersistedCapaInvestigationPlanningAdoption>(value.investigation_planning_adoptions, "investigation_planning_adoptions", "object"),
+    investigation_active_adoptions: mapEntries<PersistedCapaInvestigationActiveAdoption>(value.investigation_active_adoptions ?? [], "investigation_active_adoptions", "object"),
   } satisfies CapaDevelopmentStateSnapshot;
   return clone(snapshot);
 }

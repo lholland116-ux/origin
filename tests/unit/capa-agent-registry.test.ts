@@ -42,7 +42,7 @@ describe(
         expect(
           registry.registry_version,
         ).toBe(
-          "capa-agent-registry-1.0.0",
+          "capa-agent-registry-1.1.0",
         );
         expect(Object.isFrozen(registry))
           .toBe(true);
@@ -50,7 +50,7 @@ describe(
     );
 
     it(
-      "makes only AG-INTAKE and AG-PLAN runtime approved",
+      "makes only AG-INTAKE, AG-PLAN, and AG-RCA runtime approved",
       () => {
         const registry =
           createInitialCapaAgentRegistry();
@@ -73,7 +73,7 @@ describe(
             (status) =>
               status === "approved",
           ),
-        ).toEqual(["approved", "approved"]);
+        ).toEqual(["approved", "approved", "approved"]);
       },
     );
 
@@ -107,6 +107,39 @@ describe(
           output_schema_version: "capa_investigation_plan_draft-1.0.0",
         }],
       });
+    });
+
+    it("keeps the approved AG-RCA S40 activation binding exact and frozen", () => {
+      const rca = createInitialCapaAgentRegistry().findExact(
+        "AG-RCA",
+        "ag-rca-1.0.0",
+      );
+
+      expect(rca).toMatchObject({
+        logical_agent_id: "AG-RCA",
+        agent_version: "ag-rca-1.0.0",
+        status: "approved",
+        activation_capabilities: [{
+          eligible_states: ["S40"],
+          operation: "facilitate_root_cause",
+          output_schema_version: "capa_investigation_analysis_draft-1.0.0",
+          allowed_tools: ["TOOL-CASE-READ", "TOOL-STRUCTURED-DRAFT"],
+        }],
+      });
+      expect(rca?.activation_capabilities).toHaveLength(1);
+      expect(rca?.activation_capabilities[0]?.allowed_tools).not.toContain(
+        "TOOL-RETRIEVE",
+      );
+      expect(rca?.activation_capabilities[0]?.allowed_tools).not.toContain(
+        "TOOL-EVIDENCE-READ",
+      );
+      expect(rca?.activation_capabilities[0]?.allowed_tools).not.toContain(
+        "TOOL-FEEDBACK",
+      );
+      expect(Object.isFrozen(rca?.activation_capabilities)).toBe(true);
+      expect(Object.isFrozen(rca?.activation_capabilities[0])).toBe(true);
+      expect(Object.isFrozen(rca?.activation_capabilities[0]?.eligible_states)).toBe(true);
+      expect(Object.isFrozen(rca?.activation_capabilities[0]?.allowed_tools)).toBe(true);
     });
 
     it(

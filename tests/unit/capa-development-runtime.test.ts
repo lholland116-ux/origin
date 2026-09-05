@@ -34,6 +34,10 @@ import type {
 } from "../../lib/capa/ai/capa-investigation-planning-advisory-model-profile";
 
 import type {
+  CapaInvestigationActiveAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-investigation-active-advisory-model-profile";
+
+import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
 } from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
@@ -144,6 +148,17 @@ function investigationPlanningStructuredModelClient():
   };
 }
 
+function investigationActiveStructuredModelClient():
+  CapaInvestigationActiveAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The development S40 runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
 function requestTrace():
   RequestTrace {
   return {
@@ -217,6 +232,29 @@ function policyRequest(
 describe(
   "createCapaDevelopmentRuntime",
   () => {
+    it("composes request-scoped S40 advisory and adoption services over in-memory persistence", () => {
+      const runtime = createCapaDevelopmentRuntime({
+        environment: "test",
+        now: () => NOW,
+        generate_uuid: createUuidGenerator(),
+        investigation_active_advisory: {
+          structured_model_client: investigationActiveStructuredModelClient(),
+        },
+      });
+
+      const advisory = runtime.create_investigation_active_advisory_service(
+        developmentContext(),
+      );
+      const adoption = runtime.create_investigation_active_adoption_service(
+        developmentContext(),
+      );
+
+      expect(advisory).not.toBe(adoption);
+      expect(advisory.execute).toEqual(expect.any(Function));
+      expect(adoption.adopt).toEqual(expect.any(Function));
+      expect((advisory as any).dependencies.output_repository).toBe(runtime.database);
+    });
+
     it(
       "assembles one isolated transaction-bound in-memory CAPA runtime",
       () => {
@@ -407,7 +445,7 @@ describe(
           runtime.agent_activation_service
             .registry_version,
         ).toBe(
-          "capa-agent-registry-1.0.0",
+          "capa-agent-registry-1.1.0",
         );
 
         const activationDecision =

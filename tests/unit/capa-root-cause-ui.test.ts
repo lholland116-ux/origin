@@ -96,4 +96,10 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).toContain("applyRootCauseDraftMutation(value, mutation).draft");
     expect(workspace).toContain("setAttempt(null)");
   });
+  it("locks only adopted AI causal roles while preserving human decision controls", () => {
+    expect(workspace).toContain('const adoptedAi = hypothesis.provenance.source_type === "ai_proposal"');
+    expect(workspace).toContain('disabled={adoptedAi}');
+    expect(workspace).toContain('Status<select value={hypothesis.status}');
+    expect(workspace).toContain('Material to package');
+  });
 });

@@ -65,6 +65,9 @@ import type {
 import type {
   CapaInvestigationPlanningAdvisoryService,
 } from "../ai/capa-investigation-planning-advisory-service";
+import type {
+  CapaInvestigationActiveAdvisoryService,
+} from "../ai/capa-investigation-active-advisory-service";
 
 import type {
   CapaAiOutputReviewService,
@@ -77,6 +80,9 @@ import type { CapaParticipantEligibilityRepository } from "../../database/reposi
 import type {
   CapaInvestigationPlanningAdoptionService,
 } from "./capa-investigation-planning-adoption-runtime-factory";
+import type {
+  CapaInvestigationActiveAdoptionService,
+} from "./capa-investigation-active-adoption-runtime-factory";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -167,6 +173,16 @@ export interface CapaRuntime {
   readonly create_investigation_planning_adoption_service: (
     context: CapaRequestContext,
   ) => CapaInvestigationPlanningAdoptionService;
+
+  /** Creates an AG-RCA advisory-only S40 service; it cannot perform S40→S50. */
+  readonly create_investigation_active_advisory_service: (
+    context: CapaRequestContext,
+  ) => CapaInvestigationActiveAdvisoryService;
+
+  /** Creates a human-controlled selective S40 adoption service; it cannot perform S40→S50. */
+  readonly create_investigation_active_adoption_service: (
+    context: CapaRequestContext,
+  ) => CapaInvestigationActiveAdoptionService;
 
   /**
    * Application dependencies used by controlled CAPA commands.

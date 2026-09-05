@@ -253,7 +253,7 @@ const DEFINITIONS = [
     agent_id: "AG-RCA",
     name: "Root Cause Facilitator",
     version: "ag-rca-1.0.0",
-    status: "evaluation",
+    status: "approved",
     purpose:
       "Facilitate causal analysis and propose testable hypotheses, contributing factors and alternatives.",
     states: ["S40", "S50"],
@@ -280,6 +280,18 @@ const DEFINITIONS = [
       "alternatives",
       "falsification_questions",
       "unresolved_gaps",
+    ],
+    activation_capabilities: [
+      {
+        eligible_states: ["S40"],
+        operation: "facilitate_root_cause",
+        allowed_tools: [
+          "TOOL-CASE-READ",
+          "TOOL-STRUCTURED-DRAFT",
+        ],
+        output_schema_version:
+          "capa_investigation_analysis_draft-1.0.0" as never,
+      },
     ],
   }),
   definition({
@@ -485,7 +497,7 @@ export interface CapaAgentRegistry {
 class InitialCapaAgentRegistry
   implements CapaAgentRegistry {
   readonly registry_version =
-    "capa-agent-registry-1.0.0";
+    "capa-agent-registry-1.1.0";
 
   private readonly byAgentId =
     new Map(

@@ -77,7 +77,7 @@ describe(
 
         expect(service.registry_version)
           .toBe(
-            "capa-agent-registry-1.0.0",
+            "capa-agent-registry-1.1.0",
           );
         expect(Object.isFrozen(service))
           .toBe(true);
@@ -110,7 +110,7 @@ describe(
     );
 
     it(
-      "denies an evaluation-only specialist",
+      "activates only the exact qualified AG-RCA S40 capability",
       () => {
         const service =
           createCapaAgentActivationService();
@@ -120,9 +120,9 @@ describe(
             "AG-RCA",
             "ag-rca-1.0.0",
           )?.status,
-        ).toBe("evaluation");
+        ).toBe("approved");
 
-        const result = service.evaluate({
+        const qualified: CapaAgentEligibilityRequest = {
           ...intakeRequest(),
           agent_id: "AG-RCA",
           agent_version:
@@ -130,15 +130,44 @@ describe(
           workflow_state: "S40",
           operation:
             "facilitate_root_cause",
+          requested_tool_ids: [
+            "TOOL-CASE-READ",
+            "TOOL-STRUCTURED-DRAFT",
+          ],
           output_schema_version:
-            "capa_root_cause_draft-1.0.0" as never,
-        });
+            "capa_investigation_analysis_draft-1.0.0" as never,
+        };
 
-        expect(result).toEqual({
-          eligible: false,
-          reason_code:
-            "AGENT_VERSION_NOT_APPROVED",
+        expect(service.evaluate(qualified)).toMatchObject({
+          eligible: true,
+          reason_code: "AGENT_ELIGIBLE",
         });
+        expect(service.evaluate({ ...qualified, workflow_state: "S50" }))
+          .toMatchObject({ reason_code: "WORKFLOW_STATE_NOT_ELIGIBLE" });
+        expect(service.evaluate({
+          ...qualified,
+          output_schema_version: "capa_root_cause_draft-1.0.0" as never,
+        })).toMatchObject({ reason_code: "OUTPUT_SCHEMA_MISMATCH" });
+        expect(service.evaluate({
+          ...qualified,
+          output_schema_version: "arbitrary-schema-1.0.0" as never,
+        })).toMatchObject({ reason_code: "OUTPUT_SCHEMA_MISMATCH" });
+        expect(service.evaluate({
+          ...qualified,
+          operation: "draft_action_plan",
+        })).toMatchObject({ reason_code: "OPERATION_NOT_ELIGIBLE" });
+        expect(service.evaluate({
+          ...qualified,
+          agent_version: "ag-rca-9.9.9" as never,
+        })).toMatchObject({ reason_code: "AGENT_VERSION_NOT_APPROVED" });
+        expect(service.evaluate({
+          ...qualified,
+          requested_tool_ids: ["TOOL-CASE-READ", "TOOL-RETRIEVE"],
+        })).toMatchObject({ reason_code: "TOOL_NOT_ALLOWED" });
+        expect(service.evaluate({
+          ...qualified,
+          active_role_ids: ["CAPA_AUDITOR" as RoleId],
+        })).toMatchObject({ reason_code: "REQUESTER_ROLE_NOT_ELIGIBLE" });
       },
     );
 

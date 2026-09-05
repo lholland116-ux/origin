@@ -293,6 +293,7 @@ function harness(
     } as never,
     capa_repository: repository as never,
     audit_repository: { appendEvent, findEventById } as never,
+    adoption_repository: { findAdoptionById: vi.fn().mockResolvedValue(null) } as never,
     workflow_idempotency_repository: {
       claimWorkflowOperation: vi
         .fn()
@@ -363,6 +364,7 @@ async function statefulHarness(options: { alternateSource?: boolean } = {}) {
     transaction_manager: database,
     capa_repository: database,
     audit_repository: auditRepository as never,
+    adoption_repository: database,
     workflow_idempotency_repository: database,
     authorization_policy: policy as never,
     id_generator: {

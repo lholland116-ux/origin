@@ -60,6 +60,9 @@ import {
 import {
   createRequestScopedCapaInvestigationPlanningAdoptionService,
 } from "./capa-investigation-planning-adoption-runtime-factory";
+import { createRequestScopedCapaInvestigationActiveAdvisoryService } from "./capa-investigation-active-advisory-runtime-factory";
+import { createRequestScopedCapaInvestigationActiveAdoptionService } from "./capa-investigation-active-adoption-runtime-factory";
+import { RepositoryCapaInvestigationActiveAdoptionSourceResolver } from "./capa-investigation-active-adoption-source-resolver";
 
 import {
   createRequestScopedCapaAiOutputReviewService,
@@ -88,10 +91,12 @@ import type {
 import type {
   CapaInvestigationPlanningAdvisoryStructuredModelClient,
 } from "../ai/capa-investigation-planning-advisory-model-profile";
+import type { CapaInvestigationActiveAdvisoryStructuredModelClient } from "../ai/capa-investigation-active-advisory-model-profile";
 
 import {
   createOpenAICapaInvestigationPlanningAdvisoryStructuredModelClient,
 } from "../ai/openai-capa-investigation-planning-advisory-structured-model-client";
+import { createOpenAICapaInvestigationActiveAdvisoryStructuredModelClient } from "../ai/openai-capa-investigation-active-advisory-structured-model-client";
 
 import {
   CAPA_KNOWLEDGE_QUERY_CONSTRUCTION_VERSION,
@@ -194,6 +199,11 @@ import {
 import {
   createSupabaseCapaInvestigationPlanningAdvisoryOutputRepository,
 } from "../../database/supabase/supabase-capa-investigation-planning-advisory-output-repository";
+
+import {
+  SupabaseCapaInvestigationActiveAdoptionRepository,
+} from "../../database/supabase/supabase-capa-investigation-active-adoption-repository";
+import { SupabaseCapaInvestigationActiveAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-investigation-active-advisory-output-repository";
 
 import {
   createSupabaseCapaAiOutputReviewRepository,
@@ -301,6 +311,10 @@ export interface CapaProductionInvestigationPlanningAdvisoryConfiguration {
   readonly structured_model_client?:
     CapaInvestigationPlanningAdvisoryStructuredModelClient;
 }
+export interface CapaProductionInvestigationActiveAdvisoryConfiguration {
+  readonly model: string;
+  readonly structured_model_client?: CapaInvestigationActiveAdvisoryStructuredModelClient;
+}
 
 export interface CapaProductionRuntimeOptions {
   /**
@@ -346,6 +360,8 @@ export interface CapaProductionRuntimeOptions {
 
   readonly investigation_planning_advisory?:
     CapaProductionInvestigationPlanningAdvisoryConfiguration;
+  readonly investigation_active_advisory?:
+    CapaProductionInvestigationActiveAdvisoryConfiguration;
 }
 
 export class CapaProductionRuntimeConfigurationError
@@ -534,6 +550,11 @@ function validateInvestigationPlanningAdvisoryConfiguration(
       configuration.structured_model_client,
   });
 }
+function validateInvestigationActiveAdvisoryConfiguration(
+  configuration: CapaProductionInvestigationActiveAdvisoryConfiguration,
+): CapaProductionInvestigationActiveAdvisoryConfiguration {
+  return Object.freeze({ model: requireNonEmptyConfigurationValue(configuration.model, "investigation_active_advisory.model"), structured_model_client: configuration.structured_model_client });
+}
 
 function productionIntakeAdvisoryConfigurationFromEnvironment():
   CapaProductionIntakeAdvisoryConfiguration | undefined {
@@ -660,6 +681,12 @@ function productionInvestigationPlanningAdvisoryConfigurationFromEnvironment():
 
   return { model };
 }
+function productionInvestigationActiveAdvisoryConfigurationFromEnvironment(): CapaProductionInvestigationActiveAdvisoryConfiguration | undefined {
+  const model = process.env.CAPA_INVESTIGATION_ACTIVE_ADVISORY_MODEL;
+  if (model === undefined) return undefined;
+  if (model.trim().length === 0) throw new CapaProductionRuntimeConfigurationError("CAPA_INVESTIGATION_ACTIVE_ADVISORY_MODEL must be a non-empty controlled server value.");
+  return { model };
+}
 
 function createIdGenerator(
   generateUuid: () => string,
@@ -764,6 +791,10 @@ export function createCapaProductionRuntime(
       : validateInvestigationPlanningAdvisoryConfiguration(
           options.investigation_planning_advisory,
         );
+  const investigationActiveAdvisoryConfiguration =
+    options.investigation_active_advisory === undefined
+      ? undefined
+      : validateInvestigationActiveAdvisoryConfiguration(options.investigation_active_advisory);
 
   const sql =
     options.sql ??
@@ -781,6 +812,11 @@ export function createCapaProductionRuntime(
 
   const adoptionRepository =
     new SupabaseCapaInvestigationPlanningAdoptionRepository(sql);
+
+  const investigationActiveAdoptionRepository =
+    new SupabaseCapaInvestigationActiveAdoptionRepository(sql);
+  const investigationActiveAdvisoryOutputRepository =
+    new SupabaseCapaInvestigationActiveAdvisoryOutputRepository(sql);
 
   const auditRepository =
     new SupabaseAuditRepository(
@@ -955,6 +991,7 @@ export function createCapaProductionRuntime(
   const submitRootCauseDependencies:
     SubmitCapaRootCausePackageDependencies = {
     ...submitIntakeDependencies,
+    adoption_repository: investigationActiveAdoptionRepository,
   };
 
   const updateInvestigationProgressDependencies:
@@ -1022,6 +1059,8 @@ export function createCapaProductionRuntime(
 
   let investigationPlanningAdvisoryModelClient:
     CapaInvestigationPlanningAdvisoryStructuredModelClient | undefined;
+  let investigationActiveAdvisoryModelClient:
+    CapaInvestigationActiveAdvisoryStructuredModelClient | undefined;
 
   if (
     intakeAdvisoryConfiguration !==
@@ -1136,6 +1175,16 @@ export function createCapaProductionRuntime(
               investigationPlanningAdvisoryConfiguration.model,
           },
         );
+    }
+  }
+
+  if (investigationActiveAdvisoryConfiguration !== undefined) {
+    if (investigationActiveAdvisoryConfiguration.structured_model_client !== undefined) {
+      investigationActiveAdvisoryModelClient = investigationActiveAdvisoryConfiguration.structured_model_client;
+    } else {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (typeof apiKey !== "string" || apiKey.trim().length === 0) throw new CapaProductionRuntimeConfigurationError("OPENAI_API_KEY is required when the CAPA investigation-active advisory uses the OpenAI structured model adapter.");
+      investigationActiveAdvisoryModelClient = createOpenAICapaInvestigationActiveAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model: investigationActiveAdvisoryConfiguration.model });
     }
   }
 
@@ -1353,6 +1402,15 @@ export function createCapaProductionRuntime(
       });
     },
 
+    create_investigation_active_advisory_service(context) {
+      if (investigationActiveAdvisoryConfiguration === undefined || investigationActiveAdvisoryModelClient === undefined) throw new CapaProductionRuntimeConfigurationError("The CAPA investigation-active advisory runtime is not configured.");
+      return createRequestScopedCapaInvestigationActiveAdvisoryService({ request_context: context, capa_repository: capaRepository, authorization_policy: authorizationPolicy, agent_activation_service: agentActivationService, structured_model_client: investigationActiveAdvisoryModelClient, output_repository: investigationActiveAdvisoryOutputRepository, transaction_manager: transactionManager, now, generate_uuid: generateUuid });
+    },
+
+    create_investigation_active_adoption_service(context) {
+      return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: transactionManager, adoption_repository: investigationActiveAdoptionRepository, audit_repository: auditRepository, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(investigationActiveAdvisoryOutputRepository), authorization_policy: authorizationPolicy, now, generate_uuid: generateUuid, audit_schema_version: auditSchemaVersion });
+    },
+
     dependencies,
 
     submit_intake_dependencies:
@@ -1419,6 +1477,8 @@ export function getCapaProductionRuntime():
           productionContainmentRiskAdvisoryConfigurationFromEnvironment(),
         investigation_planning_advisory:
           productionInvestigationPlanningAdvisoryConfigurationFromEnvironment(),
+        investigation_active_advisory:
+          productionInvestigationActiveAdvisoryConfigurationFromEnvironment(),
       });
   }
 

@@ -50,6 +50,8 @@ import type {
   CapaWorkflowRequestFingerprint,
 } from "../../database/repositories/capa-workflow-idempotency-repository";
 import type { TransactionManager } from "../../database/transactions";
+import type { CapaInvestigationActiveAdoptionRepository } from "../../database/repositories/capa-investigation-active-adoption-repository";
+import { verifyCapaInvestigationActiveAdoptionProvenance } from "./capa-investigation-active-adoption-verifier";
 import type { CreateCapaClock, CreateCapaIdGenerator } from "./create-capa";
 import { AuditEventAppendConflictError } from "./create-capa";
 
@@ -70,6 +72,7 @@ export interface SubmitCapaRootCausePackageDependencies {
   readonly transaction_manager: TransactionManager;
   readonly capa_repository: CapaRepository;
   readonly audit_repository: AuditRepository;
+  readonly adoption_repository: CapaInvestigationActiveAdoptionRepository;
   readonly workflow_idempotency_repository: CapaWorkflowIdempotencyRepository;
   readonly authorization_policy: CapaAuthorizationPolicy;
   readonly id_generator: CreateCapaIdGenerator;
@@ -631,6 +634,22 @@ export async function submitCapaRootCausePackage(
       status: "submission_blocked",
       reason_codes: readiness.reason_codes,
       canonical_blocker_codes: readiness.canonical_blocker_codes,
+    };
+
+  const provenance = await verifyCapaInvestigationActiveAdoptionProvenance({
+    adoption_repository: dependencies.adoption_repository,
+    organization_id: organizationId,
+    capa_case_id: capaCase.capa_case_id,
+    expected_case_version_id: sourceVersion.case_version_id,
+    expected_record_version: command.expected_record_version,
+    evidence_assumption_ledger: validated.value.evidence_assumption_ledger,
+    root_cause_package: validated.value.root_cause_package,
+  });
+  if (provenance.status === "blocked")
+    return {
+      status: "submission_blocked",
+      reason_codes: ["AI_PROPOSAL_NOT_HUMAN_ADOPTED"],
+      canonical_blocker_codes: [],
     };
 
   const idempotencyKey = requireIdempotencyKey(command.request_trace);

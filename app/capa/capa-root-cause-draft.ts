@@ -3,6 +3,7 @@ import {
   validateCapaEvidenceAssumptionLedger,
   type CapaEvidenceAssumptionLedgerContent,
   type CapaEvidenceAssumptionLedgerItem,
+  type CapaLedgerProvenance,
   type CapaLedgerInformationClass,
 } from "../../lib/capa/domain/capa-evidence-assumption-ledger";
 import {
@@ -13,6 +14,12 @@ import {
   type CapaRootCausePackageContent,
 } from "../../lib/capa/domain/capa-root-cause-package";
 import type { CapaInvestigationPlanContent } from "../../lib/capa/domain/capa-investigation-plan";
+import type {
+  CapaInvestigationActiveAdoptionCategory,
+  CapaInvestigationActiveAdoptedContent,
+} from "../../lib/capa/ai/capa-investigation-active-adoption-contract";
+import { validateCapaInvestigationActiveAdoptedContent } from "../../lib/capa/ai/capa-investigation-active-adoption-validator";
+import type { CapaInvestigationActiveAdoptionSafeRecord } from "./capa-investigation-active-adoption-client";
 
 const humanProvenance = Object.freeze({
   source_type: "human" as const, source_reference: null,
@@ -81,15 +88,21 @@ export function createLedgerItem(
 function normalizeClass(item: CapaEvidenceAssumptionLedgerItem): CapaEvidenceAssumptionLedgerItem {
   const c = item.information_class;
   const evidence = c === "verified_evidence" || c === "user_provided_statement" || c === "retrieved_reference";
+  const adoptedAiProvenance = item.provenance.source_type === "ai_proposal" &&
+    item.provenance.source_reference !== null && item.provenance.adopted_by_user_id !== null &&
+    item.provenance.adopted_at !== null ? Object.freeze({ ...item.provenance }) : null;
   return freezeItem({ ...item,
     evidence_status: evidence ? (item.evidence_status ?? "current") : null,
     assumption_status: c === "assumption" ? (item.assumption_status ?? "open") : null,
     gap_status: c === "missing_information" ? (item.gap_status ?? "open") : null,
     conflict_status: c === "conflicting_information" ? (item.conflict_status ?? "open") : null,
-    provenance: c === "ai_generated_hypothesis" || c === "ai_recommendation" ? aiProvenance
+    provenance: c === "ai_generated_hypothesis" || c === "ai_recommendation" ?
+      (item.provenance.source_type === "ai_proposal" && item.provenance.source_reference !== null &&
+        item.provenance.adopted_by_user_id !== null && item.provenance.adopted_at !== null
+        ? Object.freeze({ ...item.provenance }) : aiProvenance)
       : c === "retrieved_reference" ? Object.freeze({ ...item.provenance, source_type: "retrieved_reference" as const,
         source_reference: item.provenance.source_reference?.trim() || null,
-        adopted_by_user_id: null, adopted_at: null }) : humanProvenance,
+        adopted_by_user_id: null, adopted_at: null }) : (adoptedAiProvenance ?? humanProvenance),
     recommended_next_step: c === "missing_information" ? item.recommended_next_step : null,
     target_date: c === "missing_information" ? item.target_date : null,
     material_to_conclusion: c === "assumption" || c === "conflicting_information" ? item.material_to_conclusion : false,
@@ -119,7 +132,10 @@ export function updateLedgerItem(
 ): RootCauseLedgerDraft {
   return Object.freeze({ items: Object.freeze(draft.items.map((item) => {
     if (item.item_id !== itemId) return item;
-    const next = normalizeClass({ ...item, ...patch, item_id: item.item_id });
+    const next = normalizeClass({ ...item, ...patch, item_id: item.item_id,
+      provenance: item.provenance.source_type === "ai_proposal" && item.provenance.source_reference !== null &&
+        item.provenance.adopted_by_user_id !== null && item.provenance.adopted_at !== null
+        ? item.provenance : patch.provenance ?? item.provenance });
     const resolved = (next.evidence_status !== null && next.evidence_status !== "current") ||
       (next.assumption_status !== null && next.assumption_status !== "open") || next.gap_status === "resolved" || next.conflict_status === "resolved";
     return freezeItem({ ...next, human_disposition: resolved ? Object.freeze({
@@ -155,11 +171,71 @@ export function updateHypothesis(
 ): RootCausePackageDraft {
   const hypotheses = draft.hypotheses.map((h) => h.hypothesis_id !== hypothesisId ? h : freezeHypothesis({
     ...h, ...patch, hypothesis_id: h.hypothesis_id,
+    provenance: h.provenance.source_type === "ai_proposal" && h.provenance.source_reference !== null &&
+      h.provenance.adopted_by_user_id !== null && h.provenance.adopted_at !== null
+      ? h.provenance : patch.provenance ?? h.provenance,
     responsible_user_id: (patch.status ?? h.status) === "proposed" ? null : currentUserId,
   }));
   const hasConfirmedRoot = hypotheses.some((h) => h.causal_role === "proposed_root_cause" && h.status === "confirmed");
   return Object.freeze({ hypotheses: Object.freeze(hypotheses),
     root_cause_not_confirmed: hasConfirmedRoot ? null : draft.root_cause_not_confirmed });
+}
+
+function adoptedProvenance(record: CapaInvestigationActiveAdoptionSafeRecord): CapaLedgerProvenance {
+  return Object.freeze({ source_type: "ai_proposal" as const, source_reference: record.adoption_id,
+    adopted_by_user_id: record.adopted_by_user_id, adopted_at: record.adopted_at });
+}
+
+function validAdoptionRecord(record: CapaInvestigationActiveAdoptionSafeRecord): CapaInvestigationActiveAdoptedContent | null {
+  if (!record || record.adopted_item.proposal_key !== record.proposal_key) return null;
+  try { return validateCapaInvestigationActiveAdoptedContent(record.proposal_category, record.adopted_item.adopted_content); } catch { return null; }
+}
+
+export function applyAdoptedCapaInvestigationActiveProposal(
+  ledger: RootCauseLedgerDraft,
+  pkg: RootCausePackageDraft,
+  record: CapaInvestigationActiveAdoptionSafeRecord,
+  causalRole?: "proposed_root_cause" | "contributing_factor",
+  createLedgerId: () => string = () => `LED-${crypto.randomUUID()}`,
+  createHypothesisId: () => string = () => `HYP-${crypto.randomUUID()}`,
+): Readonly<{ readonly ledger: RootCauseLedgerDraft; readonly rootCausePackage: RootCausePackageDraft }> | null {
+  const content = validAdoptionRecord(record); if (content === null) return null;
+  const provenance = adoptedProvenance(record);
+  const c = record.proposal_category;
+  if (c === "causal_hypothesis" || c === "alternative_hypothesis") {
+    if (c === "causal_hypothesis" && causalRole === undefined) return null;
+    const value = content as { readonly hypothesis: string; readonly rationale: string };
+    const hypothesis: CapaCausalHypothesis = freezeHypothesis({ hypothesis_id: createHypothesisId(), statement: value.hypothesis,
+      status: "proposed", causal_role: c === "alternative_hypothesis" ? "alternative_hypothesis" : causalRole!, rationale: value.rationale,
+      responsible_user_id: null, supporting_evidence_item_ids: [], contradictory_evidence_item_ids: [], linked_assumption_item_ids: [],
+      linked_gap_item_ids: [], linked_conflict_item_ids: [], material_to_package: false, provenance });
+    // AI adoption is advisory-local: unlike an explicit human addHypothesis
+    // action, it must not alter a human root-cause-not-confirmed conclusion.
+    return Object.freeze({ ledger, rootCausePackage: Object.freeze({
+      hypotheses: Object.freeze([...pkg.hypotheses, hypothesis]),
+      root_cause_not_confirmed: pkg.root_cause_not_confirmed,
+    }) });
+  }
+  const value = content as unknown as Record<string, string>;
+  const itemClass: CapaLedgerInformationClass = c === "evidence_gap" ? "missing_information" : c === "conflicting_information" ? "conflicting_information" : c === "assumption" ? "assumption" : "ai_recommendation";
+  const item = createLedgerItem(itemClass, createLedgerId());
+  const next = normalizeClass({ ...item, statement: value.gap ?? value.conflict ?? value.assumption ?? value.recommendation,
+    context: value.why_it_matters ?? value.verification_question ?? value.rationale,
+    recommended_next_step: value.recommended_next_step ?? null, provenance });
+  return Object.freeze({ ledger: addLedgerItem(ledger, next), rootCausePackage: pkg });
+}
+
+export function applyAdoptedCapaInvestigationActiveProposals(
+  ledger: RootCauseLedgerDraft, pkg: RootCausePackageDraft, records: readonly CapaInvestigationActiveAdoptionSafeRecord[],
+  causalRoles: Readonly<Record<string, "proposed_root_cause" | "contributing_factor">>,
+): Readonly<{ readonly ledger: RootCauseLedgerDraft; readonly rootCausePackage: RootCausePackageDraft }> | null {
+  let nextLedger = ledger; let nextPackage = pkg;
+  for (const record of records) {
+    const applied = applyAdoptedCapaInvestigationActiveProposal(nextLedger, nextPackage, record, causalRoles[record.proposal_key]);
+    if (applied === null) return null;
+    nextLedger = applied.ledger; nextPackage = applied.rootCausePackage;
+  }
+  return Object.freeze({ ledger: nextLedger, rootCausePackage: nextPackage });
 }
 export function setRootCauseNotConfirmed(
   draft: RootCausePackageDraft, input: { readonly rationale: string; readonly nextSteps: readonly string[] },
