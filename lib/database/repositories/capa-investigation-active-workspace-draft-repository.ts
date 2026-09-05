@@ -3,6 +3,8 @@ import type {
 } from "../../capa/application/capa-investigation-active-workspace-draft-contract";
 import type {
   CapaCaseId,
+  CapaCaseStatus,
+  CapaCaseVersionId,
   OrganizationId,
 } from "../../capa/domain/capa-types";
 import type { TransactionContext } from "../transactions";
@@ -11,11 +13,15 @@ export interface SaveCapaInvestigationActiveWorkspaceDraftInput {
   readonly draft: CapaInvestigationActiveWorkspaceDraft;
   /** null creates revision 1; an integer updates that exact current revision. */
   readonly expected_draft_revision: number | null;
+  readonly expected_case_version_id?: CapaCaseVersionId;
+  readonly expected_record_version?: number;
+  readonly expected_workflow_state?: CapaCaseStatus;
 }
 
 export type SaveCapaInvestigationActiveWorkspaceDraftResult =
   | { readonly status: "saved"; readonly draft: CapaInvestigationActiveWorkspaceDraft }
-  | { readonly status: "concurrency_conflict" };
+  | { readonly status: "concurrency_conflict" }
+  | { readonly status: "case_changed" };
 
 /**
  * Storage boundary for one current, non-authoritative S40 workspace per case.

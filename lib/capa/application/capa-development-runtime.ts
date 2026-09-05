@@ -187,6 +187,9 @@ import {
 import type {
   CapaDevelopmentStateSnapshot,
 } from "../../database/development/capa-development-state-snapshot";
+import {
+  createCapaInvestigationActiveWorkspaceDraftService,
+} from "./capa-investigation-active-workspace-draft-service";
 
 /**
  * Development-only CAPA runtime.
@@ -427,6 +430,16 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_ADOPTION_ALLOWED",
       );
 
+    case "read_investigation_active_workspace_draft":
+      return controlled(
+        "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_WORKSPACE_READ_ALLOWED",
+      );
+
+    case "edit_investigation_active_workspace_draft":
+      return controlled(
+        "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_WORKSPACE_EDIT_ALLOWED",
+      );
+
     default:
       return controlled(
         "DEVELOPMENT_POLICY_DENIED",
@@ -494,7 +507,11 @@ function developmentAuthorizationPolicy():
         request.operation ===
           "adopt_ai_investigation_planning_proposal" ||
         request.operation ===
-          "adopt_ai_investigation_active_proposal";
+          "adopt_ai_investigation_active_proposal" ||
+        request.operation ===
+          "read_investigation_active_workspace_draft" ||
+        request.operation ===
+          "edit_investigation_active_workspace_draft";
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -1209,6 +1226,17 @@ export function createCapaDevelopmentRuntime(
 
     create_investigation_active_adoption_service(context) {
       return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: database, adoption_repository: database, audit_repository: database, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(database), authorization_policy: dependencies.authorization_policy, now, generate_uuid: generateUuid, audit_schema_version: dependencies.configuration.audit_schema_version });
+    },
+
+    create_investigation_active_workspace_draft_service(context) {
+      return createCapaInvestigationActiveWorkspaceDraftService({
+        request_context: context,
+        capa_repository: database,
+        workspace_repository: database,
+        transaction_manager: database,
+        authorization_policy: dependencies.authorization_policy,
+        now,
+      });
     },
 
     dependencies,

@@ -37,6 +37,9 @@ import type {
 import type {
   CapaInvestigationActiveAdoptionApiDependencies,
 } from "@/lib/capa/api/capa-investigation-active-adoption-route-handler";
+import type {
+  CapaInvestigationActiveWorkspaceDraftApiDependencies,
+} from "@/lib/capa/api/capa-investigation-active-workspace-draft-route-handler";
 
 import {
   selectCapaRuntime,
@@ -310,6 +313,17 @@ export function createCapaInvestigationActiveAdoptionApiDependencies():
     ...dependencies,
     create_adoption_service(context) {
       return dependencies.get_runtime().create_investigation_active_adoption_service(context);
+    },
+  };
+}
+
+export function createCapaInvestigationActiveWorkspaceDraftApiDependencies():
+  CapaInvestigationActiveWorkspaceDraftApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return {
+    ...dependencies,
+    create_workspace_service(context) {
+      return dependencies.get_runtime().create_investigation_active_workspace_draft_service(context);
     },
   };
 }

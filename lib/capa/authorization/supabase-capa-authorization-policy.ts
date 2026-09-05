@@ -80,6 +80,10 @@ const OPERATION_PERMISSION = {
     "capa.review.disposition",
   adopt_ai_investigation_active_proposal:
     "capa.review.disposition",
+  read_investigation_active_workspace_draft:
+    "capa.case.view",
+  edit_investigation_active_workspace_draft:
+    "capa.case.edit",
   review_ai_intake_advisory:
     "capa.ai.intake.review",
   approve_scope:
@@ -138,6 +142,10 @@ const OPERATION_PURPOSE = {
     "CAPA_AI_INVESTIGATION_PLANNING_ADOPTION",
   adopt_ai_investigation_active_proposal:
     "CAPA_AI_INVESTIGATION_ACTIVE_ADOPTION",
+  read_investigation_active_workspace_draft:
+    "CAPA_INVESTIGATION_ACTIVE_WORKSPACE_READ",
+  edit_investigation_active_workspace_draft:
+    "CAPA_INVESTIGATION_ACTIVE_WORKSPACE_EDIT",
   review_ai_intake_advisory:
     "CAPA_AI_INTAKE_ADVISORY_REVIEW",
   approve_scope:
@@ -229,6 +237,16 @@ const REQUIRED_WORKFLOW_STATES:
       ]),
 
     adopt_ai_investigation_active_proposal:
+      new Set([
+        CAPA_STATE.INVESTIGATION_ACTIVE,
+      ]),
+
+    read_investigation_active_workspace_draft:
+      new Set([
+        CAPA_STATE.INVESTIGATION_ACTIVE,
+      ]),
+
+    edit_investigation_active_workspace_draft:
       new Set([
         CAPA_STATE.INVESTIGATION_ACTIVE,
       ]),

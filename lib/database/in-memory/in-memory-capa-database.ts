@@ -2092,6 +2092,18 @@ export class InMemoryCapaDatabase
     const validated = validateCapaInvestigationActiveWorkspaceDraft(input.draft);
     if (validated.status !== "valid") throw new InMemoryIntegrityError("The S40 workspace draft is invalid.");
     const draft = validated.value;
+    const hasExpectedCaseContext = input.expected_case_version_id !== undefined || input.expected_record_version !== undefined || input.expected_workflow_state !== undefined;
+    if (hasExpectedCaseContext) {
+      const current = state.cases.get(recordKey(draft.organization_id, draft.capa_case_id));
+      const currentVersion = current === undefined ? undefined : state.case_versions.get(recordKey(draft.organization_id, current.current_version_id));
+      const committedCurrent = this.committed_state.cases.get(recordKey(draft.organization_id, draft.capa_case_id));
+      const committedCurrentVersion = committedCurrent === undefined ? undefined : this.committed_state.case_versions.get(recordKey(draft.organization_id, committedCurrent.current_version_id));
+      const contextMatches = (candidate: typeof current, version: typeof currentVersion) =>
+        input.expected_case_version_id !== undefined && input.expected_record_version !== undefined && input.expected_workflow_state !== undefined && candidate !== undefined && candidate.current_version_id === input.expected_case_version_id && candidate.record_version === input.expected_record_version && candidate.status === input.expected_workflow_state && version !== undefined && version.case_version_id === input.expected_case_version_id && version.version_number === input.expected_record_version && version.status === input.expected_workflow_state;
+      if (!contextMatches(current, currentVersion) || !contextMatches(committedCurrent, committedCurrentVersion)) {
+        return { status: "case_changed" };
+      }
+    }
     const key = recordKey(draft.organization_id, draft.capa_case_id);
     const existing = state.investigation_active_workspace_drafts.get(key);
     const validCreate = input.expected_draft_revision === null && draft.draft_revision === 1 && existing === undefined;

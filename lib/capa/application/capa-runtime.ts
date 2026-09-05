@@ -83,6 +83,9 @@ import type {
 import type {
   CapaInvestigationActiveAdoptionService,
 } from "./capa-investigation-active-adoption-runtime-factory";
+import type {
+  CapaInvestigationActiveWorkspaceDraftService,
+} from "./capa-investigation-active-workspace-draft-service";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -183,6 +186,11 @@ export interface CapaRuntime {
   readonly create_investigation_active_adoption_service: (
     context: CapaRequestContext,
   ) => CapaInvestigationActiveAdoptionService;
+
+  /** Creates a request-scoped durable S40 human workspace service. */
+  readonly create_investigation_active_workspace_draft_service: (
+    context: CapaRequestContext,
+  ) => CapaInvestigationActiveWorkspaceDraftService;
 
   /**
    * Application dependencies used by controlled CAPA commands.

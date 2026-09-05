@@ -47,6 +47,8 @@ export type CapaAuthorizationOperation =
   | "request_ai_investigation_active_advisory"
   | "adopt_ai_investigation_planning_proposal"
   | "adopt_ai_investigation_active_proposal"
+  | "read_investigation_active_workspace_draft"
+  | "edit_investigation_active_workspace_draft"
   | "review_ai_intake_advisory"
   | "approve_scope"
   | "accept_containment_risk"
@@ -78,6 +80,8 @@ export const HUMAN_ONLY_CAPA_OPERATIONS =
     "request_ai_investigation_active_advisory",
     "adopt_ai_investigation_planning_proposal",
     "adopt_ai_investigation_active_proposal",
+    "read_investigation_active_workspace_draft",
+    "edit_investigation_active_workspace_draft",
     "review_ai_intake_advisory",
     "approve_scope",
     "accept_containment_risk",

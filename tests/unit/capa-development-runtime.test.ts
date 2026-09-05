@@ -1397,6 +1397,25 @@ describe(
       });
     });
 
+    it("allows both S40 investigation-active workspace operations", async () => {
+      const request = policyRequest();
+      for (const [operation, purpose, reason_code] of [
+        ["read_investigation_active_workspace_draft", "CAPA_INVESTIGATION_ACTIVE_WORKSPACE_READ", "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_WORKSPACE_READ_ALLOWED"],
+        ["edit_investigation_active_workspace_draft", "CAPA_INVESTIGATION_ACTIVE_WORKSPACE_EDIT", "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_WORKSPACE_EDIT_ALLOWED"],
+      ] as const) {
+        await expect(createPolicy().evaluate({
+          ...request,
+          operation,
+          resource: {
+            organization_id: request.tenant.organization_id,
+            resource_type: controlled("CAPA_INVESTIGATION_ACTIVE_WORKSPACE_DRAFT"),
+            workflow_state: "S40",
+          },
+          purpose: controlled(purpose),
+        })).resolves.toMatchObject({ decision: "allow", reason_code });
+      }
+    });
+
     it.each([
       {
         name:
@@ -1570,5 +1589,11 @@ describe(
         );
       },
     );
+
+    it("wires the request-scoped S40 workspace service to the development database", () => {
+      const runtime = createCapaDevelopmentRuntime({ now: () => NOW });
+      const service = runtime.create_investigation_active_workspace_draft_service({} as any);
+      expect(service).toEqual(expect.objectContaining({ load: expect.any(Function), save: expect.any(Function) }));
+    });
   },
 );

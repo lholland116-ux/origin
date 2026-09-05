@@ -204,6 +204,8 @@ import {
   SupabaseCapaInvestigationActiveAdoptionRepository,
 } from "../../database/supabase/supabase-capa-investigation-active-adoption-repository";
 import { SupabaseCapaInvestigationActiveAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-investigation-active-advisory-output-repository";
+import { SupabaseCapaInvestigationActiveWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-investigation-active-workspace-draft-repository";
+import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
 
 import {
   createSupabaseCapaAiOutputReviewRepository,
@@ -817,6 +819,8 @@ export function createCapaProductionRuntime(
     new SupabaseCapaInvestigationActiveAdoptionRepository(sql);
   const investigationActiveAdvisoryOutputRepository =
     new SupabaseCapaInvestigationActiveAdvisoryOutputRepository(sql);
+  const investigationActiveWorkspaceDraftRepository =
+    new SupabaseCapaInvestigationActiveWorkspaceDraftRepository(sql);
 
   const auditRepository =
     new SupabaseAuditRepository(
@@ -1409,6 +1413,17 @@ export function createCapaProductionRuntime(
 
     create_investigation_active_adoption_service(context) {
       return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: transactionManager, adoption_repository: investigationActiveAdoptionRepository, audit_repository: auditRepository, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(investigationActiveAdvisoryOutputRepository), authorization_policy: authorizationPolicy, now, generate_uuid: generateUuid, audit_schema_version: auditSchemaVersion });
+    },
+
+    create_investigation_active_workspace_draft_service(context) {
+      return createCapaInvestigationActiveWorkspaceDraftService({
+        request_context: context,
+        capa_repository: capaRepository,
+        workspace_repository: investigationActiveWorkspaceDraftRepository,
+        transaction_manager: transactionManager,
+        authorization_policy: authorizationPolicy,
+        now,
+      });
     },
 
     dependencies,

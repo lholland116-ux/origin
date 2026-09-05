@@ -277,6 +277,15 @@ describe(
         );
 
         expect(
+          runtime.create_investigation_active_workspace_draft_service({} as any),
+        ).toEqual(
+          expect.objectContaining({
+            load: expect.any(Function),
+            save: expect.any(Function),
+          }),
+        );
+
+        expect(
           runtime.dependencies
             .audit_repository,
         ).toBeInstanceOf(
