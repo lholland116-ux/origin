@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CapaInvestigationPlanContent } from "../../lib/capa/domain/capa-investigation-plan";
 import type { CapaEvidenceAssumptionLedgerContent, CapaEvidenceAssumptionLedgerItem, CapaLedgerInformationClass } from "../../lib/capa/domain/capa-evidence-assumption-ledger";
 import { CAPA_ASSUMPTION_STATUSES, CAPA_CONFLICT_STATUSES, CAPA_EVIDENCE_STATUSES, CAPA_GAP_STATUSES } from "../../lib/capa/domain/capa-evidence-assumption-ledger";
@@ -15,6 +15,8 @@ import type { CapaInvestigationActiveAdoptionSafeRecord } from "./capa-investiga
 import type { CapaInvestigationActiveHumanCausalRole } from "./capa-investigation-active-advisory-review";
 import { createRootCauseSubmissionAttempt, submitRootCauseSubmissionAttempt,
   type RootCauseSubmissionAttempt } from "./capa-root-cause-submission-client";
+import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace,
+  saveCapaInvestigationActiveWorkspace, type WorkspaceAutosaveStatus } from "./capa-investigation-active-workspace-client";
 
 const readable = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const toggle = (values: readonly string[], value: string, checked: boolean) =>
@@ -40,6 +42,12 @@ const canonicalForReason: Readonly<Record<string, string>> = {
 };
 const shown = (value: string | boolean | null) => value === null ? "—" : typeof value === "boolean" ? (value ? "Yes" : "No") : value;
 const shownIds = (values: readonly string[]) => values.length ? values.join(", ") : "—";
+function aiSourceReferences(ledger: CapaEvidenceAssumptionLedgerContent, rootPackage: CapaRootCausePackageContent): ReadonlySet<string> {
+  const references = new Set<string>();
+  for (const item of ledger.items) if (item.provenance.source_type === "ai_proposal" && item.provenance.source_reference !== null) references.add(item.provenance.source_reference);
+  for (const hypothesis of rootPackage.hypotheses) if (hypothesis.provenance.source_type === "ai_proposal" && hypothesis.provenance.source_reference !== null) references.add(hypothesis.provenance.source_reference);
+  return references;
+}
 
 function ReadOnlyLedgerItem({ item }: { readonly item: CapaEvidenceAssumptionLedgerItem }) {
   return <article className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
@@ -96,8 +104,8 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   readonly authoritativeRootCausePackage?: CapaRootCausePackageContent;
   readonly onAuthoritativeRefresh: () => Promise<void>;
 }) {
-  const [ledger, setLedger] = useState(() => authoritativeLedger ?? createInitialLedgerDraft());
-  const [rootPackage, setRootPackage] = useState(() => authoritativeRootCausePackage ?? createInitialRootCausePackageDraft());
+  const [ledger, setLedger] = useState(() => mode === "S50" ? authoritativeLedger ?? createInitialLedgerDraft() : createInitialLedgerDraft());
+  const [rootPackage, setRootPackage] = useState(() => mode === "S50" ? authoritativeRootCausePackage ?? createInitialRootCausePackageDraft() : createInitialRootCausePackageDraft());
   const [newClass, setNewClass] = useState<CapaLedgerInformationClass>("verified_evidence");
   const [notConfirmed, setNotConfirmed] = useState(false);
   const [notConfirmedRationale, setNotConfirmedRationale] = useState("");
@@ -106,6 +114,15 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reasons, setReasons] = useState<readonly string[]>([]);
+  const [hydrationStatus, setHydrationStatus] = useState<"loading" | "ready" | "failed">(mode === "S50" ? "ready" : "loading");
+  const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceAutosaveStatus | "loading">(mode === "S50" ? "saved" : "loading");
+  const [draftRevision, setDraftRevision] = useState<number | null>(null);
+  const coordinatorRef = useRef<ReturnType<typeof createCapaInvestigationActiveWorkspaceAutosaveCoordinator> | null>(null);
+  const ledgerRef = useRef(ledger);
+  const rootPackageRef = useRef(rootPackage);
+  const acknowledgedAiReferencesRef = useRef<ReadonlySet<string>>(new Set());
+  ledgerRef.current = ledger;
+  rootPackageRef.current = rootPackage;
 
   const validation = useMemo(() => validateRootCauseDrafts(plan, ledger, rootPackage), [plan, ledger, rootPackage]);
   const readOnly = mode === "S50";
@@ -113,11 +130,63 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   const displayRootPackage = readOnly ? authoritativeRootCausePackage ?? createInitialRootCausePackageDraft() : rootPackage;
   const references = displayLedger.items;
   const attributionAvailable = isValidCurrentUserId(currentUserId);
+  const hydrated = readOnly || hydrationStatus === "ready";
+  const editingDisabled = !readOnly && (!hydrated || !attributionAvailable || workspaceStatus === "conflict");
+  const submissionBlocked = !readOnly && (!hydrated || workspaceStatus !== "saved" || coordinatorRef.current?.isBusy() === true);
+  useEffect(() => {
+    if (readOnly) return;
+    const coordinator = createCapaInvestigationActiveWorkspaceAutosaveCoordinator({
+      save: (value) => saveCapaInvestigationActiveWorkspace(caseId, value),
+      onStatus: setWorkspaceStatus,
+      onSaved: (workspace) => {
+        setDraftRevision(workspace.draft_revision);
+        acknowledgedAiReferencesRef.current = aiSourceReferences(workspace.evidence_assumption_ledger, workspace.root_cause_package);
+      },
+    });
+    coordinatorRef.current = coordinator;
+    return () => { coordinator.dispose(); if (coordinatorRef.current === coordinator) coordinatorRef.current = null; };
+  }, [caseId, readOnly]);
+  useEffect(() => {
+    if (readOnly) { setHydrationStatus("ready"); setWorkspaceStatus("saved"); return; }
+    let active = true;
+    setHydrationStatus("loading"); setWorkspaceStatus("loading"); setError(null); setAttempt(null);
+    const initialLedger = createInitialLedgerDraft();
+    const initialRootPackage = createInitialRootCausePackageDraft();
+    ledgerRef.current = initialLedger; rootPackageRef.current = initialRootPackage;
+    setLedger(initialLedger); setRootPackage(initialRootPackage); setDraftRevision(null);
+    acknowledgedAiReferencesRef.current = new Set(); coordinatorRef.current?.resetFromServer(null);
+    void loadCapaInvestigationActiveWorkspace(caseId).then((result) => {
+      if (!active) return;
+      if (result.status === "failed") { setHydrationStatus("failed"); setWorkspaceStatus("failed"); setError("The durable S40 workspace could not be loaded. Editing remains disabled."); return; }
+      const loadedLedger = result.workspace?.evidence_assumption_ledger ?? initialLedger;
+      const loadedRootPackage = result.workspace?.root_cause_package ?? initialRootPackage;
+      ledgerRef.current = loadedLedger; rootPackageRef.current = loadedRootPackage;
+      setLedger(loadedLedger); setRootPackage(loadedRootPackage);
+      const loadedRevision = result.workspace?.draft_revision ?? null;
+      setDraftRevision(loadedRevision); coordinatorRef.current?.resetFromServer(loadedRevision);
+      acknowledgedAiReferencesRef.current = aiSourceReferences(loadedLedger, loadedRootPackage);
+      setHydrationStatus("ready"); setWorkspaceStatus("saved");
+    });
+    return () => { active = false; };
+  }, [caseId, readOnly]);
+  const queueWorkspaceSave = (nextLedger: typeof ledger, nextRootPackage: typeof rootPackage) => {
+    if (readOnly || !hydrated || coordinatorRef.current === null) return;
+    const aiReferences = aiSourceReferences(nextLedger, nextRootPackage);
+    if ([...aiReferences].some((reference) => !acknowledgedAiReferencesRef.current.has(reference))) {
+      coordinatorRef.current.markBlocked();
+      return;
+    }
+    const candidateValidation = validateRootCauseDrafts(plan, nextLedger, nextRootPackage);
+    if (candidateValidation.status !== "valid") { coordinatorRef.current.markInvalid(); return; }
+    coordinatorRef.current.queue({ evidence_assumption_ledger: candidateValidation.ledger, root_cause_package: candidateValidation.rootCausePackage });
+  };
   const mutateLedger = (mutation: (value: typeof ledger) => typeof ledger) => {
-    setAttempt(null); setLedger((value) => applyRootCauseDraftMutation(value, mutation).draft);
+    const next = applyRootCauseDraftMutation(ledgerRef.current, mutation).draft;
+    ledgerRef.current = next; setAttempt(null); setLedger(next); queueWorkspaceSave(next, rootPackageRef.current);
   };
   const mutateRootPackage = (mutation: (value: typeof rootPackage) => typeof rootPackage) => {
-    setAttempt(null); setRootPackage((value) => applyRootCauseDraftMutation(value, mutation).draft);
+    const next = applyRootCauseDraftMutation(rootPackageRef.current, mutation).draft;
+    rootPackageRef.current = next; setAttempt(null); setRootPackage(next); queueWorkspaceSave(ledgerRef.current, next);
   };
   const setLedgerItem = (itemId: string, patch: Parameters<typeof updateLedgerItem>[2]) => {
     mutateLedger((value) => updateLedgerItem(value, itemId, patch, currentUserId));
@@ -145,24 +214,31 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     setAttempt(next); void submit(next);
   }
   function applyAdopted(records: readonly CapaInvestigationActiveAdoptionSafeRecord[], roles: Readonly<Record<string, CapaInvestigationActiveHumanCausalRole>>) {
-    const applied = applyAdoptedCapaInvestigationActiveProposals(ledger, rootPackage, records, roles);
+    const applied = applyAdoptedCapaInvestigationActiveProposals(ledgerRef.current, rootPackageRef.current, records, roles);
     if (applied === null) { setError("The trusted adoption response could not be integrated into the local draft."); return; }
+    ledgerRef.current = applied.ledger; rootPackageRef.current = applied.rootCausePackage;
     setAttempt(null); setLedger(applied.ledger); setRootPackage(applied.rootCausePackage); setError(null);
+    queueWorkspaceSave(applied.ledger, applied.rootCausePackage);
   }
 
   return <section aria-labelledby="root-cause-workspace-heading" className="mt-8 space-y-6">
     <header><p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{readOnly ? "S50 · Submitted read-only record" : "S40 · Investigation Active"}</p>
       <h2 id="root-cause-workspace-heading" className="mt-2 text-2xl font-semibold">{readOnly ? "Root Cause Review" : `Root Cause Workspace — ${caseNumber}`}</h2></header>
+    {!readOnly && hydrationStatus === "loading" ? <p role="status" className="rounded-xl border border-blue-400/25 bg-blue-500/10 p-3 text-sm text-blue-100">Loading durable workspace…</p> : null}
+    {!readOnly && hydrationStatus === "failed" ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">The durable S40 workspace could not be loaded. Refresh or reload is required.</p> : null}
+    {!readOnly && hydrationStatus === "ready" ? <p role="status" className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-300">Workspace persistence: {workspaceStatus === "loading" ? "Loading…" : workspaceStatus === "saving" ? "Saving…" : workspaceStatus === "unsaved" ? "Unsaved changes" : workspaceStatus === "conflict" ? "Conflict — reload required" : workspaceStatus === "failed" ? "Save failed" : workspaceStatus === "blocked" ? "Persistence blocked — governed adoption is required" : "Saved"}{draftRevision !== null ? ` · revision ${draftRevision}` : ""}</p> : null}
     {!attributionAvailable && !readOnly ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">Authenticated user identity is unavailable. Human-attributed ledger and root-cause actions are disabled.</p> : null}
+    {!readOnly && hydrationStatus === "ready" && workspaceStatus === "failed" ? <button type="button" onClick={() => coordinatorRef.current?.retry()} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm">Retry workspace save</button> : null}
+    <fieldset disabled={editingDisabled}>
     <CapaInvestigationProgressPanel caseId={caseId} plan={plan} recordVersion={recordVersion}
       currentVersionId={currentVersionId} readOnly={readOnly} onAuthoritativeRefresh={onAuthoritativeRefresh} />
-    {!readOnly ? <CapaInvestigationActiveAdvisoryPanel caseId={caseId} currentVersionId={currentVersionId}
+    {!readOnly && hydrationStatus === "ready" ? <CapaInvestigationActiveAdvisoryPanel caseId={caseId} currentVersionId={currentVersionId}
       recordVersion={recordVersion} ledger={ledger} rootPackage={rootPackage} currentUserId={currentUserId}
       onApplyAdoptions={applyAdopted} /> : null}
 
     <section aria-labelledby="ledger-heading" className="rounded-3xl border border-zinc-800 bg-zinc-900/75 p-5 sm:p-7">
       <h2 id="ledger-heading" className="text-xl font-semibold">Evidence &amp; Assumption Ledger</h2>
-      <p className="mt-2 text-sm text-zinc-400">{readOnly ? "Authoritative submitted ledger; read-only." : "Local working draft until root cause is submitted for review."}</p>
+      <p className="mt-2 text-sm text-zinc-400">{readOnly ? "Authoritative submitted ledger; read-only." : "Durable working draft; non-authoritative until root cause is submitted for review."}</p>
       {!readOnly ? <div className="mt-4 flex flex-wrap gap-3"><label className="text-sm">Information class<select value={newClass}
         onChange={(event) => setNewClass(event.target.value as CapaLedgerInformationClass)} className="ml-2 rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2">
         {CAPA_LEDGER_INFORMATION_CLASSES.map((value) => <option key={value} value={value}>{readable(value)}</option>)}</select></label>
@@ -239,8 +315,9 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
         : validation.readiness.status === "ready_for_review" ? <p className="mt-3 text-emerald-300">Ready to submit for root-cause review. The server will revalidate.</p>
           : <ul className="mt-3 space-y-2 text-sm text-amber-200">{validation.readiness.reason_codes.map((reason) => <li key={reason}>{canonicalForReason[reason] ?? ""} {reason}: {blockerText[reason]}</li>)}</ul>}
       {error ? <div role="alert" className="mt-4 rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200"><p>{error}</p>{reasons.length ? <ul className="mt-2 list-disc pl-5">{reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}{attempt ? <button type="button" disabled={submitting} onClick={() => void submit(attempt)} className="mt-2 underline">Retry exact submission</button> : null}</div> : null}
-      <div className="mt-5 flex justify-end"><button type="button" disabled={!attributionAvailable || submitting || validation.status !== "valid" || validation.readiness.status !== "ready_for_review"}
+      <div className="mt-5 flex justify-end"><button type="button" disabled={!attributionAvailable || submitting || submissionBlocked || validation.status !== "valid" || validation.readiness.status !== "ready_for_review"}
         onClick={beginSubmission} className="rounded-xl bg-emerald-600 px-5 py-3 font-semibold disabled:opacity-40">{submitting ? "Submitting…" : "Submit root cause for review"}</button></div>
     </section> : null}
+    </fieldset>
   </section>;
 }

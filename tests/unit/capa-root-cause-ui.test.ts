@@ -29,9 +29,10 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).toMatch(/status === "submitted"[\s\S]*await onAuthoritativeRefresh/);
     expect(intake).toMatch(/onAuthoritativeRefresh=\{async \(\) => \{[\s\S]*await openExistingCase[\s\S]*await loadCases\("replace"\)/);
   });
-  it("uses a case-and-mode key while excluding version identity", () => {
+  it("hydrates by case identity while excluding version identity from reloads", () => {
     expect(intake).toContain("key={capaRootCauseWorkspaceKey(createdCapa.capaCaseId, createdCapa.status)}");
-    expect(workspace).not.toMatch(/useEffect\([\s\S]*setLedger/);
+    expect(workspace).toContain("loadCapaInvestigationActiveWorkspace(caseId)");
+    expect(workspace).toContain("}, [caseId, readOnly]);");
     expect(workspace).toContain("readOnly ? authoritativeLedger");
     expect(workspace).toContain("readOnly ? authoritativeRootCausePackage");
   });
@@ -93,8 +94,14 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(markup).not.toMatch(/<button[^>]*>\s*(?:Start|Complete|Disposition|Cancel)\s*<\/button>/);
   });
   it("routes every controlled ledger/package mutation through attempt-invalidating wrappers", () => {
-    expect(workspace).toContain("applyRootCauseDraftMutation(value, mutation).draft");
+    expect(workspace).toContain("applyRootCauseDraftMutation(ledgerRef.current, mutation).draft");
+    expect(workspace).toContain("applyRootCauseDraftMutation(rootPackageRef.current, mutation).draft");
     expect(workspace).toContain("setAttempt(null)");
+  });
+  it("hydrates S40 before enabling durable edits and describes the draft correctly", () => {
+    expect(workspace).toContain("Loading durable workspace");
+    expect(workspace).toContain("Durable working draft; non-authoritative until root cause is submitted for review.");
+    expect(workspace).toContain("workspaceStatus === \"conflict\"");
   });
   it("locks only adopted AI causal roles while preserving human decision controls", () => {
     expect(workspace).toContain('const adoptedAi = hypothesis.provenance.source_type === "ai_proposal"');
