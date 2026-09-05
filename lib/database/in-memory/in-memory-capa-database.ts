@@ -3142,6 +3142,12 @@ export class InMemoryCapaDatabase
       const capaCase = state.cases.get(
         recordKey(adoption.organization_id, adoption.capa_case_id),
       );
+      const sourceVersion = state.case_versions.get(
+        recordKey(
+          adoption.organization_id,
+          adoption.case_version_id,
+        ),
+      );
       const output = state.advisory_outputs.get(
         recordKey(adoption.organization_id, adoption.output_id),
       );
@@ -3152,10 +3158,12 @@ export class InMemoryCapaDatabase
         ? null
         : independentlyResolveS40AdoptionSource(output, adoption);
       if (
-        capaCase === undefined || auditEvent === undefined || source === null ||
-        capaCase.current_version_id !== adoption.case_version_id ||
-        capaCase.record_version !== adoption.record_version ||
-        capaCase.status !== "S40" ||
+        capaCase === undefined || sourceVersion === undefined ||
+        sourceVersion.organization_id !== adoption.organization_id ||
+        sourceVersion.capa_case_id !== adoption.capa_case_id ||
+        sourceVersion.case_version_id !== adoption.case_version_id ||
+        sourceVersion.version_number !== adoption.record_version ||
+        sourceVersion.status !== "S40" || auditEvent === undefined || source === null ||
         source.category !== adoption.proposal_category ||
         !isDeepStrictEqual(source.bindings, adoption.resolved_reference_bindings) ||
         source.manifest_schema !== adoption.reference_manifest_schema_version ||
