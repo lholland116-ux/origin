@@ -140,6 +140,13 @@ import {
   type PersistedCapaInvestigationActiveAdoption,
 } from "../repositories/capa-investigation-active-adoption-repository";
 import {
+  type CapaInvestigationActiveWorkspaceDraftRepository,
+  type SaveCapaInvestigationActiveWorkspaceDraftInput,
+  type SaveCapaInvestigationActiveWorkspaceDraftResult,
+} from "../repositories/capa-investigation-active-workspace-draft-repository";
+import type { CapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-contract";
+import { validateCapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-validator";
+import {
   type CapaInvestigationActiveAdoptionCategory,
 } from "../../capa/ai/capa-investigation-active-adoption-contract";
 import {
@@ -350,6 +357,8 @@ interface InMemoryState {
     Map<string, InMemoryCapaInvestigationPlanningAdoptionRecord>;
   readonly investigation_active_adoptions:
     Map<string, PersistedCapaInvestigationActiveAdoption>;
+  readonly investigation_active_workspace_drafts:
+    Map<string, CapaInvestigationActiveWorkspaceDraft>;
 }
 
 interface ActiveTransaction {
@@ -705,6 +714,8 @@ function cloneState(
 
     investigation_active_adoptions:
       cloneMap(state.investigation_active_adoptions),
+    investigation_active_workspace_drafts:
+      cloneMap(state.investigation_active_workspace_drafts),
   };
 }
 
@@ -748,6 +759,8 @@ function emptyState():
 
     investigation_active_adoptions:
       new Map(),
+    investigation_active_workspace_drafts:
+      new Map(),
   };
 }
 
@@ -769,6 +782,7 @@ function stateFromSnapshot(
     advisory_runs: new Map(snapshot.advisory_runs),
     investigation_planning_adoptions: new Map(snapshot.investigation_planning_adoptions.map(([key, value]) => [key, cloneValue(value)])),
     investigation_active_adoptions: new Map(snapshot.investigation_active_adoptions.map(([key, value]) => [key, cloneValue(value)])),
+    investigation_active_workspace_drafts: new Map(snapshot.investigation_active_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
   };
 }
 
@@ -792,6 +806,7 @@ function snapshotFromState(state: InMemoryState): InMemoryCapaDatabaseSnapshot {
     advisory_runs: entries(state.advisory_runs),
     investigation_planning_adoptions: entries(state.investigation_planning_adoptions),
     investigation_active_adoptions: entries(state.investigation_active_adoptions),
+    investigation_active_workspace_drafts: entries(state.investigation_active_workspace_drafts),
   };
 }
 
@@ -1367,7 +1382,8 @@ export class InMemoryCapaDatabase
     CapaIntakeAdvisoryOutputRepository,
     CapaInvestigationPlanningAdvisoryOutputRepository,
     CapaInvestigationPlanningAdoptionRepository,
-    CapaInvestigationActiveAdoptionRepository
+    CapaInvestigationActiveAdoptionRepository,
+    CapaInvestigationActiveWorkspaceDraftRepository
 {
   private committed_state:
     InMemoryState;
@@ -2064,6 +2080,25 @@ export class InMemoryCapaDatabase
     );
     if (!isS40AdvisoryOutputRecord(output)) return null;
     return cloneValue(output) as unknown as CapaInvestigationActiveAdvisoryOutputRecord;
+  }
+
+  async findDraft(organizationId: OrganizationId, capaCaseId: CapaCaseId): Promise<CapaInvestigationActiveWorkspaceDraft | null> {
+    const draft = this.committed_state.investigation_active_workspace_drafts.get(recordKey(organizationId, capaCaseId));
+    return draft === undefined ? null : cloneValue(draft);
+  }
+
+  async saveDraft(transaction: TransactionContext, input: SaveCapaInvestigationActiveWorkspaceDraftInput): Promise<SaveCapaInvestigationActiveWorkspaceDraftResult> {
+    const state = this.transactionState(transaction);
+    const validated = validateCapaInvestigationActiveWorkspaceDraft(input.draft);
+    if (validated.status !== "valid") throw new InMemoryIntegrityError("The S40 workspace draft is invalid.");
+    const draft = validated.value;
+    const key = recordKey(draft.organization_id, draft.capa_case_id);
+    const existing = state.investigation_active_workspace_drafts.get(key);
+    const validCreate = input.expected_draft_revision === null && draft.draft_revision === 1 && existing === undefined;
+    const validUpdate = existing !== undefined && input.expected_draft_revision !== null && existing.draft_revision === input.expected_draft_revision && draft.draft_revision === input.expected_draft_revision + 1;
+    if (!validCreate && !validUpdate) return { status: "concurrency_conflict" };
+    state.investigation_active_workspace_drafts.set(key, cloneValue(draft));
+    return { status: "saved", draft: cloneValue(draft) };
   }
 
   async listAdoptionsForOutput(
@@ -2896,6 +2931,12 @@ export class InMemoryCapaDatabase
     state:
       InMemoryState,
   ): void {
+    for (const [key, draft] of state.investigation_active_workspace_drafts) {
+      const validated = validateCapaInvestigationActiveWorkspaceDraft(draft);
+      if (validated.status !== "valid" || key !== recordKey(draft.organization_id, draft.capa_case_id)) {
+        throw new InMemoryIntegrityError("The S40 workspace draft state is invalid.");
+      }
+    }
     for (
       const claim
       of state.creation_idempotency
