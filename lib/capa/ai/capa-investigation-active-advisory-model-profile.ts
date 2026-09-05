@@ -25,6 +25,13 @@ const text = {
   maxLength: MAXIMUM_TEXT_CHARACTERS,
 } as const;
 
+const controlledQuestion = {
+  type: "string",
+  minLength: 1,
+  maxLength: MAXIMUM_TEXT_CHARACTERS,
+  pattern: "^(?:[Dd]oes|[Dd]o|[Dd]id|[Ii]s|[Aa]re|[Ww]as|[Ww]ere|[Mm]ay|[Mm]ight|[Cc]an|[Cc]ould|[Ss]hould|[Ww]ould|[Mm]ust|[Ww]hat|[Ww]hich|[Ww]ho|[Ww]hom|[Ww]hose|[Ww]hy|[Hh]ow|[Ww]hen|[Ww]here|[Ww]hether) [^.!?;,:\\n\\r]+\\?$",
+} as const;
+
 const proposalKey = {
   type: "string",
   pattern: "^P[1-9][0-9]{0,2}$",
@@ -59,7 +66,7 @@ const evidenceGap = {
     why_it_matters: text,
     related_reference_keys: referenceKeys(),
     recommended_next_step: text,
-    human_review_question: text,
+    human_review_question: controlledQuestion,
   },
 } as const;
 
@@ -78,7 +85,7 @@ const conflict = {
     conflict: text,
     conflicting_reference_keys: referenceKeys(2),
     why_it_matters: text,
-    human_review_question: text,
+    human_review_question: controlledQuestion,
   },
 } as const;
 
@@ -96,8 +103,8 @@ const assumption = {
     proposal_key: proposalKey,
     assumption: text,
     related_reference_keys: referenceKeys(),
-    verification_question: text,
-    human_review_question: text,
+    verification_question: controlledQuestion,
+    human_review_question: controlledQuestion,
   },
 } as const;
 
@@ -125,7 +132,7 @@ const causalHypothesis = {
     rationale: text,
     supporting_reference_keys: referenceKeys(),
     contradictory_reference_keys: referenceKeys(),
-    human_review_question: text,
+    human_review_question: controlledQuestion,
   },
 } as const;
 
@@ -146,7 +153,7 @@ const alternativeHypothesis = {
     rationale: text,
     supporting_reference_keys: referenceKeys(),
     contradictory_reference_keys: referenceKeys(),
-    human_review_question: text,
+    human_review_question: controlledQuestion,
   },
 } as const;
 
@@ -165,7 +172,7 @@ const recommendation = {
     recommendation: text,
     rationale: text,
     related_reference_keys: referenceKeys(),
-    human_review_question: text,
+    human_review_question: controlledQuestion,
   },
 } as const;
 
@@ -214,7 +221,7 @@ export const CAPA_INVESTIGATION_ACTIVE_ADVISORY_JSON_SCHEMA =
               ...CAPA_INVESTIGATION_ACTIVE_ADVISORY_UNCERTAINTY_CATEGORIES,
             ],
           },
-          human_review_question: text,
+          human_review_question: controlledQuestion,
         },
       }),
       citations: {

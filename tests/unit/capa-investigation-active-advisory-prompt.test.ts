@@ -71,6 +71,23 @@ describe("S40 investigation-active advisory prompt", () => {
     }
   });
 
+  it("requires every controlled review question to use the semantic-validator grammar", () => {
+    const prompt = buildCapaInvestigationActiveAdvisoryPrompt({
+      model_safe_context: modelSafeContext,
+    });
+
+    for (const phrase of [
+      "For every human_review_question and verification_question",
+      "write exactly one concise direct question",
+      "Begin with exactly one of: does, do, did",
+      "End with exactly one terminal ?",
+      "Do not use an internal ?, comma, colon, semicolon, period, newline",
+      "a second independent question joined with and",
+    ]) {
+      expect(prompt).toContain(phrase);
+    }
+  });
+
   it("cannot receive a server-only reference manifest or raw source identifiers", () => {
     const prompt = buildCapaInvestigationActiveAdvisoryPrompt({
       model_safe_context: modelSafeContext,

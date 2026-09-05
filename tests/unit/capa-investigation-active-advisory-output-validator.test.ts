@@ -100,7 +100,7 @@ function expectReason(
 }
 
 describe("CAPA investigation-active advisory raw output validation", () => {
-  it("accepts and deeply freezes a valid advisory analysis", () => {
+  it("accepts and deeply freezes a realistic advisory analysis with compliant direct questions", () => {
     const result =
       validateCapaInvestigationActiveAdvisoryModelOutput(
         JSON.stringify(validOutput()),
@@ -304,6 +304,28 @@ describe("CAPA investigation-active advisory raw output validation", () => {
 
     expectReason(
       assertion,
+      "INVALID_ADVISORY_QUESTION",
+    );
+
+    const internalQuestionMark = validOutput();
+
+    internalQuestionMark.proposal.evidence_gaps[0]
+      .human_review_question =
+      "Should the team review this record? Why?";
+
+    expectReason(
+      internalQuestionMark,
+      "INVALID_ADVISORY_QUESTION",
+    );
+
+    const assertionSeparator = validOutput();
+
+    assertionSeparator.proposal.evidence_gaps[0]
+      .human_review_question =
+      "Should the team review this record, before acceptance?";
+
+    expectReason(
+      assertionSeparator,
       "INVALID_ADVISORY_QUESTION",
     );
 

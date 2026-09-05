@@ -115,7 +115,7 @@ function generate(subject: ReturnType<typeof fixture>) {
 }
 
 describe("S40 investigation-active advisory model generator", () => {
-  it("generates an advisory-only response using only model-safe context", async () => {
+  it("generates an advisory-only response with a compliant direct question using only model-safe context", async () => {
     const subject = fixture(outputWithReference("R1"));
     const result = await generate(subject);
 
@@ -129,6 +129,10 @@ describe("S40 investigation-active advisory model generator", () => {
       workflow_mutated: false,
       human_acceptance_required: true,
     });
+    expect(
+      result.response.proposal?.evidence_gaps[0]
+        ?.human_review_question,
+    ).toBe("What record should the team obtain?");
     expect(subject.createOutputId).toHaveBeenCalledTimes(1);
     expect(subject.model_client.generateStructured).toHaveBeenCalledWith({
       prompt: expect.any(String),

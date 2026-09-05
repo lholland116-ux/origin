@@ -66,4 +66,60 @@ describe("S40 investigation-active advisory model profile", () => {
       ),
     ).toMatchObject(validOutput);
   });
+
+  it("uses the controlled question schema only for review and verification questions", () => {
+    const proposal = CAPA_INVESTIGATION_ACTIVE_ADVISORY_JSON_SCHEMA
+      .properties.proposal.properties;
+    const questions = [
+      proposal.evidence_gaps.items.properties.human_review_question,
+      proposal.conflicting_information.items.properties.human_review_question,
+      proposal.assumptions.items.properties.verification_question,
+      proposal.assumptions.items.properties.human_review_question,
+      proposal.causal_hypotheses.items.properties.human_review_question,
+      proposal.alternative_hypotheses.items.properties.human_review_question,
+      proposal.investigation_recommendations.items.properties.human_review_question,
+      CAPA_INVESTIGATION_ACTIVE_ADVISORY_JSON_SCHEMA.properties
+        .uncertainty_and_limitations.items.properties.human_review_question,
+    ];
+    const narrative = proposal.evidence_gaps.items.properties.gap;
+
+    for (const question of questions) {
+      expect(question).toMatchObject({
+        type: "string",
+        minLength: 1,
+        maxLength: 1_000,
+        pattern: expect.any(String),
+      });
+    }
+    expect(narrative).toEqual({
+      type: "string",
+      minLength: 1,
+      maxLength: 1_000,
+    });
+  });
+
+  it("expresses the provider-supported controlled question grammar", () => {
+    const pattern = new RegExp(
+      CAPA_INVESTIGATION_ACTIVE_ADVISORY_JSON_SCHEMA.properties.proposal
+        .properties.assumptions.items.properties.verification_question.pattern,
+    );
+
+    for (const question of [
+      "What record supports this hypothesis?",
+      "Does the batch record support this hypothesis?",
+      "Could the process history explain this observation?",
+    ]) {
+      expect(pattern.test(question)).toBe(true);
+    }
+    for (const question of [
+      "Please review the batch record?",
+      "Review the batch record?",
+      "Determine whether the record is complete?",
+      "Does the batch record, support this hypothesis?",
+      "Does the batch record support this hypothesis? Why?",
+      "Does the batch record support this hypothesis\n?",
+    ]) {
+      expect(pattern.test(question)).toBe(false);
+    }
+  });
 });
