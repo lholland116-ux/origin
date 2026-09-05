@@ -422,6 +422,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADOPTION_ALLOWED",
       );
 
+    case "adopt_ai_investigation_active_proposal":
+      return controlled(
+        "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_ADOPTION_ALLOWED",
+      );
+
     default:
       return controlled(
         "DEVELOPMENT_POLICY_DENIED",
@@ -487,7 +492,9 @@ function developmentAuthorizationPolicy():
         request.operation ===
           "request_ai_investigation_active_advisory" ||
         request.operation ===
-          "adopt_ai_investigation_planning_proposal";
+          "adopt_ai_investigation_planning_proposal" ||
+        request.operation ===
+          "adopt_ai_investigation_active_proposal";
 
       if (
         !tenantIsDevelopmentScoped ||

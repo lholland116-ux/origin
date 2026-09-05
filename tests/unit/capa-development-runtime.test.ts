@@ -255,6 +255,39 @@ describe(
       expect((advisory as any).dependencies.output_repository).toBe(runtime.database);
     });
 
+    it("allows the real S40 adoption service to pass development authorization", async () => {
+      const runtime = createCapaDevelopmentRuntime({
+        environment: "test",
+        now: () => NOW,
+        generate_uuid: createUuidGenerator(),
+      });
+      const adoption = runtime.create_investigation_active_adoption_service(
+        developmentContext(),
+      );
+
+      await expect(adoption.adopt({
+        capa_case_id: "30000000-0000-4000-8000-000000000001" as never,
+        adoption_intent: {
+          expected_case_version_id: "40000000-0000-4000-8000-000000000001" as never,
+          expected_record_version: 4,
+          output_id: "50000000-0000-4000-8000-000000000001" as never,
+          selected_items: [{
+            proposal_key: "P1",
+            adopted_content: {
+              gap: "The controlled record is unavailable.",
+              why_it_matters: "The evidence requires human review.",
+              recommended_next_step: "Review the controlled archive.",
+            },
+          }],
+        },
+        request_trace: {
+          request_id: "60000000-0000-4000-8000-000000000001" as never,
+          correlation_id: "70000000-0000-4000-8000-000000000001" as never,
+          idempotency_key: "s40-development-adoption" as never,
+        },
+      })).resolves.toEqual({ status: "output_not_found_or_not_authorized" });
+    });
+
     it(
       "assembles one isolated transaction-bound in-memory CAPA runtime",
       () => {
@@ -1325,6 +1358,39 @@ describe(
       expect(decision).toEqual({
         decision: "allow",
         reason_code: "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADVISORY_ALLOWED",
+        policy_version: "development-policy-1.0.0",
+        evaluated_at: "2026-08-12T14:00:00.000Z",
+        relied_on_role_assignment_ids: [`development-role:${USER_ID}`],
+      });
+    });
+
+    it.each([
+      {
+        operation: "adopt_ai_investigation_planning_proposal",
+        workflow_state: "S30",
+        purpose: "CAPA_AI_INVESTIGATION_PLANNING_ADOPTION",
+        reason_code: "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADOPTION_ALLOWED",
+      },
+      {
+        operation: "adopt_ai_investigation_active_proposal",
+        workflow_state: "S40",
+        purpose: "CAPA_AI_INVESTIGATION_ACTIVE_ADOPTION",
+        reason_code: "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_ADOPTION_ALLOWED",
+      },
+    ] as const)("allows governed development %s", async ({ operation, workflow_state, purpose, reason_code }) => {
+      const request = policyRequest();
+      await expect(createPolicy().evaluate({
+        ...request,
+        operation,
+        resource: {
+          organization_id: request.tenant.organization_id,
+          resource_type: controlled("CAPA_CASE"),
+          workflow_state,
+        },
+        purpose: controlled(purpose),
+      })).resolves.toEqual({
+        decision: "allow",
+        reason_code,
         policy_version: "development-policy-1.0.0",
         evaluated_at: "2026-08-12T14:00:00.000Z",
         relied_on_role_assignment_ids: [`development-role:${USER_ID}`],
