@@ -206,6 +206,7 @@ import {
 import { SupabaseCapaInvestigationActiveAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-investigation-active-advisory-output-repository";
 import { SupabaseCapaInvestigationActiveWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-investigation-active-workspace-draft-repository";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
+import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 
 import {
   createSupabaseCapaAiOutputReviewRepository,
@@ -1412,7 +1413,7 @@ export function createCapaProductionRuntime(
     },
 
     create_investigation_active_adoption_service(context) {
-      return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: transactionManager, adoption_repository: investigationActiveAdoptionRepository, audit_repository: auditRepository, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(investigationActiveAdvisoryOutputRepository), authorization_policy: authorizationPolicy, now, generate_uuid: generateUuid, audit_schema_version: auditSchemaVersion });
+      return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: transactionManager, adoption_repository: investigationActiveAdoptionRepository, audit_repository: auditRepository, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(investigationActiveAdvisoryOutputRepository), workspace_repository: investigationActiveWorkspaceDraftRepository, authorization_policy: authorizationPolicy, now, generate_uuid: generateUuid, audit_schema_version: auditSchemaVersion });
     },
 
     create_investigation_active_workspace_draft_service(context) {
@@ -1424,6 +1425,10 @@ export function createCapaProductionRuntime(
         authorization_policy: authorizationPolicy,
         now,
       });
+    },
+
+    create_investigation_active_workspace_reconciliation_service(context) {
+      return createReconcileCapaInvestigationActiveWorkspaceAdoptionsService({ request_context: context, capa_repository: capaRepository, adoption_repository: investigationActiveAdoptionRepository, workspace_repository: investigationActiveWorkspaceDraftRepository, transaction_manager: transactionManager, authorization_policy: authorizationPolicy, now });
     },
 
     dependencies,

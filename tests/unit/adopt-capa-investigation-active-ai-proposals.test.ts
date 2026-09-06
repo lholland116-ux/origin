@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  CAPA_INVESTIGATION_ACTIVE_ADOPTION_OPERATION,
+  CAPA_INVESTIGATION_ACTIVE_ADOPTION_REQUEST_FINGERPRINT_VERSION,
   adoptCapaInvestigationActiveAiProposals,
   type AdoptCapaInvestigationActiveAiProposalsDependencies,
 } from "../../lib/capa/application/adopt-capa-investigation-active-ai-proposals";
-import { validateCapaInvestigationActiveAdoptionIntent } from "../../lib/capa/ai/capa-investigation-active-adoption-validator";
-import type { CapaInvestigationActiveAdoptionCategory } from "../../lib/capa/ai/capa-investigation-active-adoption-contract";
+import { fingerprintCanonicalJson } from "../../lib/capa/ai/capa-ai-generation-trace";
+import { CapaInvestigationActiveAdoptionValidationError, validateCapaInvestigationActiveAdoptionIntent } from "../../lib/capa/ai/capa-investigation-active-adoption-validator";
+import {
+  CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION,
+  type CapaInvestigationActiveAdoptionCategory,
+} from "../../lib/capa/ai/capa-investigation-active-adoption-contract";
 import {
   CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM,
   CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION,
@@ -25,13 +31,17 @@ const adoptedContent: Record<CapaInvestigationActiveAdoptionCategory, object> = 
   alternative_hypothesis: { hypothesis: "Alternative", rationale: "Rationale" },
   investigation_recommendation: { recommendation: "Recommendation", rationale: "Rationale" },
 };
-function intent(category: CapaInvestigationActiveAdoptionCategory = "evidence_gap", second = false) {
+function intent(category: CapaInvestigationActiveAdoptionCategory = "evidence_gap", second = false, human_causal_role: "proposed_root_cause" | "contributing_factor" = "proposed_root_cause") {
   const adopted_content = adoptedContent[category];
-  return validateCapaInvestigationActiveAdoptionIntent({ expected_case_version_id: VERSION, expected_record_version: 4, output_id: OUTPUT, selected_items: [{ proposal_key: "P1", adopted_content }, ...(second ? [{ proposal_key: "P2", adopted_content }] : [])] });
+  return validateCapaInvestigationActiveAdoptionIntent({ expected_case_version_id: VERSION, expected_record_version: 4, output_id: OUTPUT, selected_items: [{ proposal_key: "P1", adopted_content, ...(category === "causal_hypothesis" ? { human_causal_role } : {}) }, ...(second ? [{ proposal_key: "P2", adopted_content, ...(category === "causal_hypothesis" ? { human_causal_role } : {}) }] : [])] });
 }
 function resolverResult(category: CapaInvestigationActiveAdoptionCategory = "evidence_gap", second = false) {
-  const proposals = [{ proposal_key: "P1", proposal_category: category, source_proposal: {}, resolved_reference_bindings: [{ reference_key: "R1", relationship: "related", trust: "untrusted_human_draft", source_kind: "ledger_item", source_id: "ledger-1" }] }, ...(second ? [{ proposal_key: "P2", proposal_category: category, source_proposal: {}, resolved_reference_bindings: [] }] : [])];
+  const proposals = [{ proposal_key: "P1", proposal_category: category, source_proposal: {}, resolved_reference_bindings: category === "conflicting_information" ? [{ reference_key: "R1", relationship: "conflicting", trust: "untrusted_human_draft", source_kind: "ledger_item", source_id: "L1" }, { reference_key: "R2", relationship: "conflicting", trust: "untrusted_human_draft", source_kind: "ledger_item", source_id: "L2" }] : [{ reference_key: "R1", relationship: "related", trust: "untrusted_human_draft", source_kind: "ledger_item", source_id: "ledger-1" }] }, ...(second ? [{ proposal_key: "P2", proposal_category: category, source_proposal: {}, resolved_reference_bindings: [] }] : [])];
   return { status: "resolved", organization_id: ORG, capa_case_id: CASE_ID, case_version_id: VERSION, record_version: 4, output_id: OUTPUT, selected_proposals: proposals, reference_manifest_schema_version: CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION, reference_manifest_fingerprint_algorithm: CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM, reference_manifest_sha256: "a".repeat(64) } as never;
+}
+function conflictWorkspace() {
+  const item = (id: string) => ({ item_id: id, information_class: "missing_information", statement: id, evidence_status: null, assumption_status: null, gap_status: "open", conflict_status: null, provenance: { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null }, owner_user_id: null, information_date: null, source_version: null, context: null, linked_capa_objects: [], supporting_item_ids: [], contradictory_item_ids: [], conflict_item_ids: [], material_to_conclusion: false, critical_to_conclusion: false, recommended_next_step: "Review", target_date: null, human_disposition: null });
+  return { schema_version: "capa-investigation-active-workspace-draft-1.0.0", trust: "untrusted_human_draft", workflow_state: "S40", organization_id: ORG, capa_case_id: CASE_ID, case_version_id: VERSION, record_version: 4, draft_revision: 1, evidence_assumption_ledger: { items: [item("L1"), item("L2")] }, root_cause_package: { hypotheses: [], root_cause_not_confirmed: null }, updated_by_user_id: USER, updated_at: NOW.toISOString() };
 }
 function setup(overrides: Partial<AdoptCapaInvestigationActiveAiProposalsDependencies> = {}, category: CapaInvestigationActiveAdoptionCategory = "evidence_gap", second = false) {
   let id = 0;
@@ -44,6 +54,7 @@ function setup(overrides: Partial<AdoptCapaInvestigationActiveAiProposalsDepende
     transaction_manager: { runInTransaction: vi.fn(async (_trace, work) => work({ transaction_id: "tx" as never, started_at: NOW.toISOString() as never, request_trace: _trace })) } as never,
     adoption_repository: { appendAdoption } as never,
     audit_repository: { appendEvent } as never,
+    workspace_repository: { findDraft: vi.fn().mockResolvedValue(category === "conflicting_information" ? conflictWorkspace() : null), saveDraft: vi.fn(async (_transaction, input) => ({ status: "saved" as const, draft: input.draft })) } as never,
     authorizer: { authorize: vi.fn().mockResolvedValue(true) },
     source_resolver,
     id_generator: { generateAdoptionId: () => `60000000-0000-4000-8000-${String(++id).padStart(12, "0")}` as never, generateAuditEventId: () => `70000000-0000-4000-8000-${String(++id).padStart(12, "0")}` as never },
@@ -53,8 +64,8 @@ function setup(overrides: Partial<AdoptCapaInvestigationActiveAiProposalsDepende
   const dependencies = { ...base, ...overrides };
   return { ...dependencies, source_resolver: dependencies.source_resolver, appendAdoption, appendEvent };
 }
-function command(category: CapaInvestigationActiveAdoptionCategory = "evidence_gap", second = false) {
-  return { capa_case_id: CASE_ID, adoption_intent: intent(category, second), request_trace: { request_id: "80000000-0000-4000-8000-000000000001", correlation_id: "90000000-0000-4000-8000-000000000001", idempotency_key: "batch-1" } } as never;
+function command(category: CapaInvestigationActiveAdoptionCategory = "evidence_gap", second = false, human_causal_role: "proposed_root_cause" | "contributing_factor" = "proposed_root_cause") {
+  return { capa_case_id: CASE_ID, adoption_intent: intent(category, second, human_causal_role), request_trace: { request_id: "80000000-0000-4000-8000-000000000001", correlation_id: "90000000-0000-4000-8000-000000000001", idempotency_key: "batch-1" } } as never;
 }
 
 describe("S40 investigation-active adoption service", () => {
@@ -74,12 +85,67 @@ describe("S40 investigation-active adoption service", () => {
     expect(test.appendEvent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ event_type: "EVT-AI-PROPOSAL-ADOPTED", target: expect.objectContaining({ object_type: "CAPA_INVESTIGATION_ACTIVE_ADOPTION" }), metadata: expect.objectContaining({ proposal_category: "evidence_gap", reference_manifest_sha256: "a".repeat(64), workflow_mutated: false }) }));
   });
 
+  it("preserves the historical non-causal request fingerprint payload shape", async () => {
+    expect(CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION).toBe("capa-investigation-active-adoption-1.0.0");
+    const test = setup({}, "evidence_gap");
+    await expect(adoptCapaInvestigationActiveAiProposals(test, command())).resolves.toMatchObject({ status: "adopted" });
+    const persistence = test.appendAdoption.mock.calls[0]![1];
+    const expectedHistoricalPayload = {
+      fingerprint_version: CAPA_INVESTIGATION_ACTIVE_ADOPTION_REQUEST_FINGERPRINT_VERSION,
+      operation: CAPA_INVESTIGATION_ACTIVE_ADOPTION_OPERATION,
+      organization_id: ORG,
+      capa_case_id: CASE_ID,
+      expected_case_version_id: VERSION,
+      expected_record_version: 4,
+      output_id: OUTPUT,
+      adopted_by: { actor_type: "human", actor_id: USER },
+      selected_items: [{ proposal_key: "P1", proposal_category: "evidence_gap", adopted_content: adoptedContent.evidence_gap }],
+      adoption_policy_version: CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION,
+    };
+    expect(expectedHistoricalPayload.selected_items[0]).not.toHaveProperty("human_causal_role");
+    expect(persistence.request_fingerprint).toBe(fingerprintCanonicalJson(expectedHistoricalPayload));
+  });
+
+  it("includes causal role in new fingerprints and distinguishes its value", async () => {
+    const rootCause = setup({}, "causal_hypothesis");
+    const contributing = setup({}, "causal_hypothesis");
+    await expect(adoptCapaInvestigationActiveAiProposals(rootCause, command("causal_hypothesis", false, "proposed_root_cause"))).resolves.toMatchObject({ status: "adopted" });
+    await expect(adoptCapaInvestigationActiveAiProposals(contributing, command("causal_hypothesis", false, "contributing_factor"))).resolves.toMatchObject({ status: "adopted" });
+    const rootInput = rootCause.appendAdoption.mock.calls[0]![1];
+    const contributingInput = contributing.appendAdoption.mock.calls[0]![1];
+    expect(rootInput.adoption.adopted_item).toHaveProperty("human_causal_role", "proposed_root_cause");
+    expect(contributingInput.adoption.adopted_item).toHaveProperty("human_causal_role", "contributing_factor");
+    expect(rootInput.request_fingerprint).not.toBe(contributingInput.request_fingerprint);
+  });
+
   it("uses the resolved category for adopted-content validation and supports a multi-item batch", async () => {
     const test = setup({}, "assumption", true);
     const result = await adoptCapaInvestigationActiveAiProposals(test, command("assumption", true));
     expect(result.status).toBe("adopted");
     expect(test.appendAdoption).toHaveBeenCalledTimes(2);
     expect(test.appendAdoption.mock.calls[0]![1].adoption.adopted_item.adopted_content).toEqual({ assumption: "Assumption", verification_question: "Verify?" });
+  });
+
+  it("fails closed when resolved category and human causal role disagree", async () => {
+    const evidence = setup({}, "evidence_gap");
+    const evidenceCommand: any = command("evidence_gap");
+    await expect(adoptCapaInvestigationActiveAiProposals(evidence, {
+      ...evidenceCommand,
+      adoption_intent: {
+        ...evidenceCommand.adoption_intent,
+        selected_items: [{ ...evidenceCommand.adoption_intent.selected_items[0]!, human_causal_role: "proposed_root_cause" }],
+      },
+    } as never)).rejects.toThrow(CapaInvestigationActiveAdoptionValidationError);
+    expect(evidence.appendAdoption).not.toHaveBeenCalled();
+
+    const causal = setup({}, "causal_hypothesis");
+    const causalCommand: any = command("causal_hypothesis");
+    const { human_causal_role: _role, ...causalItemWithoutRole } = causalCommand.adoption_intent.selected_items[0]!;
+    await expect(adoptCapaInvestigationActiveAiProposals(causal, {
+      ...causalCommand,
+      adoption_intent: { ...causalCommand.adoption_intent, selected_items: [causalItemWithoutRole] },
+    } as never)).rejects.toThrow(CapaInvestigationActiveAdoptionValidationError);
+    expect(causal.appendAdoption).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -107,7 +173,7 @@ describe("S40 investigation-active adoption service", () => {
     const conflict = setup({ adoption_repository: { appendAdoption: vi.fn(async () => ({ status: "conflict" as const, reason_code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST", record: {} as never })) } as never });
     await expect(adoptCapaInvestigationActiveAiProposals(conflict, command())).resolves.toEqual({ status: "idempotency_conflict" });
     const changed = setup({ adoption_repository: { appendAdoption: vi.fn(async () => ({ status: "case_changed" as const })) } as never });
-    await expect(adoptCapaInvestigationActiveAiProposals(changed, command())).resolves.toEqual({ status: "concurrency_conflict" });
+    await expect(adoptCapaInvestigationActiveAiProposals(changed, command())).resolves.toEqual({ status: "case_changed" });
   });
 
   it("rejects an empty batch before transaction persistence", async () => {

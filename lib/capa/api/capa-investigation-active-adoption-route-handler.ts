@@ -35,13 +35,15 @@ function errorResponse(trace: { readonly correlation_id: CorrelationId }, status
 function resultResponse(trace: { readonly correlation_id: CorrelationId }, result: AdoptCapaInvestigationActiveAiProposalsResult): Response {
   if (result.status === "adopted" || result.status === "already_adopted") {
     const records = result.records.map(({ adoption }) => ({ adoption_id: adoption.adoption_id, proposal_key: adoption.proposal_key, proposal_category: adoption.proposal_category, adopted_item: adoption.adopted_item, adopted_at: adoption.adopted_at, adopted_by_user_id: adoption.adopted_by.actor_id }));
-    return response({ status: result.status, records, correlation_id: trace.correlation_id }, result.status === "adopted" ? 201 : 200);
+    const workspace = { draft_revision: result.workspace.draft_revision, case_version_id: result.workspace.case_version_id, record_version: result.workspace.record_version, evidence_assumption_ledger: result.workspace.evidence_assumption_ledger, root_cause_package: result.workspace.root_cause_package, updated_at: result.workspace.updated_at };
+    return response({ status: result.status, records, workspace, correlation_id: trace.correlation_id }, result.status === "adopted" ? 201 : 200);
   }
   switch (result.status) {
     case "authorization_denied": return errorResponse(trace, 403, "CAPA_ADOPTION_ACCESS_DENIED", "The CAPA proposal-adoption operation is not authorized.");
     case "output_not_found_or_not_authorized": return errorResponse(trace, 404, "CAPA_ADOPTION_OUTPUT_NOT_FOUND", "The CAPA advisory output was not found.");
     case "output_not_adoptable": return errorResponse(trace, 409, "CAPA_ADOPTION_OUTPUT_NOT_ADOPTABLE", "The CAPA advisory output cannot be adopted.");
-    case "concurrency_conflict": return errorResponse(trace, 409, "CAPA_ADOPTION_CASE_CHANGED", "The CAPA case changed before adoption could be completed.");
+    case "case_changed": return errorResponse(trace, 409, "CAPA_ADOPTION_CASE_CHANGED", "The CAPA case changed before adoption could be completed.");
+    case "workspace_conflict": return errorResponse(trace, 409, "CAPA_ADOPTION_WORKSPACE_CONFLICT", "The workspace changed before adoption could be completed.");
     case "idempotency_conflict": return errorResponse(trace, 409, "CAPA_ADOPTION_IDEMPOTENCY_CONFLICT", "The idempotency key was used for a different logical adoption request.");
   }
 }

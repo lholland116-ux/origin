@@ -23,7 +23,7 @@ const CORRELATION = "70000000-0000-4000-8000-000000000001";
 const ADOPTION = "80000000-0000-4000-8000-000000000001";
 const TIME = "2026-09-05T12:00:00.000Z";
 
-function intent(items = [{ proposal_key: "P1", adopted_content: { gap: "gap" } }]) {
+function intent(items: readonly { proposal_key: string; adopted_content: unknown; human_causal_role?: "proposed_root_cause" | "contributing_factor" }[] = [{ proposal_key: "P1", adopted_content: { gap: "gap" } }]) {
   return validateCapaInvestigationActiveAdoptionIntent({
     expected_case_version_id: VERSION,
     expected_record_version: 4,
@@ -83,6 +83,14 @@ describe("S40 investigation-active adoption validator", () => {
     expect(() => intent([{ proposal_key: "P1", adopted_content: {} }, { proposal_key: "P1", adopted_content: {} }] as never)).toThrow();
     expect(() => intent([{ proposal_key: "P1", adopted_content: "not-object" } as never])).toThrow();
     expect(() => intent([{ proposal_key: "P1", adopted_content: { gap: "x".repeat(30_001) } }])).toThrow();
+  });
+
+  it("preserves historical non-causal requests and requires an explicit human causal role", () => {
+    expect(intent().selected_items[0]).not.toHaveProperty("human_causal_role");
+    expect(intent([{ proposal_key: "P1", adopted_content: content.causal_hypothesis, human_causal_role: "proposed_root_cause" }]).selected_items[0]?.human_causal_role).toBe("proposed_root_cause");
+    expect(() => canonical({ proposal_category: "causal_hypothesis", adopted_item: { proposal_key: "P1", adopted_content: content.causal_hypothesis } })).toThrow();
+    expect(() => canonical({ adopted_item: { proposal_key: "P1", adopted_content: content.evidence_gap, human_causal_role: "contributing_factor" } })).toThrow();
+    expect(() => intent([{ proposal_key: "P1", adopted_content: content.evidence_gap, human_causal_role: "not-a-role" } as never])).toThrow();
   });
 
   it("requires an exact UUID output_id", () => {

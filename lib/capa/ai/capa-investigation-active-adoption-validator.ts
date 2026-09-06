@@ -15,6 +15,7 @@ import {
   type CapaInvestigationActiveAdoptionCategory,
   type CapaInvestigationActiveAdoptionIntentRequest,
   type CapaInvestigationActiveAdoptionRecord,
+  type CapaInvestigationActiveHumanCausalRole,
   type CapaInvestigationActiveResolvedReferenceBinding,
   type ConstructCapaInvestigationActiveAdoptionInput,
 } from "./capa-investigation-active-adoption-contract";
@@ -44,6 +45,7 @@ const VERSION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const RELATIONSHIPS = new Set(["related", "conflicting", "supporting", "contradictory"]);
 const TRUSTS = new Set(["authoritative_server_context", "untrusted_human_draft"]);
 const SOURCES = new Set(["investigation_plan_item", "ledger_item", "causal_hypothesis", "root_cause_not_confirmed"]);
+const HUMAN_CAUSAL_ROLES = new Set<CapaInvestigationActiveHumanCausalRole>(["proposed_root_cause", "contributing_factor"]);
 const fail = (reason: CapaInvestigationActiveAdoptionValidationReasonCode): never => { throw new CapaInvestigationActiveAdoptionValidationError(reason); };
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const exact = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -90,13 +92,14 @@ export function validateCapaInvestigationActiveAdoptionIntent(value: unknown): C
   if (!uuid(input.output_id)) fail("INVALID_OUTPUT_ID");
   if (!Array.isArray(input.selected_items) || input.selected_items.length < 1 || input.selected_items.length > CAPA_INVESTIGATION_ACTIVE_ADOPTION_MAXIMUM_ITEMS) fail("INVALID_SELECTED_ITEMS");
   const selected_items = (input.selected_items as unknown[]).map((item: unknown) => {
-    if (!record(item) || !exact(item, ["proposal_key", "adopted_content"])) fail("INVALID_ADOPTED_CONTENT");
+    if (!record(item) || Object.keys(item).some((key) => !["proposal_key", "adopted_content", "human_causal_role"].includes(key)) || !Object.hasOwn(item, "proposal_key") || !Object.hasOwn(item, "adopted_content") || Object.keys(item).length < 2 || Object.keys(item).length > 3) fail("INVALID_ADOPTED_CONTENT");
     const candidate = item as Record<string, unknown>;
     if (typeof candidate.proposal_key !== "string" || !P.test(candidate.proposal_key)) fail("INVALID_PROPOSAL_KEY");
+    if (Object.hasOwn(candidate, "human_causal_role") && (typeof candidate.human_causal_role !== "string" || !HUMAN_CAUSAL_ROLES.has(candidate.human_causal_role as CapaInvestigationActiveHumanCausalRole))) fail("INVALID_ADOPTED_CONTENT");
     if (!record(candidate.adopted_content)) fail("INVALID_ADOPTED_CONTENT");
     const adopted_content = snapshotJsonValue(candidate.adopted_content);
     if (!record(adopted_content)) fail("INVALID_ADOPTED_CONTENT");
-    return Object.freeze({ proposal_key: candidate.proposal_key as string, adopted_content: freeze(adopted_content) });
+    return Object.freeze({ proposal_key: candidate.proposal_key as string, adopted_content: freeze(adopted_content), ...(candidate.human_causal_role === undefined ? {} : { human_causal_role: candidate.human_causal_role as CapaInvestigationActiveHumanCausalRole }) });
   });
   const keys = new Set<string>(); for (const item of selected_items) { if (keys.has(item.proposal_key)) fail("DUPLICATE_PROPOSAL_KEY"); keys.add(item.proposal_key); }
   let serialized: string | undefined; try { serialized = JSON.stringify(input); } catch { fail("INVALID_ADOPTION_INPUT"); }
@@ -130,7 +133,7 @@ function validateBindings(bindings: unknown): readonly CapaInvestigationActiveRe
   return Object.freeze(result);
 }
 
-export function constructCapaInvestigationActiveAdoption(input: ConstructCapaInvestigationActiveAdoptionInput): CapaInvestigationActiveAdoptionRecord {
+function constructCapaInvestigationActiveAdoptionInternal(input: ConstructCapaInvestigationActiveAdoptionInput, allowLegacyCausalRole = false): CapaInvestigationActiveAdoptionRecord {
   if (!record(input)) fail("INVALID_ADOPTION_INPUT");
   if (!uuid(input.adoption_id)) fail("INVALID_ADOPTION_ID");
   if (!uuid(input.organization_id)) fail("INVALID_ORGANIZATION");
@@ -140,7 +143,8 @@ export function constructCapaInvestigationActiveAdoption(input: ConstructCapaInv
   if (!uuid(input.output_id)) fail("INVALID_OUTPUT_ID");
   if (typeof input.proposal_key !== "string" || !P.test(input.proposal_key)) fail("INVALID_ADOPTED_CONTENT");
   if (!(input.proposal_category in CONTENT_FIELDS)) fail("INVALID_ADOPTED_CONTENT");
-  if (!record(input.adopted_item) || !exact(input.adopted_item, ["proposal_key", "adopted_content"]) || input.adopted_item.proposal_key !== input.proposal_key) fail("INVALID_ADOPTED_CONTENT");
+  if (!record(input.adopted_item) || Object.keys(input.adopted_item).some((key) => !["proposal_key", "adopted_content", "human_causal_role"].includes(key)) || !Object.hasOwn(input.adopted_item, "proposal_key") || !Object.hasOwn(input.adopted_item, "adopted_content") || Object.keys(input.adopted_item).length < 2 || Object.keys(input.adopted_item).length > 3 || input.adopted_item.proposal_key !== input.proposal_key) fail("INVALID_ADOPTED_CONTENT");
+  if (input.proposal_category === "causal_hypothesis" ? ((!allowLegacyCausalRole && input.adopted_item.human_causal_role === undefined) || (input.adopted_item.human_causal_role !== undefined && !HUMAN_CAUSAL_ROLES.has(input.adopted_item.human_causal_role as CapaInvestigationActiveHumanCausalRole))) : input.adopted_item.human_causal_role !== undefined) fail("INVALID_ADOPTED_CONTENT");
   const adopted_content = validateCapaInvestigationActiveAdoptedContent(input.proposal_category, input.adopted_item.adopted_content);
   if (!record(input.adopted_by) || input.adopted_by.actor_type !== "human" || typeof input.adopted_by.actor_id !== "string" || !uuid(input.adopted_by.actor_id)) fail("INVALID_ADOPTER");
   if (!timestamp(input.adopted_at)) fail("INVALID_ADOPTION_TIMESTAMP");
@@ -151,9 +155,13 @@ export function constructCapaInvestigationActiveAdoption(input: ConstructCapaInv
   if (input.reference_manifest_schema_version !== CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION || input.reference_manifest_fingerprint_algorithm !== CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM) fail("INVALID_REFERENCE_MANIFEST");
   if (input.workflow_mutated !== false || input.controlled_record_mutated !== false || input.gate_approved !== false) fail("INVALID_AUTHORITY_FLAGS");
   const recordValue: CapaInvestigationActiveAdoptionRecord = {
-    adoption_id: input.adoption_id, organization_id: input.organization_id, capa_case_id: input.capa_case_id, case_version_id: input.case_version_id, record_version: input.record_version, output_id: input.output_id as CapaAiOutputId, proposal_key: input.proposal_key, proposal_category: input.proposal_category, adopted_item: { proposal_key: input.proposal_key, adopted_content }, resolved_reference_bindings: validateBindings(input.resolved_reference_bindings), reference_manifest_schema_version: input.reference_manifest_schema_version, reference_manifest_fingerprint_algorithm: input.reference_manifest_fingerprint_algorithm, reference_manifest_sha256: input.reference_manifest_sha256, adopted_at: input.adopted_at, adopted_by: { actor_type: "human", actor_id: input.adopted_by.actor_id }, adoption_policy_version: CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION, request_id: input.request_id, correlation_id: input.correlation_id, idempotency_key: input.idempotency_key, workflow_mutated: false, controlled_record_mutated: false, gate_approved: false,
+    adoption_id: input.adoption_id, organization_id: input.organization_id, capa_case_id: input.capa_case_id, case_version_id: input.case_version_id, record_version: input.record_version, output_id: input.output_id as CapaAiOutputId, proposal_key: input.proposal_key, proposal_category: input.proposal_category, adopted_item: { proposal_key: input.proposal_key, adopted_content, ...(input.adopted_item.human_causal_role === undefined ? {} : { human_causal_role: input.adopted_item.human_causal_role }) }, resolved_reference_bindings: validateBindings(input.resolved_reference_bindings), reference_manifest_schema_version: input.reference_manifest_schema_version, reference_manifest_fingerprint_algorithm: input.reference_manifest_fingerprint_algorithm, reference_manifest_sha256: input.reference_manifest_sha256, adopted_at: input.adopted_at, adopted_by: { actor_type: "human", actor_id: input.adopted_by.actor_id }, adoption_policy_version: CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION, request_id: input.request_id, correlation_id: input.correlation_id, idempotency_key: input.idempotency_key, workflow_mutated: false, controlled_record_mutated: false, gate_approved: false,
   };
   return freeze(recordValue);
+}
+
+export function constructCapaInvestigationActiveAdoption(input: ConstructCapaInvestigationActiveAdoptionInput): CapaInvestigationActiveAdoptionRecord {
+  return constructCapaInvestigationActiveAdoptionInternal(input);
 }
 
 export function validateCapaInvestigationActiveAdoptionRecord(
@@ -161,7 +169,7 @@ export function validateCapaInvestigationActiveAdoptionRecord(
 ): CapaInvestigationActiveAdoptionRecord {
   if (!record(value)) fail("INVALID_ADOPTION_INPUT");
   const candidate = value as Record<string, unknown>;
-  return constructCapaInvestigationActiveAdoption({
+  return constructCapaInvestigationActiveAdoptionInternal({
     adoption_id: candidate.adoption_id as never,
     organization_id: candidate.organization_id as never,
     capa_case_id: candidate.capa_case_id as never,
@@ -184,5 +192,5 @@ export function validateCapaInvestigationActiveAdoptionRecord(
     workflow_mutated: candidate.workflow_mutated as false,
     controlled_record_mutated: candidate.controlled_record_mutated as false,
     gate_approved: candidate.gate_approved as false,
-  });
+  }, true);
 }

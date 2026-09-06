@@ -4,10 +4,11 @@ import {
   type CapaInvestigationActiveAdoptionCategory,
   type CapaInvestigationActiveAdoptedContent,
   type CapaInvestigationActiveAdoptionItemIntent,
+  type CapaInvestigationActiveHumanCausalRole,
 } from "../../lib/capa/ai/capa-investigation-active-adoption-contract";
+export type { CapaInvestigationActiveHumanCausalRole } from "../../lib/capa/ai/capa-investigation-active-adoption-contract";
 import { validateCapaInvestigationActiveAdoptedContent } from "../../lib/capa/ai/capa-investigation-active-adoption-validator";
 
-export type CapaInvestigationActiveHumanCausalRole = "proposed_root_cause" | "contributing_factor";
 export interface CapaInvestigationActiveAdvisoryReviewCard {
   readonly proposalKey: string;
   readonly category: CapaInvestigationActiveAdoptionCategory;
@@ -78,7 +79,7 @@ export function validateCapaInvestigationActiveAdvisorySelection(cards: readonly
     if (item.humanCausalRole === undefined) return { valid: false, message: `${item.proposalKey} requires a human causal role.` };
     causalRoles[item.proposalKey] = item.humanCausalRole;
   }
-  const selectedItems = selected.map((item) => Object.freeze({ proposal_key: item.proposalKey, adopted_content: item.adoptedContent }));
+  const selectedItems = selected.map((item) => Object.freeze({ proposal_key: item.proposalKey, adopted_content: item.adoptedContent, ...(item.humanCausalRole === undefined ? {} : { human_causal_role: item.humanCausalRole }) }));
   try { for (const item of selectedItems) { const source = cards.find((card) => card.proposalKey === item.proposal_key); if (source === undefined) return { valid: false, message: "The selected proposal is not available." }; validateCapaInvestigationActiveAdoptedContent(source.category, item.adopted_content); } } catch { return { valid: false, message: "A selected proposal contains invalid adopted content." }; }
   return { valid: true, selectedItems: Object.freeze(selectedItems), causalRoles: Object.freeze(causalRoles) };
 }

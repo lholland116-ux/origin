@@ -39,6 +39,7 @@ function adoption(category: Category = "evidence_gap") {
     adopted_item: {
       proposal_key: "P1",
       adopted_content: content,
+      ...(category === "causal_hypothesis" ? { human_causal_role: "proposed_root_cause" as const } : {}),
     },
     resolved_reference_bindings: [],
     reference_manifest_schema_version: "capa-investigation-active-reference-manifest-1.0.0",

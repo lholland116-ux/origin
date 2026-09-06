@@ -115,6 +115,7 @@ import {
 import {
   validateCapaInvestigationActiveAdvisoryModelOutput,
 } from "../../capa/ai/capa-investigation-active-advisory-output-validator";
+import { fingerprintCanonicalJson } from "../../capa/ai/capa-ai-generation-trace";
 
 import {
   constructCapaInvestigationPlanningAdoption,
@@ -2045,6 +2046,17 @@ export class InMemoryCapaDatabase
 
   async listActiveAdoptionsForOutput(organizationId: import("../../capa/domain/capa-types").OrganizationId, outputId: string): Promise<readonly PersistedCapaInvestigationActiveAdoption[]> {
     return Object.freeze([...this.committed_state.investigation_active_adoptions.values()].filter((record) => record.adoption.organization_id === organizationId && record.adoption.output_id === outputId).sort((left, right) => left.adoption.adopted_at.localeCompare(right.adoption.adopted_at) || left.adoption.adoption_id.localeCompare(right.adoption.adoption_id)).map(cloneValue));
+  }
+
+  async listAdoptionsForCase(organizationId: OrganizationId, capaCaseId: CapaCaseId): Promise<readonly PersistedCapaInvestigationActiveAdoption[]> {
+    return Object.freeze([...this.committed_state.investigation_active_adoptions.values()]
+      .filter((record) => record.adoption.organization_id === organizationId && record.adoption.capa_case_id === capaCaseId)
+      .sort((left, right) => left.adoption.adopted_at.localeCompare(right.adoption.adopted_at) || left.adoption.adoption_id.localeCompare(right.adoption.adoption_id))
+      .map((record) => {
+        const validated = validateCapaInvestigationActiveAdoptionRecord(record.adoption);
+        if (!isDeepStrictEqual(validated, record.adoption) || record.record_fingerprint !== fingerprintCanonicalJson(validated)) throw new InMemoryIntegrityError("The S40 adoption state is invalid.");
+        return cloneValue(record);
+      }));
   }
 
   async findAdoptionById(

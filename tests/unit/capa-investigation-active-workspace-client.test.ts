@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createInitialLedgerDraft, createInitialRootCausePackageDraft, createLedgerItem } from "../../app/capa/capa-root-cause-draft";
-import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace, parseCapaInvestigationActiveWorkspaceLoad, saveCapaInvestigationActiveWorkspace, type CapaInvestigationActiveWorkspaceProjection, type CapaInvestigationActiveWorkspaceSaveResult, type WorkspaceAutosaveSnapshot } from "../../app/capa/capa-investigation-active-workspace-client";
+import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace, reconcileCapaInvestigationActiveWorkspaceAdoptions, parseCapaInvestigationActiveWorkspaceLoad, saveCapaInvestigationActiveWorkspace, type CapaInvestigationActiveWorkspaceProjection, type CapaInvestigationActiveWorkspaceSaveResult, type WorkspaceAutosaveSnapshot } from "../../app/capa/capa-investigation-active-workspace-client";
 
 const CASE = "20000000-0000-4000-8000-000000000001";
 const VERSION = "30000000-0000-4000-8000-000000000001";
@@ -21,6 +21,22 @@ describe("S40 investigation-active workspace browser client", () => {
     const parsed = parseCapaInvestigationActiveWorkspaceLoad({ workspace, correlation_id: CORRELATION });
     expect(parsed).toMatchObject({ status: "loaded", workspace: { draft_revision: 1, case_version_id: VERSION, record_version: 4 } });
     expect((parsed as { workspace: typeof workspace }).workspace).not.toHaveProperty("organization_id");
+  });
+
+  it("parses reconciled workspace and null responses", async () => {
+    await expect(reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify({ status: "reconciled", workspace, correlation_id: CORRELATION }), { status: 200 }))).resolves.toMatchObject({ status: "loaded", workspace: { draft_revision: 1, case_version_id: VERSION } });
+    await expect(reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify({ status: "reconciled", workspace: null, correlation_id: CORRELATION }), { status: 200 }))).resolves.toMatchObject({ status: "loaded", workspace: null });
+  });
+
+  it.each([
+    ["malformed reconciliation response", { status: "unexpected", workspace, correlation_id: CORRELATION }],
+    ["malformed workspace projection", { status: "reconciled", workspace: { ...workspace, draft_revision: 0 }, correlation_id: CORRELATION }],
+  ])("fails closed for a %s", async (_label, body) => {
+    await expect(reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify(body), { status: 200 }))).resolves.toMatchObject({ status: "failed", code: "INVALID_WORKSPACE_RESPONSE" });
+  });
+
+  it.each(["WORKFLOW_MUTATION_DETECTED", "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT"])("preserves controlled reconciliation failure code %s", async (code) => {
+    await expect(reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify({ error: { code, message: "raw repository details", correlation_id: CORRELATION } }), { status: 409 }))).resolves.toMatchObject({ status: "failed", code });
   });
 
   it("sends only the safe PUT payload and rejects malformed responses", async () => {

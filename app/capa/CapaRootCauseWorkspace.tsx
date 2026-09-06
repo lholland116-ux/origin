@@ -10,15 +10,17 @@ import CapaInvestigationActiveAdvisoryPanel from "./CapaInvestigationActiveAdvis
 import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, addLedgerItem, applyRootCauseDraftMutation, clearRootCauseNotConfirmed,
   createHypothesis, createInitialLedgerDraft, createInitialRootCausePackageDraft, createLedgerItem,
   isValidCurrentUserId, removeHypothesis, removeLedgerItem, setRootCauseNotConfirmed, updateHypothesis, updateLedgerItem,
-  validateRootCauseDrafts, applyAdoptedCapaInvestigationActiveProposals } from "./capa-root-cause-draft";
+  validateRootCauseDrafts } from "./capa-root-cause-draft";
 import type { CapaInvestigationActiveAdoptionSafeRecord } from "./capa-investigation-active-adoption-client";
 import type { CapaInvestigationActiveHumanCausalRole } from "./capa-investigation-active-advisory-review";
 import { createRootCauseSubmissionAttempt, submitRootCauseSubmissionAttempt,
   type RootCauseSubmissionAttempt } from "./capa-root-cause-submission-client";
 import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace,
-  saveCapaInvestigationActiveWorkspace, type WorkspaceAutosaveStatus } from "./capa-investigation-active-workspace-client";
+  saveCapaInvestigationActiveWorkspace, reconcileCapaInvestigationActiveWorkspaceAdoptions, type WorkspaceAutosaveStatus, type CapaInvestigationActiveWorkspaceProjection } from "./capa-investigation-active-workspace-client";
 
 const readable = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const ADOPTED_AI_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isAdoptedAi = (provenance: { readonly source_type: string; readonly source_reference: string | null; readonly adopted_by_user_id: string | null; readonly adopted_at: string | null }) => provenance.source_type === "ai_proposal" && provenance.source_reference !== null && ADOPTED_AI_UUID.test(provenance.source_reference) && provenance.adopted_by_user_id !== null && provenance.adopted_at !== null;
 const toggle = (values: readonly string[], value: string, checked: boolean) =>
   checked ? [...values, value] : values.filter((entry) => entry !== value);
 export const normalizedLedgerReferenceIds = (value: string): readonly string[] =>
@@ -155,14 +157,17 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     ledgerRef.current = initialLedger; rootPackageRef.current = initialRootPackage;
     setLedger(initialLedger); setRootPackage(initialRootPackage); setDraftRevision(null);
     acknowledgedAiReferencesRef.current = new Set(); coordinatorRef.current?.resetFromServer(null);
-    void loadCapaInvestigationActiveWorkspace(caseId).then((result) => {
+    void loadCapaInvestigationActiveWorkspace(caseId).then(async (result) => {
       if (!active) return;
       if (result.status === "failed") { setHydrationStatus("failed"); setWorkspaceStatus("failed"); setError("The durable S40 workspace could not be loaded. Editing remains disabled."); return; }
-      const loadedLedger = result.workspace?.evidence_assumption_ledger ?? initialLedger;
-      const loadedRootPackage = result.workspace?.root_cause_package ?? initialRootPackage;
+      const reconciled = await reconcileCapaInvestigationActiveWorkspaceAdoptions(caseId);
+      if (!active) return;
+      if (reconciled.status === "failed") { setHydrationStatus("failed"); setWorkspaceStatus("failed"); setError("The durable S40 workspace could not be reconciled. Editing remains disabled."); return; }
+      const loadedLedger = reconciled.workspace?.evidence_assumption_ledger ?? initialLedger;
+      const loadedRootPackage = reconciled.workspace?.root_cause_package ?? initialRootPackage;
       ledgerRef.current = loadedLedger; rootPackageRef.current = loadedRootPackage;
       setLedger(loadedLedger); setRootPackage(loadedRootPackage);
-      const loadedRevision = result.workspace?.draft_revision ?? null;
+      const loadedRevision = reconciled.workspace?.draft_revision ?? null;
       setDraftRevision(loadedRevision); coordinatorRef.current?.resetFromServer(loadedRevision);
       acknowledgedAiReferencesRef.current = aiSourceReferences(loadedLedger, loadedRootPackage);
       setHydrationStatus("ready"); setWorkspaceStatus("saved");
@@ -213,12 +218,9 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     if (next === null) { setError("The root-cause submission could not be prepared."); return; }
     setAttempt(next); void submit(next);
   }
-  function applyAdopted(records: readonly CapaInvestigationActiveAdoptionSafeRecord[], roles: Readonly<Record<string, CapaInvestigationActiveHumanCausalRole>>) {
-    const applied = applyAdoptedCapaInvestigationActiveProposals(ledgerRef.current, rootPackageRef.current, records, roles);
-    if (applied === null) { setError("The trusted adoption response could not be integrated into the local draft."); return; }
-    ledgerRef.current = applied.ledger; rootPackageRef.current = applied.rootCausePackage;
-    setAttempt(null); setLedger(applied.ledger); setRootPackage(applied.rootCausePackage); setError(null);
-    queueWorkspaceSave(applied.ledger, applied.rootCausePackage);
+  function applyAdopted(_records: readonly CapaInvestigationActiveAdoptionSafeRecord[], _roles: Readonly<Record<string, CapaInvestigationActiveHumanCausalRole>>, workspace: CapaInvestigationActiveWorkspaceProjection) {
+    ledgerRef.current = workspace.evidence_assumption_ledger; rootPackageRef.current = workspace.root_cause_package;
+    setAttempt(null); setLedger(workspace.evidence_assumption_ledger); setRootPackage(workspace.root_cause_package); setDraftRevision(workspace.draft_revision); acknowledgedAiReferencesRef.current = aiSourceReferences(workspace.evidence_assumption_ledger, workspace.root_cause_package); coordinatorRef.current?.resetFromServer(workspace.draft_revision); setWorkspaceStatus("saved"); setError(null);
   }
 
   return <section aria-labelledby="root-cause-workspace-heading" className="mt-8 space-y-6">
@@ -247,10 +249,11 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
       <div className="mt-5 space-y-4">{displayLedger.items.length === 0 ? <p className="text-sm text-zinc-500">No ledger items recorded.</p> : readOnly ? displayLedger.items.map((item) => <ReadOnlyLedgerItem key={item.item_id} item={item} />) : displayLedger.items.map((item) => {
         const resolved = (item.evidence_status !== null && item.evidence_status !== "current") ||
           (item.assumption_status !== null && item.assumption_status !== "open") || item.gap_status === "resolved" || item.conflict_status === "resolved";
+        const adoptedAi = isAdoptedAi(item.provenance);
         return <fieldset key={item.item_id} disabled={readOnly || submitting} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
           <div className="flex justify-between gap-3"><legend className="font-semibold">{readable(item.information_class)}</legend>
-            {!readOnly ? <button type="button" className="text-sm text-red-300" onClick={() => mutateLedger((value) => removeLedgerItem(value, item.item_id))}>Remove</button> : null}</div>
-          <label className="mt-3 block text-sm">Statement<textarea value={item.statement} readOnly={readOnly || (item.provenance.source_type === "ai_proposal" && item.provenance.source_reference !== null && item.provenance.adopted_by_user_id !== null && item.provenance.adopted_at !== null)}
+            {!readOnly && !adoptedAi ? <button type="button" className="text-sm text-red-300" onClick={() => mutateLedger((value) => removeLedgerItem(value, item.item_id))}>Remove</button> : null}</div>
+          <label className="mt-3 block text-sm">Statement<textarea value={item.statement} readOnly={readOnly || adoptedAi}
             onChange={(event) => setLedgerItem(item.item_id, { statement: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {item.evidence_status !== null ? <label className="text-sm">Evidence status<select value={item.evidence_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItem(item.item_id, { evidence_status: event.target.value as typeof item.evidence_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{item.information_class === "verified_evidence" ? <option value="current" disabled>Choose a human-dispositioned status</option> : null}{CAPA_EVIDENCE_STATUSES.filter((value) => !(item.information_class === "verified_evidence" && value === "current")).map((value) => <option key={value}>{value}</option>)}</select></label> : null}
@@ -259,7 +262,7 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
             {item.conflict_status !== null ? <label className="text-sm">Conflict status<select value={item.conflict_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItem(item.item_id, { conflict_status: event.target.value as typeof item.conflict_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_CONFLICT_STATUSES.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
             {(item.information_class === "assumption" || item.information_class === "conflicting_information") ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.material_to_conclusion} onChange={(event) => setLedgerItem(item.item_id, { material_to_conclusion: event.target.checked })} />Material to conclusion</label> : null}
             {item.information_class === "missing_information" ? <><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.critical_to_conclusion} onChange={(event) => setLedgerItem(item.item_id, { critical_to_conclusion: event.target.checked })} />Critical to conclusion</label>
-              <label className="text-sm">Recommended next step<input readOnly={item.provenance.source_type === "ai_proposal" && item.provenance.source_reference !== null && item.provenance.adopted_by_user_id !== null && item.provenance.adopted_at !== null} value={item.recommended_next_step ?? ""} onChange={(event) => setLedgerItem(item.item_id, { recommended_next_step: event.target.value || null })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2" /></label>
+              <label className="text-sm">Recommended next step<input readOnly={adoptedAi} value={item.recommended_next_step ?? ""} onChange={(event) => setLedgerItem(item.item_id, { recommended_next_step: event.target.value || null })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2" /></label>
               <label className="text-sm">Target date<input type="date" value={item.target_date ?? ""} onChange={(event) => setLedgerItem(item.item_id, { target_date: event.target.value || null })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2" /></label></> : null}
           </div>
           {item.information_class === "retrieved_reference" ? <label className="mt-3 block text-sm">Source reference<input value={item.provenance.source_reference ?? ""} onChange={(event) => setLedgerItem(item.item_id, { provenance: { ...item.provenance, source_reference: event.target.value || null } })} className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label> : null}
@@ -278,15 +281,15 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
       <p className="mt-2 text-sm text-zinc-400">{readOnly ? "Authoritative submitted package; read-only." : "Human-authored causal hypotheses. No conclusion is inferred automatically."}</p>
       {!readOnly ? <button type="button" onClick={() => mutateRootPackage((value) => addHypothesis(value, createHypothesis(`HYP-${crypto.randomUUID()}`)))} className="mt-4 rounded-xl bg-zinc-700 px-4 py-2 text-sm">Add hypothesis</button> : null}
       <div className="mt-5 space-y-4">{displayRootPackage.hypotheses.length === 0 ? <p className="text-sm text-zinc-500">No hypotheses recorded.</p> : readOnly ? displayRootPackage.hypotheses.map((hypothesis) => <ReadOnlyHypothesis key={hypothesis.hypothesis_id} hypothesis={hypothesis} />) : displayRootPackage.hypotheses.map((hypothesis) => {
-        const adoptedAi = hypothesis.provenance.source_type === "ai_proposal" && hypothesis.provenance.source_reference !== null && hypothesis.provenance.adopted_by_user_id !== null && hypothesis.provenance.adopted_at !== null;
+        const adoptedAi = isAdoptedAi(hypothesis.provenance);
         return <fieldset key={hypothesis.hypothesis_id} disabled={submitting} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
-        <div className="flex justify-between"><legend className="font-semibold">{hypothesis.hypothesis_id}</legend>{!readOnly ? <button type="button" onClick={() => mutateRootPackage((value) => removeHypothesis(value, hypothesis.hypothesis_id))} className="text-sm text-red-300">Remove</button> : null}</div>
-        <label className="mt-3 block text-sm">Statement<textarea readOnly={hypothesis.provenance.source_type === "ai_proposal" && hypothesis.provenance.source_reference !== null && hypothesis.provenance.adopted_by_user_id !== null && hypothesis.provenance.adopted_at !== null} value={hypothesis.statement} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { statement: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
+        <div className="flex justify-between"><legend className="font-semibold">{hypothesis.hypothesis_id}</legend>{!readOnly && !adoptedAi ? <button type="button" onClick={() => mutateRootPackage((value) => removeHypothesis(value, hypothesis.hypothesis_id))} className="text-sm text-red-300">Remove</button> : null}</div>
+        <label className="mt-3 block text-sm">Statement<textarea readOnly={adoptedAi} value={hypothesis.statement} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { statement: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
         <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-sm">Status<select value={hypothesis.status} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { status: event.target.value as typeof hypothesis.status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_CAUSAL_HYPOTHESIS_STATUSES.filter((value) => attributionAvailable || value === "proposed").map((value) => <option key={value}>{value}</option>)}</select></label>
           <label className="text-sm">Causal role<select value={hypothesis.causal_role} disabled={adoptedAi} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { causal_role: event.target.value as typeof hypothesis.causal_role })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_CAUSAL_ROLES.map((value) => <option key={value}>{value}</option>)}</select></label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={hypothesis.material_to_package} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { material_to_package: event.target.checked })} />Material to package</label>
           <p className="text-sm text-zinc-400">Responsible investigator: {hypothesis.responsible_user_id ? "You" : "Assigned when human disposition is recorded"}</p></div>
-        <label className="mt-3 block text-sm">Rationale<textarea readOnly={hypothesis.provenance.source_type === "ai_proposal" && hypothesis.provenance.source_reference !== null && hypothesis.provenance.adopted_by_user_id !== null && hypothesis.provenance.adopted_at !== null} value={hypothesis.rationale} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { rationale: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
+        <label className="mt-3 block text-sm">Rationale<textarea readOnly={adoptedAi} value={hypothesis.rationale} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { rationale: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">{([
           ["supporting_evidence_item_ids", ["verified_evidence", "user_provided_statement", "retrieved_reference"]],
           ["contradictory_evidence_item_ids", ["verified_evidence", "user_provided_statement", "retrieved_reference"]],

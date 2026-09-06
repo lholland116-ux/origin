@@ -5,10 +5,7 @@ import {
   type CapaInvestigationActiveAdoptionCategory,
   type CapaInvestigationActiveAdoptionRecord,
 } from "../../capa/ai/capa-investigation-active-adoption-contract";
-import {
-  constructCapaInvestigationActiveAdoption,
-  validateCapaInvestigationActiveAdoptionRecord,
-} from "../../capa/ai/capa-investigation-active-adoption-validator";
+import { validateCapaInvestigationActiveAdoptionRecord } from "../../capa/ai/capa-investigation-active-adoption-validator";
 import {
   CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM,
   CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION,
@@ -78,37 +75,22 @@ function adoptionFromRow(row: Row): PersistedCapaInvestigationActiveAdoption {
       row.record_fingerprint_algorithm !== "sha256" || !uuid(row.audit_event_id)) fail();
   let adoption: CapaInvestigationActiveAdoptionRecord;
   try {
-    adoption = constructCapaInvestigationActiveAdoption({
-      adoption_id: row.adoption_id as never,
-      organization_id: row.organization_id as never,
-      capa_case_id: row.capa_case_id as never,
-      case_version_id: row.case_version_id as never,
-      record_version: number(row.record_version),
-      output_id: row.output_id as string,
-      proposal_key: row.proposal_key as string,
-      proposal_category: row.proposal_category as CapaInvestigationActiveAdoptionCategory,
-      adopted_item: row.adopted_item as never,
-      resolved_reference_bindings: row.resolved_reference_bindings as never,
-      reference_manifest_schema_version: row.reference_manifest_schema_version as string,
-      reference_manifest_fingerprint_algorithm: row.reference_manifest_fingerprint_algorithm as string,
-      reference_manifest_sha256: row.reference_manifest_sha256 as string,
-      adopted_at: iso(row.adopted_at),
-      adopted_by: { actor_type: row.adopted_by_actor_type as "human", actor_id: row.adopted_by_actor_id as string },
-      adoption_policy_version: row.adoption_policy_version as string,
-      request_id: row.request_id as never,
-      correlation_id: row.correlation_id as never,
-      idempotency_key: row.idempotency_key as never,
-      workflow_mutated: row.workflow_mutated as false,
-      controlled_record_mutated: row.controlled_record_mutated as false,
-      gate_approved: row.gate_approved as false,
-    });
+    adoption = validateCapaInvestigationActiveAdoptionRecord(row.adoption_record);
   } catch { fail(); }
   if (!isDeepStrictEqual(row.adoption_record, adoption) ||
+      !isDeepStrictEqual(row.adopted_item, adoption.adopted_item) ||
+      row.organization_id !== adoption.organization_id || row.adoption_id !== adoption.adoption_id ||
+      row.output_id !== adoption.output_id || row.capa_case_id !== adoption.capa_case_id ||
+      row.case_version_id !== adoption.case_version_id || number(row.record_version) !== adoption.record_version ||
       row.proposal_key !== adoption.proposal_key || row.proposal_category !== adoption.proposal_category ||
       !isDeepStrictEqual(row.resolved_reference_bindings, adoption.resolved_reference_bindings) ||
       row.reference_manifest_schema_version !== adoption.reference_manifest_schema_version ||
       row.reference_manifest_fingerprint_algorithm !== adoption.reference_manifest_fingerprint_algorithm ||
       row.reference_manifest_sha256 !== adoption.reference_manifest_sha256 ||
+      row.adopted_by_actor_type !== adoption.adopted_by.actor_type || row.adopted_by_actor_id !== adoption.adopted_by.actor_id ||
+      iso(row.adopted_at) !== adoption.adopted_at || row.adoption_policy_version !== adoption.adoption_policy_version ||
+      row.request_id !== adoption.request_id || row.correlation_id !== adoption.correlation_id ||
+      row.idempotency_key !== adoption.idempotency_key ||
       row.output_status !== "completed_draft" || row.workflow_mutated !== false ||
       row.controlled_record_mutated !== false || row.gate_approved !== false ||
       fingerprintCanonicalJson(adoption) !== row.record_fingerprint) fail();
@@ -209,6 +191,10 @@ export class SupabaseCapaInvestigationActiveAdoptionRepository implements CapaIn
   }
   async listAdoptionsForOutput(organizationId: string, outputId: string): Promise<readonly PersistedCapaInvestigationActiveAdoption[]> {
     const rows = await this.sql<Row[]>`select * from public.capa_investigation_active_ai_adoptions where organization_id = ${organizationId} and output_id = ${outputId} order by adopted_at asc, adoption_id asc`;
+    return Object.freeze(rows.map(adoptionFromRow));
+  }
+  async listAdoptionsForCase(organizationId: string, capaCaseId: string): Promise<readonly PersistedCapaInvestigationActiveAdoption[]> {
+    const rows = await this.sql<Row[]>`select * from public.capa_investigation_active_ai_adoptions where organization_id = ${organizationId} and capa_case_id = ${capaCaseId} order by adopted_at asc, adoption_id asc`;
     return Object.freeze(rows.map(adoptionFromRow));
   }
 }

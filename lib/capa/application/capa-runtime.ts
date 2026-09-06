@@ -86,6 +86,8 @@ import type {
 import type {
   CapaInvestigationActiveWorkspaceDraftService,
 } from "./capa-investigation-active-workspace-draft-service";
+import type { ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult } from "./reconcile-capa-investigation-active-workspace-adoptions";
+import type { RequestTrace, CapaCaseId } from "../domain/capa-types";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -191,6 +193,10 @@ export interface CapaRuntime {
   readonly create_investigation_active_workspace_draft_service: (
     context: CapaRequestContext,
   ) => CapaInvestigationActiveWorkspaceDraftService;
+
+  readonly create_investigation_active_workspace_reconciliation_service: (
+    context: CapaRequestContext,
+  ) => { reconcile(command: { readonly capa_case_id: CapaCaseId; readonly request_trace: RequestTrace }): Promise<ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult> };
 
   /**
    * Application dependencies used by controlled CAPA commands.

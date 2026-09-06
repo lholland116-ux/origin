@@ -190,6 +190,7 @@ import type {
 import {
   createCapaInvestigationActiveWorkspaceDraftService,
 } from "./capa-investigation-active-workspace-draft-service";
+import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 
 /**
  * Development-only CAPA runtime.
@@ -1225,7 +1226,7 @@ export function createCapaDevelopmentRuntime(
     },
 
     create_investigation_active_adoption_service(context) {
-      return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: database, adoption_repository: database, audit_repository: database, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(database), authorization_policy: dependencies.authorization_policy, now, generate_uuid: generateUuid, audit_schema_version: dependencies.configuration.audit_schema_version });
+      return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: database, adoption_repository: database, audit_repository: database, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(database), workspace_repository: database, authorization_policy: dependencies.authorization_policy, now, generate_uuid: generateUuid, audit_schema_version: dependencies.configuration.audit_schema_version });
     },
 
     create_investigation_active_workspace_draft_service(context) {
@@ -1237,6 +1238,10 @@ export function createCapaDevelopmentRuntime(
         authorization_policy: dependencies.authorization_policy,
         now,
       });
+    },
+
+    create_investigation_active_workspace_reconciliation_service(context) {
+      return createReconcileCapaInvestigationActiveWorkspaceAdoptionsService({ request_context: context, capa_repository: database, adoption_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, now });
     },
 
     dependencies,

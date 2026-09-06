@@ -19,6 +19,7 @@ const CONTROLLED_FAILURE_MESSAGES: Readonly<Record<string, string>> = {
   INVALID_CAPA_INVESTIGATION_ACTIVE_WORKSPACE_REQUEST: "The S40 workspace request is invalid.",
   WORKSPACE_DRAFT_CONCURRENCY_CONFLICT: "The workspace changed before this save could be completed.",
   CAPA_INTERNAL_ERROR: "The S40 workspace request could not be completed.",
+  LEGACY_CAUSAL_ROLE_NOT_RECORDED: "A historical causal adoption requires human role information before reconciliation.",
 };
 
 export interface CapaInvestigationActiveWorkspaceProjection {
@@ -97,6 +98,19 @@ export async function loadCapaInvestigationActiveWorkspace(caseId: string, fetch
     return parseCapaInvestigationActiveWorkspaceLoad(body);
   } catch {
     return { status: "failed", code: null, message: "The S40 workspace could not be loaded.", correlation_id: null };
+  }
+}
+
+export async function reconcileCapaInvestigationActiveWorkspaceAdoptions(caseId: string, fetcher: typeof fetch = fetch): Promise<CapaInvestigationActiveWorkspaceLoadResult> {
+  const requestTrace = trace();
+  try {
+    const response = await fetcher(`/api/capa/${encodeURIComponent(caseId)}/investigation-active-workspace/reconcile-adoptions`, { method: "POST", cache: "no-store", headers: { "x-request-id": requestTrace.requestId, "x-correlation-id": requestTrace.correlationId } });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) return parseFailure(body);
+    if (!record(body) || body.status !== "reconciled") return { status: "failed", code: "INVALID_WORKSPACE_RESPONSE", message: "The S40 workspace reconciliation response could not be verified.", correlation_id: parseCorrelation(body) };
+    return parseCapaInvestigationActiveWorkspaceLoad({ workspace: body.workspace, correlation_id: body.correlation_id });
+  } catch {
+    return { status: "failed", code: null, message: "The S40 workspace could not be reconciled.", correlation_id: null };
   }
 }
 

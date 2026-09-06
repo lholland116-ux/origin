@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { RootCauseLedgerDraft, RootCausePackageDraft } from "./capa-root-cause-draft";
 import { buildCapaInvestigationActiveAdvisoryRequest, fetchCapaInvestigationActiveAdvisory, type CapaInvestigationActiveAdvisorySuccess } from "./capa-investigation-active-advisory-client";
 import { createInvestigationActiveAdoptionAttempt, submitInvestigationActiveAdoptionAttempt, type InvestigationActiveAdoptionAttempt } from "./capa-investigation-active-adoption-client";
+import type { CapaInvestigationActiveWorkspaceProjection } from "./capa-investigation-active-workspace-client";
 import { buildCapaInvestigationActiveAdvisoryReview, updateCapaInvestigationActiveAdvisoryReviewCard, validateCapaInvestigationActiveAdvisorySelection, type CapaInvestigationActiveAdvisoryReviewCard, type CapaInvestigationActiveHumanCausalRole } from "./capa-investigation-active-advisory-review";
 
 export interface CapaInvestigationActiveAdvisoryPanelProps {
@@ -13,7 +14,7 @@ export interface CapaInvestigationActiveAdvisoryPanelProps {
   readonly ledger: RootCauseLedgerDraft;
   readonly rootPackage: RootCausePackageDraft;
   readonly currentUserId: string;
-  readonly onApplyAdoptions: (records: readonly import("./capa-investigation-active-adoption-client").CapaInvestigationActiveAdoptionSafeRecord[], roles: Readonly<Record<string, CapaInvestigationActiveHumanCausalRole>>) => void;
+  readonly onApplyAdoptions: (records: readonly import("./capa-investigation-active-adoption-client").CapaInvestigationActiveAdoptionSafeRecord[], roles: Readonly<Record<string, CapaInvestigationActiveHumanCausalRole>>, workspace: CapaInvestigationActiveWorkspaceProjection) => void;
 }
 export interface InvestigationActiveAdoptionRetry {
   readonly attempt: InvestigationActiveAdoptionAttempt;
@@ -60,7 +61,7 @@ export default function CapaInvestigationActiveAdvisoryPanel({ caseId, currentVe
       setRetry(localRetry);
     }
     setAdopting(true); setError(null); const result = await submitInvestigationActiveAdoptionAttempt(localRetry.attempt);
-    if (result.status === "adopted" || result.status === "already_adopted") { onApplyAdoptions(result.records, localRetry.causalRoles); setMessage(`${result.records.length} proposal${result.records.length === 1 ? "" : "s"} adopted into the local S40 draft.`); setAdvisory(null); setCards([]); setRetry(null); }
+    if (result.status === "adopted" || result.status === "already_adopted") { onApplyAdoptions(result.records, localRetry.causalRoles, result.workspace); setMessage(`${result.records.length} proposal${result.records.length === 1 ? "" : "s"} adopted into the durable S40 workspace.`); setAdvisory(null); setCards([]); setRetry(null); }
     else if (result.status === "failed") { setError(result.message); if (result.requiresRefresh) setMessage("Refresh the authoritative CAPA before retrying."); if (!result.retryableExact) setRetry(null); }
     setAdopting(false);
   }

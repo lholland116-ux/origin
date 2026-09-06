@@ -35,4 +35,5 @@ export type AppendCapaInvestigationActiveAdoptionResult =
 export interface CapaInvestigationActiveAdoptionRepository {
   appendAdoption(transaction: TransactionContext, input: CapaInvestigationActiveAdoptionPersistenceInput): Promise<AppendCapaInvestigationActiveAdoptionResult>;
   findAdoptionById(organizationId: OrganizationId, adoptionId: CapaInvestigationActiveAdoptionId): Promise<PersistedCapaInvestigationActiveAdoption | null>;
+  listAdoptionsForCase(organizationId: OrganizationId, capaCaseId: import("../../capa/domain/capa-types").CapaCaseId): Promise<readonly PersistedCapaInvestigationActiveAdoption[]>;
 }

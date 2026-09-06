@@ -36,6 +36,10 @@ export type CapaInvestigationActiveAdoptionCategory =
   | "alternative_hypothesis"
   | "investigation_recommendation";
 
+export type CapaInvestigationActiveHumanCausalRole =
+  | "proposed_root_cause"
+  | "contributing_factor";
+
 export interface EvidenceGapAdoptedContent {
   readonly gap: string;
   readonly why_it_matters: string;
@@ -73,6 +77,7 @@ export type CapaInvestigationActiveAdoptedContent =
 export interface CapaInvestigationActiveAdoptionItemIntent {
   readonly proposal_key: string;
   readonly adopted_content: unknown;
+  readonly human_causal_role?: CapaInvestigationActiveHumanCausalRole;
 }
 export interface CapaInvestigationActiveAdoptionIntentRequest {
   readonly expected_case_version_id: CapaCaseVersionId;
@@ -95,6 +100,7 @@ export interface CapaInvestigationActiveResolvedReferenceBinding {
 export interface CapaInvestigationActiveAdoptedItem {
   readonly proposal_key: string;
   readonly adopted_content: CapaInvestigationActiveAdoptedContent;
+  readonly human_causal_role?: CapaInvestigationActiveHumanCausalRole;
 }
 
 export interface CapaInvestigationActiveAdoptionRecord {

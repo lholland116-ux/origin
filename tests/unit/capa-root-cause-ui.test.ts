@@ -103,8 +103,18 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).toContain("Durable working draft; non-authoritative until root cause is submitted for review.");
     expect(workspace).toContain("workspaceStatus === \"conflict\"");
   });
+  it("proves ordered S40 hydration, reconciliation failure handling, and server adoption hydration", () => {
+    expect(workspace).toMatch(/loadCapaInvestigationActiveWorkspace\(caseId\)[\s\S]*reconcileCapaInvestigationActiveWorkspaceAdoptions\(caseId\)[\s\S]*resetFromServer\(loadedRevision\)[\s\S]*setHydrationStatus\("ready"\)/);
+    expect(workspace).toMatch(/reconciled\.status === "failed"[\s\S]*setHydrationStatus\("failed"\)[\s\S]*Editing remains disabled/);
+    expect(workspace).toMatch(/if \(readOnly\) return;[\s\S]*loadCapaInvestigationActiveWorkspace\(caseId\)/);
+    expect(workspace).toMatch(/!readOnly && hydrationStatus === "ready"[\s\S]*CapaInvestigationActiveAdvisoryPanel/);
+    expect(workspace).not.toContain("materializeCapaInvestigationActiveAdoptions");
+    expect(workspace).toMatch(/setLedger\(workspace\.evidence_assumption_ledger\)[\s\S]*setRootPackage\(workspace\.root_cause_package\)[\s\S]*resetFromServer\(workspace\.draft_revision\)/);
+  });
   it("locks only adopted AI causal roles while preserving human decision controls", () => {
-    expect(workspace).toContain('const adoptedAi = hypothesis.provenance.source_type === "ai_proposal"');
+    expect(workspace).toContain("const adoptedAi = isAdoptedAi(hypothesis.provenance)");
+    expect(workspace).toContain("const adoptedAi = isAdoptedAi(item.provenance)");
+    expect(workspace).toContain("!readOnly && !adoptedAi ? <button");
     expect(workspace).toContain('disabled={adoptedAi}');
     expect(workspace).toContain('Status<select value={hypothesis.status}');
     expect(workspace).toContain('Material to package');
