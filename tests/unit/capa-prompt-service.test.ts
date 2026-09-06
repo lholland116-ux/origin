@@ -103,7 +103,7 @@ describe(
           service.configuration,
         ).toMatchObject({
           registry_version:
-            "capa-agent-registry-1.1.0",
+            "capa-agent-registry-1.2.0",
           agent_id: "AG-INTAKE",
           agent_version:
             "ag-intake-1.0.0",

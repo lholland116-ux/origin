@@ -42,7 +42,7 @@ describe(
         expect(
           registry.registry_version,
         ).toBe(
-          "capa-agent-registry-1.1.0",
+          "capa-agent-registry-1.2.0",
         );
         expect(Object.isFrozen(registry))
           .toBe(true);
@@ -50,7 +50,7 @@ describe(
     );
 
     it(
-      "makes only AG-INTAKE, AG-PLAN, and AG-RCA runtime approved",
+      "makes only the governed runtime agents approved",
       () => {
         const registry =
           createInitialCapaAgentRegistry();
@@ -73,7 +73,12 @@ describe(
             (status) =>
               status === "approved",
           ),
-        ).toEqual(["approved", "approved", "approved"]);
+        ).toEqual([
+          "approved",
+          "approved",
+          "approved",
+          "approved",
+        ]);
       },
     );
 

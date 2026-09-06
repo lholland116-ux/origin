@@ -77,7 +77,7 @@ describe(
 
         expect(service.registry_version)
           .toBe(
-            "capa-agent-registry-1.1.0",
+            "capa-agent-registry-1.2.0",
           );
         expect(Object.isFrozen(service))
           .toBe(true);
@@ -168,6 +168,112 @@ describe(
           ...qualified,
           active_role_ids: ["CAPA_AUDITOR" as RoleId],
         })).toMatchObject({ reason_code: "REQUESTER_ROLE_NOT_ELIGIBLE" });
+      },
+    );
+
+    it(
+      "activates only the governed AG-REVIEW S50 review-packet capability",
+      () => {
+        const service =
+          createCapaAgentActivationService();
+
+        expect(
+          createInitialCapaAgentRegistry().findExact(
+            "AG-REVIEW",
+            "ag-review-1.0.0",
+          )?.status,
+        ).toBe("approved");
+
+        const qualified: CapaAgentEligibilityRequest = {
+          ...intakeRequest(),
+          agent_id: "AG-REVIEW",
+          agent_version:
+            "ag-review-1.0.0" as never,
+          workflow_state: "S50",
+          operation:
+            "assemble_review_packet",
+          active_role_ids: [
+            "CAPA_REVIEWER" as RoleId,
+          ],
+          requested_tool_ids: [
+            "TOOL-CASE-READ",
+            "TOOL-EVIDENCE-READ",
+            "TOOL-STRUCTURED-DRAFT",
+          ],
+          output_schema_version:
+            "capa_review_packet_draft-1.0.0" as never,
+        };
+
+        expect(service.evaluate(qualified)).toMatchObject({
+          eligible: true,
+          reason_code: "AGENT_ELIGIBLE",
+        });
+
+        for (const workflow_state of [
+          "S70",
+          "S90",
+          "S110",
+          "S120",
+          "S150",
+        ] as const) {
+          expect(
+            service.evaluate({
+              ...qualified,
+              workflow_state,
+            }),
+          ).toMatchObject({
+            reason_code:
+              "WORKFLOW_STATE_NOT_ELIGIBLE",
+          });
+        }
+
+        expect(
+          service.evaluate({
+            ...qualified,
+            active_role_ids: [
+              "CAPA_OWNER" as RoleId,
+            ],
+          }),
+        ).toMatchObject({
+          reason_code:
+            "REQUESTER_ROLE_NOT_ELIGIBLE",
+        });
+
+        expect(
+          service.evaluate({
+            ...qualified,
+            requested_tool_ids: [
+              "TOOL-CASE-READ",
+              "TOOL-EVIDENCE-READ",
+              "TOOL-RETRIEVE",
+              "TOOL-STRUCTURED-DRAFT",
+            ],
+          }),
+        ).toMatchObject({
+          reason_code: "TOOL_NOT_ALLOWED",
+        });
+
+        expect(
+          service.evaluate({
+            ...qualified,
+            operation:
+              "facilitate_root_cause",
+          }),
+        ).toMatchObject({
+          reason_code:
+            "OPERATION_NOT_ELIGIBLE",
+        });
+
+        expect(
+          service.evaluate({
+            ...qualified,
+            output_schema_version:
+              "arbitrary-schema-1.0.0" as never,
+          }),
+        ).toMatchObject({
+          reason_code:
+            "OUTPUT_SCHEMA_MISMATCH",
+        });
       },
     );
 

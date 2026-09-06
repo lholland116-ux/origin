@@ -478,7 +478,7 @@ describe(
           runtime.agent_activation_service
             .registry_version,
         ).toBe(
-          "capa-agent-registry-1.1.0",
+          "capa-agent-registry-1.2.0",
         );
 
         const activationDecision =

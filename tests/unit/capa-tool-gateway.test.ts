@@ -694,7 +694,7 @@ describe(
             tool_registry_version:
               "capa-tool-registry-1.0.0",
             agent_registry_version:
-              "capa-agent-registry-1.1.0",
+              "capa-agent-registry-1.2.0",
           });
       },
     );

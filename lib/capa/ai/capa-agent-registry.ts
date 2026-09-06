@@ -390,7 +390,7 @@ const DEFINITIONS = [
     agent_id: "AG-REVIEW",
     name: "Human Review Assistant",
     version: "ag-review-1.0.0",
-    status: "evaluation",
+    status: "approved",
     purpose:
       "Build neutral review packets, version comparisons, blockers and evidence maps without recommending disposition.",
     states: [
@@ -413,6 +413,19 @@ const DEFINITIONS = [
       "version_changes",
       "blockers_warnings",
       "evidence_map",
+    ],
+    activation_capabilities: [
+      {
+        eligible_states: ["S50"],
+        operation: "assemble_review_packet",
+        allowed_tools: [
+          "TOOL-CASE-READ",
+          "TOOL-EVIDENCE-READ",
+          "TOOL-STRUCTURED-DRAFT",
+        ],
+        output_schema_version:
+          "capa_review_packet_draft-1.0.0" as never,
+      },
     ],
   }),
   definition({
@@ -497,7 +510,7 @@ export interface CapaAgentRegistry {
 class InitialCapaAgentRegistry
   implements CapaAgentRegistry {
   readonly registry_version =
-    "capa-agent-registry-1.1.0";
+    "capa-agent-registry-1.2.0";
 
   private readonly byAgentId =
     new Map(
