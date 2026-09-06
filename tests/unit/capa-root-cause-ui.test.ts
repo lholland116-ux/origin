@@ -119,4 +119,105 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).toContain('Status<select value={hypothesis.status}');
     expect(workspace).toContain('Material to package');
   });
+  it("stages Ledger-item editing behind one explicit Save changes boundary", () => {
+    expect(workspace).toContain(
+      "beginCapaLedgerItemEditSession",
+    );
+
+    expect(workspace).toContain(
+      "patchCapaLedgerItemEditSession",
+    );
+
+    expect(workspace).toContain(
+      "commitCapaLedgerItemEditSession",
+    );
+
+    expect(workspace).toContain(
+      "Unsaved Ledger-item changes",
+    );
+
+    expect(workspace).toContain(
+      ">Save changes</button>",
+    );
+
+    expect(workspace).toContain(
+      ">Cancel</button>",
+    );
+
+    expect(workspace).toContain(
+      "effectiveWorkspaceStatus",
+    );
+
+    expect(workspace).toContain(
+      "visibleLedgerItems.map((persistedItem)",
+    );
+
+    const draftStart =
+      workspace.indexOf(
+        "const setLedgerItemDraft",
+      );
+
+    const saveStart =
+      workspace.indexOf(
+        "const saveLedgerItemEdit",
+      );
+
+    const cancelStart =
+      workspace.indexOf(
+        "const cancelLedgerItemEdit",
+      );
+
+    expect(draftStart).toBeGreaterThan(-1);
+    expect(saveStart).toBeGreaterThan(draftStart);
+    expect(cancelStart).toBeGreaterThan(saveStart);
+
+    const draftBoundary =
+      workspace.slice(
+        draftStart,
+        workspace.indexOf(
+          "const beginNewLedgerItemEdit",
+        ),
+      );
+
+    expect(
+      draftBoundary,
+    ).not.toContain(
+      "queueWorkspaceSave(",
+    );
+
+    expect(
+      draftBoundary,
+    ).not.toContain(
+      "coordinatorRef.current.queue(",
+    );
+
+    const saveBoundary =
+      workspace.slice(
+        saveStart,
+        cancelStart,
+      );
+
+    expect(
+      saveBoundary,
+    ).toContain(
+      "commitCapaLedgerItemEditSession",
+    );
+
+    expect(
+      saveBoundary,
+    ).toContain(
+      "validateRootCauseDrafts",
+    );
+
+    expect(
+      saveBoundary,
+    ).toContain(
+      "coordinatorRef.current.queue",
+    );
+
+    expect(workspace).not.toContain(
+      "const setLedgerItem =",
+    );
+  });
+
 });

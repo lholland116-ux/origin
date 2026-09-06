@@ -7,7 +7,7 @@ import { CAPA_ASSUMPTION_STATUSES, CAPA_CONFLICT_STATUSES, CAPA_EVIDENCE_STATUSE
 import { CAPA_CAUSAL_HYPOTHESIS_STATUSES, CAPA_CAUSAL_ROLES, type CapaCausalHypothesis, type CapaRootCausePackageContent } from "../../lib/capa/domain/capa-root-cause-package";
 import CapaInvestigationProgressPanel from "./CapaInvestigationProgressPanel";
 import CapaInvestigationActiveAdvisoryPanel from "./CapaInvestigationActiveAdvisoryPanel";
-import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, addLedgerItem, applyRootCauseDraftMutation, clearRootCauseNotConfirmed,
+import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, applyRootCauseDraftMutation, clearRootCauseNotConfirmed,
   createHypothesis, createInitialLedgerDraft, createInitialRootCausePackageDraft, createLedgerItem,
   isValidCurrentUserId, removeHypothesis, removeLedgerItem, setRootCauseNotConfirmed, updateHypothesis, updateLedgerItem,
   validateRootCauseDrafts } from "./capa-root-cause-draft";
@@ -17,6 +17,12 @@ import { createRootCauseSubmissionAttempt, submitRootCauseSubmissionAttempt,
   type RootCauseSubmissionAttempt } from "./capa-root-cause-submission-client";
 import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace,
   saveCapaInvestigationActiveWorkspace, reconcileCapaInvestigationActiveWorkspaceAdoptions, type WorkspaceAutosaveStatus, type CapaInvestigationActiveWorkspaceProjection } from "./capa-investigation-active-workspace-client";
+import {
+  beginCapaLedgerItemEditSession,
+  commitCapaLedgerItemEditSession,
+  patchCapaLedgerItemEditSession,
+  type CapaLedgerItemEditSession,
+} from "./capa-ledger-item-edit-session";
 
 const readable = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const ADOPTED_AI_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -119,6 +125,7 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   const [hydrationStatus, setHydrationStatus] = useState<"loading" | "ready" | "failed">(mode === "S50" ? "ready" : "loading");
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceAutosaveStatus | "loading">(mode === "S50" ? "saved" : "loading");
   const [draftRevision, setDraftRevision] = useState<number | null>(null);
+  const [ledgerEditSession, setLedgerEditSession] = useState<CapaLedgerItemEditSession | null>(null);
   const coordinatorRef = useRef<ReturnType<typeof createCapaInvestigationActiveWorkspaceAutosaveCoordinator> | null>(null);
   const ledgerRef = useRef(ledger);
   const rootPackageRef = useRef(rootPackage);
@@ -130,11 +137,28 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   const readOnly = mode === "S50";
   const displayLedger = readOnly ? authoritativeLedger ?? createInitialLedgerDraft() : ledger;
   const displayRootPackage = readOnly ? authoritativeRootCausePackage ?? createInitialRootCausePackageDraft() : rootPackage;
+  const visibleLedgerItems = !readOnly && ledgerEditSession?.mode === "new"
+    ? [...displayLedger.items, ledgerEditSession.draft]
+    : displayLedger.items;
   const references = displayLedger.items;
   const attributionAvailable = isValidCurrentUserId(currentUserId);
   const hydrated = readOnly || hydrationStatus === "ready";
+  const effectiveWorkspaceStatus =
+    ledgerEditSession !== null && workspaceStatus === "saved"
+      ? "unsaved"
+      : workspaceStatus;
   const editingDisabled = !readOnly && (!hydrated || !attributionAvailable || workspaceStatus === "conflict");
-  const submissionBlocked = !readOnly && (!hydrated || workspaceStatus !== "saved" || coordinatorRef.current?.isBusy() === true);
+  const ledgerEditingDisabled =
+    editingDisabled ||
+    (ledgerEditSession === null &&
+      (workspaceStatus !== "saved" ||
+        coordinatorRef.current?.isBusy() === true));
+  const submissionBlocked = !readOnly && (
+    ledgerEditSession !== null ||
+    !hydrated ||
+    effectiveWorkspaceStatus !== "saved" ||
+    coordinatorRef.current?.isBusy() === true
+  );
   useEffect(() => {
     if (readOnly) return;
     const coordinator = createCapaInvestigationActiveWorkspaceAutosaveCoordinator({
@@ -151,7 +175,7 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   useEffect(() => {
     if (readOnly) { setHydrationStatus("ready"); setWorkspaceStatus("saved"); return; }
     let active = true;
-    setHydrationStatus("loading"); setWorkspaceStatus("loading"); setError(null); setAttempt(null);
+    setHydrationStatus("loading"); setWorkspaceStatus("loading"); setError(null); setAttempt(null); setLedgerEditSession(null);
     const initialLedger = createInitialLedgerDraft();
     const initialRootPackage = createInitialRootCausePackageDraft();
     ledgerRef.current = initialLedger; rootPackageRef.current = initialRootPackage;
@@ -193,8 +217,123 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     const next = applyRootCauseDraftMutation(rootPackageRef.current, mutation).draft;
     rootPackageRef.current = next; setAttempt(null); setRootPackage(next); queueWorkspaceSave(ledgerRef.current, next);
   };
-  const setLedgerItem = (itemId: string, patch: Parameters<typeof updateLedgerItem>[2]) => {
-    mutateLedger((value) => updateLedgerItem(value, itemId, patch, currentUserId));
+  const setLedgerItemDraft = (itemId: string, patch: Parameters<typeof updateLedgerItem>[2]) => {
+    setAttempt(null);
+
+    setLedgerEditSession((current) => {
+      const persisted =
+        ledgerRef.current.items.find(
+          (item) => item.item_id === itemId,
+        );
+
+      const session =
+        current ??
+        (persisted
+          ? beginCapaLedgerItemEditSession(
+              persisted,
+              "existing",
+            )
+          : null);
+
+      if (session === null) return current;
+
+      return patchCapaLedgerItemEditSession(
+        session,
+        itemId,
+        patch,
+      );
+    });
+  };
+
+  const beginNewLedgerItemEdit = () => {
+    if (ledgerEditSession !== null || ledgerEditingDisabled) return;
+
+    setAttempt(null);
+
+    setLedgerEditSession(
+      beginCapaLedgerItemEditSession(
+        createLedgerItem(
+          newClass,
+          `LED-${crypto.randomUUID()}`,
+        ),
+        "new",
+      ),
+    );
+  };
+
+  const saveLedgerItemEdit = () => {
+    const session = ledgerEditSession;
+
+    if (
+      session === null ||
+      readOnly ||
+      !hydrated ||
+      coordinatorRef.current === null
+    ) {
+      return;
+    }
+
+    const nextLedger =
+      applyRootCauseDraftMutation(
+        ledgerRef.current,
+        (value) =>
+          commitCapaLedgerItemEditSession(
+            value,
+            session,
+            currentUserId,
+          ),
+      ).draft;
+
+    const aiReferences =
+      aiSourceReferences(
+        nextLedger,
+        rootPackageRef.current,
+      );
+
+    if (
+      [...aiReferences].some(
+        (reference) =>
+          !acknowledgedAiReferencesRef.current.has(reference),
+      )
+    ) {
+      coordinatorRef.current.markBlocked();
+      return;
+    }
+
+    const candidateValidation =
+      validateRootCauseDrafts(
+        plan,
+        nextLedger,
+        rootPackageRef.current,
+      );
+
+    if (candidateValidation.status !== "valid") {
+      setError(
+        "The Ledger item contains invalid or incomplete controlled data. Correct the item or cancel the editing session.",
+      );
+      return;
+    }
+
+    ledgerRef.current =
+      candidateValidation.ledger;
+
+    setAttempt(null);
+    setLedger(candidateValidation.ledger);
+    setLedgerEditSession(null);
+    setError(null);
+
+    coordinatorRef.current.queue({
+      evidence_assumption_ledger:
+        candidateValidation.ledger,
+      root_cause_package:
+        candidateValidation.rootCausePackage,
+    });
+  };
+
+  const cancelLedgerItemEdit = () => {
+    setAttempt(null);
+    setError(null);
+    setLedgerEditSession(null);
   };
   const setHypothesis = (hypothesisId: string, patch: Parameters<typeof updateHypothesis>[2]) => {
     mutateRootPackage((value) => updateHypothesis(value, hypothesisId, patch, currentUserId));
@@ -220,7 +359,7 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   }
   function applyAdopted(_records: readonly CapaInvestigationActiveAdoptionSafeRecord[], _roles: Readonly<Record<string, CapaInvestigationActiveHumanCausalRole>>, workspace: CapaInvestigationActiveWorkspaceProjection) {
     ledgerRef.current = workspace.evidence_assumption_ledger; rootPackageRef.current = workspace.root_cause_package;
-    setAttempt(null); setLedger(workspace.evidence_assumption_ledger); setRootPackage(workspace.root_cause_package); setDraftRevision(workspace.draft_revision); acknowledgedAiReferencesRef.current = aiSourceReferences(workspace.evidence_assumption_ledger, workspace.root_cause_package); coordinatorRef.current?.resetFromServer(workspace.draft_revision); setWorkspaceStatus("saved"); setError(null);
+    setAttempt(null); setLedgerEditSession(null); setLedger(workspace.evidence_assumption_ledger); setRootPackage(workspace.root_cause_package); setDraftRevision(workspace.draft_revision); acknowledgedAiReferencesRef.current = aiSourceReferences(workspace.evidence_assumption_ledger, workspace.root_cause_package); coordinatorRef.current?.resetFromServer(workspace.draft_revision); setWorkspaceStatus("saved"); setError(null);
   }
 
   return <section aria-labelledby="root-cause-workspace-heading" className="mt-8 space-y-6">
@@ -228,7 +367,7 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
       <h2 id="root-cause-workspace-heading" className="mt-2 text-2xl font-semibold">{readOnly ? "Root Cause Review" : `Root Cause Workspace — ${caseNumber}`}</h2></header>
     {!readOnly && hydrationStatus === "loading" ? <p role="status" className="rounded-xl border border-blue-400/25 bg-blue-500/10 p-3 text-sm text-blue-100">Loading durable workspace…</p> : null}
     {!readOnly && hydrationStatus === "failed" ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">The durable S40 workspace could not be loaded. Refresh or reload is required.</p> : null}
-    {!readOnly && hydrationStatus === "ready" ? <p role="status" className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-300">Workspace persistence: {workspaceStatus === "loading" ? "Loading…" : workspaceStatus === "saving" ? "Saving…" : workspaceStatus === "unsaved" ? "Unsaved changes" : workspaceStatus === "conflict" ? "Conflict — reload required" : workspaceStatus === "failed" ? "Save failed" : workspaceStatus === "blocked" ? "Persistence blocked — governed adoption is required" : "Saved"}{draftRevision !== null ? ` · revision ${draftRevision}` : ""}</p> : null}
+    {!readOnly && hydrationStatus === "ready" ? <p role="status" className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-300">Workspace persistence: {effectiveWorkspaceStatus === "loading" ? "Loading…" : effectiveWorkspaceStatus === "saving" ? "Saving…" : effectiveWorkspaceStatus === "unsaved" ? "Unsaved changes" : effectiveWorkspaceStatus === "conflict" ? "Conflict — reload required" : effectiveWorkspaceStatus === "failed" ? "Save failed" : effectiveWorkspaceStatus === "blocked" ? "Persistence blocked — governed adoption is required" : "Saved"}{draftRevision !== null ? ` · revision ${draftRevision}` : ""}</p> : null}
     {!attributionAvailable && !readOnly ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">Authenticated user identity is unavailable. Human-attributed ledger and root-cause actions are disabled.</p> : null}
     {!readOnly && hydrationStatus === "ready" && workspaceStatus === "failed" ? <button type="button" onClick={() => coordinatorRef.current?.retry()} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm">Retry workspace save</button> : null}
     <fieldset disabled={editingDisabled}>
@@ -244,45 +383,54 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
       {!readOnly ? <div className="mt-4 flex flex-wrap gap-3"><label className="text-sm">Information class<select value={newClass}
         onChange={(event) => setNewClass(event.target.value as CapaLedgerInformationClass)} className="ml-2 rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2">
         {CAPA_LEDGER_INFORMATION_CLASSES.map((value) => <option key={value} value={value}>{readable(value)}</option>)}</select></label>
-        <button type="button" onClick={() => mutateLedger((value) => addLedgerItem(value, createLedgerItem(newClass, `LED-${crypto.randomUUID()}`)))}
-          className="rounded-xl bg-zinc-700 px-4 py-2 text-sm">Add ledger item</button></div> : null}
-      <div className="mt-5 space-y-4">{displayLedger.items.length === 0 ? <p className="text-sm text-zinc-500">No ledger items recorded.</p> : readOnly ? displayLedger.items.map((item) => <ReadOnlyLedgerItem key={item.item_id} item={item} />) : displayLedger.items.map((item) => {
+        <button type="button" disabled={ledgerEditingDisabled || ledgerEditSession !== null} onClick={beginNewLedgerItemEdit}
+          className="rounded-xl bg-zinc-700 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50">Add ledger item</button></div> : null}
+      <div className="mt-5 space-y-4">{visibleLedgerItems.length === 0 ? <p className="text-sm text-zinc-500">No ledger items recorded.</p> : readOnly ? displayLedger.items.map((item) => <ReadOnlyLedgerItem key={item.item_id} item={item} />) : visibleLedgerItems.map((persistedItem) => {
+          const item =
+            ledgerEditSession?.itemId === persistedItem.item_id
+              ? ledgerEditSession.draft
+              : persistedItem;
         const resolved = (item.evidence_status !== null && item.evidence_status !== "current") ||
           (item.assumption_status !== null && item.assumption_status !== "open") || item.gap_status === "resolved" || item.conflict_status === "resolved";
         const adoptedAi = isAdoptedAi(item.provenance);
-        return <fieldset key={item.item_id} disabled={readOnly || submitting} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
+        return <fieldset key={item.item_id} disabled={readOnly || submitting || ledgerEditingDisabled || (ledgerEditSession !== null && ledgerEditSession.itemId !== item.item_id)} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
           <div className="flex justify-between gap-3"><legend className="font-semibold">{readable(item.information_class)}</legend>
-            {!readOnly && !adoptedAi ? <button type="button" className="text-sm text-red-300" onClick={() => mutateLedger((value) => removeLedgerItem(value, item.item_id))}>Remove</button> : null}</div>
+            {!readOnly && !adoptedAi && ledgerEditSession === null ? <button type="button" className="text-sm text-red-300" onClick={() => mutateLedger((value) => removeLedgerItem(value, item.item_id))}>Remove</button> : null}</div>
           <label className="mt-3 block text-sm">Statement<textarea value={item.statement} readOnly={readOnly || adoptedAi}
-            onChange={(event) => setLedgerItem(item.item_id, { statement: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
+            onChange={(event) => setLedgerItemDraft(item.item_id, { statement: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {item.evidence_status !== null ? <label className="text-sm">Evidence status<select value={item.evidence_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItem(item.item_id, { evidence_status: event.target.value as typeof item.evidence_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{item.information_class === "verified_evidence" ? <option value="current" disabled>Choose a human-dispositioned status</option> : null}{CAPA_EVIDENCE_STATUSES.filter((value) => !(item.information_class === "verified_evidence" && value === "current")).map((value) => <option key={value}>{value}</option>)}</select></label> : null}
-            {item.assumption_status !== null ? <label className="text-sm">Assumption status<select value={item.assumption_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItem(item.item_id, { assumption_status: event.target.value as typeof item.assumption_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_ASSUMPTION_STATUSES.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
-            {item.gap_status !== null ? <label className="text-sm">Gap status<select value={item.gap_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItem(item.item_id, { gap_status: event.target.value as typeof item.gap_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_GAP_STATUSES.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
-            {item.conflict_status !== null ? <label className="text-sm">Conflict status<select value={item.conflict_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItem(item.item_id, { conflict_status: event.target.value as typeof item.conflict_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_CONFLICT_STATUSES.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
-            {(item.information_class === "assumption" || item.information_class === "conflicting_information") ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.material_to_conclusion} onChange={(event) => setLedgerItem(item.item_id, { material_to_conclusion: event.target.checked })} />Material to conclusion</label> : null}
-            {item.information_class === "missing_information" ? <><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.critical_to_conclusion} onChange={(event) => setLedgerItem(item.item_id, { critical_to_conclusion: event.target.checked })} />Critical to conclusion</label>
-              <label className="text-sm">Recommended next step<input readOnly={adoptedAi} value={item.recommended_next_step ?? ""} onChange={(event) => setLedgerItem(item.item_id, { recommended_next_step: event.target.value || null })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2" /></label>
-              <label className="text-sm">Target date<input type="date" value={item.target_date ?? ""} onChange={(event) => setLedgerItem(item.item_id, { target_date: event.target.value || null })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2" /></label></> : null}
+            {item.evidence_status !== null ? <label className="text-sm">Evidence status<select value={item.evidence_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItemDraft(item.item_id, { evidence_status: event.target.value as typeof item.evidence_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{item.information_class === "verified_evidence" ? <option value="current" disabled>Choose a human-dispositioned status</option> : null}{CAPA_EVIDENCE_STATUSES.filter((value) => !(item.information_class === "verified_evidence" && value === "current")).map((value) => <option key={value}>{value}</option>)}</select></label> : null}
+            {item.assumption_status !== null ? <label className="text-sm">Assumption status<select value={item.assumption_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItemDraft(item.item_id, { assumption_status: event.target.value as typeof item.assumption_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_ASSUMPTION_STATUSES.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
+            {item.gap_status !== null ? <label className="text-sm">Gap status<select value={item.gap_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItemDraft(item.item_id, { gap_status: event.target.value as typeof item.gap_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_GAP_STATUSES.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
+            {item.conflict_status !== null ? <label className="text-sm">Conflict status<select value={item.conflict_status} disabled={!attributionAvailable} onChange={(event) => setLedgerItemDraft(item.item_id, { conflict_status: event.target.value as typeof item.conflict_status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_CONFLICT_STATUSES.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
+            {(item.information_class === "assumption" || item.information_class === "conflicting_information") ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.material_to_conclusion} onChange={(event) => setLedgerItemDraft(item.item_id, { material_to_conclusion: event.target.checked })} />Material to conclusion</label> : null}
+            {item.information_class === "missing_information" ? <><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.critical_to_conclusion} onChange={(event) => setLedgerItemDraft(item.item_id, { critical_to_conclusion: event.target.checked })} />Critical to conclusion</label>
+              <label className="text-sm">Recommended next step<input readOnly={adoptedAi} value={item.recommended_next_step ?? ""} onChange={(event) => setLedgerItemDraft(item.item_id, { recommended_next_step: event.target.value || null })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2" /></label>
+              <label className="text-sm">Target date<input type="date" value={item.target_date ?? ""} onChange={(event) => setLedgerItemDraft(item.item_id, { target_date: event.target.value || null })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2" /></label></> : null}
           </div>
-          {item.information_class === "retrieved_reference" ? <label className="mt-3 block text-sm">Source reference<input value={item.provenance.source_reference ?? ""} onChange={(event) => setLedgerItem(item.item_id, { provenance: { ...item.provenance, source_reference: event.target.value || null } })} className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label> : null}
+          {item.information_class === "retrieved_reference" ? <label className="mt-3 block text-sm">Source reference<input value={item.provenance.source_reference ?? ""} onChange={(event) => setLedgerItemDraft(item.item_id, { provenance: { ...item.provenance, source_reference: event.target.value || null } })} className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label> : null}
           {(item.information_class === "verified_evidence" || item.information_class === "assumption" || item.information_class === "missing_information" || item.information_class === "conflicting_information") ? <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <label className="text-sm">Supporting item IDs<input value={item.supporting_item_ids.join(", ")} onChange={(event) => setLedgerItem(item.item_id, { supporting_item_ids: normalizedLedgerReferenceIds(event.target.value) })} placeholder="LED-1, LED-2" className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label>
-            {item.information_class !== "missing_information" ? <label className="text-sm">Contradictory item IDs<input value={item.contradictory_item_ids.join(", ")} onChange={(event) => setLedgerItem(item.item_id, { contradictory_item_ids: normalizedLedgerReferenceIds(event.target.value) })} placeholder="LED-3" className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label> : null}
-            {item.information_class === "conflicting_information" ? <label className="text-sm">Conflict item IDs (at least two)<input value={item.conflict_item_ids.join(", ")} onChange={(event) => setLedgerItem(item.item_id, { conflict_item_ids: normalizedLedgerReferenceIds(event.target.value) })} placeholder="LED-1, LED-2" className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label> : null}
+            <label className="text-sm">Supporting item IDs<input value={item.supporting_item_ids.join(", ")} onChange={(event) => setLedgerItemDraft(item.item_id, { supporting_item_ids: normalizedLedgerReferenceIds(event.target.value) })} placeholder="LED-1, LED-2" className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label>
+            {item.information_class !== "missing_information" ? <label className="text-sm">Contradictory item IDs<input value={item.contradictory_item_ids.join(", ")} onChange={(event) => setLedgerItemDraft(item.item_id, { contradictory_item_ids: normalizedLedgerReferenceIds(event.target.value) })} placeholder="LED-3" className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label> : null}
+            {item.information_class === "conflicting_information" ? <label className="text-sm">Conflict item IDs (at least two)<input value={item.conflict_item_ids.join(", ")} onChange={(event) => setLedgerItemDraft(item.item_id, { conflict_item_ids: normalizedLedgerReferenceIds(event.target.value) })} placeholder="LED-1, LED-2" className="mt-1 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3" /></label> : null}
           </div> : null}
-          {resolved ? <label className="mt-3 block text-sm">Human disposition rationale<textarea disabled={!attributionAvailable} value={item.human_disposition?.rationale ?? ""} onChange={(event) => setLedgerItem(item.item_id, { human_disposition: { user_id: currentUserId, disposition_at: new Date().toISOString(), rationale: event.target.value } })} className="mt-1 min-h-16 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /><span className="text-xs text-zinc-500">Attributed to You</span></label> : null}
-        </fieldset>;
+          {resolved ? <label className="mt-3 block text-sm">Human disposition rationale<textarea disabled={!attributionAvailable} value={item.human_disposition?.rationale ?? ""} onChange={(event) => setLedgerItemDraft(item.item_id, { human_disposition: { user_id: currentUserId, disposition_at: new Date().toISOString(), rationale: event.target.value } })} className="mt-1 min-h-16 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /><span className="text-xs text-zinc-500">Attributed to You</span></label> : null}
+                    {ledgerEditSession?.itemId === item.item_id ? <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-zinc-800 pt-4">
+              <span className="text-sm text-amber-300">Unsaved Ledger-item changes</span>
+              <button type="button" onClick={saveLedgerItemEdit} className="rounded-xl bg-zinc-700 px-4 py-2 text-sm">Save changes</button>
+              <button type="button" onClick={cancelLedgerItemEdit} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm">Cancel</button>
+            </div> : null}
+          </fieldset>;
       })}</div>
     </section>
 
     <section aria-labelledby="root-package-heading" className="rounded-3xl border border-zinc-800 bg-zinc-900/75 p-5 sm:p-7">
       <h2 id="root-package-heading" className="text-xl font-semibold">Root-Cause Package</h2>
       <p className="mt-2 text-sm text-zinc-400">{readOnly ? "Authoritative submitted package; read-only." : "Human-authored causal hypotheses. No conclusion is inferred automatically."}</p>
-      {!readOnly ? <button type="button" onClick={() => mutateRootPackage((value) => addHypothesis(value, createHypothesis(`HYP-${crypto.randomUUID()}`)))} className="mt-4 rounded-xl bg-zinc-700 px-4 py-2 text-sm">Add hypothesis</button> : null}
+      {!readOnly ? <button type="button" disabled={ledgerEditSession !== null || editingDisabled} onClick={() => mutateRootPackage((value) => addHypothesis(value, createHypothesis(`HYP-${crypto.randomUUID()}`)))} className="mt-4 rounded-xl bg-zinc-700 px-4 py-2 text-sm">Add hypothesis</button> : null}
       <div className="mt-5 space-y-4">{displayRootPackage.hypotheses.length === 0 ? <p className="text-sm text-zinc-500">No hypotheses recorded.</p> : readOnly ? displayRootPackage.hypotheses.map((hypothesis) => <ReadOnlyHypothesis key={hypothesis.hypothesis_id} hypothesis={hypothesis} />) : displayRootPackage.hypotheses.map((hypothesis) => {
         const adoptedAi = isAdoptedAi(hypothesis.provenance);
-        return <fieldset key={hypothesis.hypothesis_id} disabled={submitting} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
+        return <fieldset key={hypothesis.hypothesis_id} disabled={submitting || ledgerEditSession !== null} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
         <div className="flex justify-between"><legend className="font-semibold">{hypothesis.hypothesis_id}</legend>{!readOnly && !adoptedAi ? <button type="button" onClick={() => mutateRootPackage((value) => removeHypothesis(value, hypothesis.hypothesis_id))} className="text-sm text-red-300">Remove</button> : null}</div>
         <label className="mt-3 block text-sm">Statement<textarea readOnly={adoptedAi} value={hypothesis.statement} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { statement: event.target.value })} className="mt-1 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
         <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-sm">Status<select value={hypothesis.status} onChange={(event) => setHypothesis(hypothesis.hypothesis_id, { status: event.target.value as typeof hypothesis.status })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">{CAPA_CAUSAL_HYPOTHESIS_STATUSES.filter((value) => attributionAvailable || value === "proposed").map((value) => <option key={value}>{value}</option>)}</select></label>
