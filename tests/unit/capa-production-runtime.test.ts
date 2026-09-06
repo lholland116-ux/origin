@@ -55,6 +55,10 @@ import type {
 } from "../../lib/capa/ai/capa-investigation-planning-advisory-model-profile";
 
 import type {
+  CapaRootCauseReviewAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-root-cause-review-advisory-model-generator";
+
+import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
 } from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
@@ -97,6 +101,10 @@ import {
 import {
   SupabaseCapaInvestigationPlanningAdvisoryOutputRepository,
 } from "../../lib/database/supabase/supabase-capa-investigation-planning-advisory-output-repository";
+
+import {
+  SupabaseCapaRootCauseReviewAdvisoryOutputRepository,
+} from "../../lib/database/supabase/supabase-capa-root-cause-review-advisory-output-repository";
 
 const NOW =
   new Date(
@@ -166,6 +174,17 @@ function containmentRiskStructuredModelClient():
     async generateStructured() {
       throw new Error(
         "The production S20 runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
+function rootCauseReviewStructuredModelClient():
+  CapaRootCauseReviewAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The production S50 runtime-composition test must not invoke the model.",
       );
     },
   };
@@ -245,6 +264,30 @@ afterEach(() => {
 describe(
   "createCapaProductionRuntime",
   () => {
+    it("composes the durable S50 advisory service with injected model configuration", () => {
+      const runtime = createCapaProductionRuntime({
+        sql: SQL,
+        now: () => NOW,
+        generate_uuid: uuidGenerator(),
+        root_cause_review_advisory: {
+          model: "gpt-5.6",
+          structured_model_client: rootCauseReviewStructuredModelClient(),
+        },
+      });
+
+      const service = runtime.create_root_cause_review_advisory_service(
+        requestContext(),
+      );
+
+      expect(service.execute).toEqual(expect.any(Function));
+      expect((service as any).dependencies.output_repository).toBeInstanceOf(
+        SupabaseCapaRootCauseReviewAdvisoryOutputRepository,
+      );
+      expect((service as any).dependencies.transaction_manager).toBe(
+        runtime.dependencies.transaction_manager,
+      );
+    });
+
     it(
       "assembles the durable CAPA adapters around one SQL client",
       () => {
@@ -772,6 +815,13 @@ describe(
               requestContext(),
             ),
         ).toThrow(CapaProductionRuntimeConfigurationError);
+
+        expect(
+          () =>
+            runtime.create_root_cause_review_advisory_service(
+              requestContext(),
+            ),
+        ).toThrow(CapaProductionRuntimeConfigurationError);
       },
     );
 
@@ -807,6 +857,10 @@ describe(
 
     it.each(["", "   "])("rejects invalid S20 model configuration '%s'", (model) => {
       expect(() => createCapaProductionRuntime({ sql: SQL, containment_risk_advisory: { model } })).toThrow(CapaProductionRuntimeConfigurationError);
+    });
+
+    it.each(["", "   "])("rejects invalid S50 model configuration '%s'", (model) => {
+      expect(() => createCapaProductionRuntime({ sql: SQL, root_cause_review_advisory: { model } })).toThrow(CapaProductionRuntimeConfigurationError);
     });
 
     it("creates request-scoped S30 advisory services from an injected client", () => {
@@ -865,6 +919,25 @@ describe(
           createCapaProductionRuntime({
             sql: SQL,
             investigation_planning_advisory: {
+              model: "test-controlled-model",
+            },
+          }),
+        ).toThrow(CapaProductionRuntimeConfigurationError);
+      } finally {
+        if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = previousApiKey;
+      }
+    });
+
+    it("requires OPENAI_API_KEY when S50 uses the real model adapter", () => {
+      const previousApiKey = process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+
+      try {
+        expect(() =>
+          createCapaProductionRuntime({
+            sql: SQL,
+            root_cause_review_advisory: {
               model: "test-controlled-model",
             },
           }),

@@ -33,6 +33,9 @@ import type {
 import type {
   CapaInvestigationActiveAdvisoryApiDependencies,
 } from "@/lib/capa/api/capa-investigation-active-advisory-route-handler";
+import type {
+  CapaRootCauseReviewAdvisoryApiDependencies,
+} from "@/lib/capa/api/capa-root-cause-review-advisory-route-handler";
 
 import type {
   CapaInvestigationActiveAdoptionApiDependencies,
@@ -303,6 +306,17 @@ export function createCapaInvestigationActiveAdvisoryApiDependencies():
     ...dependencies,
     create_advisory_service(context) {
       return dependencies.get_runtime().create_investigation_active_advisory_service(context);
+    },
+  };
+}
+
+export function createCapaRootCauseReviewAdvisoryApiDependencies():
+  CapaRootCauseReviewAdvisoryApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return {
+    ...dependencies,
+    create_advisory_service(context) {
+      return dependencies.get_runtime().create_root_cause_review_advisory_service(context);
     },
   };
 }

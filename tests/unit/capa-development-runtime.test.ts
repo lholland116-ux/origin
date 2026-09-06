@@ -38,6 +38,10 @@ import type {
 } from "../../lib/capa/ai/capa-investigation-active-advisory-model-profile";
 
 import type {
+  CapaRootCauseReviewAdvisoryStructuredModelClient,
+} from "../../lib/capa/ai/capa-root-cause-review-advisory-model-generator";
+
+import type {
   CapaIntakeAdvisoryRetrievalConfiguration,
 } from "../../lib/capa/ai/capa-intake-advisory-retrieval-request-factory";
 
@@ -159,6 +163,17 @@ function investigationActiveStructuredModelClient():
   };
 }
 
+function rootCauseReviewStructuredModelClient():
+  CapaRootCauseReviewAdvisoryStructuredModelClient {
+  return {
+    async generateStructured() {
+      throw new Error(
+        "The development S50 runtime-composition test must not invoke the model.",
+      );
+    },
+  };
+}
+
 function requestTrace():
   RequestTrace {
   return {
@@ -232,6 +247,37 @@ function policyRequest(
 describe(
   "createCapaDevelopmentRuntime",
   () => {
+    it("composes the request-scoped S50 advisory over in-memory persistence", () => {
+      const runtime = createCapaDevelopmentRuntime({
+        environment: "test",
+        now: () => NOW,
+        generate_uuid: createUuidGenerator(),
+        root_cause_review_advisory: {
+          structured_model_client: rootCauseReviewStructuredModelClient(),
+        },
+      });
+
+      const service = runtime.create_root_cause_review_advisory_service(
+        developmentContext(),
+      );
+
+      expect(service.execute).toEqual(expect.any(Function));
+      expect((service as any).dependencies.output_repository).toBe(runtime.database);
+      expect((service as any).dependencies.transaction_manager).toBe(runtime.database);
+    });
+
+    it("fails closed when the development S50 advisory is not configured", () => {
+      const runtime = createCapaDevelopmentRuntime({
+        environment: "test",
+        now: () => NOW,
+        generate_uuid: createUuidGenerator(),
+      });
+
+      expect(() =>
+        runtime.create_root_cause_review_advisory_service(developmentContext()),
+      ).toThrow(CapaDevelopmentRuntimeAdvisoryConfigurationError);
+    });
+
     it("composes request-scoped S40 advisory and adoption services over in-memory persistence", () => {
       const runtime = createCapaDevelopmentRuntime({
         environment: "test",
