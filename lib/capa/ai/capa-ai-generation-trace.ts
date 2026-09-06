@@ -26,6 +26,10 @@ import {
   CAPA_INVESTIGATION_ACTIVE_ADVISORY_OUTPUT,
   CAPA_INVESTIGATION_ACTIVE_ADVISORY_OUTPUT_SCHEMA_VERSION,
 } from "./capa-investigation-active-advisory-contract";
+import {
+  CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT,
+  CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION,
+} from "./capa-root-cause-review-advisory-contract";
 
 /**
  * Durable-generation-trace schema identity.
@@ -204,6 +208,25 @@ export function fingerprintCanonicalJson(
   return sha256Utf8(
     canonicalJson(value),
   );
+}
+
+export function snapshotCapaAiGenerationTraceValue<T>(
+  value: T,
+): T {
+  return JSON.parse(canonicalJson(value)) as T;
+}
+
+export function deepFreezeCapaAiGenerationTraceValue<T>(
+  value: T,
+): T {
+  if (value !== null && typeof value === "object") {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      deepFreezeCapaAiGenerationTraceValue(child);
+    }
+  }
+
+  return value;
 }
 
 export const CAPA_CONTAINMENT_RISK_PROMPT_PACKAGE_SCHEMA_VERSION = "capa-containment-risk-prompt-package-1.0.0" as const;
@@ -1155,6 +1178,235 @@ export function createCapaInvestigationActiveAdvisoryGenerationTrace(input: {
   });
 
   return freezeInvestigationPlanningTrace({
+    trace_schema_version: CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
+    package: pkg,
+    rendered_prompt: input.rendered_prompt,
+    model_profile_version: input.model_profile_version,
+    output_schema_name: input.output_schema_name,
+    output_schema: outputSchema,
+    store: false as const,
+    maximum_output_characters: input.maximum_output_characters,
+    evidence_manifest: evidenceManifest,
+    policy_manifest: policyManifest,
+    fingerprints,
+  });
+}
+
+export const CAPA_ROOT_CAUSE_REVIEW_PROMPT_PACKAGE_SCHEMA_VERSION =
+  "capa-root-cause-review-prompt-package-1.0.0" as const;
+export const CAPA_ROOT_CAUSE_REVIEW_EVIDENCE_MANIFEST_SCHEMA_VERSION =
+  "capa-root-cause-review-evidence-manifest-1.0.0" as const;
+export const CAPA_ROOT_CAUSE_REVIEW_POLICY_MANIFEST_SCHEMA_VERSION =
+  "capa-root-cause-review-policy-manifest-1.0.0" as const;
+
+export interface CapaRootCauseReviewAdvisoryGenerationContract {
+  readonly operation: "assemble_review_packet";
+  readonly requested_output:
+    typeof CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT;
+  readonly output_schema_version:
+    typeof CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION;
+  readonly model_profile_version: string;
+  readonly output_schema_name: string;
+  readonly output_schema_sha256: string;
+  readonly store: false;
+  readonly maximum_output_characters: number;
+}
+
+export interface CapaRootCauseReviewAdvisoryPromptPackage {
+  readonly package_schema_version:
+    typeof CAPA_ROOT_CAUSE_REVIEW_PROMPT_PACKAGE_SCHEMA_VERSION;
+  readonly scope: Readonly<{
+    readonly organization_id: string;
+    readonly capa_case_id: string;
+    readonly case_version_id: string;
+    readonly record_version: number;
+    readonly workflow_state: "S50";
+  }>;
+  readonly agent: Readonly<{
+    readonly agent_id: "AG-REVIEW";
+    readonly agent_version: "ag-review-1.0.0";
+  }>;
+  readonly trace: Readonly<{
+    readonly run_id: CapaAiRunId;
+    readonly prompt_package_id: CapaPromptPackageId;
+    readonly request_id: RequestId;
+    readonly correlation_id: CorrelationId;
+    readonly assembled_at: IsoDateTime;
+  }>;
+  readonly generation_contract:
+    CapaRootCauseReviewAdvisoryGenerationContract;
+  /** Only model-safe context is captured here; never the server-only manifest. */
+  readonly context_provenance: Readonly<{
+    readonly model_safe_context: unknown;
+  }>;
+  readonly governance: CapaRootCauseReviewAdvisoryGovernance;
+}
+
+export type CapaRootCauseReviewAdvisoryPromptPackageInput = Omit<
+  CapaRootCauseReviewAdvisoryPromptPackage,
+  "package_schema_version" | "generation_contract"
+>;
+
+export interface CapaRootCauseReviewAdvisoryGovernance {
+  readonly advisory_only: true;
+  readonly workflow_mutated: false;
+  readonly controlled_record_mutated: false;
+  readonly human_acceptance_required: true;
+}
+
+export interface CapaRootCauseReviewAdvisoryEvidenceManifest {
+  readonly evidence_manifest_schema_version:
+    typeof CAPA_ROOT_CAUSE_REVIEW_EVIDENCE_MANIFEST_SCHEMA_VERSION;
+  readonly retrieval_performed: false;
+  readonly item_count: 0;
+  readonly items: readonly [];
+}
+
+export interface CapaRootCauseReviewAdvisoryPolicyManifest {
+  readonly policy_manifest_schema_version:
+    typeof CAPA_ROOT_CAUSE_REVIEW_POLICY_MANIFEST_SCHEMA_VERSION;
+  readonly agent: Readonly<{
+    readonly agent_id: "AG-REVIEW";
+    readonly agent_version: "ag-review-1.0.0";
+  }>;
+  readonly workflow_state: "S50";
+  readonly operation: "assemble_review_packet";
+  readonly requested_output:
+    typeof CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT;
+  readonly output_schema_version:
+    typeof CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION;
+  readonly generation: Readonly<{
+    readonly model_profile_version: string;
+    readonly output_schema_name: string;
+    readonly output_schema_sha256: string;
+  }>;
+  readonly authority: CapaRootCauseReviewAdvisoryGovernance;
+  readonly prohibitions: readonly string[];
+}
+
+export interface CapaRootCauseReviewAdvisoryGenerationFingerprints {
+  readonly algorithm:
+    typeof CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM;
+  readonly prompt_package_sha256: string;
+  readonly rendered_prompt_sha256: string;
+  readonly evidence_manifest_sha256: string;
+  readonly policy_manifest_sha256: string;
+  readonly output_schema_sha256: string;
+}
+
+export interface CapaRootCauseReviewAdvisoryGenerationTraceCapture {
+  readonly trace_schema_version:
+    typeof CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION;
+  readonly package: CapaRootCauseReviewAdvisoryPromptPackage;
+  readonly rendered_prompt: string;
+  readonly model_profile_version: string;
+  readonly output_schema_name: string;
+  readonly output_schema: unknown;
+  readonly store: false;
+  readonly maximum_output_characters: number;
+  readonly evidence_manifest: CapaRootCauseReviewAdvisoryEvidenceManifest;
+  readonly policy_manifest: CapaRootCauseReviewAdvisoryPolicyManifest;
+  readonly fingerprints: CapaRootCauseReviewAdvisoryGenerationFingerprints;
+}
+
+const CAPA_ROOT_CAUSE_REVIEW_PROHIBITIONS = Object.freeze([
+  "root-cause approval",
+  "root-cause rejection",
+  "authoritative root-cause confirmation",
+  "G-04 approval",
+  "review disposition",
+  "workflow advancement",
+  "S50 to S60 transition",
+  "controlled-record mutation",
+  "controlled-record signing",
+  "reviewer impersonation",
+  "approver impersonation",
+  "authoritative evidence verification",
+  "release determination",
+  "recall or field-action determination",
+  "patient-treatment determination",
+  "regulatory-reportability determination",
+  "external regulatory submission or communication decision",
+] as const);
+
+export function createCapaRootCauseReviewAdvisoryGenerationTrace(input: {
+  readonly rendered_prompt: string;
+  readonly model_profile_version: string;
+  readonly output_schema_name: string;
+  readonly output_schema: unknown;
+  readonly maximum_output_characters: number;
+  readonly package: CapaRootCauseReviewAdvisoryPromptPackageInput;
+}): CapaRootCauseReviewAdvisoryGenerationTraceCapture {
+  const outputSchema = deepFreezeCapaAiGenerationTraceValue(
+    snapshotCapaAiGenerationTraceValue(input.output_schema),
+  );
+  const outputSchemaSha256 = fingerprintCanonicalJson(outputSchema);
+  const governance: CapaRootCauseReviewAdvisoryGovernance = {
+    advisory_only: true,
+    workflow_mutated: false,
+    controlled_record_mutated: false,
+    human_acceptance_required: true,
+  };
+  const generationContract: CapaRootCauseReviewAdvisoryGenerationContract = {
+    operation: "assemble_review_packet",
+    requested_output: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT,
+    output_schema_version:
+      CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION,
+    model_profile_version: input.model_profile_version,
+    output_schema_name: input.output_schema_name,
+    output_schema_sha256: outputSchemaSha256,
+    store: false,
+    maximum_output_characters: input.maximum_output_characters,
+  };
+  const pkg = deepFreezeCapaAiGenerationTraceValue(
+    snapshotCapaAiGenerationTraceValue({
+      ...input.package,
+      package_schema_version:
+        CAPA_ROOT_CAUSE_REVIEW_PROMPT_PACKAGE_SCHEMA_VERSION,
+      generation_contract: generationContract,
+    }),
+  ) as CapaRootCauseReviewAdvisoryPromptPackage;
+  const evidenceManifest = deepFreezeCapaAiGenerationTraceValue(
+    snapshotCapaAiGenerationTraceValue({
+      evidence_manifest_schema_version:
+        CAPA_ROOT_CAUSE_REVIEW_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+      retrieval_performed: false as const,
+      item_count: 0 as const,
+      items: [] as const,
+    }),
+  ) as CapaRootCauseReviewAdvisoryEvidenceManifest;
+  const policyManifest = deepFreezeCapaAiGenerationTraceValue(
+    snapshotCapaAiGenerationTraceValue({
+      policy_manifest_schema_version:
+        CAPA_ROOT_CAUSE_REVIEW_POLICY_MANIFEST_SCHEMA_VERSION,
+      agent: {
+        agent_id: "AG-REVIEW" as const,
+        agent_version: "ag-review-1.0.0" as const,
+      },
+      workflow_state: "S50" as const,
+      operation: "assemble_review_packet" as const,
+      requested_output: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT,
+      output_schema_version:
+        CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION,
+      generation: {
+        model_profile_version: input.model_profile_version,
+        output_schema_name: input.output_schema_name,
+        output_schema_sha256: outputSchemaSha256,
+      },
+      authority: governance,
+      prohibitions: CAPA_ROOT_CAUSE_REVIEW_PROHIBITIONS,
+    }),
+  ) as CapaRootCauseReviewAdvisoryPolicyManifest;
+  const fingerprints: CapaRootCauseReviewAdvisoryGenerationFingerprints = {
+    algorithm: CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM,
+    prompt_package_sha256: fingerprintCanonicalJson(pkg),
+    rendered_prompt_sha256: sha256Utf8(input.rendered_prompt),
+    evidence_manifest_sha256: fingerprintCanonicalJson(evidenceManifest),
+    policy_manifest_sha256: fingerprintCanonicalJson(policyManifest),
+    output_schema_sha256: outputSchemaSha256,
+  };
+
+  return deepFreezeCapaAiGenerationTraceValue({
     trace_schema_version: CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION,
     package: pkg,
     rendered_prompt: input.rendered_prompt,
