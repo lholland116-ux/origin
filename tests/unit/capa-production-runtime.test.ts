@@ -1119,6 +1119,15 @@ describe(
         expect(result.getTime()).toBeLessThanOrEqual(after);
       },
     );
+
+    it("wires the human-controlled S50 root-cause gate", () => {
+      const runtime = createCapaProductionRuntime({ now: () => NOW, sql: SQL });
+      expect(runtime.decide_root_cause_gate_dependencies).toEqual(expect.objectContaining({
+        capa_repository: runtime.database,
+        audit_repository: expect.any(SupabaseAuditRepository),
+      }));
+      expect(runtime.decide_root_cause_gate_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
+    });
   },
 );
 

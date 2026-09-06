@@ -10,9 +10,14 @@ import {
   type SubmitCapaRootCausePackageDependencies,
 } from "../../lib/capa/application/submit-capa-root-cause-package";
 import {
+  decideCapaRootCauseGate,
+  type DecideCapaRootCauseGateDependencies,
+} from "../../lib/capa/application/decide-capa-root-cause-gate";
+import {
   updateCapaInvestigationProgress,
   type UpdateCapaInvestigationProgressDependencies,
 } from "../../lib/capa/application/update-capa-investigation-progress";
+import { createCapaInvestigationActiveWorkspaceDraftService } from "../../lib/capa/application/capa-investigation-active-workspace-draft-service";
 import { InMemoryCapaDatabase } from "../../lib/database/in-memory/in-memory-capa-database";
 
 const ORG = "20000000-0000-4000-8000-000000000001";
@@ -22,6 +27,7 @@ const V3 = "40000000-0000-4000-8000-000000000003";
 const V4 = "40000000-0000-4000-8000-000000000004";
 const V5 = "40000000-0000-4000-8000-000000000005";
 const V6 = "40000000-0000-4000-8000-000000000006";
+const V7 = "40000000-0000-4000-8000-000000000007";
 const CONTAINMENT = "70000000-0000-4000-8000-000000000001";
 const PLAN1 = "70000000-0000-4000-8000-000000000002";
 const PLAN2 = "70000000-0000-4000-8000-000000000003";
@@ -30,6 +36,8 @@ const ROOT = "70000000-0000-4000-8000-000000000005";
 const RELEASE_AUDIT = "80000000-0000-4000-8000-000000000001";
 const D3_AUDIT = "80000000-0000-4000-8000-000000000002";
 const D2_AUDIT = "80000000-0000-4000-8000-000000000003";
+const GATE_AUDIT = "80000000-0000-4000-8000-000000000004";
+const GATE_TRANSITION_AUDIT = "80000000-0000-4000-8000-000000000005";
 const NOW = "2026-09-01T12:00:00.000Z";
 const human = { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null };
 
@@ -37,7 +45,7 @@ function authentication() {
   return {
     principal: { principal_type: "human", user_id: USER }, session_id: "session",
     authentication_method: "SUPABASE_SESSION", assurance_level: "SINGLE_FACTOR",
-    authenticated_at: "2026-09-01T11:00:00.000Z", expires_at: "2026-09-02T12:00:00.000Z",
+    authenticated_at: "2026-09-01T11:00:00.000Z", expires_at: "2026-09-02T12:00:00.000Z", reauthenticated_at: NOW,
   } as never;
 }
 
@@ -158,7 +166,44 @@ async function lifecycleHarness() {
       generateAuditEventId: () => D2_AUDIT,
     } as never,
   };
-  return { database, release, progress, submit };
+  const gate: DecideCapaRootCauseGateDependencies = {
+    ...common,
+    id_generator: {
+      generateCaseVersionId: () => V7,
+      generateSectionVersionId: () => ROOT,
+      generateAuditEventId: (() => { let index = 0; return () => [GATE_AUDIT, GATE_TRANSITION_AUDIT][index++]!; })(),
+    } as never,
+    configuration: { ...common.configuration, authorization_purpose: "CAPA_GATE_DECISION" as never,
+      step_up_maximum_age_ms: 900000, required_step_up_assurance: "MFA" as never },
+  };
+  const workspace = createCapaInvestigationActiveWorkspaceDraftService({
+    request_context: { authentication: authentication(), tenant: tenant(), owner_user_id: USER } as never,
+    capa_repository: database,
+    workspace_repository: database,
+    transaction_manager: database,
+    authorization_policy,
+    now: () => new Date(NOW),
+  });
+  return { database, release, progress, submit, gate, workspace };
+}
+
+async function reachS50(test: Awaited<ReturnType<typeof lifecycleHarness>>, preserveWorkspace = false) {
+  await releaseCapaInvestigation(test.release, { authentication: authentication(), tenant: tenant(), capa_case_id: CASE,
+    expected_record_version: 3, expected_current_version_id: V3, request_trace: trace("gate-release"),
+    body: { investigation_plan: plan(), release: { confirmation: CAPA_INVESTIGATION_RELEASE_CONFIRMATION, comment: null } } } as never);
+  if (preserveWorkspace) {
+    await expect(test.workspace.save({
+      capa_case_id: CASE as never,
+      request_trace: trace("workspace-before-return"),
+      body: { expected_draft_revision: null, evidence_assumption_ledger: { items: [] }, root_cause_package: { hypotheses: [], root_cause_not_confirmed: null } },
+    })).resolves.toMatchObject({ status: "saved", workspace: { workflow_state: "S40", case_version_id: V4, record_version: 4, draft_revision: 1 } });
+  }
+  await updateCapaInvestigationProgress(test.progress, { authentication: authentication(), tenant: tenant(), capa_case_id: CASE,
+    expected_record_version: 4, expected_current_version_id: V4, item_id: "INV-1", new_status: "completed",
+    disposition: null, disposition_rationale: null, request_trace: trace("gate-progress") } as never);
+  return submitCapaRootCausePackage(test.submit, { authentication: authentication(), tenant: tenant(), capa_case_id: CASE,
+    expected_record_version: 5, expected_current_version_id: V5, request_trace: trace("gate-submit"),
+    body: { evidence_assumption_ledger: ledger(), root_cause_package: rootCause() } } as never);
 }
 
 describe("real investigation-to-root-cause lifecycle", () => {
@@ -209,5 +254,32 @@ describe("real investigation-to-root-cause lifecycle", () => {
     expect(await test.database.findEventById(ORG as never, D3_AUDIT as never)).toMatchObject({ event_type: "EVT-SUBSTANTIVE-CHANGE", action: "UPDATE_CAPA_INVESTIGATION_PROGRESS" });
     expect(await test.database.findEventById(ORG as never, D2_AUDIT as never)).toMatchObject({ event_type: "EVT-STATE-TRANSITION", action: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE" });
     expect(await test.database.findEventById(ORG as never, RELEASE_AUDIT as never)).not.toMatchObject({ event_type: "EVT-APPROVAL" });
+  });
+
+  it("completes both governed CS7 outcomes with immutable history", async () => {
+    const approvalTest = await lifecycleHarness();
+    await reachS50(approvalTest);
+    const approved = await decideCapaRootCauseGate(approvalTest.gate, { authentication: authentication(), tenant: tenant(), capa_case_id: CASE,
+      request_trace: trace("gate-approve"), body: { expected_record_version: 6, expected_current_version_id: V6,
+        decision: "approve", rationale: "Approved after human review.", confirmation: "G04_ROOT_CAUSE_APPROVAL_CONFIRMED" } } as never);
+    expect(approved).toMatchObject({ status: "decided", workflow_state: "S60", record_version: 7 });
+    expect(await approvalTest.database.findCaseVersionById(ORG as never, CASE as never, V6 as never)).toMatchObject({ status: "S50", section_version_ids: expect.arrayContaining([LEDGER, ROOT]) });
+
+    const returnTest = await lifecycleHarness();
+    await reachS50(returnTest, true);
+    const returned = await decideCapaRootCauseGate(returnTest.gate, { authentication: authentication(), tenant: tenant(), capa_case_id: CASE,
+      request_trace: trace("gate-return"), body: { expected_record_version: 6, expected_current_version_id: V6,
+        decision: "return_for_investigation", rationale: "Investigate the remaining uncertainty." } } as never);
+    expect(returned).toMatchObject({ status: "decided", workflow_state: "S40", record_version: 7 });
+    expect(await returnTest.database.findCaseVersionById(ORG as never, CASE as never, V6 as never)).toMatchObject({ status: "S50", section_version_ids: expect.arrayContaining([LEDGER, ROOT]) });
+    expect(await returnTest.database.findCaseVersionById(ORG as never, CASE as never, V7 as never)).toMatchObject({ status: "S40", section_version_ids: expect.arrayContaining([LEDGER, ROOT]) });
+    const loadedWorkspace = await returnTest.workspace.load({ capa_case_id: CASE as never });
+    expect(loadedWorkspace).toMatchObject({ status: "loaded", workspace: { workflow_state: "S40", case_version_id: V4, record_version: 4, draft_revision: 1 } });
+    await expect(returnTest.workspace.save({
+      capa_case_id: CASE as never,
+      request_trace: trace("workspace-after-return-update"),
+      body: { expected_draft_revision: 1, evidence_assumption_ledger: { items: [] }, root_cause_package: { hypotheses: [], root_cause_not_confirmed: null } },
+    })).resolves.toMatchObject({ status: "saved", workspace: { case_version_id: V7, record_version: 7, draft_revision: 2 } });
+    await expect(returnTest.workspace.load({ capa_case_id: CASE as never })).resolves.toMatchObject({ status: "loaded", workspace: { case_version_id: V7, record_version: 7, draft_revision: 2 } });
   });
 });

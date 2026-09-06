@@ -1641,5 +1641,16 @@ describe(
       const service = runtime.create_investigation_active_workspace_draft_service({} as any);
       expect(service).toEqual(expect.objectContaining({ load: expect.any(Function), save: expect.any(Function) }));
     });
+
+    it("wires the human-controlled S50 root-cause gate", () => {
+      const runtime = createCapaDevelopmentRuntime({ now: () => NOW });
+      expect(runtime.decide_root_cause_gate_dependencies).toEqual(expect.objectContaining({
+        transaction_manager: runtime.database,
+        capa_repository: runtime.database,
+        audit_repository: runtime.database,
+        workflow_idempotency_repository: runtime.database,
+      }));
+      expect(runtime.decide_root_cause_gate_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
+    });
   },
 );

@@ -15,6 +15,10 @@ import {
 } from "../application/submit-capa-root-cause-package";
 
 import {
+  decideCapaRootCauseGate,
+} from "../application/decide-capa-root-cause-gate";
+
+import {
   updateCapaInvestigationProgress,
 } from "../application/update-capa-investigation-progress";
 
@@ -368,6 +372,26 @@ async function parseJsonBody(
       valid: false,
     };
   }
+}
+
+function parsedRootCauseGateBody(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  const expectedVersion = body.expected_record_version;
+  const expectedCurrentVersionId = body.expected_current_version_id;
+  if (!Number.isSafeInteger(expectedVersion) || (expectedVersion as number) < 1 ||
+    typeof expectedCurrentVersionId !== "string" ||
+    normalizedUuid(expectedCurrentVersionId) !== expectedCurrentVersionId ||
+    (body.decision !== "approve" && body.decision !== "return_for_investigation") ||
+    typeof body.rationale !== "string" || body.rationale.length === 0 ||
+    body.rationale.trim() !== body.rationale || body.rationale.length > 4000) return null;
+  const keys = Object.keys(body).sort().join(",");
+  const expectedKeys = body.decision === "approve"
+    ? ["confirmation", "decision", "expected_current_version_id", "expected_record_version", "rationale"].join(",")
+    : ["decision", "expected_current_version_id", "expected_record_version", "rationale"].join(",");
+  if (keys !== expectedKeys) return null;
+  if (body.decision === "approve" && body.confirmation !== "G04_ROOT_CAUSE_APPROVAL_CONFIRMED") return null;
+  return body;
 }
 
 interface ParsedSubmitIntakeBody {
@@ -2247,5 +2271,64 @@ export async function handleCapaSubmitRootCause(
       "root-cause submission",
       error
     );
+  }
+}
+
+/** Framework-neutral POST handler for the human-controlled S50 G-04 gate. */
+export async function handleCapaRootCauseGate(
+  request: Request,
+  capaCaseId: string,
+  dependencies: CapaApiHandlerDependencies,
+): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  try {
+    const context = await authenticatedContext(dependencies);
+    if (context === null) return errorResponse(trace, 401, "UNAUTHORIZED", "Authentication is required.");
+    const normalizedCaseId = normalizedUuid(capaCaseId);
+    if (normalizedCaseId === null || normalizedCaseId !== capaCaseId) {
+      return errorResponse(trace, 400, "INVALID_CAPA_CASE_ID", "A valid CAPA case identifier is required.");
+    }
+    const key = request.headers.get("idempotency-key");
+    if (key === null || key.length === 0 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH || key.trim() !== key) {
+      return errorResponse(trace, 400, "INVALID_IDEMPOTENCY_KEY", "A valid idempotency key is required.");
+    }
+    const parsedJson = await parseJsonBody(request);
+    if (!parsedJson.valid) return errorResponse(trace, 400, "INVALID_JSON", "The request body must be valid JSON.");
+    const body = parsedRootCauseGateBody(parsedJson.body);
+    if (body === null) return errorResponse(trace, 400, "INVALID_CAPA_ROOT_CAUSE_GATE", "The root-cause gate request is invalid.");
+    const result = await decideCapaRootCauseGate(
+      dependencies.get_runtime().decide_root_cause_gate_dependencies,
+      {
+        authentication: context.authentication,
+        tenant: context.tenant,
+        capa_case_id: normalizedCaseId as CapaCaseId,
+        request_trace: { ...trace, idempotency_key: key as IdempotencyKey },
+        body,
+      },
+    );
+    if (result.status === "validation_failed") {
+      return errorResponse(trace, 400, "CAPA_ROOT_CAUSE_GATE_VALIDATION_FAILED", "The root-cause gate request did not pass controlled validation.", [{ path: "gate", message: result.reason_code }]);
+    }
+    if (result.status === "authorization_denied") return errorResponse(trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.");
+    if (result.status === "step_up_required") return errorResponse(trace, 403, "CAPA_STEP_UP_REQUIRED", "Fresh step-up authentication is required.");
+    if (result.status === "not_found_or_not_authorized") return errorResponse(trace, 404, "CAPA_NOT_FOUND", "The CAPA case was not found.");
+    if (result.status === "idempotency_conflict") return errorResponse(trace, 409, "CAPA_IDEMPOTENCY_CONFLICT", "The idempotency key was already used for a different CAPA request.");
+    if (result.status === "concurrency_conflict") return errorResponse(trace, 409, "CAPA_CONCURRENCY_CONFLICT", "The CAPA record changed before the root-cause gate could be completed.");
+    if (result.status === "workflow_conflict") return errorResponse(trace, 409, "CAPA_WORKFLOW_CONFLICT", "The CAPA case is not in S50 Root Cause Review.");
+    return jsonResponse({
+      status: "decided",
+      decision: result.decision,
+      capa_case_id: result.capa_case.capa_case_id,
+      previous_case_version_id: result.source_case_version_id,
+      current_case_version_id: result.resulting_case_version_id,
+      record_version: result.record_version,
+      workflow_state: result.workflow_state,
+      replayed: result.status === "already_decided",
+      correlation_id: trace.correlation_id,
+    }, 200);
+  } catch (error) {
+    const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
+    if (contextResponse !== null) return contextResponse;
+    return safeUnexpectedError(dependencies, trace, "root-cause gate", error);
   }
 }

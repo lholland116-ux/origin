@@ -165,6 +165,15 @@ describe("CAPA operation classifications", () => {
   });
 });
 
+describe("S50 root-cause gate preconditions", () => {
+  it.each(["approve_root_cause", "return_root_cause_for_investigation"] as const)("requires human authority and fresh step-up for %s", (operation) => {
+    expect(requiresHumanAuthority(operation)).toBe(true);
+    expect(requiresStepUpAuthentication(operation)).toBe(true);
+    expect(HUMAN_ONLY_CAPA_OPERATIONS.has(operation)).toBe(true);
+    expect(STEP_UP_CAPA_OPERATIONS.has(operation)).toBe(true);
+  });
+});
+
 describe("mandatory authorization preconditions", () => {
   it("denies an expired session", () => {
     const result = evaluateCapaAuthorizationPreconditions(

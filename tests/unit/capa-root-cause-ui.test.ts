@@ -10,6 +10,8 @@ describe("CS4E S40/S50 browser boundary", () => {
   const progress = readFileSync(resolve("app/capa/CapaInvestigationProgressPanel.tsx"), "utf8");
   const workspace = readFileSync(resolve("app/capa/CapaRootCauseWorkspace.tsx"), "utf8");
   const advisoryPanel = readFileSync(resolve("app/capa/CapaRootCauseReviewAdvisoryPanel.tsx"), "utf8");
+  const gatePanel = readFileSync(resolve("app/capa/CapaRootCauseGatePanel.tsx"), "utf8");
+  const gateClient = readFileSync(resolve("app/capa/capa-root-cause-gate-client.ts"), "utf8");
   const d2 = readFileSync(resolve("app/capa/capa-root-cause-submission-client.ts"), "utf8");
   it("renders semantic S40 and S50 workspace branches", () => {
     expect(intake).toContain('createdCapa.status === "S40" || createdCapa.status === "S50"');
@@ -55,6 +57,15 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).not.toContain("CapaRootCauseReviewAdvisoryPanel caseId={caseId} expectedCaseVersionId={currentVersionId} expectedRecordVersion={recordVersion} onAuthoritativeRefresh");
     expect(advisoryPanel).not.toMatch(/\b(?:Adopt|Accept|Reject|Approve|Submit|Release|Transition|Sign)\b/);
   });
+  it("mounts a separate S50 gate while keeping the submitted package read-only", () => {
+    expect(workspace).toContain('mode === "S50" ? <CapaRootCauseGatePanel');
+    expect(gatePanel).toContain("Approve to S60");
+    expect(gatePanel).toContain("Return to S40");
+    expect(gatePanel).toContain("FreshTotpStepUp");
+    expect(gateClient).toContain("idempotencyKey");
+    expect(gateClient).toContain("requestBody");
+    expect(workspace).toContain("Authoritative submitted package; read-only.");
+  });
   it("contains no raw JSON editor or CS4E approval, G-04, MFA, signature controls", () => {
     const cs4e = progress + workspace;
     expect(cs4e).not.toMatch(/JSON\.stringify|raw JSON|G-04|MFA|TOTP|e-signature|Approve root cause/i);
@@ -98,7 +109,8 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(markup).toContain("Root cause not confirmed"); expect(markup).toContain("Evidence was insufficient.");
     expect(markup).toContain("Continue monitoring"); expect(markup).not.toContain("Record that root cause was not confirmed");
     expect(markup).not.toContain("Submit root cause for review");
-    expect(markup).not.toContain("<input"); expect(markup).not.toContain("<select"); expect(markup).not.toContain("<textarea");
+    const submittedPackageMarkup = markup.slice(markup.indexOf('id="root-package-heading"'));
+    expect(submittedPackageMarkup).not.toContain("<input"); expect(submittedPackageMarkup).not.toContain("<select"); expect(submittedPackageMarkup).not.toContain("<textarea");
     expect(markup).not.toMatch(/<button[^>]*>\s*(?:Start|Complete|Disposition|Cancel)\s*<\/button>/);
   });
   it("routes every controlled ledger/package mutation through attempt-invalidating wrappers", () => {

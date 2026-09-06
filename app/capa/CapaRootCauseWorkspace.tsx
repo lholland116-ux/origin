@@ -8,6 +8,7 @@ import { CAPA_CAUSAL_HYPOTHESIS_STATUSES, CAPA_CAUSAL_ROLES, type CapaCausalHypo
 import CapaInvestigationProgressPanel from "./CapaInvestigationProgressPanel";
 import CapaInvestigationActiveAdvisoryPanel from "./CapaInvestigationActiveAdvisoryPanel";
 import CapaRootCauseReviewAdvisoryPanel from "./CapaRootCauseReviewAdvisoryPanel";
+import CapaRootCauseGatePanel from "./CapaRootCauseGatePanel";
 import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, applyRootCauseDraftMutation, clearRootCauseNotConfirmed,
   createHypothesis, createInitialLedgerDraft, createInitialRootCausePackageDraft, createLedgerItem,
   isValidCurrentUserId, removeHypothesis, removeLedgerItem, setRootCauseNotConfirmed, updateHypothesis, updateLedgerItem,
@@ -371,6 +372,7 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     {!readOnly && hydrationStatus === "ready" ? <p role="status" className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-300">Workspace persistence: {effectiveWorkspaceStatus === "loading" ? "Loading…" : effectiveWorkspaceStatus === "saving" ? "Saving…" : effectiveWorkspaceStatus === "unsaved" ? "Unsaved changes" : effectiveWorkspaceStatus === "conflict" ? "Conflict — reload required" : effectiveWorkspaceStatus === "failed" ? "Save failed" : effectiveWorkspaceStatus === "blocked" ? "Persistence blocked — governed adoption is required" : "Saved"}{draftRevision !== null ? ` · revision ${draftRevision}` : ""}</p> : null}
     {!attributionAvailable && !readOnly ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">Authenticated user identity is unavailable. Human-attributed ledger and root-cause actions are disabled.</p> : null}
     {!readOnly && hydrationStatus === "ready" && workspaceStatus === "failed" ? <button type="button" onClick={() => coordinatorRef.current?.retry()} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm">Retry workspace save</button> : null}
+    {mode === "S50" ? <CapaRootCauseGatePanel caseId={caseId} currentVersionId={currentVersionId} recordVersion={recordVersion} onAuthoritativeRefresh={onAuthoritativeRefresh} /> : null}
     {mode === "S50" ? <CapaRootCauseReviewAdvisoryPanel caseId={caseId} expectedCaseVersionId={currentVersionId} expectedRecordVersion={recordVersion} /> : null}
     <fieldset disabled={editingDisabled}>
     <CapaInvestigationProgressPanel caseId={caseId} plan={plan} recordVersion={recordVersion}

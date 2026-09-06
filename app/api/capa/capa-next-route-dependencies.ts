@@ -188,6 +188,12 @@ export function createCapaApiHandlerDependencies():
   };
 }
 
+/** Explicit server composition entry point for the consequential S50 gate. */
+export function createCapaRootCauseGateApiDependencies():
+  CapaApiHandlerDependencies {
+  return createCapaApiHandlerDependencies();
+}
+
 export function createCapaCitationReviewApiDependencies():
   CapaCitationReviewApiDependencies {
   const dependencies = createCapaApiHandlerDependencies();

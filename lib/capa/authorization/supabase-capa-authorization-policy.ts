@@ -96,6 +96,8 @@ const OPERATION_PERMISSION = {
     "capa.case.submit",
   approve_root_cause:
     "capa.gate.approve",
+  return_root_cause_for_investigation:
+    "capa.gate.approve",
   approve_action_plan:
     "capa.gate.approve",
   accept_implementation:
@@ -159,6 +161,8 @@ const OPERATION_PURPOSE = {
   release_investigation:
     "CAPA_WORKFLOW_TRANSITION",
   approve_root_cause:
+    "CAPA_GATE_DECISION",
+  return_root_cause_for_investigation:
     "CAPA_GATE_DECISION",
   approve_action_plan:
     "CAPA_GATE_DECISION",
@@ -294,6 +298,11 @@ const REQUIRED_WORKFLOW_STATES:
         CAPA_STATE.ROOT_CAUSE_REVIEW,
       ]),
 
+    return_root_cause_for_investigation:
+      new Set([
+        CAPA_STATE.ROOT_CAUSE_REVIEW,
+      ]),
+
     approve_action_plan:
       new Set([
         CAPA_STATE.ACTION_PLAN_REVIEW,
@@ -331,9 +340,10 @@ const REQUIRED_WORKFLOW_STATES:
       EXPORTABLE_STATES,
   };
 
-const APPROVER_LEVEL_OPERATIONS =
+  const APPROVER_LEVEL_OPERATIONS =
   new Set<CapaAuthorizationOperation>([
     "approve_root_cause",
+    "return_root_cause_for_investigation",
     "approve_action_plan",
     "approve_effectiveness",
     "close_case",

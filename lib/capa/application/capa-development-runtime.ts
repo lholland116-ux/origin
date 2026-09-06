@@ -18,6 +18,10 @@ import type {
   UpdateCapaInvestigationProgressDependencies,
 } from "./update-capa-investigation-progress";
 
+import type {
+  DecideCapaRootCauseGateDependencies,
+} from "./decide-capa-root-cause-gate";
+
 import {
   randomUUID,
 } from "node:crypto";
@@ -1017,6 +1021,18 @@ export function createCapaDevelopmentRuntime(
     adoption_repository: database,
   };
 
+  const decideRootCauseGateDependencies:
+    DecideCapaRootCauseGateDependencies = {
+    ...approveScopeDependencies,
+    configuration: {
+      workflow_version: dependencies.configuration.workflow_version,
+      audit_schema_version: dependencies.configuration.audit_schema_version,
+      step_up_maximum_age_ms: 15 * 60 * 1000,
+      required_step_up_assurance: controlled("MFA"),
+      authorization_purpose: controlled("CAPA_GATE_DECISION"),
+    },
+  };
+
   const updateInvestigationProgressDependencies:
     UpdateCapaInvestigationProgressDependencies = {
     ...submitIntakeDependencies,
@@ -1297,6 +1313,9 @@ export function createCapaDevelopmentRuntime(
 
     submit_root_cause_dependencies:
       submitRootCauseDependencies,
+
+    decide_root_cause_gate_dependencies:
+      decideRootCauseGateDependencies,
     prompt_assembly_service:
       promptAssemblyService,
 

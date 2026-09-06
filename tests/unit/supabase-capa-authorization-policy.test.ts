@@ -880,6 +880,38 @@ describe(
         });
       },
     );
+
+    it("maps the S50 return decision to the approver gate", async () => {
+      const evaluated = await evaluateWithAuthority(
+        approvalRequest({ operation: "return_root_cause_for_investigation" }),
+        [membershipRow()],
+        [authorityRow({ role_assignment_id: APPROVER_ASSIGNMENT_ID, role_id: "CAPA_APPROVER", permissions: ["capa.gate.approve"] })],
+      );
+      expect(evaluated.result).toMatchObject({ decision: "allow" });
+    });
+
+    it.each(["approve_root_cause", "return_root_cause_for_investigation"])("allows only CAPA_APPROVER for %s", async (operation) => {
+      const gateOperation = operation as "approve_root_cause" | "return_root_cause_for_investigation";
+      const approver = await evaluateWithAuthority(
+        approvalRequest({ operation: gateOperation }),
+        [membershipRow()],
+        [authorityRow({ role_assignment_id: APPROVER_ASSIGNMENT_ID, role_id: "CAPA_APPROVER", permissions: ["capa.gate.approve"] })],
+      );
+      expect(approver.result.decision).toBe("allow");
+
+      for (const [roleId, assignmentId, permissions] of [
+        ["CAPA_REVIEWER", REVIEWER_ASSIGNMENT_ID, ["capa.case.view"]],
+        ["CAPA_OWNER", OWNER_ASSIGNMENT_ID, ["capa.case.view"]],
+        ["CAPA_CONTRIBUTOR", OWNER_ASSIGNMENT_ID, ["capa.case.view"]],
+      ] as const) {
+        const denied = await evaluateWithAuthority(
+          approvalRequest({ operation: gateOperation, tenant: tenantContext({ role_assignments: [assignment({ role_assignment_id: assignmentId, role_id: roleId as RoleId })] }) }),
+          [membershipRow()],
+          [authorityRow({ role_assignment_id: assignmentId, role_id: roleId, permissions })],
+        );
+        expect(denied.result.decision).toBe("deny");
+      }
+    });
   },
 );
 

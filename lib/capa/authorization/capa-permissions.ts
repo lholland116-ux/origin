@@ -55,6 +55,7 @@ export type CapaAuthorizationOperation =
   | "accept_containment_risk"
   | "release_investigation"
   | "approve_root_cause"
+  | "return_root_cause_for_investigation"
   | "approve_action_plan"
   | "accept_implementation"
   | "approve_effectiveness"
@@ -89,6 +90,7 @@ export const HUMAN_ONLY_CAPA_OPERATIONS =
     "accept_containment_risk",
     "release_investigation",
     "approve_root_cause",
+    "return_root_cause_for_investigation",
     "approve_action_plan",
     "accept_implementation",
     "approve_effectiveness",
@@ -110,6 +112,7 @@ export const STEP_UP_CAPA_OPERATIONS =
     "approve_scope",
     "accept_containment_risk",
     "approve_root_cause",
+    "return_root_cause_for_investigation",
     "approve_action_plan",
     "accept_implementation",
     "approve_effectiveness",

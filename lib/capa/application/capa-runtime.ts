@@ -19,6 +19,10 @@ import type {
 } from "./update-capa-investigation-progress";
 
 import type {
+  DecideCapaRootCauseGateDependencies,
+} from "./decide-capa-root-cause-gate";
+
+import type {
   CreateCapaDependencies,
 } from "./create-capa";
 
@@ -245,6 +249,10 @@ export interface CapaRuntime {
   /** Human-controlled S40 to S50 root-cause submission dependencies. */
   readonly submit_root_cause_dependencies:
     SubmitCapaRootCausePackageDependencies;
+
+  /** Human-controlled S50 root-cause gate dependencies. */
+  readonly decide_root_cause_gate_dependencies:
+    DecideCapaRootCauseGateDependencies;
 
   /**
    * Controlled provider-neutral prompt assembly. This boundary does not
