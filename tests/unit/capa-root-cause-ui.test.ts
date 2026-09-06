@@ -9,6 +9,7 @@ describe("CS4E S40/S50 browser boundary", () => {
   const intake = readFileSync(resolve("app/capa/CapaIntakeClient.tsx"), "utf8");
   const progress = readFileSync(resolve("app/capa/CapaInvestigationProgressPanel.tsx"), "utf8");
   const workspace = readFileSync(resolve("app/capa/CapaRootCauseWorkspace.tsx"), "utf8");
+  const advisoryPanel = readFileSync(resolve("app/capa/CapaRootCauseReviewAdvisoryPanel.tsx"), "utf8");
   const d2 = readFileSync(resolve("app/capa/capa-root-cause-submission-client.ts"), "utf8");
   it("renders semantic S40 and S50 workspace branches", () => {
     expect(intake).toContain('createdCapa.status === "S40" || createdCapa.status === "S50"');
@@ -46,6 +47,13 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).toContain("Authoritative submitted package; read-only.");
     expect(progress).toContain("!readOnly && !terminal.has(item.status)");
     expect(workspace).toContain("!readOnly ?");
+  });
+  it("mounts the advisory panel only for S50 with the authoritative snapshot", () => {
+    expect(workspace).toContain('mode === "S50" ? <CapaRootCauseReviewAdvisoryPanel');
+    expect(workspace).toContain("expectedCaseVersionId={currentVersionId}");
+    expect(workspace).toContain("expectedRecordVersion={recordVersion}");
+    expect(workspace).not.toContain("CapaRootCauseReviewAdvisoryPanel caseId={caseId} expectedCaseVersionId={currentVersionId} expectedRecordVersion={recordVersion} onAuthoritativeRefresh");
+    expect(advisoryPanel).not.toMatch(/\b(?:Adopt|Accept|Reject|Approve|Submit|Release|Transition|Sign)\b/);
   });
   it("contains no raw JSON editor or CS4E approval, G-04, MFA, signature controls", () => {
     const cs4e = progress + workspace;
