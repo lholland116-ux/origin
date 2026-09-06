@@ -186,10 +186,12 @@ export class SupabaseCapaInvestigationActiveAdvisoryOutputRepository implements 
       const output = outputs[0]!;
       const trace = traces[0]!;
       const manifestRow = manifests[0]!;
+      const recordVersion = Number(output.record_version);
+
       if (!uuid(organizationId) || !uuid(outputId) ||
         !exactTuple(output, { organization_id: organizationId, output_id: outputId }) ||
         !uuid(output.capa_case_id) || !uuid(output.case_version_id) ||
-        !Number.isSafeInteger(Number(output.record_version)) || Number(output.record_version) <= 0 ||
+        !Number.isSafeInteger(recordVersion) || recordVersion <= 0 ||
         output.agent_id !== CAPA_INVESTIGATION_ACTIVE_ADVISORY_AGENT.agent_id ||
         output.agent_version !== CAPA_INVESTIGATION_ACTIVE_ADVISORY_AGENT.agent_version ||
         output.output_schema_version !== CAPA_INVESTIGATION_ACTIVE_ADVISORY_OUTPUT_SCHEMA_VERSION ||
@@ -224,7 +226,7 @@ export class SupabaseCapaInvestigationActiveAdvisoryOutputRepository implements 
       if (!exactObject(packageValue, ["package_schema_version", "scope", "agent", "trace", "generation_contract", "context_provenance", "governance"]) ||
         packageValue.package_schema_version !== CAPA_INVESTIGATION_ACTIVE_PROMPT_PACKAGE_SCHEMA_VERSION ||
         !exactObject(scope, ["organization_id", "capa_case_id", "case_version_id", "record_version", "workflow_state"]) ||
-        !exactTuple(scope, { organization_id: output.organization_id, capa_case_id: output.capa_case_id, case_version_id: output.case_version_id, record_version: output.record_version, workflow_state: "S40" }) ||
+        !exactTuple(scope, { organization_id: output.organization_id, capa_case_id: output.capa_case_id, case_version_id: output.case_version_id, record_version: recordVersion, workflow_state: "S40" }) ||
         !exactObject(packageValue.agent, ["agent_id", "agent_version"]) || packageValue.agent.agent_id !== CAPA_INVESTIGATION_ACTIVE_ADVISORY_AGENT.agent_id || packageValue.agent.agent_version !== CAPA_INVESTIGATION_ACTIVE_ADVISORY_AGENT.agent_version ||
         !exactObject(packageTrace, ["run_id", "prompt_package_id", "request_id", "correlation_id", "assembled_at"]) ||
         !exactTuple(packageTrace, { run_id: output.run_id, request_id: output.request_id, correlation_id: output.correlation_id }) || !uuid(packageTrace.prompt_package_id) || typeof packageTrace.assembled_at !== "string" || Number.isNaN(Date.parse(packageTrace.assembled_at)) || iso(trace.assembled_at) !== packageTrace.assembled_at ||
@@ -253,7 +255,7 @@ export class SupabaseCapaInvestigationActiveAdvisoryOutputRepository implements 
         organization_id: organizationId,
         capa_case_id: output.capa_case_id as string,
         case_version_id: output.case_version_id as string,
-        record_version: Number(output.record_version),
+        record_version: recordVersion,
         response: { ...validatedPayload, run_id: output.run_id as never, output_id: output.output_id as never, output_schema_version: output.output_schema_version as never, status: output.status as "completed_draft", warnings: [] },
         generation_trace: { trace_schema_version: trace.trace_schema_version as never, package: packageValue as never, store: false as const, evidence_manifest: trace.evidence_manifest as never, policy_manifest: trace.policy_manifest as never, fingerprints: { algorithm: trace.fingerprint_algorithm as never, prompt_package_sha256: trace.prompt_package_sha256 as string, rendered_prompt_sha256: trace.rendered_prompt_sha256 as string, evidence_manifest_sha256: trace.evidence_manifest_sha256 as string, policy_manifest_sha256: trace.policy_manifest_sha256 as string, output_schema_sha256: generation.output_schema_sha256 as string }, model_profile_version: trace.model_profile_version as string },
         reference_manifest: computedManifest,

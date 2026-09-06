@@ -167,6 +167,47 @@ describe("S40 investigation-active advisory output repository", () => {
     expect(result).toMatchObject({ organization_id: ORG, capa_case_id: CASE_ID, case_version_id: VERSION, record_version: 4, response: { output_id: OUTPUT, advisory_only: true }, reference_manifest: { reference_manifest_sha256: rows.manifest.reference_manifest_sha256 } });
   });
 
+  it("normalizes PostgreSQL bigint record_version values when reconstructing durable output", async () => {
+    const rows = durableRows();
+
+    const output = {
+      ...rows.output,
+      record_version: "4",
+    };
+
+    const traceRow = {
+      ...rows.trace,
+      record_version: "4",
+    };
+
+    const manifest = {
+      ...rows.manifest,
+      record_version: "4",
+    };
+
+    const h = harness(
+      [output],
+      [traceRow],
+      [manifest],
+    );
+
+    const result =
+      await new SupabaseCapaInvestigationActiveAdvisoryOutputRepository(
+        activeSql as any,
+      ).findById(ORG, OUTPUT);
+
+    expect(result).toMatchObject({
+      organization_id: ORG,
+      capa_case_id: CASE_ID,
+      case_version_id: VERSION,
+      record_version: 4,
+      response: {
+        output_id: OUTPUT,
+        advisory_only: true,
+      },
+    });
+  });
+
   it.each([
     ["output agent", { output: { ...durableRows().output, agent_id: "AG-PLAN" } }],
     ["output authority", { output: { ...durableRows().output, advisory_only: false } }],
