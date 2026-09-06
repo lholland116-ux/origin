@@ -1,0 +1,169 @@
+D40-03 Final Browser E2E Qualification
+Date: 2026-09-06
+
+Qualification case:
+CAPA-000002
+
+Final durable workspace revision:
+22
+
+================================================================
+1. HISTORICAL P1 RECONCILIATION / PERSISTENCE
+================================================================
+
+Result: PASS
+
+Observed:
+- Historical adopted proposal P1 reconciled automatically into the
+  Evidence & Assumption Ledger.
+- P1 materialized as Missing Information.
+- P1 statement:
+  Executed production records for the affected lot were not provided
+  for review.
+- Supporting item IDs remained LED-1, LED-2.
+- No workspace reconciliation error was observed.
+- Hard refresh / reopen preserved P1.
+- Investigation Plan remained present and unchanged.
+- Case remained S40 Investigation Active.
+
+================================================================
+2. ATOMIC EXISTING LEDGER-ITEM EDITING
+================================================================
+
+Result: PASS
+
+Starting durable workspace revision:
+17
+
+Observed:
+- Multiple human-owned P1 fields were edited during one local edit
+  session.
+- Critical was changed.
+- Target date was set to 2026-09-30 and then changed to 2026-10-01.
+- Waits longer than the former 700 ms autosave interval did not create
+  durable revisions.
+- Workspace remained at revision 17 before explicit Save.
+- UI showed Unsaved changes while the local edit session was active.
+- One explicit Save changed revision 17 -> 18 exactly once.
+- Saved values persisted after hard refresh / reopen.
+
+================================================================
+3. CANCEL SEMANTICS
+================================================================
+
+Result: PASS
+
+Observed:
+- Target date was locally changed from 2026-10-01 to 2026-10-02.
+- Workspace revision remained 18 before Cancel.
+- Cancel restored the persisted 2026-10-01 value.
+- Cancel created zero durable revisions.
+- Workspace revision remained 18.
+
+================================================================
+4. EXISTING ITEM CLEANUP
+================================================================
+
+Result: PASS
+
+Observed:
+- Critical was restored to unchecked.
+- Target date was cleared.
+- One explicit Save changed revision 18 -> 19 exactly once.
+- Hard refresh / reopen preserved the cleaned P1 values.
+- Historical P1 remained present.
+
+================================================================
+5. HUMAN-CREATED LEDGER ITEM
+================================================================
+
+Result: PASS
+
+Starting durable workspace revision:
+19
+
+Temporary qualification item:
+- Information class: Verified Evidence
+- Statement:
+  Browser E2E human-created evidence item.
+- Evidence status: verified
+- Human disposition rationale:
+  Verified by the investigator for browser E2E persistence testing.
+
+Observed:
+- New item remained local before explicit Save.
+- Revision remained 19 during local editing.
+- One explicit Save changed revision 19 -> 20 exactly once.
+- Hard refresh / reopen preserved the new item and its human-owned
+  fields.
+- Historical P1 remained present.
+- No workspace error was observed.
+
+Cleanup:
+- Temporary qualification item was removed.
+- Removal changed revision 20 -> 21.
+- Hard refresh / reopen confirmed the item was gone.
+- Historical P1 remained clean and present.
+
+================================================================
+6. GOVERNED P4 CAUSAL-HYPOTHESIS ADOPTION
+================================================================
+
+Result: PASS
+
+Starting durable workspace revision:
+21
+
+Fresh S40 advisory:
+- Only proposal P4 was selected.
+- Human causal role selected:
+  Proposed Root Cause.
+- Adopt selected into draft was executed once.
+
+P4 hypothesis:
+The adhesive application sequence or execution may have differed from
+approved instructions and produced incomplete coverage.
+
+Observed:
+- One adoption changed workspace revision 21 -> 22 exactly once.
+- P4 materialized into the Root-Cause Package.
+- P4 status remained proposed.
+- Stored causal role was proposed_root_cause.
+- P4 statement was preserved.
+- P4 rationale was preserved.
+- Historical P1 linkage remained present.
+- No duplicate P4-derived hypothesis was observed.
+- No workspace error was observed.
+
+================================================================
+7. FINAL HARD-REFRESH / REOPEN DURABILITY
+================================================================
+
+Result: PASS
+
+After hard refresh / reopen:
+
+- Workspace persistence showed Saved · revision 22.
+- P4 remained present.
+- P4 status remained proposed.
+- P4 causal role remained Proposed Root Cause /
+  proposed_root_cause.
+- P4 statement remained unchanged.
+- Only one P4-derived hypothesis was present.
+- Historical P1 remained present.
+- Case remained S40 Investigation Active.
+- Investigation Plan remained unchanged.
+- No workspace or reconciliation error was observed.
+- No unintended S50 transition occurred.
+
+================================================================
+FINAL BROWSER E2E DISPOSITION
+================================================================
+
+D40-03 Browser E2E Qualification: PASS
+
+Qualification case:
+CAPA-000002
+
+Final durable workspace revision:
+22

@@ -1,0 +1,40 @@
+Connecting to local database...
+psql:/home/levi/openai-next-starter/supabase/tests/capa_ai_generation_traces_test.sql:4: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_ai_generation_traces_test.sql ................... ok
+/home/levi/openai-next-starter/supabase/tests/capa_ai_intake_review_role_mapping_test.sql .......... ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_ai_output_reviews_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_ai_output_reviews_test.sql ...................... ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_ai_reference_manifests_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_ai_reference_manifests_test.sql ................. ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_authorization_roles_test.sql:4: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_authorization_roles_test.sql .................... ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_behavior_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_behavior_test.sql ............................... ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_case_number_allocator_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_case_number_allocator_test.sql .................. ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_creation_idempotency_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_creation_idempotency_test.sql ................... ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_foundation_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_foundation_test.sql ............................. ok
+/home/levi/openai-next-starter/supabase/tests/capa_intake_advisory_permission_test.sql ............. ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_investigation_active_ai_adoptions_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_investigation_active_ai_adoptions_test.sql ...... ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_investigation_active_workspace_drafts_test.sql:2: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_investigation_active_workspace_drafts_test.sql .. ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_investigation_planning_ai_adoptions_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_investigation_planning_ai_adoptions_test.sql .... ok
+/home/levi/openai-next-starter/supabase/tests/capa_investigation_release_role_mapping_test.sql ..... ok
+/home/levi/openai-next-starter/supabase/tests/capa_knowledge_citation_review_permission_test.sql ... ok
+/home/levi/openai-next-starter/supabase/tests/capa_knowledge_citation_reviews_test.sql ............. ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_knowledge_foundation_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_knowledge_foundation_test.sql ................... ok
+/home/levi/openai-next-starter/supabase/tests/capa_knowledge_retrieval_index_test.sql .............. ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_organization_provisioning_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_organization_provisioning_test.sql .............. ok
+psql:/home/levi/openai-next-starter/supabase/tests/capa_workflow_idempotency_test.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/levi/openai-next-starter/supabase/tests/capa_workflow_idempotency_test.sql ................... ok
+All tests successful.
+Files=20, Tests=557,  3 wallclock secs ( 0.16 usr  0.05 sys +  0.29 cusr  0.11 csys =  0.61 CPU)
+Result: PASS
+A new version of Supabase CLI is available: v2.116.0 (currently installed v2.115.0)
+We recommend updating regularly for new features and bug fixes: https://supabase.com/docs/guides/cli/getting-started#updating-the-supabase-cli

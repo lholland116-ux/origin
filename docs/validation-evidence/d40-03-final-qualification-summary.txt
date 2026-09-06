@@ -1,0 +1,196 @@
+D40-03 Final Qualification Summary
+Date: 2026-09-06
+
+================================================================
+SCOPE
+================================================================
+
+D40-03 qualified the governed S40 Investigation Active /
+Root-Cause Workspace implementation, including:
+
+- Durable S40 workspace draft persistence
+- Guarded workspace service and API
+- Browser hydration and reload persistence
+- Governed AI proposal adoption
+- Adoption provenance verification
+- Historical adoption reconciliation
+- Atomic adoption/workspace materialization
+- Evidence & Assumption Ledger persistence
+- Atomic Ledger-item edit transactions
+- Explicit Save / Cancel semantics
+- Human-created Ledger items
+- Governed causal-hypothesis adoption
+- Human-selected causal role governance
+- Root-Cause Package persistence
+- S40 workflow-state preservation
+- Released Investigation Plan preservation
+- Fail-closed validation and authorization behavior
+
+================================================================
+D40-03 IMPLEMENTATION CHECKPOINTS
+================================================================
+
+884480a  Define durable S40 workspace draft contract
+cbcc7f0  Add durable S40 workspace draft persistence
+81fab2c  Add guarded S40 workspace service and API
+ac11df1  Add durable S40 workspace browser persistence
+a38cd03  Add atomic S40 adoption workspace reconciliation
+be27268  Add atomic S40 ledger item editing
+
+Final D40-03 application implementation checkpoint:
+be27268
+
+================================================================
+QUALIFICATION INFRASTRUCTURE CHECKPOINT
+================================================================
+
+During final full-suite qualification, Vitest was found not to mirror the
+TypeScript / Next.js @/ path alias.
+
+The application module existed, was tracked, and resolved successfully
+under TypeScript, but Vitest could not resolve the unmocked @/ import.
+
+The Vitest configuration was corrected to provide project-root alias
+parity.
+
+Qualification infrastructure checkpoint:
+
+a31da53  Align Vitest path alias resolution
+
+Current repository HEAD:
+a31da53a65a8a92faf17640b321a35c528717884
+
+Current origin/main:
+a31da53a65a8a92faf17640b321a35c528717884
+
+================================================================
+AUTOMATED QUALIFICATION RESULTS
+================================================================
+
+Gate 1 — Direct S40 regression
+Result: PASS
+Test files: 17 passed
+Tests: 183 passed
+
+Evidence:
+docs/validation-evidence/d40-03-final-s40-regression.txt
+
+----------------------------------------------------------------
+
+Gate 2 — Full Vitest regression
+Result: PASS
+Test files: 217 passed, 1 skipped
+Tests: 3195 passed, 3 skipped
+
+Evidence:
+docs/validation-evidence/d40-03-final-full-vitest-regression.txt
+
+----------------------------------------------------------------
+
+Gate 3 — Full Supabase regression
+Result: PASS
+Files: 20
+Tests: 557
+
+Evidence:
+docs/validation-evidence/d40-03-final-supabase-regression.txt
+
+----------------------------------------------------------------
+
+Gate 4 — TypeScript
+Result: PASS
+Command:
+npx tsc --noEmit
+
+Evidence:
+docs/validation-evidence/d40-03-final-typescript.txt
+
+----------------------------------------------------------------
+
+Gate 5 — Production build
+Result: PASS
+Command:
+npm run build
+
+Observed:
+- Next.js production compilation succeeded.
+- TypeScript production-build phase succeeded.
+- Static generation completed successfully.
+- CAPA S40 routes were included in the production build.
+
+Evidence:
+docs/validation-evidence/d40-03-final-production-build.txt
+
+----------------------------------------------------------------
+
+Gate 6 — Repository / diff integrity
+Result: PASS
+
+Observed:
+- git diff --check exit code: 0
+- Unstaged tracked changes: NONE
+- Staged changes: NONE
+- HEAD equals origin/main: YES
+
+Evidence:
+docs/validation-evidence/d40-03-final-diff-integrity.txt
+
+================================================================
+BROWSER E2E QUALIFICATION
+================================================================
+
+Gate 7 — Browser E2E
+Result: PASS
+
+Qualification case:
+CAPA-000002
+
+Final durable workspace revision:
+22
+
+Qualified behaviors:
+
+- Historical P1 reconciliation
+- Historical P1 reload persistence
+- Atomic existing Ledger-item editing
+- Multiple local edits without intermediate durable revisions
+- One explicit Save -> one durable revision
+- Cancel -> zero durable revisions
+- Cancel restored persisted state
+- Human-created Ledger-item persistence
+- Temporary item cleanup persistence
+- Fresh P4 advisory adoption
+- Human-selected Proposed Root Cause role
+- P4 materialized once into Root-Cause Package
+- Stored causal role: proposed_root_cause
+- No duplicate P4 hypothesis
+- P1 remained present
+- Case remained S40
+- Investigation Plan remained unchanged
+- No workspace/reconciliation error
+- No unintended S50 transition
+- Hard-refresh / reopen persistence confirmed
+
+Evidence:
+docs/validation-evidence/d40-03-final-browser-e2e.txt
+
+================================================================
+FINAL QUALIFICATION DISPOSITION
+================================================================
+
+All required D40-03 qualification gates passed.
+
+D40-03 FINAL DISPOSITION:
+QUALIFIED
+
+Final D40-03 application implementation checkpoint:
+be27268
+
+Final qualification repository checkpoint:
+a31da53
+
+Qualification case:
+CAPA-000002
+
+Final durable workspace revision:
+22
