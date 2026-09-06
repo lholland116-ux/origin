@@ -1731,5 +1731,73 @@ describe(
         });
       },
     );
+
+    it("authorizes only the narrowly scoped S50 root-cause review advisory", async () => {
+      const { result } = await evaluateWithAuthority(
+        policyRequest({
+          operation: "request_ai_root_cause_review_advisory",
+          tenant: tenantContext({ role_assignments: [assignment({ role_assignment_id: REVIEWER_ASSIGNMENT_ID, role_id: "CAPA_REVIEWER" as RoleId })] }),
+          resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: "S50" as CapaCaseStatus },
+          purpose: controlled("CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY"),
+        }),
+        [membershipRow()],
+        [authorityRow({ role_assignment_id: REVIEWER_ASSIGNMENT_ID, role_id: "CAPA_REVIEWER", permissions: ["capa.case.view", "capa.ai.root_cause.review"] })],
+      );
+      expect(result.decision).toBe("allow");
+    });
+
+    it("denies S50 advisory requests for wrong state or without the dedicated permission", async () => {
+      const wrongState = await evaluateWithAuthority(
+        policyRequest({ operation: "request_ai_root_cause_review_advisory", resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: "S40" as CapaCaseStatus }, purpose: controlled("CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY") }),
+      );
+      expect(wrongState.result.decision).toBe("deny");
+      const missingPermission = await evaluateWithAuthority(
+        policyRequest({ operation: "request_ai_root_cause_review_advisory", resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: "S50" as CapaCaseStatus }, purpose: controlled("CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY") }),
+      );
+      expect(missingPermission.result.decision).toBe("deny");
+    });
+
+    it("authorizes CAPA_APPROVER with the dedicated S50 advisory permission", async () => {
+      const { result } = await evaluateWithAuthority(
+        policyRequest({
+          operation: "request_ai_root_cause_review_advisory",
+          tenant: tenantContext({ role_assignments: [assignment({ role_assignment_id: APPROVER_ASSIGNMENT_ID, role_id: "CAPA_APPROVER" as RoleId })] }),
+          resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: "S50" as CapaCaseStatus },
+          purpose: controlled("CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY"),
+        }),
+        [membershipRow()],
+        [authorityRow({ role_assignment_id: APPROVER_ASSIGNMENT_ID, role_id: "CAPA_APPROVER", permissions: ["capa.case.view", "capa.review.disposition", "capa.gate.approve", "capa.ai.root_cause.review"] })],
+      );
+      expect(result.decision).toBe("allow");
+    });
+
+    it("does not let the dedicated advisory permission authorize disposition, approval, or transition", async () => {
+      const reviewerAuthority = [authorityRow({ role_assignment_id: REVIEWER_ASSIGNMENT_ID, role_id: "CAPA_REVIEWER", permissions: ["capa.case.view", "capa.ai.root_cause.review"] })];
+      const approval = await evaluateWithAuthority(
+        approvalRequest({ tenant: tenantContext({ role_assignments: [assignment({ role_assignment_id: REVIEWER_ASSIGNMENT_ID, role_id: "CAPA_REVIEWER" as RoleId })] }) }),
+        [membershipRow()], reviewerAuthority,
+      );
+      expect(approval.result.decision).toBe("deny");
+      const transition = await evaluateWithAuthority(rootCauseSubmissionRequest("CAPA_REVIEWER", "S50"), [membershipRow()], reviewerAuthority);
+      expect(transition.result.decision).toBe("deny");
+      const wrongPurpose = await evaluateWithAuthority(policyRequest({ operation: "request_ai_root_cause_review_advisory", resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: "S50" as CapaCaseStatus }, purpose: controlled("CAPA_GATE_DECISION") }), [membershipRow()], reviewerAuthority);
+      expect(wrongPurpose.result.decision).toBe("deny");
+    });
+
+    it("does not authorize the advisory from disposition-only or gate-only permissions", async () => {
+      const request = policyRequest({ operation: "request_ai_root_cause_review_advisory", resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: "S50" as CapaCaseStatus }, purpose: controlled("CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY") });
+      const dispositionOnly = await evaluateWithAuthority(request, [membershipRow()], [authorityRow({ permissions: ["capa.review.disposition"] })]);
+      expect(dispositionOnly.result.decision).toBe("deny");
+      const gateOnly = await evaluateWithAuthority({ ...request, tenant: tenantContext({ role_assignments: [assignment({ role_assignment_id: APPROVER_ASSIGNMENT_ID, role_id: "CAPA_APPROVER" as RoleId })] }) }, [membershipRow()], [authorityRow({ role_assignment_id: APPROVER_ASSIGNMENT_ID, role_id: "CAPA_APPROVER", permissions: ["capa.gate.approve"] })]);
+      expect(gateOnly.result.decision).toBe("deny");
+    });
+
+    it("denies the S50 advisory operation at both S40 and S60", async () => {
+      const makeRequest = (state: CapaCaseStatus) => policyRequest({ operation: "request_ai_root_cause_review_advisory", resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: state }, purpose: controlled("CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY") });
+      for (const state of ["S40", "S60"] as CapaCaseStatus[]) {
+        const result = await evaluateWithAuthority(makeRequest(state), [membershipRow()], [authorityRow({ permissions: ["capa.ai.root_cause.review"] })]);
+        expect(result.result.decision).toBe("deny");
+      }
+    });
   },
 );

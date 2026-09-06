@@ -109,6 +109,24 @@ import type {
   CapaInvestigationActiveAdvisoryOutputSaveResult,
   CapaInvestigationActiveAdvisoryOutputRecord,
 } from "../repositories/capa-investigation-active-advisory-output-repository";
+import type {
+  CapaRootCauseReviewAdvisoryOutputRepository,
+  CapaRootCauseReviewAdvisoryOutputSaveResult,
+  CapaRootCauseReviewAdvisoryReferenceManifest,
+  CapaRootCauseReviewAdvisoryOutputRecord,
+} from "../repositories/capa-root-cause-review-advisory-output-repository";
+import type {
+  AuthoritativeS50RootCauseReviewContext,
+} from "../../capa/ai/capa-root-cause-review-advisory-context";
+import type {
+  CapaRootCauseReviewAdvisoryResponse,
+} from "../../capa/ai/capa-root-cause-review-advisory-contract";
+import type {
+  CapaRootCauseReviewAdvisoryGenerationTraceCapture,
+} from "../../capa/ai/capa-ai-generation-trace";
+import {
+  validateCapaRootCauseReviewAdvisoryModelOutput,
+} from "../../capa/ai/capa-root-cause-review-advisory-validator";
 import {
   createCapaInvestigationActiveAdvisoryReferenceManifest,
 } from "../../capa/ai/capa-investigation-active-advisory-reference-manifest";
@@ -273,6 +291,19 @@ interface InMemoryCapaInvestigationActiveAdvisoryOutputRecord {
   readonly created_at: IsoDateTime;
 }
 
+interface InMemoryCapaRootCauseReviewAdvisoryOutputRecord
+  {
+  readonly organization_id: OrganizationId;
+  readonly capa_case_id: CapaCaseId;
+  readonly case_version_id: CapaCaseVersionId;
+  readonly record_version: number;
+  readonly request_trace: RequestTrace;
+  readonly response: CapaRootCauseReviewAdvisoryResponse;
+  readonly generation_trace: CapaRootCauseReviewAdvisoryGenerationTraceCapture;
+  readonly reference_manifest: CapaRootCauseReviewAdvisoryReferenceManifest;
+  readonly created_at: IsoDateTime;
+}
+
 type InMemoryCapaInvestigationPlanningAdoptionRecord =
   PersistedCapaInvestigationPlanningAdoption;
 
@@ -286,7 +317,8 @@ type InMemoryCapaAdvisoryOutputRecord =
   | InMemoryCapaIntakeAdvisoryOutputRecord
   | InMemoryCapaContainmentRiskAdvisoryOutputRecord
   | InMemoryCapaInvestigationPlanningAdvisoryOutputRecord
-  | InMemoryCapaInvestigationActiveAdvisoryOutputRecord;
+  | InMemoryCapaInvestigationActiveAdvisoryOutputRecord
+  | InMemoryCapaRootCauseReviewAdvisoryOutputRecord;
 
 interface InMemoryState {
   readonly revision: number;
@@ -850,11 +882,15 @@ type InMemoryCapaInvestigationPlanningAdvisorySaveInput =
 type InMemoryCapaInvestigationActiveAdvisorySaveInput =
   Parameters<CapaInvestigationActiveAdvisoryOutputRepository["save"]>[1];
 
+type InMemoryCapaRootCauseReviewAdvisorySaveInput =
+  Parameters<CapaRootCauseReviewAdvisoryOutputRepository["save"]>[1];
+
 type InMemoryCapaAdvisorySaveInput =
   | InMemoryCapaIntakeAdvisorySaveInput
   | InMemoryCapaContainmentRiskAdvisorySaveInput
   | InMemoryCapaInvestigationPlanningAdvisorySaveInput
-  | InMemoryCapaInvestigationActiveAdvisorySaveInput;
+  | InMemoryCapaInvestigationActiveAdvisorySaveInput
+  | InMemoryCapaRootCauseReviewAdvisorySaveInput;
 
 function isS20AdvisorySaveInput(
   input:
@@ -873,6 +909,12 @@ function isS40AdvisorySaveInput(
   input: InMemoryCapaAdvisorySaveInput,
 ): input is InMemoryCapaInvestigationActiveAdvisorySaveInput {
   return input.context.workflow_state === "S40";
+}
+
+function isS50AdvisorySaveInput(
+  input: InMemoryCapaAdvisorySaveInput,
+): input is InMemoryCapaRootCauseReviewAdvisorySaveInput {
+  return input.context.workflow_state === "S50";
 }
 
 function isS30AdvisoryOutputRecord(
@@ -894,6 +936,17 @@ function isS40AdvisoryOutputRecord(
     isObjectRecord(record.response) &&
     record.response.output_schema_version ===
       "capa_investigation_analysis_draft-1.0.0";
+}
+
+function isS50AdvisoryOutputRecord(
+  record: unknown,
+): record is InMemoryCapaRootCauseReviewAdvisoryOutputRecord {
+  return isObjectRecord(record) &&
+    "reference_manifest" in record &&
+    "generation_trace" in record &&
+    isObjectRecord(record.response) &&
+    record.response.output_schema_version ===
+      "capa_review_packet_draft-1.0.0";
 }
 
 function isNonEmptyString(
@@ -1250,6 +1303,84 @@ function validateS40AdvisoryInput(
   }
 }
 
+function validateS50AdvisoryInput(
+  input: InMemoryCapaRootCauseReviewAdvisorySaveInput,
+): CapaRootCauseReviewAdvisoryReferenceManifest {
+  try {
+    const { context, response, generation_trace: trace } = input;
+    const scope = trace.package.scope;
+    const identity = trace.package.trace;
+    const generation = trace.package.generation_contract;
+    const policy = trace.policy_manifest;
+    if (
+      context.trust !== "authoritative_server_context" || context.workflow_state !== "S50" ||
+      !UUID_PATTERN.test(context.organization_id) || !UUID_PATTERN.test(context.capa_case_id) ||
+      !UUID_PATTERN.test(context.case_version_id) || !Number.isSafeInteger(context.record_version) || context.record_version <= 0 ||
+      !UUID_PATTERN.test(input.request_id) || !UUID_PATTERN.test(input.correlation_id) ||
+      !UUID_PATTERN.test(response.output_id) || !UUID_PATTERN.test(response.run_id) ||
+      response.status !== "completed_draft" || response.output_schema_version !== "capa_review_packet_draft-1.0.0" ||
+      response.advisory_only !== true || response.workflow_mutated !== false || response.controlled_record_mutated !== false ||
+      response.review_disposition !== null || response.workflow_transition !== null || response.human_acceptance_required !== true ||
+      trace.trace_schema_version !== CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION || trace.store !== false ||
+      trace.package.package_schema_version !== "capa-root-cause-review-prompt-package-1.0.0" ||
+      trace.package.agent.agent_id !== "AG-REVIEW" || trace.package.agent.agent_version !== "ag-review-1.0.0" ||
+      generation.operation !== "assemble_review_packet" || generation.output_schema_version !== "capa_review_packet_draft-1.0.0" ||
+      policy.policy_manifest_schema_version !== "capa-root-cause-review-policy-manifest-1.0.0" || policy.workflow_state !== "S50" ||
+      policy.operation !== "assemble_review_packet" || policy.authority.advisory_only !== true || policy.authority.workflow_mutated !== false ||
+      policy.authority.controlled_record_mutated !== false || policy.authority.human_acceptance_required !== true ||
+      trace.evidence_manifest.retrieval_performed !== false || trace.evidence_manifest.item_count !== 0 || trace.evidence_manifest.items.length !== 0 ||
+      trace.fingerprints.algorithm !== CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM ||
+      identity.run_id !== response.run_id || identity.request_id !== input.request_id || identity.correlation_id !== input.correlation_id ||
+      scope.organization_id !== context.organization_id || scope.capa_case_id !== context.capa_case_id || scope.case_version_id !== context.case_version_id || scope.record_version !== context.record_version || scope.workflow_state !== "S50"
+    ) throw new Error();
+
+    validateCapaRootCauseReviewAdvisoryModelOutput(JSON.stringify({
+      schema_version: response.output_schema_version,
+      status: response.status,
+      proposal: response.proposal,
+      uncertainty_and_limitations: response.uncertainty_and_limitations,
+      citations: response.citations,
+      advisory_only: response.advisory_only,
+      workflow_mutated: response.workflow_mutated,
+      controlled_record_mutated: response.controlled_record_mutated,
+      review_disposition: response.review_disposition,
+      workflow_transition: response.workflow_transition,
+      human_acceptance_required: response.human_acceptance_required,
+    }));
+
+    if (!isObjectRecord(trace.package.context_provenance.model_safe_context) || !Array.isArray(trace.package.context_provenance.model_safe_context.references)) throw new Error();
+    const safeReferences = trace.package.context_provenance.model_safe_context.references;
+    if (safeReferences.some((reference) => !isObjectRecord(reference) || Object.hasOwn(reference, "source_id")) || input.reference_manifest.length !== safeReferences.length) throw new Error();
+    const safeKeys = new Set<string>();
+    for (const reference of safeReferences) {
+      if (!isObjectRecord(reference) || typeof reference.reference_key !== "string" || safeKeys.has(reference.reference_key)) throw new Error();
+      safeKeys.add(reference.reference_key);
+    }
+    const seen = new Set<string>();
+    for (const entry of input.reference_manifest) {
+      if (!isObjectRecord(entry) || typeof entry.reference_key !== "string" || seen.has(entry.reference_key) || entry.trust !== "authoritative_server_context" || typeof entry.source_id !== "string" || entry.source_id.trim().length === 0 || !["current", "comparison"].includes(entry.version_scope as string) || !["investigation_plan_item", "ledger_item", "causal_hypothesis", "root_cause_not_confirmed"].includes(entry.source_kind as string)) throw new Error();
+      seen.add(entry.reference_key);
+      const matches = safeReferences.filter((reference) => isObjectRecord(reference) && reference.reference_key === entry.reference_key && reference.source_kind === entry.source_kind && reference.version_scope === entry.version_scope);
+      if (matches.length !== 1) throw new Error();
+    }
+    for (const reference of safeReferences) {
+      const matches = input.reference_manifest.filter((entry) => entry.reference_key === reference.reference_key && entry.source_kind === reference.source_kind && entry.version_scope === reference.version_scope);
+      if (matches.length !== 1) throw new Error();
+    }
+    const document = {
+      manifest_schema_version: "capa-root-cause-review-reference-manifest-1.0.0" as const,
+      entries: input.reference_manifest.map((entry) => ({ ...entry })),
+    };
+    return {
+      document,
+      fingerprint_algorithm: "sha256-canonical-json-v1" as const,
+      reference_manifest_sha256: fingerprintCanonicalJson(document),
+    };
+  } catch {
+    throw new InMemoryCapaInvestigationActiveAdvisoryPersistenceError();
+  }
+}
+
 function rejectInvalidInvestigationPlanningAdoptionInput(): never {
   throw new InMemoryIntegrityError(
     "The S30 investigation-planning adoption persistence input is invalid.",
@@ -1554,8 +1685,13 @@ export class InMemoryCapaDatabase
 
   async save(
     transaction: TransactionContext,
+    input: InMemoryCapaRootCauseReviewAdvisorySaveInput,
+  ): Promise<CapaRootCauseReviewAdvisoryOutputSaveResult>;
+
+  async save(
+    transaction: TransactionContext,
     input: InMemoryCapaAdvisorySaveInput,
-  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult | CapaInvestigationPlanningAdvisoryOutputSaveResult | CapaInvestigationActiveAdvisoryOutputSaveResult> {
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult | CapaInvestigationPlanningAdvisoryOutputSaveResult | CapaInvestigationActiveAdvisoryOutputSaveResult | CapaRootCauseReviewAdvisoryOutputSaveResult> {
     const state = this.transactionState(transaction);
 
     if (isS30AdvisorySaveInput(input)) {
@@ -1564,6 +1700,10 @@ export class InMemoryCapaDatabase
 
     if (isS40AdvisorySaveInput(input)) {
       return this.saveS40Advisory(transaction, state, input);
+    }
+
+    if (isS50AdvisorySaveInput(input)) {
+      return this.saveS50Advisory(transaction, state, input);
     }
 
     if (isS20AdvisorySaveInput(input)) {
@@ -1882,6 +2022,36 @@ export class InMemoryCapaDatabase
     return "saved";
   }
 
+  private async saveS50Advisory(
+    transaction: TransactionContext,
+    state: InMemoryState,
+    input: InMemoryCapaRootCauseReviewAdvisorySaveInput,
+  ): Promise<CapaRootCauseReviewAdvisoryOutputSaveResult> {
+    if (transaction.request_trace.request_id !== input.request_id || transaction.request_trace.correlation_id !== input.correlation_id) {
+      throw new InMemoryCapaInvestigationActiveAdvisoryPersistenceError();
+    }
+    const reference_manifest = validateS50AdvisoryInput(input);
+    const capaCase = state.cases.get(recordKey(input.context.organization_id, input.context.capa_case_id));
+    if (capaCase === undefined || capaCase.current_version_id !== input.context.case_version_id || capaCase.record_version !== input.context.record_version || capaCase.status !== "S50") return "case_changed";
+    const outputKey = recordKey(input.context.organization_id, input.response.output_id);
+    const runKey = recordKey(input.context.organization_id, input.response.run_id);
+    if (state.advisory_outputs.has(outputKey) || state.advisory_runs.has(runKey)) throw new InMemoryDuplicateRecordError("CAPA AI advisory output");
+    const record: InMemoryCapaRootCauseReviewAdvisoryOutputRecord = {
+      organization_id: input.context.organization_id,
+      capa_case_id: input.context.capa_case_id,
+      case_version_id: input.context.case_version_id,
+      record_version: input.context.record_version,
+      request_trace: { request_id: input.request_id, correlation_id: input.correlation_id },
+      response: cloneValue(input.response),
+      generation_trace: cloneValue(input.generation_trace),
+      reference_manifest: cloneValue(reference_manifest),
+      created_at: transaction.started_at,
+    };
+    state.advisory_outputs.set(outputKey, cloneValue(record));
+    state.advisory_runs.set(runKey, input.response.output_id);
+    return "saved";
+  }
+
   async appendAdoption(
     transaction: TransactionContext,
     input: CapaInvestigationPlanningAdoptionPersistenceInput,
@@ -2086,10 +2256,21 @@ export class InMemoryCapaDatabase
   async findById(
     organizationId: string,
     outputId: string,
-  ): Promise<CapaInvestigationActiveAdvisoryOutputRecord | null> {
+  ): Promise<CapaRootCauseReviewAdvisoryOutputRecord | null>;
+
+  async findById(
+    organizationId: string,
+    outputId: string,
+  ): Promise<CapaInvestigationActiveAdvisoryOutputRecord | null>;
+
+  async findById(
+    organizationId: string,
+    outputId: string,
+  ): Promise<CapaInvestigationActiveAdvisoryOutputRecord | CapaRootCauseReviewAdvisoryOutputRecord | null> {
     const output = this.committed_state.advisory_outputs.get(
       recordKey(organizationId as OrganizationId, outputId),
     );
+    if (isS50AdvisoryOutputRecord(output)) return cloneValue(output) as unknown as CapaRootCauseReviewAdvisoryOutputRecord;
     if (!isS40AdvisoryOutputRecord(output)) return null;
     return cloneValue(output) as unknown as CapaInvestigationActiveAdvisoryOutputRecord;
   }

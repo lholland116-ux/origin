@@ -3,7 +3,18 @@ begin;
 create extension if not exists pgtap
 with schema extensions;
 
-select plan(31);
+select plan(35);
+
+select ok(
+  exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'capa_ai_generation_traces'
+      and column_name = 'output_status'
+  ),
+  'shared generation traces bind both S40 and S50 output status'
+);
 
 -- ---------------------------------------------------------------------------
 -- Table shape
@@ -398,6 +409,113 @@ select ok(
   ),
   'generation fingerprint algorithm is database constrained'
 );
+
+-- ---------------------------------------------------------------------------
+-- Controlled S50 AG-REVIEW generation-trace qualification
+-- ---------------------------------------------------------------------------
+
+insert into public.capa_organizations (
+  organization_id, organization_name, authorization_policy_version,
+  effective_at, created_at, created_by_actor_type, created_by_actor_id,
+  updated_at, updated_by_actor_type, updated_by_actor_id
+) values (
+  'd1000000-0000-4000-8000-000000000001', 'S50 trace test organization',
+  'qualification-1.0.0', '2026-09-05T00:00:00Z', '2026-09-05T00:00:00Z',
+  'system', 'sql-test', '2026-09-05T00:00:00Z', 'system', 'sql-test'
+);
+
+insert into public.capa_cases (
+  capa_case_id, organization_id, case_number, current_version_id, status,
+  owner_user_id, confidentiality, record_version, effective_at, created_at,
+  created_by_actor_type, created_by_actor_id, updated_at,
+  updated_by_actor_type, updated_by_actor_id
+) values (
+  'd1300000-0000-4000-8000-000000000001',
+  'd1000000-0000-4000-8000-000000000001', 'CAPA-S50-TRACE',
+  'd1400000-0000-4000-8000-000000000001', 'S50',
+  'd1200000-0000-4000-8000-000000000001', 'CUSTOMER_CONFIDENTIAL', 4,
+  '2026-09-05T00:00:00Z', '2026-09-05T00:00:00Z', 'human', 'sql-test',
+  '2026-09-05T00:00:00Z', 'human', 'sql-test'
+);
+
+insert into public.capa_case_versions (
+  case_version_id, organization_id, capa_case_id, version_number,
+  change_reason, status, effective_at, created_at,
+  created_by_actor_type, created_by_actor_id
+) values (
+  'd1400000-0000-4000-8000-000000000001',
+  'd1000000-0000-4000-8000-000000000001',
+  'd1300000-0000-4000-8000-000000000001', 4,
+  'S50 trace qualification', 'S50', '2026-09-05T00:00:00Z',
+  '2026-09-05T00:00:00Z', 'human', 'sql-test'
+);
+
+select throws_ok($$
+  do $missing_s50_trace$
+  begin
+    insert into public.capa_ai_outputs (
+      organization_id, output_id, run_id, capa_case_id, case_version_id,
+      record_version, request_id, correlation_id, agent_id, agent_version,
+      output_schema_version, status, proposal, output_payload, advisory_only,
+      workflow_mutated, human_acceptance_required
+    ) values (
+      'd1000000-0000-4000-8000-000000000001',
+      'd1500000-0000-4000-8000-000000000002',
+      'd1600000-0000-4000-8000-000000000002',
+      'd1300000-0000-4000-8000-000000000001',
+      'd1400000-0000-4000-8000-000000000001', 4,
+      'd1700000-0000-4000-8000-000000000002',
+      'd1800000-0000-4000-8000-000000000002', 'AG-REVIEW', 'ag-review-1.0.0',
+      'capa_review_packet_draft-1.0.0', 'completed_draft', '{}'::jsonb,
+      '{}'::jsonb, true, false, true
+    );
+    set constraints capa_ai_outputs_require_generation_trace immediate;
+  end
+  $missing_s50_trace$
+$$, '23514', null, 'completed S50 AG-REVIEW output cannot commit without a generation trace');
+
+insert into public.capa_ai_outputs (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, agent_id, agent_version,
+  output_schema_version, status, proposal, output_payload, advisory_only,
+  workflow_mutated, human_acceptance_required
+) values (
+  'd1000000-0000-4000-8000-000000000001',
+  'd1500000-0000-4000-8000-000000000001',
+  'd1600000-0000-4000-8000-000000000001',
+  'd1300000-0000-4000-8000-000000000001',
+  'd1400000-0000-4000-8000-000000000001', 4,
+  'd1700000-0000-4000-8000-000000000001',
+  'd1800000-0000-4000-8000-000000000001', 'AG-REVIEW', 'ag-review-1.0.0',
+  'capa_review_packet_draft-1.0.0', 'completed_draft', '{}'::jsonb,
+  '{}'::jsonb, true, false, true
+);
+
+insert into public.capa_ai_generation_traces (
+  organization_id, run_id, output_id, capa_case_id, case_version_id,
+  record_version, output_status, request_id, correlation_id, prompt_package_id,
+  trace_schema_version, fingerprint_algorithm, prompt_package,
+  prompt_package_sha256, rendered_prompt_sha256, evidence_manifest,
+  evidence_manifest_sha256, policy_manifest, policy_manifest_sha256,
+  model_profile_version, assembled_at
+) values (
+  'd1000000-0000-4000-8000-000000000001',
+  'd1600000-0000-4000-8000-000000000001',
+  'd1500000-0000-4000-8000-000000000001',
+  'd1300000-0000-4000-8000-000000000001',
+  'd1400000-0000-4000-8000-000000000001', 4, 'completed_draft',
+  'd1700000-0000-4000-8000-000000000001',
+  'd1800000-0000-4000-8000-000000000001',
+  'd1900000-0000-4000-8000-000000000001',
+  'capa-ai-generation-trace-1.0.0', 'sha256-canonical-json-v1', '{}'::jsonb,
+  repeat('a', 64), repeat('b', 64), '{}'::jsonb, repeat('c', 64),
+  '{}'::jsonb, repeat('d', 64), 's50-review-profile-1.0.0',
+  '2026-09-05T00:00:00Z'
+);
+
+set constraints all immediate;
+select is((select count(*)::integer from public.capa_ai_outputs where output_id = 'd1500000-0000-4000-8000-000000000001'), 1, 'qualified S50 output with trace persists');
+select is((select count(*)::integer from public.capa_ai_generation_traces where output_id = 'd1500000-0000-4000-8000-000000000001'), 1, 'qualified S50 trace persists');
 
 select * from finish();
 

@@ -31,12 +31,15 @@ import {
   InMemoryCapaCaseNumberExhaustedError,
   InMemoryCapaDatabase,
   InMemoryCapaDatabaseConfigurationError,
+  InMemoryCapaInvestigationActiveAdvisoryPersistenceError,
   InMemoryDuplicateRecordError,
   InMemoryIntegrityError,
   InMemoryTransactionConflictError,
   InMemoryTransactionNotActiveError,
 } from "../../lib/database/in-memory/in-memory-capa-database";
 import { CapaDevelopmentStateSnapshotError } from "../../lib/database/development/capa-development-state-snapshot";
+import { createCapaRootCauseReviewAdvisoryGenerationTrace } from "../../lib/capa/ai/capa-ai-generation-trace";
+import { CAPA_ROOT_CAUSE_REVIEW_ADVISORY_JSON_SCHEMA, CAPA_ROOT_CAUSE_REVIEW_ADVISORY_MODEL_PROFILE } from "../../lib/capa/ai/capa-root-cause-review-advisory-model-generator";
 
 import type {
   AuditCursor,
@@ -253,6 +256,33 @@ async function seedValidCase(
       );
     },
   );
+}
+
+function s50AdvisoryInput(overrides: Record<string, unknown> = {}): any {
+  const modelSafeContext = { trust: "model_safe_context", workflow_state: "S50", current_version_number: 4, comparison_version_number: null, current_section_versions: { investigation_ledger: "L1", root_cause_package: "R1", investigation_plan: null }, comparison_section_versions: null, references: [] };
+  const generationTrace = createCapaRootCauseReviewAdvisoryGenerationTrace({
+    rendered_prompt: "controlled S50 prompt",
+    model_profile_version: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_MODEL_PROFILE.profile_version,
+    output_schema_name: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_MODEL_PROFILE.output_schema_name,
+    output_schema: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_JSON_SCHEMA,
+    maximum_output_characters: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_MODEL_PROFILE.maximum_output_characters,
+    package: {
+      scope: { organization_id: ORGANIZATION_ID, capa_case_id: CASE_ID, case_version_id: VERSION_ID, record_version: 4, workflow_state: "S50" },
+      agent: { agent_id: "AG-REVIEW", agent_version: "ag-review-1.0.0" },
+      trace: { run_id: "60000000-0000-4000-8000-000000000001" as any, prompt_package_id: "70000000-0000-4000-8000-000000000001" as any, request_id: requestTrace().request_id, correlation_id: requestTrace().correlation_id, assembled_at: "2026-08-12T01:00:00.000Z" as any },
+      context_provenance: { model_safe_context: modelSafeContext },
+      governance: { advisory_only: true, workflow_mutated: false, controlled_record_mutated: false, human_acceptance_required: true },
+    },
+  });
+  return {
+    context: { trust: "authoritative_server_context", organization_id: ORGANIZATION_ID, capa_case_id: CASE_ID, case_version_id: VERSION_ID, record_version: 4, workflow_state: "S50" },
+    response: { run_id: generationTrace.package.trace.run_id, output_id: "80000000-0000-4000-8000-000000000001" as any, output_schema_version: "capa_review_packet_draft-1.0.0", status: "completed_draft", proposal: { neutral_review_summary: "No additional review summary was supplied.", version_changes: [], blockers_warnings: [], evidence_map: [] }, uncertainty_and_limitations: [], citations: [], warnings: [], advisory_only: true, workflow_mutated: false, controlled_record_mutated: false, review_disposition: null, workflow_transition: null, human_acceptance_required: true },
+    generation_trace: generationTrace,
+    reference_manifest: [],
+    request_id: requestTrace().request_id,
+    correlation_id: requestTrace().correlation_id,
+    ...overrides,
+  };
 }
 
 describe("InMemoryCapaDatabase transactions", () => {
@@ -1571,5 +1601,121 @@ describe("InMemoryCapaDatabase integrity validation", () => {
     ).rejects.toBeInstanceOf(
       InMemoryIntegrityError,
     );
+  });
+
+  it("fails closed for malformed S50 advisory persistence input", async () => {
+    const database = createDatabase();
+    await expect(database.runInTransaction(requestTrace(), async (transaction) => {
+      await database.save(transaction, {
+        context: {
+          trust: "authoritative_server_context",
+          organization_id: ORGANIZATION_ID,
+          capa_case_id: CASE_ID,
+          case_version_id: VERSION_ID,
+          record_version: 1,
+          workflow_state: "S50",
+        },
+        response: {
+          output_schema_version: "capa_review_packet_draft-1.0.0",
+          status: "completed_draft",
+          advisory_only: true,
+          workflow_mutated: false,
+          controlled_record_mutated: true,
+          review_disposition: null,
+          workflow_transition: null,
+          human_acceptance_required: true,
+        },
+        generation_trace: {},
+        reference_manifest: [],
+        request_id: requestTrace().request_id,
+        correlation_id: requestTrace().correlation_id,
+      } as any);
+    })).rejects.toBeInstanceOf(InMemoryCapaInvestigationActiveAdvisoryPersistenceError);
+  });
+
+  it("persists and reads one governed S50 output, trace, and exact manifest", async () => {
+    const database = createDatabase();
+    await database.runInTransaction(requestTrace(), async (transaction) => {
+      await database.insertCase(transaction, capaCase({ status: "S50" as CapaCaseStatus, record_version: 4 }));
+      await database.insertSectionVersion(transaction, sectionVersion());
+      await database.insertCaseVersion(transaction, caseVersion({ status: "S50" as CapaCaseStatus, version_number: 4 }));
+      await expect(database.save(transaction, s50AdvisoryInput())).resolves.toBe("saved");
+    });
+    const result = await database.findById(ORGANIZATION_ID, "80000000-0000-4000-8000-000000000001");
+    expect(result).toMatchObject({ response: { output_schema_version: "capa_review_packet_draft-1.0.0" }, generation_trace: { package: { agent: { agent_id: "AG-REVIEW" } } }, reference_manifest: { document: { entries: [] } } });
+  });
+
+  it.each([
+    ["current version", { capaCase: capaCase({ status: "S50" as CapaCaseStatus, current_version_id: NEXT_VERSION_ID, record_version: 4 }), caseVersion: caseVersion({ case_version_id: NEXT_VERSION_ID, status: "S50" as CapaCaseStatus, version_number: 4 }) }],
+    ["record version", { capaCase: capaCase({ status: "S50" as CapaCaseStatus, record_version: 5 }), caseVersion: caseVersion({ status: "S50" as CapaCaseStatus, version_number: 5 }) }],
+    ["workflow", { capaCase: capaCase({ status: "S40" as CapaCaseStatus }), caseVersion: caseVersion({ status: "S40" as CapaCaseStatus }) }],
+  ])("returns case_changed for stale S50 %s", async (_name, values) => {
+    const database = createDatabase();
+    await database.runInTransaction(requestTrace(), async (transaction) => {
+      await database.insertCase(transaction, values.capaCase);
+      await database.insertSectionVersion(transaction, sectionVersion());
+      await database.insertCaseVersion(transaction, values.caseVersion);
+    });
+    await expect(database.runInTransaction(requestTrace(), (transaction) => database.save(transaction, s50AdvisoryInput()))).resolves.toBe("case_changed");
+  });
+
+  it("rejects request/correlation mismatch, invalid governance, invalid trace, and partial or duplicate manifests", async () => {
+    const database = createDatabase();
+    await database.runInTransaction(requestTrace(), async (transaction) => {
+      await database.insertCase(transaction, capaCase({ status: "S50" as CapaCaseStatus, record_version: 4 }));
+      await database.insertSectionVersion(transaction, sectionVersion());
+      await database.insertCaseVersion(transaction, caseVersion({ status: "S50" as CapaCaseStatus, version_number: 4 }));
+    });
+    await expect(database.runInTransaction({ ...requestTrace(), request_id: "90000000-0000-4000-8000-000000000001" as RequestId }, (transaction) => database.save(transaction, s50AdvisoryInput()))).rejects.toBeInstanceOf(InMemoryCapaInvestigationActiveAdvisoryPersistenceError);
+    await expect(database.runInTransaction({ ...requestTrace(), correlation_id: "90000000-0000-4000-8000-000000000001" as CorrelationId }, (transaction) => database.save(transaction, s50AdvisoryInput()))).rejects.toBeInstanceOf(InMemoryCapaInvestigationActiveAdvisoryPersistenceError);
+    for (const invalid of [
+      s50AdvisoryInput({ response: { ...s50AdvisoryInput().response, controlled_record_mutated: true } }),
+      s50AdvisoryInput({ generation_trace: { ...s50AdvisoryInput().generation_trace, package: { ...s50AdvisoryInput().generation_trace.package, trace: { ...s50AdvisoryInput().generation_trace.package.trace, run_id: "90000000-0000-4000-8000-000000000001" } } } }),
+      s50AdvisoryInput({ reference_manifest: [{ reference_key: "R1", trust: "authoritative_server_context", source_kind: "causal_hypothesis", version_scope: "current", source_id: "H1" }] }),
+    ]) {
+      await expect(database.runInTransaction(requestTrace(), (transaction) => database.save(transaction, invalid))).rejects.toBeInstanceOf(InMemoryCapaInvestigationActiveAdvisoryPersistenceError);
+    }
+  });
+
+  it("enforces nonempty exact mappings and controlled source kinds and scopes", async () => {
+    const database = createDatabase();
+    await database.runInTransaction(requestTrace(), async (transaction) => {
+      await database.insertCase(transaction, capaCase({ status: "S50" as CapaCaseStatus, record_version: 4 }));
+      await database.insertSectionVersion(transaction, sectionVersion());
+      await database.insertCaseVersion(transaction, caseVersion({ status: "S50" as CapaCaseStatus, version_number: 4 }));
+    });
+    const safeReference = { reference_key: "R1", trust: "authoritative_server_context", source_kind: "causal_hypothesis", version_scope: "current" };
+    const valid = s50AdvisoryInput({ generation_trace: (() => { const base = s50AdvisoryInput().generation_trace; return { ...base, package: { ...base.package, context_provenance: { model_safe_context: { ...base.package.context_provenance.model_safe_context, references: [safeReference] } } } }; })(), reference_manifest: [{ ...safeReference, source_id: "H1" }] });
+    await expect(database.runInTransaction(requestTrace(), (transaction) => database.save(transaction, valid))).resolves.toBe("saved");
+    const invalidMappings = [
+      { reference_manifest: [{ ...safeReference, source_id: "H1" }, { ...safeReference, source_id: "H2" }] },
+      { reference_manifest: [] },
+      { reference_manifest: [{ ...safeReference, source_id: "H1" }, { ...safeReference, reference_key: "R2", source_id: "H2" }] },
+      { reference_manifest: [{ ...safeReference, source_id: "H1" }], safe: { source_kind: "unsupported" } },
+      { reference_manifest: [{ ...safeReference, source_id: "H1" }], safe: { version_scope: "unsupported" } },
+      { reference_manifest: [{ ...safeReference, source_id: "H1" }], safe: { source_id: "SERVER-ID" } },
+    ];
+    for (const invalid of invalidMappings) {
+      const base = s50AdvisoryInput();
+      const alteredSafe = { ...safeReference, ...(invalid.safe ?? {}) };
+      const alteredTrace = { ...base.generation_trace, package: { ...base.generation_trace.package, context_provenance: { model_safe_context: { ...base.generation_trace.package.context_provenance.model_safe_context, references: [alteredSafe] } } } };
+      await expect(database.runInTransaction(requestTrace(), (transaction) => database.save(transaction, { ...base, generation_trace: alteredTrace, reference_manifest: invalid.reference_manifest }))).rejects.toBeInstanceOf(InMemoryCapaInvestigationActiveAdvisoryPersistenceError);
+    }
+    const duplicateSafe = s50AdvisoryInput();
+    duplicateSafe.generation_trace = { ...duplicateSafe.generation_trace, package: { ...duplicateSafe.generation_trace.package, context_provenance: { model_safe_context: { ...duplicateSafe.generation_trace.package.context_provenance.model_safe_context, references: [safeReference, safeReference] } } } };
+    duplicateSafe.reference_manifest = [{ ...safeReference, source_id: "H1" }, { ...safeReference, source_id: "H2" }];
+    await expect(database.runInTransaction(requestTrace(), (transaction) => database.save(transaction, duplicateSafe))).rejects.toBeInstanceOf(InMemoryCapaInvestigationActiveAdvisoryPersistenceError);
+  });
+
+  it("does not commit a valid advisory when the surrounding transaction fails", async () => {
+    const database = createDatabase();
+    await expect(database.runInTransaction(requestTrace(), async (transaction) => {
+      await database.insertCase(transaction, capaCase({ status: "S50" as CapaCaseStatus, record_version: 4 }));
+      await database.insertSectionVersion(transaction, sectionVersion());
+      await database.insertCaseVersion(transaction, caseVersion({ status: "S50" as CapaCaseStatus, version_number: 4 }));
+      await database.save(transaction, s50AdvisoryInput());
+      throw new Error("rollback");
+    })).rejects.toThrow("rollback");
+    await expect(database.findById(ORGANIZATION_ID, "80000000-0000-4000-8000-000000000001")).resolves.toBeNull();
   });
 });
