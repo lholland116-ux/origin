@@ -3366,13 +3366,25 @@ export default function CapaIntakeClient({
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <Link
-            href="/chat"
-            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            Back to Chat
-          </Link>
+        <div className="flex flex-col gap-3 sm:items-end">
+          <div className="rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-3 sm:text-right">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+              Authenticated CAPA user
+            </p>
+
+            <p className="mt-1 max-w-[22rem] break-all text-sm font-medium text-zinc-100">
+              {userEmail || "Authenticated user"}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Link
+              href="/chat"
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              Back to Chat
+            </Link>
+          </div>
         </div>
       </header>
 
