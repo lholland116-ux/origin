@@ -334,6 +334,27 @@ function errorResponse(
   return jsonResponse(body, status);
 }
 
+function logRootCauseGateOutcome(
+  dependencies: CapaApiHandlerDependencies,
+  trace: RequestTrace,
+  outcome:
+    | "authorization_denied"
+    | "step_up_required",
+  reasonCode: string,
+  policyVersion: string,
+): void {
+  dependencies.logger.error(
+    "CAPA root-cause gate outcome.",
+    {
+      correlation_id: trace.correlation_id,
+      operation: "root-cause gate",
+      outcome,
+      reason_code: reasonCode,
+      policy_version: policyVersion,
+    },
+  );
+}
+
 async function authenticatedContext(
   dependencies:
     CapaApiHandlerDependencies,
@@ -2309,8 +2330,26 @@ export async function handleCapaRootCauseGate(
     if (result.status === "validation_failed") {
       return errorResponse(trace, 400, "CAPA_ROOT_CAUSE_GATE_VALIDATION_FAILED", "The root-cause gate request did not pass controlled validation.", [{ path: "gate", message: result.reason_code }]);
     }
-    if (result.status === "authorization_denied") return errorResponse(trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.");
-    if (result.status === "step_up_required") return errorResponse(trace, 403, "CAPA_STEP_UP_REQUIRED", "Fresh step-up authentication is required.");
+    if (result.status === "authorization_denied") {
+      logRootCauseGateOutcome(
+        dependencies,
+        trace,
+        "authorization_denied",
+        result.reason_code,
+        result.policy_version,
+      );
+      return errorResponse(trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.");
+    }
+    if (result.status === "step_up_required") {
+      logRootCauseGateOutcome(
+        dependencies,
+        trace,
+        "step_up_required",
+        result.reason_code,
+        result.policy_version,
+      );
+      return errorResponse(trace, 403, "CAPA_STEP_UP_REQUIRED", "Fresh step-up authentication is required.");
+    }
     if (result.status === "not_found_or_not_authorized") return errorResponse(trace, 404, "CAPA_NOT_FOUND", "The CAPA case was not found.");
     if (result.status === "idempotency_conflict") return errorResponse(trace, 409, "CAPA_IDEMPOTENCY_CONFLICT", "The idempotency key was already used for a different CAPA request.");
     if (result.status === "concurrency_conflict") return errorResponse(trace, 409, "CAPA_CONCURRENCY_CONFLICT", "The CAPA record changed before the root-cause gate could be completed.");
