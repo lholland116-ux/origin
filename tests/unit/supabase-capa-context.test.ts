@@ -8,11 +8,35 @@ import {
   type SupabaseCapaSessionFacts,
 } from "../../lib/security/supabase-capa-context";
 
+import {
+  CAPA_DEVELOPMENT_ROLE_IDS,
+  CapaDevelopmentRoleConfigurationError,
+} from "../../lib/security/capa-development-role";
+
+import {
+  CapaDevelopmentOrganizationConfigurationError,
+} from "../../lib/security/capa-development-organization";
+
+import {
+  getActiveRoleAssignments,
+  hasActiveRoleAssignment,
+} from "../../lib/security/tenant-context";
+
+import type {
+  RoleId,
+} from "../../lib/capa/domain/capa-types";
+
 const NOW =
   new Date("2026-08-12T14:00:00.000Z");
 
 const USER_ID =
   "17e5a590-8e2c-4b08-8fb2-5a6c6fe87d23";
+
+const OTHER_USER_ID =
+  "8eb089a8-d26f-4662-948d-d0fb5d5e81fe";
+
+const SHARED_ORGANIZATION_ID =
+  "10000000-0000-4000-8000-000000000001";
 
 const VALID_EXPIRATION_SECONDS =
   Date.parse(
@@ -31,6 +55,47 @@ function validFacts(
       VALID_EXPIRATION_SECONDS,
     ...overrides,
   };
+}
+
+function withDevelopmentEnvironment<T>(
+  organizationId: string | undefined,
+  roleId: string | undefined,
+  action: () => T,
+): T {
+  const previousOrganizationId =
+    process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+  const previousRoleId =
+    process.env.CAPA_DEVELOPMENT_ROLE_ID;
+
+  if (organizationId === undefined) {
+    delete process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+  } else {
+    process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID =
+      organizationId;
+  }
+
+  if (roleId === undefined) {
+    delete process.env.CAPA_DEVELOPMENT_ROLE_ID;
+  } else {
+    process.env.CAPA_DEVELOPMENT_ROLE_ID = roleId;
+  }
+
+  try {
+    return action();
+  } finally {
+    if (previousOrganizationId === undefined) {
+      delete process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+    } else {
+      process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID =
+        previousOrganizationId;
+    }
+
+    if (previousRoleId === undefined) {
+      delete process.env.CAPA_DEVELOPMENT_ROLE_ID;
+    } else {
+      process.env.CAPA_DEVELOPMENT_ROLE_ID = previousRoleId;
+    }
+  }
 }
 
 async function expectContextFailure(
@@ -156,6 +221,169 @@ describe(
 
           owner_user_id: USER_ID,
         });
+      },
+    );
+
+    it(
+      "uses one configured organization for distinct authenticated users without changing their principals",
+      () => {
+        withDevelopmentEnvironment(
+          SHARED_ORGANIZATION_ID,
+          "CAPA_OWNER",
+          () => {
+            const userA =
+              resolveDevelopmentCapaRequestContext(
+                validFacts({
+                  verified_user_id: USER_ID,
+                  verified_aal: "aal2",
+                  verified_reauthenticated_at_epoch_seconds:
+                    Date.parse(
+                      "2026-08-12T13:30:00.000Z",
+                    ) / 1_000,
+                }),
+                NOW,
+              );
+
+            const userB =
+              withDevelopmentEnvironment(
+                SHARED_ORGANIZATION_ID,
+                "CAPA_APPROVER",
+                () =>
+                  resolveDevelopmentCapaRequestContext(
+                    validFacts({
+                      verified_user_id: OTHER_USER_ID,
+                    }),
+                    NOW,
+                  ),
+              );
+
+            expect(
+              userA.authentication.principal,
+            ).toEqual({
+              principal_type: "human",
+              user_id: USER_ID,
+            });
+            expect(
+              userB.authentication.principal,
+            ).toEqual({
+              principal_type: "human",
+              user_id: OTHER_USER_ID,
+            });
+            expect(
+              userA.authentication.reauthenticated_at,
+            ).toBe("2026-08-12T13:30:00.000Z");
+            expect(
+              userA.tenant.organization_id,
+            ).toBe(SHARED_ORGANIZATION_ID);
+            expect(
+              userB.tenant.organization_id,
+            ).toBe(SHARED_ORGANIZATION_ID);
+            expect(
+              userA.tenant.role_assignments[0].role_id,
+            ).toBe("CAPA_OWNER");
+            expect(
+              userB.tenant.role_assignments[0].role_id,
+            ).toBe("CAPA_APPROVER");
+            expect(
+              userA.tenant.role_assignments[0].role_assignment_id,
+            ).toBe(`development-role:${USER_ID}`);
+            expect(
+              userB.tenant.role_assignments[0].role_assignment_id,
+            ).toBe(`development-role:${OTHER_USER_ID}`);
+          },
+        );
+      },
+    );
+
+    it(
+      "fails closed when the configured development organization is invalid",
+      () => {
+        expect(() =>
+          withDevelopmentEnvironment(
+            " ",
+            undefined,
+            () =>
+              resolveDevelopmentCapaRequestContext(
+                validFacts(),
+                NOW,
+              ),
+          ),
+        ).toThrow(
+          CapaDevelopmentOrganizationConfigurationError,
+        );
+      },
+    );
+
+    it.each([...CAPA_DEVELOPMENT_ROLE_IDS])(
+      "uses the server-controlled %s role in the active tenant context",
+      (role) => {
+        const previousRole =
+          process.env.CAPA_DEVELOPMENT_ROLE_ID;
+
+        process.env.CAPA_DEVELOPMENT_ROLE_ID = role;
+
+        try {
+          const context =
+            resolveDevelopmentCapaRequestContext(
+              validFacts(),
+              NOW,
+            );
+
+          expect(
+            context.tenant.role_assignments,
+          ).toHaveLength(1);
+          expect(
+            context.tenant.role_assignments[0].role_id,
+          ).toBe(role);
+
+          expect(
+            getActiveRoleAssignments(
+              context.tenant,
+              NOW,
+            ),
+          ).toHaveLength(1);
+          expect(
+            hasActiveRoleAssignment(
+              context.tenant,
+              role as RoleId,
+              NOW,
+            ),
+          ).toBe(true);
+        } finally {
+          if (previousRole === undefined) {
+            delete process.env.CAPA_DEVELOPMENT_ROLE_ID;
+          } else {
+            process.env.CAPA_DEVELOPMENT_ROLE_ID = previousRole;
+          }
+        }
+      },
+    );
+
+    it(
+      "fails closed for an unknown server-controlled role",
+      () => {
+        const previousRole =
+          process.env.CAPA_DEVELOPMENT_ROLE_ID;
+
+        process.env.CAPA_DEVELOPMENT_ROLE_ID =
+          "CAPA_NOT_A_ROLE";
+
+        try {
+          expect(() =>
+            resolveDevelopmentCapaRequestContext(
+              validFacts(),
+              NOW,
+            ),
+          ).toThrow(
+            CapaDevelopmentRoleConfigurationError,
+          );
+        } finally {
+          if (previousRole === undefined) {
+            delete process.env.CAPA_DEVELOPMENT_ROLE_ID;
+          } else {
+            process.env.CAPA_DEVELOPMENT_ROLE_ID = previousRole;
+          }
+        }
       },
     );
 

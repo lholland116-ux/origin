@@ -4,10 +4,14 @@ import {
   CAPA_ROOT_CAUSE_GATE_APPROVAL_CONFIRMATION,
   type DecideCapaRootCauseGateDependencies,
 } from "../../lib/capa/application/decide-capa-root-cause-gate";
+import { createCapaDevelopmentRuntime } from "../../lib/capa/application/capa-development-runtime";
 import { InMemoryCapaDatabase } from "../../lib/database/in-memory/in-memory-capa-database";
+import { resolveDevelopmentCapaRequestContext } from "../../lib/security/supabase-capa-context";
 
 const ORG = "10000000-0000-4000-8000-000000000001";
 const USER = "20000000-0000-4000-8000-000000000001";
+const CASE_OWNER = "90000000-0000-4000-8000-000000000001";
+const OTHER_USER = "90000000-0000-4000-8000-000000000002";
 const CASE = "30000000-0000-4000-8000-000000000001";
 const S50 = "40000000-0000-4000-8000-000000000001";
 const NEXT = "40000000-0000-4000-8000-000000000002";
@@ -18,10 +22,13 @@ const APPROVAL_AUDIT = "60000000-0000-4000-8000-000000000001";
 const TRANSITION_AUDIT = "60000000-0000-4000-8000-000000000002";
 const NOW = "2026-09-06T12:00:00.000Z";
 
-function auth() {
-  return { principal: { principal_type: "human", user_id: USER }, session_id: "session",
+function authFor(userId: string) {
+  return { principal: { principal_type: "human", user_id: userId }, session_id: "session",
     authentication_method: "OIDC", assurance_level: "MFA", authenticated_at: NOW,
     expires_at: "2026-09-07T12:00:00.000Z", reauthenticated_at: NOW } as never;
+}
+function auth() {
+  return authFor(USER);
 }
 function tenant() {
   return { organization_id: ORG, access_grant_id: "grant", access_path: "HUMAN_MEMBERSHIP",
@@ -35,12 +42,12 @@ function idGenerator() {
     generateAuditEventId: (() => { let value = 0; return () => (++value % 2 === 1 ? APPROVAL_AUDIT : TRANSITION_AUDIT); })() } as never;
 }
 
-async function harness() {
+async function harness(ownerUserId = CASE_OWNER) {
   let transaction = 0;
   const database = new InMemoryCapaDatabase({ generate_transaction_id: () => `tx-${++transaction}` as never, now: () => new Date(NOW) });
   await database.runInTransaction(trace("seed"), async (tx) => {
     await database.insertCase(tx, { organization_id: ORG, capa_case_id: CASE, case_number: "CAPA-1",
-      current_version_id: S50, status: "S50", record_version: 5, owner_user_id: "90000000-0000-4000-8000-000000000001",
+      current_version_id: S50, status: "S50", record_version: 5, owner_user_id: ownerUserId,
       confidentiality: "CUSTOMER_CONFIDENTIAL", effective_at: NOW, created_at: NOW, updated_at: NOW,
       created_by: { actor_type: "human", actor_id: USER }, updated_by: { actor_type: "human", actor_id: USER } } as never);
     await database.insertSectionVersion(tx, { organization_id: ORG, capa_case_id: CASE, section_version_id: SECTION,
@@ -65,6 +72,55 @@ async function harness() {
   return { database, dependencies };
 }
 
+function developmentContext(
+  userId: string,
+  freshStepUp = true,
+) {
+  return resolveDevelopmentCapaRequestContext(
+    {
+      verified_user_id: userId,
+      authenticated_at: NOW,
+      expires_at_epoch_seconds:
+        Date.parse("2026-09-07T12:00:00.000Z") / 1_000,
+      verified_aal: "aal2",
+      ...(freshStepUp
+        ? {
+            verified_reauthenticated_at_epoch_seconds:
+              Date.parse(NOW) / 1_000,
+          }
+        : {}),
+    },
+    new Date(NOW),
+  );
+}
+
+async function withDevelopmentGateConfiguration<T>(
+  action: () => T | Promise<T>,
+): Promise<T> {
+  const previousOrganizationId =
+    process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+  const previousRoleId =
+    process.env.CAPA_DEVELOPMENT_ROLE_ID;
+
+  process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID = ORG;
+  process.env.CAPA_DEVELOPMENT_ROLE_ID = "CAPA_APPROVER";
+
+  try {
+    return await action();
+  } finally {
+    if (previousOrganizationId === undefined) {
+      delete process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+    } else {
+      process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID = previousOrganizationId;
+    }
+    if (previousRoleId === undefined) {
+      delete process.env.CAPA_DEVELOPMENT_ROLE_ID;
+    } else {
+      process.env.CAPA_DEVELOPMENT_ROLE_ID = previousRoleId;
+    }
+  }
+}
+
 async function advanceAfterGate(database: InMemoryCapaDatabase, status: "S70" | "S40") {
   await database.runInTransaction(trace(`later-${status}`), async (tx) => {
     await database.insertCaseVersion(tx, { organization_id: ORG, capa_case_id: CASE, case_version_id: LATER,
@@ -84,6 +140,124 @@ function body(decision: "approve" | "return_for_investigation", rationale = "Hum
 }
 
 describe("decideCapaRootCauseGate", () => {
+  it("uses the actual development policy for owner denial, non-owner approval, return, and stale step-up", async () => {
+    await withDevelopmentGateConfiguration(async () => {
+      const runtime = createCapaDevelopmentRuntime({
+        environment: "test",
+        now: () => new Date(NOW),
+        generate_uuid: () => "a0000000-0000-4000-8000-000000000001",
+      });
+      const ownerContext = developmentContext(CASE_OWNER);
+      const nonOwnerContext = developmentContext(OTHER_USER);
+
+      const ownerAttempt = await harness(CASE_OWNER);
+      const ownerDependencies = {
+        ...ownerAttempt.dependencies,
+        authorization_policy:
+          runtime.dependencies.authorization_policy,
+      };
+      const ownerDenied = await decideCapaRootCauseGate(
+        ownerDependencies,
+        {
+          authentication: ownerContext.authentication,
+          tenant: ownerContext.tenant,
+          capa_case_id: CASE,
+          request_trace: trace("development-owner-denied"),
+          body: body("approve"),
+        } as never,
+      );
+      expect(ownerDenied).toMatchObject({
+        status: "authorization_denied",
+        reason_code: "DEVELOPMENT_POLICY_DENIED",
+      });
+      expect(
+        await ownerAttempt.database.findCaseById(
+          ORG as never,
+          CASE as never,
+        ),
+      ).toMatchObject({
+        status: "S50",
+        record_version: 5,
+        current_version_id: S50,
+      });
+      expect(
+        await ownerAttempt.database.findCaseVersionById(
+          ORG as never,
+          CASE as never,
+          NEXT as never,
+        ),
+      ).toBeNull();
+
+      const approvalAttempt = await harness(CASE_OWNER);
+      const approvalResult = await decideCapaRootCauseGate(
+        {
+          ...approvalAttempt.dependencies,
+          authorization_policy:
+            runtime.dependencies.authorization_policy,
+        },
+        {
+          authentication: nonOwnerContext.authentication,
+          tenant: nonOwnerContext.tenant,
+          capa_case_id: CASE,
+          request_trace: trace("development-non-owner-approve"),
+          body: body("approve"),
+        } as never,
+      );
+      expect(approvalResult).toMatchObject({
+        status: "decided",
+        decision: "approve",
+        workflow_state: "S60",
+      });
+
+      const returnAttempt = await harness(CASE_OWNER);
+      const returnResult = await decideCapaRootCauseGate(
+        {
+          ...returnAttempt.dependencies,
+          authorization_policy:
+            runtime.dependencies.authorization_policy,
+        },
+        {
+          authentication: nonOwnerContext.authentication,
+          tenant: nonOwnerContext.tenant,
+          capa_case_id: CASE,
+          request_trace: trace("development-non-owner-return"),
+          body: body("return_for_investigation"),
+        } as never,
+      );
+      expect(returnResult).toMatchObject({
+        status: "decided",
+        decision: "return_for_investigation",
+        workflow_state: "S40",
+      });
+
+      const staleAttempt = await harness(CASE_OWNER);
+      const policyEvaluate = vi.spyOn(
+        runtime.dependencies.authorization_policy,
+        "evaluate",
+      );
+      const staleResult = await decideCapaRootCauseGate(
+        {
+          ...staleAttempt.dependencies,
+          authorization_policy:
+            runtime.dependencies.authorization_policy,
+        },
+        {
+          authentication:
+            developmentContext(CASE_OWNER, false).authentication,
+          tenant: ownerContext.tenant,
+          capa_case_id: CASE,
+          request_trace: trace("development-stale-step-up"),
+          body: body("approve"),
+        } as never,
+      );
+      expect(staleResult).toMatchObject({
+        status: "step_up_required",
+      });
+      expect(policyEvaluate).not.toHaveBeenCalled();
+      policyEvaluate.mockRestore();
+    });
+  });
+
   it("approves S50 to S60, preserves the submitted snapshot, and replays exactly", async () => {
     const test = await harness();
     const command = { authentication: auth(), tenant: tenant(), capa_case_id: CASE, request_trace: trace("approve-1"), body: body("approve") } as never;

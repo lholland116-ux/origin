@@ -152,6 +152,10 @@ import {
 import {
   getActiveRoleAssignments,
 } from "../../security/tenant-context";
+import {
+  resolveCapaDevelopmentOrganizationId,
+} from "../../security/capa-development-organization";
+import { resolveCapaDevelopmentRoleId } from "../../security/capa-development-role";
 
 import {
   InMemoryCapaDatabase,
@@ -213,9 +217,6 @@ import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from 
 
 const DEVELOPMENT_POLICY_VERSION =
   "development-policy-1.0.0";
-
-const DEVELOPMENT_ROLE_ID =
-  "CAPA_OWNER" as RoleId;
 
 /**
  * Development implementation of the provider-neutral CAPA runtime.
@@ -461,6 +462,16 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_WORKSPACE_EDIT_ALLOWED",
       );
 
+    case "approve_root_cause":
+      return controlled(
+        "DEVELOPMENT_ROOT_CAUSE_APPROVAL_ALLOWED",
+      );
+
+    case "return_root_cause_for_investigation":
+      return controlled(
+        "DEVELOPMENT_ROOT_CAUSE_RETURN_ALLOWED",
+      );
+
     default:
       return controlled(
         "DEVELOPMENT_POLICY_DENIED",
@@ -468,7 +479,9 @@ function developmentAllowReasonCode(
   }
 }
 
-function developmentAuthorizationPolicy():
+function developmentAuthorizationPolicy(
+  developmentRoleId: RoleId,
+):
   CapaAuthorizationPolicy {
   return {
     async evaluate(
@@ -485,7 +498,7 @@ function developmentAuthorizationPolicy():
         activeAssignments.find(
           (assignment) =>
             assignment.role_id ===
-              DEVELOPMENT_ROLE_ID &&
+            developmentRoleId &&
             assignment.scope ===
               "ORGANIZATION",
         );
@@ -498,7 +511,13 @@ function developmentAuthorizationPolicy():
         request.resource.organization_id ===
         request.tenant.organization_id;
 
-      const operationIsSupported =
+      const isRootCauseGateOperation =
+        request.operation ===
+          "approve_root_cause" ||
+        request.operation ===
+          "return_root_cause_for_investigation";
+
+      const genericOperationIsSupported =
         request.operation ===
           "create_case" ||
         request.operation ===
@@ -535,6 +554,26 @@ function developmentAuthorizationPolicy():
           "read_investigation_active_workspace_draft" ||
         request.operation ===
           "edit_investigation_active_workspace_draft";
+
+      const rootCauseGateBoundarySatisfied =
+        !isRootCauseGateOperation ||
+        (
+          developmentRoleId ===
+            "CAPA_APPROVER" &&
+          request.purpose ===
+            "CAPA_GATE_DECISION" &&
+          request.resource.workflow_state ===
+            "S50" &&
+          request.resource.relationship ===
+            "NOT_CASE_OWNER"
+        );
+
+      const operationIsSupported =
+        genericOperationIsSupported ||
+        (
+          isRootCauseGateOperation &&
+          rootCauseGateBoundarySatisfied
+        );
 
       if (
         !tenantIsDevelopmentScoped ||
@@ -844,6 +883,14 @@ export function createCapaDevelopmentRuntime(
     options.generate_uuid ??
     randomUUID;
 
+  resolveCapaDevelopmentOrganizationId(
+    process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID,
+  );
+
+  const developmentRoleId = resolveCapaDevelopmentRoleId(
+    process.env.CAPA_DEVELOPMENT_ROLE_ID,
+  );
+
   const intakeAdvisoryConfiguration =
     options.intake_advisory;
 
@@ -894,7 +941,7 @@ export function createCapaDevelopmentRuntime(
       database,
 
     authorization_policy:
-      developmentAuthorizationPolicy(),
+      developmentAuthorizationPolicy(developmentRoleId),
 
     id_generator:
       createIdGenerator(

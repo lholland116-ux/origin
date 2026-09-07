@@ -2,7 +2,6 @@ import type {
   ControlledCode,
   IsoDateTime,
   OrganizationId,
-  RoleId,
   UserId,
 } from "../capa/domain/capa-types";
 
@@ -16,6 +15,10 @@ import type {
   TenantAccessGrantId,
   TenantContext,
 } from "./tenant-context";
+import {
+  resolveCapaDevelopmentOrganizationId,
+} from "./capa-development-organization";
+import { resolveCapaDevelopmentRoleId } from "./capa-development-role";
 
 /**
  * Supabase-to-CAPA authenticated-context contracts and development
@@ -41,9 +44,6 @@ import type {
  */
 const DEVELOPMENT_POLICY_VERSION =
   "development-policy-1.0.0";
-
-const DEVELOPMENT_ROLE_ID =
-  "CAPA_OWNER" as RoleId;
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -448,8 +448,16 @@ export function resolveDevelopmentCapaRequestContext(
    * This cast is confined to the temporary development mapping. Durable
    * resolvers obtain an independent organization UUID from membership.
    */
+  const configuredOrganizationId =
+    resolveCapaDevelopmentOrganizationId(
+      process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID,
+    );
   const organizationId =
-    userId as unknown as OrganizationId;
+    configuredOrganizationId ??
+    (userId as unknown as OrganizationId);
+  const developmentRoleId = resolveCapaDevelopmentRoleId(
+    process.env.CAPA_DEVELOPMENT_ROLE_ID,
+  );
 
   const tenant: TenantContext = {
     organization_id:
@@ -477,7 +485,7 @@ export function resolveDevelopmentCapaRequestContext(
             RoleAssignmentId,
 
         role_id:
-          DEVELOPMENT_ROLE_ID,
+          developmentRoleId,
 
         scope:
           controlled("ORGANIZATION"),

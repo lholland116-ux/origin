@@ -21,6 +21,10 @@ import {
   getCapaDevelopmentRuntime,
 } from "../../lib/capa/application/capa-development-runtime";
 
+import {
+  CapaDevelopmentOrganizationConfigurationError,
+} from "../../lib/security/capa-development-organization";
+
 import type {
   CapaIntakeAdvisoryStructuredModelClient,
 } from "../../lib/capa/ai/capa-intake-advisory-model-generator";
@@ -64,6 +68,9 @@ const USER_ID =
 const OTHER_ORGANIZATION_ID =
   "8eb089a8-d26f-4662-948d-d0fb5d5e81fe" as
     OrganizationId;
+
+const SHARED_DEVELOPMENT_ORGANIZATION_ID =
+  "10000000-0000-4000-8000-000000000001";
 
 function controlled(
   value: string,
@@ -185,11 +192,13 @@ function requestTrace():
   } as RequestTrace;
 }
 
-function developmentContext() {
+function developmentContext(
+  userId: string = USER_ID,
+) {
   return resolveDevelopmentCapaRequestContext(
     {
       verified_user_id:
-        USER_ID,
+        userId,
 
       authenticated_at:
         "2026-08-12T13:00:00.000Z",
@@ -244,9 +253,291 @@ function policyRequest(
   };
 }
 
+function rootCauseGatePolicyRequest(
+  userId: string = USER_ID,
+  overrides:
+    Partial<CapaPolicyEvaluationRequest> = {},
+): CapaPolicyEvaluationRequest {
+  const context = developmentContext(userId);
+
+  return policyRequest({
+    authentication: context.authentication,
+    tenant: context.tenant,
+    operation: "approve_root_cause",
+    resource: {
+      organization_id: context.tenant.organization_id,
+      resource_type: controlled("CAPA_CASE"),
+      workflow_state: "S50",
+      relationship: controlled("NOT_CASE_OWNER"),
+    },
+    purpose: controlled("CAPA_GATE_DECISION"),
+    ...overrides,
+  });
+}
+
+async function withDevelopmentRole<T>(
+  role: string,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  const previousRole =
+    process.env.CAPA_DEVELOPMENT_ROLE_ID;
+
+  process.env.CAPA_DEVELOPMENT_ROLE_ID = role;
+
+  try {
+    return await action();
+  } finally {
+    if (previousRole === undefined) {
+      delete process.env.CAPA_DEVELOPMENT_ROLE_ID;
+    } else {
+      process.env.CAPA_DEVELOPMENT_ROLE_ID = previousRole;
+    }
+  }
+}
+
+async function withDevelopmentOrganization<T>(
+  organizationId: string | undefined,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  const previousOrganizationId =
+    process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+
+  if (organizationId === undefined) {
+    delete process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+  } else {
+    process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID =
+      organizationId;
+  }
+
+  try {
+    return await action();
+  } finally {
+    if (previousOrganizationId === undefined) {
+      delete process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID;
+    } else {
+      process.env.CAPA_DEVELOPMENT_ORGANIZATION_ID =
+        previousOrganizationId;
+    }
+  }
+}
+
 describe(
   "createCapaDevelopmentRuntime",
   () => {
+    it.each([
+      ["CAPA_OWNER", false],
+      ["CAPA_REVIEWER", true],
+      ["CAPA_APPROVER", true],
+    ])(
+      "uses the selected development role for S50 AG-REVIEW activation and authorization (%s)",
+      async (role, agentEligible) => {
+        await withDevelopmentRole(role, async () => {
+          const context = developmentContext();
+          const runtime = createCapaDevelopmentRuntime({
+            environment: "test",
+            now: () => NOW,
+            generate_uuid: createUuidGenerator(),
+          });
+
+          expect(
+            context.tenant.role_assignments[0].role_id,
+          ).toBe(role);
+
+          const activationDecision =
+            runtime.agent_activation_service.evaluate({
+              agent_id: "AG-REVIEW",
+              agent_version:
+                "ag-review-1.0.0" as never,
+              workflow_state: "S50",
+              operation:
+                "assemble_review_packet",
+              active_role_ids: [role] as never,
+              requested_tool_ids: [
+                "TOOL-CASE-READ",
+                "TOOL-EVIDENCE-READ",
+                "TOOL-STRUCTURED-DRAFT",
+              ] as never,
+              output_schema_version:
+                "capa_review_packet_draft-1.0.0" as never,
+            });
+
+          expect(
+            activationDecision.eligible,
+          ).toBe(agentEligible);
+
+          const authorizationDecision =
+            await runtime.dependencies
+              .authorization_policy.evaluate(
+                policyRequest({
+                  operation:
+                    "request_ai_root_cause_review_advisory",
+                  tenant: context.tenant,
+                  authentication:
+                    context.authentication,
+                  resource: {
+                    organization_id:
+                      context.tenant.organization_id,
+                    resource_type:
+                      controlled("CAPA_CASE"),
+                    workflow_state: "S50",
+                  },
+                  purpose: controlled(
+                    "CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY",
+                  ),
+                }),
+              );
+
+          expect(
+            authorizationDecision.decision,
+          ).toBe("allow");
+          expect(
+            authorizationDecision,
+          ).toMatchObject({
+            relied_on_role_assignment_ids: [
+              `development-role:${USER_ID}`,
+            ],
+          });
+        });
+      },
+    );
+
+    it(
+      "uses the selected shared development organization for policy scope",
+      async () => {
+        await withDevelopmentOrganization(
+          SHARED_DEVELOPMENT_ORGANIZATION_ID,
+          async () => {
+            const context = developmentContext();
+            const runtime = createCapaDevelopmentRuntime({
+              environment: "test",
+              now: () => NOW,
+              generate_uuid: createUuidGenerator(),
+            });
+
+            const allowed =
+              await runtime.dependencies
+                .authorization_policy.evaluate(
+                  policyRequest({
+                    operation:
+                      "request_ai_root_cause_review_advisory",
+                    tenant: context.tenant,
+                    authentication:
+                      context.authentication,
+                    resource: {
+                      organization_id:
+                        SHARED_DEVELOPMENT_ORGANIZATION_ID as
+                          OrganizationId,
+                      resource_type:
+                        controlled("CAPA_CASE"),
+                      workflow_state: "S50",
+                    },
+                    purpose: controlled(
+                      "CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY",
+                    ),
+                  }),
+                );
+
+            expect(allowed).toMatchObject({
+              decision: "allow",
+              relied_on_role_assignment_ids: [
+                `development-role:${USER_ID}`,
+              ],
+            });
+
+            const wrongOrganization =
+              await runtime.dependencies
+                .authorization_policy.evaluate(
+                  policyRequest({
+                    tenant: context.tenant,
+                    authentication:
+                      context.authentication,
+                    resource: {
+                      organization_id:
+                        OTHER_ORGANIZATION_ID,
+                      resource_type:
+                        controlled("CAPA_CASE"),
+                      workflow_state: "S50",
+                    },
+                    purpose: controlled(
+                      "CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY",
+                    ),
+                  }),
+                );
+
+            expect(wrongOrganization).toMatchObject({
+              decision: "deny",
+              reason_code:
+                "DEVELOPMENT_POLICY_DENIED",
+            });
+          },
+        );
+      },
+    );
+
+    it(
+      "derives CASE_OWNER versus NOT_CASE_OWNER from authenticated principals",
+      async () => {
+        await withDevelopmentOrganization(
+          SHARED_DEVELOPMENT_ORGANIZATION_ID,
+          async () => {
+            const capaOwner =
+              developmentContext(USER_ID);
+            const sameUser =
+              developmentContext(USER_ID);
+            const differentUser =
+              developmentContext(
+                "8eb089a8-d26f-4662-948d-d0fb5d5e81fe",
+              );
+
+            const relationshipFor = (
+              context: ReturnType<typeof developmentContext>,
+            ) =>
+              context.owner_user_id ===
+                capaOwner.owner_user_id
+                ? "CASE_OWNER"
+                : "NOT_CASE_OWNER";
+
+            expect(
+              sameUser.tenant.organization_id,
+            ).toBe(SHARED_DEVELOPMENT_ORGANIZATION_ID);
+            expect(
+              differentUser.tenant.organization_id,
+            ).toBe(SHARED_DEVELOPMENT_ORGANIZATION_ID);
+            expect(relationshipFor(sameUser)).toBe(
+              "CASE_OWNER",
+            );
+            expect(relationshipFor(differentUser)).toBe(
+              "NOT_CASE_OWNER",
+            );
+          },
+        );
+      },
+    );
+
+    it(
+      "fails closed for invalid organization configuration and remains disabled in production",
+      async () => {
+        await withDevelopmentOrganization(
+          "not-a-uuid",
+          async () => {
+            expect(() =>
+              createCapaDevelopmentRuntime({
+                environment: "test",
+              }),
+            ).toThrow(
+              CapaDevelopmentOrganizationConfigurationError,
+            );
+
+            expect(() =>
+              createCapaDevelopmentRuntime({
+                environment: "production",
+              }),
+            ).toThrow(CapaDevelopmentRuntimeDisabledError);
+          },
+        );
+      },
+    );
+
     it("composes the request-scoped S50 advisory over in-memory persistence", () => {
       const runtime = createCapaDevelopmentRuntime({
         environment: "test",
@@ -1043,6 +1334,237 @@ describe(
         .authorization_policy;
     }
 
+    it("allows both S50 root-cause gate operations for a non-owner CAPA_APPROVER", async () => {
+      await withDevelopmentOrganization(
+        SHARED_DEVELOPMENT_ORGANIZATION_ID,
+        async () => {
+          await withDevelopmentRole("CAPA_APPROVER", async () => {
+            const policy = createPolicy();
+            const request = rootCauseGatePolicyRequest(
+              OTHER_ORGANIZATION_ID,
+            );
+
+            for (const [operation, reason_code] of [
+              [
+                "approve_root_cause",
+                "DEVELOPMENT_ROOT_CAUSE_APPROVAL_ALLOWED",
+              ],
+              [
+                "return_root_cause_for_investigation",
+                "DEVELOPMENT_ROOT_CAUSE_RETURN_ALLOWED",
+              ],
+            ] as const) {
+              await expect(
+                policy.evaluate({
+                  ...request,
+                  operation,
+                }),
+              ).resolves.toMatchObject({
+                decision: "allow",
+                reason_code,
+                policy_version:
+                  "development-policy-1.0.0",
+              });
+            }
+          });
+        },
+      );
+    });
+
+    it("denies both S50 root-cause gate operations for a CAPA_APPROVER who owns the case", async () => {
+      await withDevelopmentOrganization(
+        SHARED_DEVELOPMENT_ORGANIZATION_ID,
+        async () => {
+          await withDevelopmentRole("CAPA_APPROVER", async () => {
+            const policy = createPolicy();
+            const request = rootCauseGatePolicyRequest(USER_ID, {
+              resource: {
+                organization_id:
+                  SHARED_DEVELOPMENT_ORGANIZATION_ID as
+                    OrganizationId,
+                resource_type: controlled("CAPA_CASE"),
+                workflow_state: "S50",
+                relationship: controlled("CASE_OWNER"),
+              },
+            });
+
+            for (const operation of [
+              "approve_root_cause",
+              "return_root_cause_for_investigation",
+            ] as const) {
+              await expect(
+                policy.evaluate({
+                  ...request,
+                  operation,
+                }),
+              ).resolves.toMatchObject({
+                decision: "deny",
+                reason_code: "DEVELOPMENT_POLICY_DENIED",
+              });
+            }
+          });
+        },
+      );
+    });
+
+    it.each([
+      "CAPA_OWNER",
+      "CAPA_REVIEWER",
+      "CAPA_CONTRIBUTOR",
+      "CAPA_AUDITOR",
+    ] as const)("denies both root-cause gate operations for development role %s", async (role) => {
+      await withDevelopmentOrganization(
+        SHARED_DEVELOPMENT_ORGANIZATION_ID,
+        async () => {
+          await withDevelopmentRole(role, async () => {
+            const policy = createPolicy();
+            const request = rootCauseGatePolicyRequest(
+              OTHER_ORGANIZATION_ID,
+            );
+
+            for (const operation of [
+              "approve_root_cause",
+              "return_root_cause_for_investigation",
+            ] as const) {
+              await expect(
+                policy.evaluate({
+                  ...request,
+                  operation,
+                }),
+              ).resolves.toMatchObject({
+                decision: "deny",
+                reason_code: "DEVELOPMENT_POLICY_DENIED",
+              });
+            }
+          });
+        },
+      );
+    });
+
+    it.each([
+      [
+        "wrong workflow state",
+        {
+          resource: {
+            organization_id:
+              SHARED_DEVELOPMENT_ORGANIZATION_ID as
+                OrganizationId,
+            resource_type: controlled("CAPA_CASE"),
+            workflow_state: "S40",
+            relationship: controlled("NOT_CASE_OWNER"),
+          },
+        },
+      ],
+      ["wrong purpose", { purpose: controlled("CAPA_CASE_EDIT") }],
+      [
+        "wrong organization",
+        {
+          resource: {
+            organization_id: OTHER_ORGANIZATION_ID,
+            resource_type: controlled("CAPA_CASE"),
+            workflow_state: "S50",
+            relationship: controlled("NOT_CASE_OWNER"),
+          },
+        },
+      ],
+      [
+        "missing relationship",
+        {
+          resource: {
+            organization_id:
+              SHARED_DEVELOPMENT_ORGANIZATION_ID as
+                OrganizationId,
+            resource_type: controlled("CAPA_CASE"),
+            workflow_state: "S50",
+          },
+        },
+      ],
+      [
+        "owner relationship",
+        {
+          resource: {
+            organization_id:
+              SHARED_DEVELOPMENT_ORGANIZATION_ID as
+                OrganizationId,
+            resource_type: controlled("CAPA_CASE"),
+            workflow_state: "S50",
+            relationship: controlled("CASE_OWNER"),
+          },
+        },
+      ],
+    ] as const)("denies a gate request with %s", async (_label, overrides) => {
+      await withDevelopmentOrganization(
+        SHARED_DEVELOPMENT_ORGANIZATION_ID,
+        async () => {
+          await withDevelopmentRole("CAPA_APPROVER", async () => {
+            const policy = createPolicy();
+            const request = rootCauseGatePolicyRequest(
+              OTHER_ORGANIZATION_ID,
+              overrides,
+            );
+
+            await expect(policy.evaluate(request)).resolves.toMatchObject({
+              decision: "deny",
+              reason_code: "DEVELOPMENT_POLICY_DENIED",
+            });
+          });
+        },
+      );
+    });
+
+    it.each([
+      ["missing assignment", []],
+      [
+        "inactive assignment",
+        [
+          {
+            role_assignment_id: `development-role:${OTHER_ORGANIZATION_ID}`,
+            role_id: "CAPA_APPROVER",
+            scope: controlled("ORGANIZATION"),
+            effective_at: "2026-08-12T13:00:00.000Z",
+            expires_at: "2026-08-12T13:59:59.000Z",
+          },
+        ],
+      ],
+      [
+        "wrong assignment scope",
+        [
+          {
+            role_assignment_id: `development-role:${OTHER_ORGANIZATION_ID}`,
+            role_id: "CAPA_APPROVER",
+            scope: controlled("CASE_ONLY"),
+            effective_at: "2026-08-12T13:00:00.000Z",
+            expires_at: "2026-08-12T15:00:00.000Z",
+          },
+        ],
+      ],
+    ] as const)("denies a gate request with %s", async (_label, role_assignments) => {
+      await withDevelopmentOrganization(
+        SHARED_DEVELOPMENT_ORGANIZATION_ID,
+        async () => {
+          await withDevelopmentRole("CAPA_APPROVER", async () => {
+            const policy = createPolicy();
+            const request = rootCauseGatePolicyRequest(
+              OTHER_ORGANIZATION_ID,
+              {
+                tenant: {
+                  ...rootCauseGatePolicyRequest(
+                    OTHER_ORGANIZATION_ID,
+                  ).tenant,
+                  role_assignments: role_assignments as never,
+                },
+              },
+            );
+
+            await expect(policy.evaluate(request)).resolves.toMatchObject({
+              decision: "deny",
+              reason_code: "DEVELOPMENT_POLICY_DENIED",
+            });
+          });
+        },
+      );
+    });
+
     it(
       "allows development CAPA creation",
       async () => {
@@ -1516,8 +2038,8 @@ describe(
           return {
             ...request,
 
-            operation:
-              "approve_root_cause",
+              operation:
+                "close_case",
           };
         },
       },
