@@ -5,6 +5,8 @@ import {
   type SubmitCapaRootCausePackageDependencies,
 } from "../../lib/capa/application/submit-capa-root-cause-package";
 import { InMemoryCapaDatabase } from "../../lib/database/in-memory/in-memory-capa-database";
+import { constructCapaInvestigationActiveAdoption } from "../../lib/capa/ai/capa-investigation-active-adoption-validator";
+import { CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION } from "../../lib/capa/ai/capa-investigation-active-adoption-contract";
 
 const ORG = "20000000-0000-4000-8000-000000000001";
 const USER = "10000000-0000-4000-8000-000000000001";
@@ -17,6 +19,12 @@ const PLAN_B = "70000000-0000-4000-8000-000000000009";
 const LEDGER = "70000000-0000-4000-8000-000000000002";
 const ROOT = "70000000-0000-4000-8000-000000000003";
 const AUDIT = "80000000-0000-4000-8000-000000000001";
+const HISTORICAL_ADOPTION = "90000000-0000-4000-8000-000000000001";
+const HISTORICAL_OUTPUT = "90000000-0000-4000-8000-000000000002";
+const HISTORICAL_REQUEST = "90000000-0000-4000-8000-000000000003";
+const HISTORICAL_CORRELATION = "90000000-0000-4000-8000-000000000004";
+const HISTORICAL_NEXT = "40000000-0000-4000-8000-000000000006";
+const HISTORICAL_RESULT = "40000000-0000-4000-8000-000000000007";
 const NOW = "2026-09-01T12:00:00.000Z";
 const human = {
   source_type: "human",
@@ -389,6 +397,62 @@ async function statefulHarness(options: { alternateSource?: boolean } = {}) {
 }
 
 describe("S40 root-cause package submission", () => {
+  it("accepts a human adoption from an authoritative historical S40 ancestor", async () => {
+    const test = harness();
+    const adoptedContent = {
+      gap: "The configuration record is missing.",
+      why_it_matters: "The missing record can affect causal analysis.",
+      recommended_next_step: "Review the configuration archive.",
+    };
+    const historicalLedger = {
+      items: [ledger().items[0], {
+        ...ledger().items[0],
+        item_id: "AI-1",
+        information_class: "missing_information",
+        statement: adoptedContent.gap,
+        evidence_status: null,
+        gap_status: "open",
+        context: adoptedContent.why_it_matters,
+        recommended_next_step: adoptedContent.recommended_next_step,
+        critical_to_conclusion: false,
+        human_disposition: null,
+        provenance: { source_type: "ai_proposal", source_reference: HISTORICAL_ADOPTION, adopted_by_user_id: USER, adopted_at: NOW },
+      }],
+    };
+    const historicalBody = { evidence_assumption_ledger: historicalLedger, root_cause_package: rootCause() };
+    const historicalAdoption = constructCapaInvestigationActiveAdoption({
+      adoption_id: HISTORICAL_ADOPTION as never,
+      organization_id: ORG as never,
+      capa_case_id: CASE as never,
+      case_version_id: SOURCE as never,
+      record_version: 4,
+      output_id: HISTORICAL_OUTPUT as never,
+      proposal_key: "P1",
+      proposal_category: "evidence_gap",
+      adopted_item: { proposal_key: "P1", adopted_content: adoptedContent },
+      resolved_reference_bindings: [],
+      reference_manifest_schema_version: "capa-investigation-active-reference-manifest-1.0.0",
+      reference_manifest_fingerprint_algorithm: "sha256-canonical-json-v1",
+      reference_manifest_sha256: "a".repeat(64),
+      adopted_at: NOW as never,
+      adopted_by: { actor_type: "human", actor_id: USER },
+      adoption_policy_version: CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION,
+      request_id: HISTORICAL_REQUEST as never,
+      correlation_id: HISTORICAL_CORRELATION as never,
+      idempotency_key: "historical-adoption" as never,
+      workflow_mutated: false,
+      controlled_record_mutated: false,
+      gate_approved: false,
+    });
+    const current = sourceVersion([PLAN], { case_version_id: HISTORICAL_NEXT, version_number: 5, parent_version_id: SOURCE });
+    test.repository.findCaseById.mockResolvedValue(capaCase({ current_version_id: HISTORICAL_NEXT, record_version: 5 }));
+    test.repository.findCaseVersionById.mockImplementation(async (_organizationId, _caseId, versionId) => versionId === SOURCE ? sourceVersion() : versionId === HISTORICAL_NEXT ? current : null);
+    test.repository.advanceCurrentVersion.mockResolvedValue({ status: "updated", capa_case: capaCase({ status: "S50", record_version: 6, current_version_id: HISTORICAL_RESULT }) });
+    (test.deps as unknown as { adoption_repository: unknown }).adoption_repository = { findAdoptionById: vi.fn().mockResolvedValue({ adoption: historicalAdoption }) };
+    (test.deps.id_generator as unknown as { generateCaseVersionId: () => string }).generateCaseVersionId = () => HISTORICAL_RESULT;
+    await expect(submitCapaRootCausePackage(test.deps, command(historicalBody, { expected_record_version: 5, expected_current_version_id: HISTORICAL_NEXT }))).resolves.toMatchObject({ status: "submitted", capa_case: { status: "S50", record_version: 6, current_version_id: HISTORICAL_RESULT } });
+  });
+
   it("persists two sections, one S50 version, exact +1 aggregate, and one transition audit", async () => {
     const test = harness();
     const result = await submitCapaRootCausePackage(test.deps, command());

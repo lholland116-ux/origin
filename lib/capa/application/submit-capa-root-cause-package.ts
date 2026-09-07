@@ -638,6 +638,7 @@ export async function submitCapaRootCausePackage(
 
   const provenance = await verifyCapaInvestigationActiveAdoptionProvenance({
     adoption_repository: dependencies.adoption_repository,
+    capa_repository: dependencies.capa_repository,
     organization_id: organizationId,
     capa_case_id: capaCase.capa_case_id,
     expected_case_version_id: sourceVersion.case_version_id,

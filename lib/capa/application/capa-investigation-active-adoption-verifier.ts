@@ -6,13 +6,16 @@ import type {
   CapaRootCausePackageContent,
   CapaCausalHypothesis,
 } from "../domain/capa-root-cause-package";
-import type { CapaCaseId, CapaCaseVersionId, OrganizationId } from "../domain/capa-types";
+import type { CapaCaseId, CapaCaseVersion, CapaCaseVersionId, OrganizationId } from "../domain/capa-types";
 import {
   CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION,
   type CapaInvestigationActiveAdoptionCategory,
   type CapaInvestigationActiveAdoptionRecord,
 } from "../ai/capa-investigation-active-adoption-contract";
 import type { CapaInvestigationActiveAdoptionRepository } from "../../database/repositories/capa-investigation-active-adoption-repository";
+import type { CapaRepository } from "../../database/repositories/capa-repository";
+
+const MAX_LINEAGE_DEPTH = 1_000;
 
 export type VerifyCapaInvestigationActiveAdoptionProvenanceResult =
   | { readonly status: "verified" }
@@ -20,6 +23,7 @@ export type VerifyCapaInvestigationActiveAdoptionProvenanceResult =
 
 export interface VerifyCapaInvestigationActiveAdoptionProvenanceInput {
   readonly adoption_repository: CapaInvestigationActiveAdoptionRepository;
+  readonly capa_repository: CapaRepository;
   readonly organization_id: OrganizationId;
   readonly capa_case_id: CapaCaseId;
   readonly expected_case_version_id: CapaCaseVersionId;
@@ -53,8 +57,9 @@ function sameAdoptionIdentity(
     adoption.adoption_id === provenance.source_reference &&
     adoption.organization_id === input.organization_id &&
     adoption.capa_case_id === input.capa_case_id &&
-    adoption.case_version_id === input.expected_case_version_id &&
-    adoption.record_version === input.expected_record_version &&
+    validReference(adoption.case_version_id) &&
+    Number.isSafeInteger(adoption.record_version) &&
+    adoption.record_version > 0 &&
     adoption.adopted_by.actor_type === "human" &&
     adoption.adopted_by.actor_id === provenance.adopted_by_user_id &&
     adoption.adopted_at === provenance.adopted_at &&
@@ -62,6 +67,85 @@ function sameAdoptionIdentity(
     adoption.workflow_mutated === false &&
     adoption.controlled_record_mutated === false &&
     adoption.gate_approved === false;
+}
+
+function structurallyConsistentVersion(
+  version: CapaCaseVersion,
+  input: VerifyCapaInvestigationActiveAdoptionProvenanceInput,
+): boolean {
+  return version.organization_id === input.organization_id &&
+    version.capa_case_id === input.capa_case_id &&
+    validReference(version.case_version_id) &&
+    Number.isSafeInteger(version.version_number) &&
+    version.version_number > 0;
+}
+
+async function sourceVersionIsInCurrentLineage(
+  input: VerifyCapaInvestigationActiveAdoptionProvenanceInput,
+  adoption: CapaInvestigationActiveAdoptionRecord,
+  currentVersion: CapaCaseVersion,
+): Promise<boolean> {
+  let cursor = currentVersion;
+  const visited = new Set<string>();
+
+  for (let depth = 0; depth < MAX_LINEAGE_DEPTH; depth += 1) {
+    if (!structurallyConsistentVersion(cursor, input) || visited.has(cursor.case_version_id)) return false;
+    visited.add(cursor.case_version_id);
+    if (cursor.case_version_id === adoption.case_version_id) {
+      return cursor.version_number === adoption.record_version && cursor.status === "S40";
+    }
+    if (cursor.version_number <= adoption.record_version || cursor.parent_version_id === undefined || !validReference(cursor.parent_version_id)) return false;
+    let parent: CapaCaseVersion | null | undefined;
+    try {
+      parent = await input.capa_repository.findCaseVersionById(
+        input.organization_id,
+        input.capa_case_id,
+        cursor.parent_version_id,
+      );
+    } catch {
+      return false;
+    }
+    if (parent === null || parent === undefined || !structurallyConsistentVersion(parent, input) ||
+        parent.case_version_id !== cursor.parent_version_id ||
+        parent.version_number >= cursor.version_number) return false;
+    cursor = parent;
+  }
+  return false;
+}
+
+async function validHistoricalAdoption(
+  input: VerifyCapaInvestigationActiveAdoptionProvenanceInput,
+  adoption: CapaInvestigationActiveAdoptionRecord,
+): Promise<boolean> {
+  let sourceVersion: CapaCaseVersion | null | undefined;
+  let currentVersion: CapaCaseVersion | null | undefined;
+  try {
+    [sourceVersion, currentVersion] = await Promise.all([
+      input.capa_repository.findCaseVersionById(
+        input.organization_id,
+        input.capa_case_id,
+        adoption.case_version_id,
+      ),
+      input.capa_repository.findCaseVersionById(
+        input.organization_id,
+        input.capa_case_id,
+        input.expected_case_version_id,
+      ),
+    ]);
+  } catch {
+    return false;
+  }
+  if (sourceVersion === null || sourceVersion === undefined || currentVersion === null || currentVersion === undefined ||
+      !structurallyConsistentVersion(sourceVersion, input) ||
+      sourceVersion.case_version_id !== adoption.case_version_id ||
+      sourceVersion.version_number !== adoption.record_version ||
+      sourceVersion.status !== "S40" ||
+      !structurallyConsistentVersion(currentVersion, input) ||
+      currentVersion.case_version_id !== input.expected_case_version_id ||
+      currentVersion.version_number !== input.expected_record_version ||
+      currentVersion.status !== "S40" ||
+      adoption.record_version > currentVersion.version_number) return false;
+  return sourceVersionIsInCurrentLineage(input, adoption, currentVersion);
 }
 
 async function findAndValidate(
@@ -85,6 +169,7 @@ async function findAndValidate(
   const adoption = persisted.adoption;
   if (!sameAdoptionIdentity(adoption, input, provenance) ||
       adoption.proposal_category !== category ||
+      !await validHistoricalAdoption(input, adoption) ||
       !matches(adoption)) return false;
   used.add(provenance.source_reference);
   return true;
