@@ -122,14 +122,8 @@ const SOURCE_REPORTING_SUBJECT_PATTERN =
 
 const CLAUSE_SEPARATOR = /[.!?;\n\r]+/;
 
-const QUESTION_ASSERTION_SEPARATOR =
-  /[.!?;,\:\n\r\u2028\u2029]|\s-\s|\s+[—–]\s+|\b(?:but|however|although|though|yet|while|because|since|therefore|thus)\b/i;
-
-const QUESTION_START =
-  /^(?:does|do|did|is|are|was|were|may|might|can|could|should|would|must|what|which|who|whom|whose|why|how|when|where|whether)\b/i;
-
-const QUESTION_COMPOUND_AND_CLAUSE =
-  /\band\s+(?:does|do|did|is|are|was|were|may|might|can|could|should|would|must|what|which|who|whom|whose|why|how|when|where|whether)\b/i;
+const QUESTION_PATTERN =
+  /^(?:does|do|did|is|are|was|were|may|might|can|could|should|would|must|what|which|who|whom|whose|why|how|when|where|whether) [^.!?;,:\n\r]+\?$/i;
 
 function isNeutralSourceReportingClause(
   clause: string,
@@ -336,15 +330,8 @@ function question(
     false,
     diagnosticLocation,
   );
-  const body = normalized.slice(0, -1).trim();
 
-  if (
-    !normalized.endsWith("?") ||
-    normalized.indexOf("?") !== normalized.length - 1 ||
-    QUESTION_ASSERTION_SEPARATOR.test(body) ||
-    QUESTION_COMPOUND_AND_CLAUSE.test(body) ||
-    !QUESTION_START.test(body)
-  ) {
+  if (!QUESTION_PATTERN.test(normalized)) {
     fail("INVALID_ADVISORY_QUESTION", diagnosticLocation);
   }
 

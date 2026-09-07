@@ -262,6 +262,46 @@ describe(
       expectReason(badQuestion, "INVALID_ADVISORY_QUESTION");
     });
 
+    it("aligns uncertainty questions with provider-compatible hard grammar", () => {
+      for (const humanReviewQuestion of [
+        "What evidence requires review because the source is unclear?",
+        "What evidence requires review and is additional evidence needed?",
+        "What evidence requires review - explain the discrepancy?",
+        "What evidence requires review — explain the discrepancy?",
+      ]) {
+        const output = populatedValidOutput();
+
+        output.uncertainty_and_limitations[0].human_review_question =
+          humanReviewQuestion;
+
+        expect(
+          validateCapaRootCauseReviewAdvisoryModelOutput(
+            JSON.stringify(output),
+          ).uncertainty_and_limitations[0].human_review_question,
+        ).toBe(humanReviewQuestion);
+      }
+
+      for (const humanReviewQuestion of [
+        "The reviewer should verify this source.",
+        "What evidence requires review, and why?",
+        "What evidence requires review: explain the discrepancy?",
+        "What evidence requires review. Explain the discrepancy?",
+        "What evidence requires review??",
+        "What evidence requires review",
+      ]) {
+        const output = populatedValidOutput();
+
+        output.uncertainty_and_limitations[0].human_review_question =
+          humanReviewQuestion;
+
+        expectReasonAt(
+          output,
+          "INVALID_ADVISORY_QUESTION",
+          "uncertainty_and_limitations.human_review_question",
+        );
+      }
+    });
+
     it("rejects malformed and duplicate controlled identifiers or references", () => {
       const badIdentifier = populatedValidOutput();
       badIdentifier.proposal.version_changes[0].change_key = "V0";

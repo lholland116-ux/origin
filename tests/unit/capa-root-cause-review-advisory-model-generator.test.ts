@@ -255,6 +255,66 @@ describe("S50 root-cause review advisory model generator", () => {
     );
   });
 
+  it("uses provider-compatible human-review question grammar across the S50 schema", () => {
+    const proposal =
+      CAPA_ROOT_CAUSE_REVIEW_ADVISORY_JSON_SCHEMA
+        .properties.proposal.properties;
+
+    const uncertainty =
+      CAPA_ROOT_CAUSE_REVIEW_ADVISORY_JSON_SCHEMA
+        .properties.uncertainty_and_limitations
+        .items.properties.human_review_question;
+
+    const patterns = [
+      proposal.version_changes.items.properties
+        .human_review_question.pattern,
+      proposal.blockers_warnings.items.properties
+        .human_review_question.pattern,
+      proposal.evidence_map.items.properties
+        .human_review_question.pattern,
+      uncertainty.pattern,
+    ];
+
+    expect(new Set(patterns).size).toBe(1);
+
+    expect(uncertainty.pattern).not.toContain("(?!");
+    expect(uncertainty.pattern).not.toContain("(?=");
+    expect(uncertainty.pattern).not.toContain("(?<=");
+    expect(uncertainty.pattern).not.toContain("(?<!");
+
+    const questionPattern =
+      new RegExp(uncertainty.pattern);
+
+    for (const valid of [
+      "Which source status requires human confirmation?",
+      "What evidence requires human review?",
+      "Does the submitted evidence support the stated conclusion?",
+      "What evidence requires review because the source is unclear?",
+      "What evidence requires review and is additional evidence needed?",
+      "What evidence requires review - explain the discrepancy?",
+      "What evidence requires review — explain the discrepancy?",
+    ]) {
+      expect(
+        questionPattern.test(valid),
+        valid,
+      ).toBe(true);
+    }
+
+    for (const invalid of [
+      "The reviewer should verify this source.",
+      "What evidence requires review, and why?",
+      "What evidence requires review: explain the discrepancy?",
+      "What evidence requires review. Explain the discrepancy?",
+      "What evidence requires review??",
+      "What evidence requires review",
+    ]) {
+      expect(
+        questionPattern.test(invalid),
+        invalid,
+      ).toBe(false);
+    }
+  });
+
   it("fails closed for an invented reference or identifier", async () => {
     const unknownReference = {
       ...validOutput,
