@@ -97,4 +97,47 @@ describe("S50 root-cause review advisory prompt builder", () => {
       expect(prompt).toContain(phrase);
     }
   });
+
+  it("contains strict neutral-summary lexical containment guidance", () => {
+    const prompt = buildCapaRootCauseReviewAdvisoryPrompt({
+      model_safe_context: modelSafeContext,
+    });
+
+    for (const phrase of [
+      "For proposal.neutral_review_summary",
+      "high-level descriptive, review-oriented narrative only",
+      "approve, approves, approved",
+      "accept, accepts, accepted",
+      "reject, rejects, rejected",
+      "confirm, confirms, confirmed",
+      "verify, verifies, verified",
+      "resolve, resolves, resolved",
+      "determine, determines, determined",
+      "establish, establishes, established",
+      "close, closes, closed",
+      "sign, signs, signed",
+      "do not repeat the status word in proposal.neutral_review_summary",
+      "proposed root-cause conclusion",
+      "submitted root-cause conclusion",
+      "submitted causal hypothesis",
+      "evidence associated with the submitted conclusion",
+      "evidence supporting or contradicting the submitted conclusion",
+      "evidence recorded in the submitted package",
+      "matters requiring human review",
+      "source-reported status is available in the supplied context",
+      "The submitted package presents a root-cause conclusion and associated supporting evidence for human review.",
+      "The review material includes a submitted causal hypothesis, related evidence, and source-reported status information for human review.",
+      "source_status",
+      "controlled source-reported warning and evidence structures",
+    ]) {
+      expect(prompt).toContain(phrase);
+    }
+
+    expect(prompt).not.toContain(
+      "The submitted package states the root cause is confirmed.",
+    );
+    expect(prompt).not.toContain(
+      "The authoritative record reports the hypothesis is verified.",
+    );
+  });
 });

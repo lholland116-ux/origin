@@ -3,6 +3,9 @@ import {
   CapaRootCauseReviewAdvisoryService,
   CapaRootCauseReviewAdvisoryServiceError,
 } from "../../lib/capa/ai/capa-root-cause-review-advisory-service";
+import {
+  CapaRootCauseReviewAdvisoryOutputValidationError,
+} from "../../lib/capa/ai/capa-root-cause-review-advisory-validator";
 
 const ORG = "10000000-0000-4000-8000-000000000001" as any;
 const CASE_ID = "20000000-0000-4000-8000-000000000001" as any;
@@ -142,7 +145,130 @@ describe("CapaRootCauseReviewAdvisoryService", () => {
     await expect(service({ output_repository: { save: vi.fn(async () => "case_changed") } }).execute(invocation())).rejects.toMatchObject({ reason_code: "WORKFLOW_MUTATION_DETECTED" });
   });
 
+  it("retains only a safe generator error name and never exposes its message", async () => {
+    const error = new Error("secret provider response and prompt content");
+    error.name = "Provider.Timeout";
+
+    const thrown = await service({
+      generator: {
+        generate: vi.fn(async () => {
+          throw error;
+        }),
+      },
+    }).execute(invocation()).catch((cause) => cause);
+
+    expect(thrown).toMatchObject({
+      reason_code: "ADVISORY_GENERATION_FAILED",
+      diagnostic_cause_name: "Provider.Timeout",
+      diagnostic_reason_code: null,
+    });
+    expect(thrown).not.toHaveProperty("message", expect.stringContaining("secret"));
+    expect(JSON.stringify(thrown)).not.toContain("secret provider response");
+  });
+
+  it("preserves only a controlled validator reason from a generator failure", async () => {
+    const validationError =
+      new CapaRootCauseReviewAdvisoryOutputValidationError(
+        "INVALID_ADVISORY_QUESTION",
+        "proposal.version_changes.human_review_question",
+      );
+
+    const thrown = await service({
+      generator: {
+        generate: vi.fn(async () => {
+          throw validationError;
+        }),
+      },
+    }).execute(invocation()).catch((cause) => cause);
+
+    expect(thrown).toMatchObject({
+      reason_code: "ADVISORY_GENERATION_FAILED",
+      diagnostic_cause_name:
+        "CapaRootCauseReviewAdvisoryOutputValidationError",
+      diagnostic_reason_code: "INVALID_ADVISORY_QUESTION",
+      diagnostic_validation_location:
+        "proposal.version_changes.human_review_question",
+    });
+  });
+
+  it("preserves another controlled validator reason exactly", async () => {
+    const validationError =
+      new CapaRootCauseReviewAdvisoryOutputValidationError(
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.neutral_review_summary",
+      );
+
+    const thrown = await service({
+      generator: {
+        generate: vi.fn(async () => {
+          throw validationError;
+        }),
+      },
+    }).execute(invocation()).catch((cause) => cause);
+
+    expect(thrown.diagnostic_reason_code).toBe(
+      "PROHIBITED_S50_DECISION_CLAIM",
+    );
+    expect(thrown.diagnostic_validation_location).toBe(
+      "proposal.neutral_review_summary",
+    );
+  });
+
+  it("does not trust arbitrary reason_code properties from generator failures", async () => {
+    const thrown = await service({
+      generator: {
+        generate: vi.fn(async () => {
+          throw {
+            name: "UntrustedError",
+            reason_code: "PROHIBITED_S50_DECISION_CLAIM",
+          };
+        }),
+      },
+    }).execute(invocation()).catch((cause) => cause);
+
+    expect(thrown).toMatchObject({
+      reason_code: "ADVISORY_GENERATION_FAILED",
+      diagnostic_reason_code: null,
+      diagnostic_validation_location: null,
+    });
+  });
+
+  it.each([
+    "Provider/response body",
+    "",
+    "A".repeat(129),
+  ])("normalizes malformed and unsafe generator error name %s to UnknownError", async (name) => {
+    const error = new Error("secret");
+    error.name = name;
+
+    const thrown = await service({
+      generator: {
+        generate: vi.fn(async () => {
+          throw error;
+        }),
+      },
+    }).execute(invocation()).catch((cause) => cause);
+
+    expect(thrown).toMatchObject({
+      reason_code: "ADVISORY_GENERATION_FAILED",
+      diagnostic_cause_name: "UnknownError",
+      diagnostic_validation_location: null,
+    });
+  });
+
   it("keeps persistence failures fail closed", async () => {
-    await expect(service({ output_repository: { save: vi.fn(async () => { throw new Error(); }) } }).execute(invocation())).rejects.toEqual(expect.objectContaining({ reason_code: "ADVISORY_PERSISTENCE_FAILED" } satisfies Partial<CapaRootCauseReviewAdvisoryServiceError>));
+    const error = new Error("secret persistence details");
+    error.name = "Database.Timeout";
+
+    await expect(service({ output_repository: { save: vi.fn(async () => { throw error; }) } }).execute(invocation())).rejects.toEqual(expect.objectContaining({ reason_code: "ADVISORY_PERSISTENCE_FAILED", diagnostic_cause_name: "Database.Timeout", diagnostic_reason_code: null, diagnostic_validation_location: null } satisfies Partial<CapaRootCauseReviewAdvisoryServiceError>));
+  });
+
+  it("preserves an existing service error from persistence", async () => {
+    const existing = new CapaRootCauseReviewAdvisoryServiceError(
+      "ADVISORY_GENERATION_FAILED",
+      "Provider.Timeout",
+    );
+
+    await expect(service({ output_repository: { save: vi.fn(async () => { throw existing; }) } }).execute(invocation())).rejects.toBe(existing);
   });
 });

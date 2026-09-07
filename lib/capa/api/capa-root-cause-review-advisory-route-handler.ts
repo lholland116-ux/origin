@@ -164,6 +164,18 @@ export async function handleCapaRootCauseReviewAdvisoryPost(
     if (error instanceof CapaRootCauseReviewAdvisoryServiceError) {
       const mapped = serviceError(requestTrace, error);
       if (mapped !== null) return mapped;
+
+      dependencies.logger.error("CAPA API root-cause review advisory failed.", {
+        correlation_id: requestTrace.correlation_id,
+        error_name: error.name,
+        reason_code: error.reason_code,
+        diagnostic_cause_name: error.diagnostic_cause_name ?? "UnknownError",
+        diagnostic_reason_code: error.diagnostic_reason_code,
+        diagnostic_validation_location:
+          error.diagnostic_validation_location,
+      });
+
+      return errorResponse(requestTrace, 500, "CAPA_INTERNAL_ERROR", "The CAPA request could not be completed.");
     }
 
     dependencies.logger.error("CAPA API root-cause review advisory failed.", {

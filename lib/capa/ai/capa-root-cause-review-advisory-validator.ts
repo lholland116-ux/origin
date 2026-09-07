@@ -108,9 +108,9 @@ const HARD_PROHIBITED_S50_PATTERNS = [
 ];
 
 const DECISION_PROHIBITED_S50_PATTERNS = [
-  /\b(?:approve|approved|accept|accepted|reject|rejected|confirm|confirmed|verify|verified|resolve|resolved|determine|determined|establish|established)\b[\s\S]{0,80}\b(?:root[- ]cause|hypothesis|g-?04|review\s+disposition)\b/i,
-  /\b(?:root[- ]cause|hypothesis|g-?04|review\s+disposition|capa|case|controlled\s+record)\b[\s\S]{0,80}\b(?:approve|approved|accept|accepted|reject|rejected|confirm|confirmed|verify|verified|resolve|resolved|determine|determined|establish|established|closed|signed)\b/i,
-  /\b(?:approve|approved|accept|accepted|reject|rejected|confirm|confirmed|verify|verified|resolve|resolved|determine|determined|establish|established|close|closed|sign|signed)\b[\s\S]{0,80}\b(?:root[- ]cause|hypothesis|g-?04|review\s+disposition|capa|case|controlled\s+record)\b/i,
+  /\b(?:approve|approves|approved|accept|accepts|accepted|reject|rejects|rejected|confirm|confirms|confirmed|verify|verifies|verified|resolve|resolves|resolved|determine|determines|determined|establish|establishes|established)\b[\s\S]{0,80}\b(?:root[- ]cause|hypothesis|g-?04|review\s+disposition)\b/i,
+  /\b(?:root[- ]cause|hypothesis|g-?04|review\s+disposition|capa|case|controlled\s+record)\b[\s\S]{0,80}\b(?:approve|approves|approved|accept|accepts|accepted|reject|rejects|rejected|confirm|confirms|confirmed|verify|verifies|verified|resolve|resolves|resolved|determine|determines|determined|establish|establishes|established|close|closes|closed|sign|signs|signed)\b/i,
+  /\b(?:approve|approves|approved|accept|accepts|accepted|reject|rejects|rejected|confirm|confirms|confirmed|verify|verifies|verified|resolve|resolves|resolved|determine|determines|determined|establish|establishes|established|close|closes|closed|sign|signs|signed)\b[\s\S]{0,80}\b(?:root[- ]cause|hypothesis|g-?04|review\s+disposition|capa|case|controlled\s+record)\b/i,
 ];
 
 const SOURCE_REPORTING_CLAUSE_PATTERN =
@@ -173,14 +173,37 @@ export const CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_VALIDATION_REASON_CODES = [
 export type CapaRootCauseReviewAdvisoryOutputValidationReasonCode =
   (typeof CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_VALIDATION_REASON_CODES)[number];
 
+export const CAPA_ROOT_CAUSE_REVIEW_ADVISORY_VALIDATION_LOCATIONS = [
+  "proposal.neutral_review_summary",
+  "proposal.version_changes.subject",
+  "proposal.version_changes.previous_value",
+  "proposal.version_changes.current_value",
+  "proposal.version_changes.human_review_question",
+  "proposal.blockers_warnings.subject",
+  "proposal.blockers_warnings.description",
+  "proposal.blockers_warnings.human_review_question",
+  "proposal.evidence_map.subject",
+  "proposal.evidence_map.description",
+  "proposal.evidence_map.human_review_question",
+  "uncertainty_and_limitations.human_review_question",
+  "unknown",
+] as const;
+
+export type CapaRootCauseReviewAdvisoryValidationLocation =
+  (typeof CAPA_ROOT_CAUSE_REVIEW_ADVISORY_VALIDATION_LOCATIONS)[number];
+
 export class CapaRootCauseReviewAdvisoryOutputValidationError
   extends Error {
   readonly reason_code:
     CapaRootCauseReviewAdvisoryOutputValidationReasonCode;
+  readonly diagnostic_location:
+    CapaRootCauseReviewAdvisoryValidationLocation;
 
   constructor(
     reasonCode:
       CapaRootCauseReviewAdvisoryOutputValidationReasonCode,
+    diagnosticLocation:
+      CapaRootCauseReviewAdvisoryValidationLocation = "unknown",
   ) {
     super(
       "The governed CAPA S50 root-cause review advisory model output failed controlled validation.",
@@ -188,15 +211,19 @@ export class CapaRootCauseReviewAdvisoryOutputValidationError
     this.name =
       "CapaRootCauseReviewAdvisoryOutputValidationError";
     this.reason_code = reasonCode;
+    this.diagnostic_location = diagnosticLocation;
   }
 }
 
 function fail(
   reasonCode:
     CapaRootCauseReviewAdvisoryOutputValidationReasonCode,
+  diagnosticLocation:
+    CapaRootCauseReviewAdvisoryValidationLocation = "unknown",
 ): never {
   throw new CapaRootCauseReviewAdvisoryOutputValidationError(
     reasonCode,
+    diagnosticLocation,
   );
 }
 
@@ -255,9 +282,11 @@ function text(
   value: unknown,
   maximumCharacters = MAXIMUM_TEXT_CHARACTERS,
   allowSourceReporting = false,
+  diagnosticLocation:
+    CapaRootCauseReviewAdvisoryValidationLocation = "unknown",
 ): string {
   if (typeof value !== "string") {
-    fail("INVALID_OUTPUT_TEXT");
+    fail("INVALID_OUTPUT_TEXT", diagnosticLocation);
   }
 
   const normalized = value.normalize("NFKC").trim();
@@ -266,7 +295,7 @@ function text(
     normalized.length === 0 ||
     normalized.length > maximumCharacters
   ) {
-    fail("INVALID_OUTPUT_TEXT");
+    fail("INVALID_OUTPUT_TEXT", diagnosticLocation);
   }
 
   if (
@@ -275,7 +304,7 @@ function text(
       allowSourceReporting,
     )
   ) {
-    fail("PROHIBITED_S50_DECISION_CLAIM");
+    fail("PROHIBITED_S50_DECISION_CLAIM", diagnosticLocation);
   }
 
   return normalized;
@@ -284,13 +313,29 @@ function text(
 function optionalText(
   value: unknown,
   allowSourceReporting = false,
+  diagnosticLocation:
+    CapaRootCauseReviewAdvisoryValidationLocation = "unknown",
 ): string | null {
   if (value === null) return null;
-  return text(value, MAXIMUM_TEXT_CHARACTERS, allowSourceReporting);
+  return text(
+    value,
+    MAXIMUM_TEXT_CHARACTERS,
+    allowSourceReporting,
+    diagnosticLocation,
+  );
 }
 
-function question(value: unknown): string {
-  const normalized = text(value, MAXIMUM_QUESTION_CHARACTERS);
+function question(
+  value: unknown,
+  diagnosticLocation:
+    CapaRootCauseReviewAdvisoryValidationLocation = "unknown",
+): string {
+  const normalized = text(
+    value,
+    MAXIMUM_QUESTION_CHARACTERS,
+    false,
+    diagnosticLocation,
+  );
   const body = normalized.slice(0, -1).trim();
 
   if (
@@ -300,7 +345,7 @@ function question(value: unknown): string {
     QUESTION_COMPOUND_AND_CLAUSE.test(body) ||
     !QUESTION_START.test(body)
   ) {
-    fail("INVALID_ADVISORY_QUESTION");
+    fail("INVALID_ADVISORY_QUESTION", diagnosticLocation);
   }
 
   return normalized;
@@ -391,21 +436,35 @@ function versionChanges(
         fail("INVALID_ENUM_VALUE");
       }
 
-      return Object.freeze({
+    return Object.freeze({
         change_key: localIdentifier(
           source.change_key,
           CHANGE_KEY_PATTERN,
           used,
         ),
-        subject: text(source.subject),
+        subject: text(
+          source.subject,
+          MAXIMUM_TEXT_CHARACTERS,
+          false,
+          "proposal.version_changes.subject",
+        ),
         change_type: changeType as CapaRootCauseReviewAdvisoryVersionChange["change_type"],
-        previous_value: optionalText(source.previous_value, true),
-        current_value: optionalText(source.current_value, true),
+        previous_value: optionalText(
+          source.previous_value,
+          true,
+          "proposal.version_changes.previous_value",
+        ),
+        current_value: optionalText(
+          source.current_value,
+          true,
+          "proposal.version_changes.current_value",
+        ),
         authoritative_identifier:
           authoritativeIdentifier(source.authoritative_identifier),
         reference_keys: referenceKeys(source.reference_keys),
         human_review_question: question(
           source.human_review_question,
+          "proposal.version_changes.human_review_question",
         ),
       });
     }),
@@ -455,17 +514,24 @@ function blockersWarnings(
           used,
         ),
         kind: kind as CapaRootCauseReviewAdvisoryBlockerWarning["kind"],
-        subject: text(source.subject),
+        subject: text(
+          source.subject,
+          MAXIMUM_TEXT_CHARACTERS,
+          false,
+          "proposal.blockers_warnings.subject",
+        ),
         description: text(
           source.description,
           MAXIMUM_TEXT_CHARACTERS,
           kind === "authoritative_source_reported_blocker",
+          "proposal.blockers_warnings.description",
         ),
         authoritative_identifier:
           authoritativeIdentifierValue,
         reference_keys: referenceKeysValue,
         human_review_question: question(
           source.human_review_question,
+          "proposal.blockers_warnings.human_review_question",
         ),
       });
     }),
@@ -528,12 +594,18 @@ function evidenceMap(
           MAPPING_KEY_PATTERN,
           used,
         ),
-        subject: text(source.subject),
+        subject: text(
+          source.subject,
+          MAXIMUM_TEXT_CHARACTERS,
+          false,
+          "proposal.evidence_map.subject",
+        ),
         relationship: relationship as CapaRootCauseReviewAdvisoryEvidenceMapEntry["relationship"],
         description: text(
           source.description,
           MAXIMUM_TEXT_CHARACTERS,
           sourceStatus === "source_reported",
+          "proposal.evidence_map.description",
         ),
         evidence_reference_keys: evidenceReferenceKeys,
         source_status: sourceStatus as CapaRootCauseReviewAdvisoryEvidenceMapEntry["source_status"],
@@ -541,6 +613,7 @@ function evidenceMap(
           authoritativeIdentifierValue,
         human_review_question: question(
           source.human_review_question,
+          "proposal.evidence_map.human_review_question",
         ),
       });
     }),
@@ -561,6 +634,7 @@ function proposal(
       value.neutral_review_summary,
       MAXIMUM_SUMMARY_CHARACTERS,
       true,
+      "proposal.neutral_review_summary",
     ),
     version_changes: versionChanges(
       value.version_changes,
@@ -594,6 +668,7 @@ function uncertainties(
           source.category as CapaRootCauseReviewAdvisoryUncertainty["category"],
         human_review_question: question(
           source.human_review_question,
+          "uncertainty_and_limitations.human_review_question",
         ),
       });
     }),

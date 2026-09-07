@@ -5,6 +5,9 @@ import {
 import {
   CapaRootCauseReviewAdvisoryServiceError,
 } from "../../lib/capa/ai/capa-root-cause-review-advisory-service";
+import {
+  CapaRootCauseReviewAdvisoryOutputValidationError,
+} from "../../lib/capa/ai/capa-root-cause-review-advisory-validator";
 import { SupabaseCapaContextError } from "../../lib/security/supabase-capa-context";
 import { SupabaseCapaTenantAccessError } from "../../lib/security/supabase-capa-durable-context";
 
@@ -115,6 +118,73 @@ describe("S50 root-cause review advisory route handler", () => {
     const deps = dependencies({ create_advisory_service: vi.fn(() => ({ execute: vi.fn(async () => { throw new CapaRootCauseReviewAdvisoryServiceError(reason); }) })) });
     expect((await handleCapaRootCauseReviewAdvisoryPost(request(validBody), CASE_ID, deps)).status).toBe(status);
   });
+
+  it.each([
+    ["generation", "ADVISORY_GENERATION_FAILED", "Provider.Timeout", undefined],
+    [
+      "validation",
+      "ADVISORY_GENERATION_FAILED",
+      "CapaRootCauseReviewAdvisoryOutputValidationError",
+      new CapaRootCauseReviewAdvisoryOutputValidationError(
+        "INVALID_ADVISORY_QUESTION",
+        "proposal.neutral_review_summary",
+      ),
+    ],
+    ["persistence", "ADVISORY_PERSISTENCE_FAILED", "Database.Timeout", undefined],
+  ] as const)(
+    "logs safe diagnostics for an unmapped %s failure while preserving the generic 500 response",
+    async (_name, reason, diagnosticCauseName, validationError) => {
+      const logger = { error: vi.fn() };
+      const deps = dependencies({
+        logger,
+        create_advisory_service: vi.fn(() => ({
+          execute: vi.fn(async () => {
+            throw new CapaRootCauseReviewAdvisoryServiceError(
+              reason,
+              diagnosticCauseName,
+              validationError,
+            );
+          }),
+        })),
+      });
+
+      const response = await handleCapaRootCauseReviewAdvisoryPost(
+        request(validBody, { "x-correlation-id": CORRELATION_ID }),
+        CASE_ID,
+        deps,
+      );
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "CAPA_INTERNAL_ERROR",
+          message: "The CAPA request could not be completed.",
+          correlation_id: CORRELATION_ID,
+        },
+      });
+      expect(logger.error).toHaveBeenCalledWith(
+        "CAPA API root-cause review advisory failed.",
+        {
+          correlation_id: CORRELATION_ID,
+          error_name: "CapaRootCauseReviewAdvisoryServiceError",
+          reason_code: reason,
+          diagnostic_cause_name: diagnosticCauseName,
+          diagnostic_reason_code:
+            validationError?.reason_code ?? null,
+          diagnostic_validation_location:
+            validationError?.diagnostic_location ?? null,
+        },
+      );
+
+      const serializedLog = JSON.stringify(logger.error.mock.calls);
+      expect(serializedLog).not.toContain("error.message");
+      expect(serializedLog).not.toContain("stack");
+      expect(serializedLog).not.toContain("prompt");
+      expect(serializedLog).not.toContain("model output");
+      expect(serializedLog).not.toContain("CAPA content");
+      expect(serializedLog).not.toContain("provider response");
+    },
+  );
 
   it("maps an undisclosed case failure to a safe 404 response", async () => {
     const deps = dependencies({

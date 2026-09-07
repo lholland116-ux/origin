@@ -143,6 +143,28 @@ function expectReason(
   );
 }
 
+function expectReasonAt(
+  value: unknown,
+  reasonCode: string,
+  location: string,
+): void {
+  const raw =
+    typeof value === "string"
+      ? value
+      : JSON.stringify(value);
+
+  expect(() =>
+    validateCapaRootCauseReviewAdvisoryModelOutput(raw),
+  ).toThrowError(
+    expect.objectContaining({
+      name:
+        "CapaRootCauseReviewAdvisoryOutputValidationError",
+      reason_code: reasonCode,
+      diagnostic_location: location,
+    }),
+  );
+}
+
 describe(
   "CAPA S50 root-cause review advisory raw output validation",
   () => {
@@ -287,6 +309,8 @@ describe(
         "Approve the root cause.",
         "Root cause approved.",
         "Reject this root cause.",
+        "The root cause is confirmed.",
+        "The evidence confirmed the root cause.",
         "Advance this workflow to S60.",
         "Transition the CAPA to S60.",
         "G-04 is approved.",
@@ -302,6 +326,36 @@ describe(
       }
     });
 
+    it("rejects third-person-singular forms of the existing authority verbs", () => {
+      const claims = [
+        "The evidence confirms the root cause.",
+        "The reviewer verifies the hypothesis.",
+        "The analysis determines the root cause.",
+        "The review establishes the root cause.",
+        "The system approves G-04.",
+        "The reviewer accepts the hypothesis.",
+        "The reviewer rejects the hypothesis.",
+        "The review resolves the hypothesis.",
+        "The system closes the CAPA case.",
+        "The reviewer signs the controlled record.",
+      ];
+
+      for (const claim of claims) {
+        const output = minimalValidOutput();
+        output.proposal.neutral_review_summary = claim;
+        expectReason(output, "PROHIBITED_S50_DECISION_CLAIM");
+      }
+
+      const confirms = minimalValidOutput();
+      confirms.proposal.neutral_review_summary =
+        "The evidence confirms the root cause.";
+      expectReasonAt(
+        confirms,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.neutral_review_summary",
+      );
+    });
+
     it("does not let neutral source reporting exempt a later prohibited clause", () => {
       for (const claim of [
         "The submitted package identifies X as a confirmed hypothesis. Root cause approved.",
@@ -315,6 +369,128 @@ describe(
         output.proposal.neutral_review_summary = claim;
         expectReason(output, "PROHIBITED_S50_DECISION_CLAIM");
       }
+    });
+
+    it("reports controlled locations for prohibited text and questions", () => {
+      const summary = minimalValidOutput();
+      summary.proposal.neutral_review_summary =
+        "Root cause approved.";
+      expectReasonAt(
+        summary,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.neutral_review_summary",
+      );
+
+      const versionSubject = populatedValidOutput();
+      versionSubject.proposal.version_changes[0].subject =
+        "Root cause approved.";
+      expectReasonAt(
+        versionSubject,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.version_changes.subject",
+      );
+
+      const validSourceReporting = populatedValidOutput();
+      validSourceReporting.proposal.version_changes[0].previous_value =
+        "The submitted package identifies X as a confirmed hypothesis.";
+      validSourceReporting.proposal.version_changes[0].current_value =
+        "Root cause approved.";
+      expectReasonAt(
+        validSourceReporting,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.version_changes.current_value",
+      );
+
+      const mixedPreviousValue = populatedValidOutput();
+      mixedPreviousValue.proposal.version_changes[0].previous_value =
+        "The submitted package identifies X as a confirmed hypothesis. Root cause approved.";
+      expectReasonAt(
+        mixedPreviousValue,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.version_changes.previous_value",
+      );
+
+      const blockerSubject = populatedValidOutput();
+      blockerSubject.proposal.blockers_warnings[0].subject =
+        "Root cause approved.";
+      expectReasonAt(
+        blockerSubject,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.blockers_warnings.subject",
+      );
+
+      const blockerDescription = populatedValidOutput();
+      blockerDescription.proposal.blockers_warnings[0].description =
+        "Reject this root cause.";
+      expectReasonAt(
+        blockerDescription,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.blockers_warnings.description",
+      );
+
+      const evidenceSubject = populatedValidOutput();
+      evidenceSubject.proposal.evidence_map[0].subject =
+        "G-04 is approved.";
+      expectReasonAt(
+        evidenceSubject,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.evidence_map.subject",
+      );
+
+      const evidenceDescription = populatedValidOutput();
+      evidenceDescription.proposal.evidence_map[0].description =
+        "The AI confirms this root cause.";
+      expectReasonAt(
+        evidenceDescription,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.evidence_map.description",
+      );
+
+      const versionQuestion = populatedValidOutput();
+      versionQuestion.proposal.version_changes[0].human_review_question =
+        "Approve the root cause?";
+      expectReasonAt(
+        versionQuestion,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.version_changes.human_review_question",
+      );
+
+      const blockerQuestion = populatedValidOutput();
+      blockerQuestion.proposal.blockers_warnings[0].human_review_question =
+        "Reject this root cause?";
+      expectReasonAt(
+        blockerQuestion,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.blockers_warnings.human_review_question",
+      );
+
+      const evidenceQuestion = populatedValidOutput();
+      evidenceQuestion.proposal.evidence_map[0].human_review_question =
+        "Confirm this root cause?";
+      expectReasonAt(
+        evidenceQuestion,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "proposal.evidence_map.human_review_question",
+      );
+
+      const uncertaintyQuestion = populatedValidOutput();
+      uncertaintyQuestion.uncertainty_and_limitations[0].human_review_question =
+        "Approve the root cause?";
+      expectReasonAt(
+        uncertaintyQuestion,
+        "PROHIBITED_S50_DECISION_CLAIM",
+        "uncertainty_and_limitations.human_review_question",
+      );
+    });
+
+    it("uses unknown for structural validation failures", () => {
+      const malformed = minimalValidOutput();
+      malformed.proposal.version_changes = "not-an-array";
+      expectReasonAt(
+        malformed,
+        "INVALID_OUTPUT_LIST",
+        "unknown",
+      );
     });
 
     it("applies the source-reporting exception independently in nested fields", () => {
@@ -377,6 +553,26 @@ describe(
           JSON.stringify(sourceDescription),
         ).proposal.neutral_review_summary,
       ).toBe("The submitted package identifies X as a confirmed hypothesis.");
+
+      const attributedStatus = minimalValidOutput();
+      attributedStatus.proposal.neutral_review_summary =
+        "The submitted package states the root cause is confirmed.";
+      expect(
+        validateCapaRootCauseReviewAdvisoryModelOutput(
+          JSON.stringify(attributedStatus),
+        ).proposal.neutral_review_summary,
+      ).toBe("The submitted package states the root cause is confirmed.");
+
+      const neutralLanguage = minimalValidOutput();
+      neutralLanguage.proposal.neutral_review_summary =
+        "The submitted package describes evidence supporting the proposed root-cause conclusion.";
+      expect(
+        validateCapaRootCauseReviewAdvisoryModelOutput(
+          JSON.stringify(neutralLanguage),
+        ).proposal.neutral_review_summary,
+      ).toBe(
+        "The submitted package describes evidence supporting the proposed root-cause conclusion.",
+      );
     });
   },
 );

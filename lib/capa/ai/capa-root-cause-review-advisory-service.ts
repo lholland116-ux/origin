@@ -4,6 +4,7 @@ import type { AuthoritativeS50RootCauseReviewContext, CapaRootCauseReviewAdvisor
 import { CAPA_ROOT_CAUSE_REVIEW_ADVISORY_AGENT, CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OPERATION, type CapaRootCauseReviewAdvisoryAgentGate } from "./capa-root-cause-review-advisory-agent-gate";
 import { CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION, type CapaRootCauseReviewAdvisoryResponse } from "./capa-root-cause-review-advisory-contract";
 import { CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION } from "./capa-ai-generation-trace";
+import { CapaRootCauseReviewAdvisoryOutputValidationError, type CapaRootCauseReviewAdvisoryValidationLocation } from "./capa-root-cause-review-advisory-validator";
 import type { CapaRootCauseReviewAdvisoryGenerationInput } from "./capa-root-cause-review-advisory-model-generator";
 import type { CapaRootCauseReviewAdvisoryOutputRepository } from "../../database/repositories/capa-root-cause-review-advisory-output-repository";
 
@@ -11,9 +12,57 @@ export const CAPA_ROOT_CAUSE_REVIEW_ADVISORY_SERVICE_REASON_CODES = [
   "CASE_NOT_FOUND_OR_NOT_AUTHORIZED", "CASE_NOT_IN_ROOT_CAUSE_REVIEW", "ADVISORY_ACCESS_DENIED", "AGENT_NOT_ELIGIBLE", "ADVISORY_GENERATION_FAILED", "INVALID_ADVISORY_RESULT", "ADVISORY_PERSISTENCE_FAILED", "WORKFLOW_MUTATION_DETECTED",
 ] as const;
 export type CapaRootCauseReviewAdvisoryServiceReasonCode = typeof CAPA_ROOT_CAUSE_REVIEW_ADVISORY_SERVICE_REASON_CODES[number];
+
+const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function safeDiagnosticCauseName(value: unknown): string {
+  return typeof value === "string" && SAFE_ERROR_NAME_PATTERN.test(value)
+    ? value
+    : "UnknownError";
+}
+
+function safeErrorName(error: unknown): string {
+  if (!(error instanceof Error)) return "UnknownError";
+
+  try {
+    return safeDiagnosticCauseName(error.name);
+  } catch {
+    return "UnknownError";
+  }
+}
+
 export class CapaRootCauseReviewAdvisoryServiceError extends Error {
   readonly reason_code: CapaRootCauseReviewAdvisoryServiceReasonCode;
-  constructor(reason_code: CapaRootCauseReviewAdvisoryServiceReasonCode) { super("The governed CAPA S50 root-cause review advisory operation failed."); this.name = "CapaRootCauseReviewAdvisoryServiceError"; this.reason_code = reason_code; }
+  readonly diagnostic_cause_name?: string;
+  readonly diagnostic_reason_code: string | null;
+  readonly diagnostic_validation_location:
+    CapaRootCauseReviewAdvisoryValidationLocation | null;
+
+  constructor(
+    reason_code: CapaRootCauseReviewAdvisoryServiceReasonCode,
+    diagnostic_cause_name?: string,
+    validation_error?: CapaRootCauseReviewAdvisoryOutputValidationError,
+  ) {
+    super("The governed CAPA S50 root-cause review advisory operation failed.");
+    this.name = "CapaRootCauseReviewAdvisoryServiceError";
+    this.reason_code = reason_code;
+    this.diagnostic_reason_code =
+      validation_error instanceof
+        CapaRootCauseReviewAdvisoryOutputValidationError
+        ? validation_error.reason_code
+        : null;
+    this.diagnostic_validation_location =
+      validation_error instanceof
+        CapaRootCauseReviewAdvisoryOutputValidationError
+        ? validation_error.diagnostic_location
+        : null;
+
+    if (diagnostic_cause_name !== undefined) {
+      this.diagnostic_cause_name = safeDiagnosticCauseName(
+        diagnostic_cause_name,
+      );
+    }
+  }
 }
 
 export interface CapaRootCauseReviewAdvisoryRequest {
@@ -80,14 +129,14 @@ export class CapaRootCauseReviewAdvisoryService {
     let eligible = false; try { eligible = this.dependencies.agent_gate.evaluate({ context, agent: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_AGENT, operation: CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OPERATION }); } catch { eligible = false; }
     if (!eligible) throw new CapaRootCauseReviewAdvisoryServiceError("AGENT_NOT_ELIGIBLE");
     let generated: Awaited<ReturnType<CapaRootCauseReviewAdvisoryGenerator["generate"]>>;
-    try { generated = await this.dependencies.generator.generate({ context: assembly, request_id: invocation.request_id, correlation_id: invocation.correlation_id }); } catch { throw new CapaRootCauseReviewAdvisoryServiceError("ADVISORY_GENERATION_FAILED"); }
+    try { generated = await this.dependencies.generator.generate({ context: assembly, request_id: invocation.request_id, correlation_id: invocation.correlation_id }); } catch (error) { throw new CapaRootCauseReviewAdvisoryServiceError("ADVISORY_GENERATION_FAILED", safeErrorName(error), error instanceof CapaRootCauseReviewAdvisoryOutputValidationError ? error : undefined); }
     if (!validGenerated(generated, invocation, context)) throw new CapaRootCauseReviewAdvisoryServiceError("INVALID_ADVISORY_RESULT");
     let unchanged = false; try { unchanged = await this.dependencies.context_resolver.assertCaseUnchanged(context); } catch { unchanged = false; }
     if (!unchanged) throw new CapaRootCauseReviewAdvisoryServiceError("WORKFLOW_MUTATION_DETECTED");
     try {
       const saved = await this.dependencies.transaction_manager.runInTransaction({ request_id: invocation.request_id, correlation_id: invocation.correlation_id }, (transaction) => this.dependencies.output_repository.save(transaction, { context, response: generated.response, generation_trace: generated.trace, reference_manifest: assembly.reference_manifest, request_id: invocation.request_id, correlation_id: invocation.correlation_id }));
       if (saved === "case_changed") throw new CapaRootCauseReviewAdvisoryServiceError("WORKFLOW_MUTATION_DETECTED");
-    } catch (error) { if (error instanceof CapaRootCauseReviewAdvisoryServiceError) throw error; throw new CapaRootCauseReviewAdvisoryServiceError("ADVISORY_PERSISTENCE_FAILED"); }
+    } catch (error) { if (error instanceof CapaRootCauseReviewAdvisoryServiceError) throw error; throw new CapaRootCauseReviewAdvisoryServiceError("ADVISORY_PERSISTENCE_FAILED", safeErrorName(error)); }
     return Object.freeze({ advisory: generated.response, snapshot: Object.freeze({ capa_case_id: context.capa_case_id, case_version_id: context.case_version_id, record_version: context.record_version }) });
   }
 }
