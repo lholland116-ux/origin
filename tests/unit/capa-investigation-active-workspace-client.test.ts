@@ -32,6 +32,20 @@ describe("S40 investigation-active workspace browser client", () => {
     await expect(reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify({ status: "reconciled", workspace: null, correlation_id: CORRELATION }), { status: 200 }))).resolves.toMatchObject({ status: "loaded", workspace: null });
   });
 
+  it("preserves a populated response through the production GET then reconciliation sequence", async () => {
+    const initial = parseCapaInvestigationActiveWorkspaceLoad({ workspace: { ...workspace, root_cause_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION });
+    const reconciled = await reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify({ status: "reconciled", workspace: { ...workspace, root_cause_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION }), { status: 200 }));
+    expect(initial).toMatchObject({ status: "loaded", workspace: { root_cause_return_response: { editable: { response_summary: RETURN_RESPONSE.response_summary, actions_taken: RETURN_RESPONSE.actions_taken, disposition: "addressed", supporting_evidence_item_ids: ["E-1"] }, metadata: { responded_by: RETURN_RESPONSE.responded_by, responded_at: RETURN_RESPONSE.responded_at, return_transition_audit_event_id: RETURN_RESPONSE.return_transition_audit_event_id, source_case_version_id: RETURN_RESPONSE.source_case_version_id, resulting_case_version_id: RETURN_RESPONSE.resulting_case_version_id } } } });
+    expect(reconciled).toMatchObject({ status: "loaded", workspace: { root_cause_return_response: { editable: { response_summary: RETURN_RESPONSE.response_summary, actions_taken: RETURN_RESPONSE.actions_taken, disposition: "addressed", supporting_evidence_item_ids: ["E-1"] }, metadata: { responded_by: RETURN_RESPONSE.responded_by, responded_at: RETURN_RESPONSE.responded_at, return_transition_audit_event_id: RETURN_RESPONSE.return_transition_audit_event_id, source_case_version_id: RETURN_RESPONSE.source_case_version_id, resulting_case_version_id: RETURN_RESPONSE.resulting_case_version_id } } } });
+  });
+
+  it("preserves authoritative null through the production GET then reconciliation sequence", async () => {
+    const initial = parseCapaInvestigationActiveWorkspaceLoad({ workspace: { ...workspace, root_cause_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION });
+    const reconciled = await reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify({ status: "reconciled", workspace: { ...workspace, root_cause_return_response: null }, correlation_id: CORRELATION }), { status: 200 }));
+    expect(initial).toMatchObject({ status: "loaded", workspace: { root_cause_return_response: { editable: { response_summary: RETURN_RESPONSE.response_summary } } } });
+    expect(reconciled).toMatchObject({ status: "loaded", workspace: { root_cause_return_response: null } });
+  });
+
   it("parses server-bound response metadata separately from editable content", () => {
     const parsed = parseCapaInvestigationActiveWorkspaceLoad({ workspace: { ...workspace, root_cause_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION });
     expect(parsed).toMatchObject({ status: "loaded", workspace: { root_cause_return_response: { editable: { response_summary: RETURN_RESPONSE.response_summary, actions_taken: RETURN_RESPONSE.actions_taken, disposition: "addressed", supporting_evidence_item_ids: ["E-1"] }, metadata: { schema_version: RETURN_RESPONSE.schema_version, responded_by: RETURN_RESPONSE.responded_by, responded_at: RETURN_RESPONSE.responded_at, return_transition_audit_event_id: RETURN_RESPONSE.return_transition_audit_event_id } } } });

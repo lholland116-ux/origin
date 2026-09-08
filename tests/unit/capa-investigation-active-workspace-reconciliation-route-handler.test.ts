@@ -4,6 +4,7 @@ import { handleCapaInvestigationActiveWorkspaceReconciliationPost } from "../../
 const CASE_ID = "20000000-0000-4000-8000-000000000001";
 const VERSION_ID = "30000000-0000-4000-8000-000000000001";
 const CORRELATION_ID = "40000000-0000-4000-8000-000000000001";
+const RETURN_RESPONSE = { schema_version: "capa-root-cause-review-return-response-draft-1.0.0", response_summary: "The investigation response is complete.", actions_taken: "The returned package was reviewed.", disposition: "addressed", supporting_evidence_item_ids: ["E-1"], return_transition_audit_event_id: "50000000-0000-4000-8000-000000000002", source_case_version_id: "60000000-0000-4000-8000-000000000002", resulting_case_version_id: "70000000-0000-4000-8000-000000000002", responded_by: { actor_type: "human", actor_id: "50000000-0000-4000-8000-000000000001" }, responded_at: "2026-09-05T00:00:00.000Z" };
 
 function dependencies(result: unknown): any {
   return {
@@ -28,6 +29,7 @@ const workspace = {
   evidence_assumption_ledger: { items: [] },
   root_cause_package: { hypotheses: [], root_cause_not_confirmed: null },
   updated_by_user_id: "server-only-user",
+  root_cause_return_response: null,
   updated_at: "2026-09-05T00:00:00.000Z",
 };
 
@@ -40,9 +42,25 @@ describe("S40 workspace reconciliation route handler", () => {
     const response = await post({ status: "reconciled", workspace });
     expect(response.status).toBe(200);
     const body = await response.json() as Record<string, unknown>;
-    expect(body).toMatchObject({ status: "reconciled", workspace: { draft_revision: 7, case_version_id: VERSION_ID, record_version: 4 }, correlation_id: CORRELATION_ID });
+    expect(body).toMatchObject({ status: "reconciled", workspace: { draft_revision: 7, case_version_id: VERSION_ID, record_version: 4, root_cause_return_response: null }, correlation_id: CORRELATION_ID });
     expect(JSON.stringify(body)).not.toContain("server-only");
     expect(body).not.toHaveProperty("workspace.organization_id");
+  });
+
+  it("projects the complete authoritative return response without manufacturing metadata", async () => {
+    const response = await post({ status: "reconciled", workspace: { ...workspace, root_cause_return_response: RETURN_RESPONSE } });
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ status: "reconciled", workspace: {
+      draft_revision: 7,
+      case_version_id: VERSION_ID,
+      record_version: 4,
+      evidence_assumption_ledger: workspace.evidence_assumption_ledger,
+      root_cause_package: workspace.root_cause_package,
+      root_cause_return_response: RETURN_RESPONSE,
+      updated_at: workspace.updated_at,
+    }, correlation_id: CORRELATION_ID });
+    expect(JSON.stringify(body)).not.toContain("server-only");
   });
 
   it("returns workspace:null when reconciliation has no durable workspace", async () => {
