@@ -24,6 +24,8 @@ import type { PersistedCapaInvestigationPlanningAdoption } from "../repositories
 import type { PersistedCapaInvestigationActiveAdoption } from "../repositories/capa-investigation-active-adoption-repository";
 import type { CapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-contract";
 import { validateCapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-validator";
+import type { CapaActionPlanWorkspaceDraft } from "../../capa/application/capa-action-plan-workspace-draft-contract";
+import { validateCapaActionPlanWorkspaceDraft } from "../../capa/application/capa-action-plan-workspace-draft-validator";
 
 export const CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION =
   "capa-development-state-1.0.0" as const;
@@ -113,6 +115,7 @@ export interface CapaDevelopmentStateSnapshot {
   readonly investigation_planning_adoptions: readonly CapaDevelopmentStateMapEntry<PersistedCapaInvestigationPlanningAdoption>[];
   readonly investigation_active_adoptions: readonly CapaDevelopmentStateMapEntry<PersistedCapaInvestigationActiveAdoption>[];
   readonly investigation_active_workspace_drafts: readonly CapaDevelopmentStateMapEntry<CapaInvestigationActiveWorkspaceDraft>[];
+  readonly action_plan_workspace_drafts: readonly CapaDevelopmentStateMapEntry<CapaActionPlanWorkspaceDraft>[];
 }
 
 export class CapaDevelopmentStateSnapshotError extends Error {
@@ -132,9 +135,12 @@ const TOP_LEVEL_FIELDS = [
   "investigation_planning_adoptions",
   "investigation_active_adoptions",
   "investigation_active_workspace_drafts",
+  "action_plan_workspace_drafts",
 ] as const;
-const LEGACY_TOP_LEVEL_FIELDS = TOP_LEVEL_FIELDS.filter((field) => field !== "investigation_active_adoptions" && field !== "investigation_active_workspace_drafts");
-const PRE_WORKSPACE_TOP_LEVEL_FIELDS = TOP_LEVEL_FIELDS.filter((field) => field !== "investigation_active_workspace_drafts");
+const LEGACY_TOP_LEVEL_FIELDS = TOP_LEVEL_FIELDS.filter((field) => field !== "investigation_active_adoptions" && field !== "investigation_active_workspace_drafts" && field !== "action_plan_workspace_drafts");
+const PRE_WORKSPACE_TOP_LEVEL_FIELDS = TOP_LEVEL_FIELDS.filter((field) => field !== "investigation_active_workspace_drafts" && field !== "action_plan_workspace_drafts");
+const PRE_WORKSPACE_WITH_ACTION_PLAN_TOP_LEVEL_FIELDS = TOP_LEVEL_FIELDS.filter((field) => field !== "investigation_active_workspace_drafts");
+const PRE_ACTION_PLAN_TOP_LEVEL_FIELDS = TOP_LEVEL_FIELDS.filter((field) => field !== "action_plan_workspace_drafts");
 
 function objectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -167,6 +173,8 @@ export function validateCapaDevelopmentStateSnapshot(value: unknown): CapaDevelo
     !(
       (Object.keys(value).length === TOP_LEVEL_FIELDS.length && TOP_LEVEL_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field))) ||
       (Object.keys(value).length === PRE_WORKSPACE_TOP_LEVEL_FIELDS.length && PRE_WORKSPACE_TOP_LEVEL_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field))) ||
+      (Object.keys(value).length === PRE_WORKSPACE_WITH_ACTION_PLAN_TOP_LEVEL_FIELDS.length && PRE_WORKSPACE_WITH_ACTION_PLAN_TOP_LEVEL_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field))) ||
+      (Object.keys(value).length === PRE_ACTION_PLAN_TOP_LEVEL_FIELDS.length && PRE_ACTION_PLAN_TOP_LEVEL_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field))) ||
       (Object.keys(value).length === LEGACY_TOP_LEVEL_FIELDS.length && LEGACY_TOP_LEVEL_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field)))
     )) {
     throw new CapaDevelopmentStateSnapshotError("INVALID_SNAPSHOT", "The CAPA development state snapshot shape is invalid.");
@@ -180,6 +188,10 @@ export function validateCapaDevelopmentStateSnapshot(value: unknown): CapaDevelo
   const workspaceDrafts = mapEntries<CapaInvestigationActiveWorkspaceDraft>(value.investigation_active_workspace_drafts ?? [], "investigation_active_workspace_drafts", "object");
   if (workspaceDrafts.some(([, draft]) => validateCapaInvestigationActiveWorkspaceDraft(draft).status !== "valid")) {
     throw new CapaDevelopmentStateSnapshotError("INVALID_SNAPSHOT", "investigation_active_workspace_drafts contains an invalid workspace draft.");
+  }
+  const actionPlanWorkspaceDrafts = mapEntries<CapaActionPlanWorkspaceDraft>(value.action_plan_workspace_drafts ?? [], "action_plan_workspace_drafts", "object");
+  if (actionPlanWorkspaceDrafts.some(([, draft]) => validateCapaActionPlanWorkspaceDraft(draft).status !== "valid")) {
+    throw new CapaDevelopmentStateSnapshotError("INVALID_SNAPSHOT", "action_plan_workspace_drafts contains an invalid workspace draft.");
   }
   const snapshot = {
     schema_version: CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION,
@@ -197,6 +209,7 @@ export function validateCapaDevelopmentStateSnapshot(value: unknown): CapaDevelo
     investigation_planning_adoptions: mapEntries<PersistedCapaInvestigationPlanningAdoption>(value.investigation_planning_adoptions, "investigation_planning_adoptions", "object"),
     investigation_active_adoptions: mapEntries<PersistedCapaInvestigationActiveAdoption>(value.investigation_active_adoptions ?? [], "investigation_active_adoptions", "object"),
     investigation_active_workspace_drafts: workspaceDrafts,
+    action_plan_workspace_drafts: actionPlanWorkspaceDrafts,
   } satisfies CapaDevelopmentStateSnapshot;
   return clone(snapshot);
 }

@@ -93,6 +93,9 @@ import type {
 import type {
   CapaInvestigationActiveWorkspaceDraftService,
 } from "./capa-investigation-active-workspace-draft-service";
+import type {
+  CapaActionPlanWorkspaceDraftService,
+} from "./capa-action-plan-workspace-draft-service";
 import type { ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import type { RequestTrace, CapaCaseId } from "../domain/capa-types";
 
@@ -205,6 +208,11 @@ export interface CapaRuntime {
   readonly create_investigation_active_workspace_draft_service: (
     context: CapaRequestContext,
   ) => CapaInvestigationActiveWorkspaceDraftService;
+
+  /** Creates a request-scoped durable S60 human workspace service. */
+  readonly create_action_plan_workspace_draft_service: (
+    context: CapaRequestContext,
+  ) => CapaActionPlanWorkspaceDraftService;
 
   readonly create_investigation_active_workspace_reconciliation_service: (
     context: CapaRequestContext,

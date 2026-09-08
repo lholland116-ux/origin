@@ -1,0 +1,29 @@
+select plan(25);
+
+select has_table('public', 'capa_action_plan_workspace_drafts', 'S60 workspace draft table exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'organization_id', 'organization_id column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'capa_case_id', 'capa_case_id column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'case_version_id', 'case_version_id column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'record_version', 'record_version column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'draft_revision', 'draft_revision column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'schema_version', 'schema_version column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'trust', 'trust column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'workflow_state', 'workflow_state column exists');
+select col_type_is('public', 'capa_action_plan_workspace_drafts', 'action_plan', 'jsonb', 'action_plan is jsonb');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'updated_by_user_id', 'updated_by_user_id column exists');
+select has_column('public', 'capa_action_plan_workspace_drafts', 'updated_at', 'updated_at column exists');
+select has_pk('public', 'capa_action_plan_workspace_drafts', 'workspace table has a primary key');
+select ok((select array_agg(att.attname::text order by key.ord) = array['organization_id','capa_case_id']::text[] from pg_constraint con join unnest(con.conkey) with ordinality key(attnum, ord) on true join pg_attribute att on att.attrelid = con.conrelid and att.attnum = key.attnum where con.conrelid = 'public.capa_action_plan_workspace_drafts'::regclass and con.contype = 'p'), 'primary key is organization_id plus capa_case_id');
+select ok(exists (select 1 from pg_constraint where conrelid = 'public.capa_action_plan_workspace_drafts'::regclass and contype = 'c' and conname = 'capa_s60_workspace_record_version_safe_integer'), 'record_version safe-integer CHECK exists');
+select ok(exists (select 1 from pg_constraint where conrelid = 'public.capa_action_plan_workspace_drafts'::regclass and contype = 'c' and conname = 'capa_s60_workspace_draft_revision_safe_integer'), 'draft_revision safe-integer CHECK exists');
+select ok(exists (select 1 from pg_constraint where conrelid = 'public.capa_action_plan_workspace_drafts'::regclass and contype = 'c' and conname = 'capa_s60_workspace_schema_version'), 'schema version CHECK exists');
+select ok(exists (select 1 from pg_constraint where conrelid = 'public.capa_action_plan_workspace_drafts'::regclass and contype = 'c' and conname = 'capa_s60_workspace_trust'), 'trust CHECK exists');
+select ok(exists (select 1 from pg_constraint where conrelid = 'public.capa_action_plan_workspace_drafts'::regclass and contype = 'c' and conname = 'capa_s60_workspace_workflow_state'), 'workflow state CHECK exists');
+select ok(exists (select 1 from pg_constraint where conrelid = 'public.capa_action_plan_workspace_drafts'::regclass and contype = 'c' and conname = 'capa_s60_workspace_action_plan_object'), 'action plan JSON object CHECK exists');
+select row_security_active('public.capa_action_plan_workspace_drafts');
+select ok((select relforcerowsecurity from pg_class where oid = 'public.capa_action_plan_workspace_drafts'::regclass), 'RLS is forced');
+select table_privs_are('public', 'capa_action_plan_workspace_drafts', 'anon', array[]::text[], 'anon has no workspace table privileges');
+select table_privs_are('public', 'capa_action_plan_workspace_drafts', 'authenticated', array[]::text[], 'authenticated has no workspace table privileges');
+select table_privs_are('public', 'capa_action_plan_workspace_drafts', 'service_role', array['SELECT','INSERT','UPDATE']::text[], 'service_role has only SELECT INSERT UPDATE workspace privileges');
+
+select * from finish();

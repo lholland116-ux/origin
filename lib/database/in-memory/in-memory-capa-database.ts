@@ -164,8 +164,14 @@ import {
   type SaveCapaInvestigationActiveWorkspaceDraftInput,
   type SaveCapaInvestigationActiveWorkspaceDraftResult,
 } from "../repositories/capa-investigation-active-workspace-draft-repository";
+import {
+  type SaveCapaActionPlanWorkspaceDraftInput,
+  type SaveCapaActionPlanWorkspaceDraftResult,
+} from "../repositories/capa-action-plan-workspace-draft-repository";
 import type { CapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-contract";
 import { validateCapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-validator";
+import type { CapaActionPlanWorkspaceDraft } from "../../capa/application/capa-action-plan-workspace-draft-contract";
+import { validateCapaActionPlanWorkspaceDraft } from "../../capa/application/capa-action-plan-workspace-draft-validator";
 import {
   type CapaInvestigationActiveAdoptionCategory,
 } from "../../capa/ai/capa-investigation-active-adoption-contract";
@@ -393,6 +399,8 @@ interface InMemoryState {
     Map<string, PersistedCapaInvestigationActiveAdoption>;
   readonly investigation_active_workspace_drafts:
     Map<string, CapaInvestigationActiveWorkspaceDraft>;
+  readonly action_plan_workspace_drafts:
+    Map<string, CapaActionPlanWorkspaceDraft>;
 }
 
 interface ActiveTransaction {
@@ -750,6 +758,8 @@ function cloneState(
       cloneMap(state.investigation_active_adoptions),
     investigation_active_workspace_drafts:
       cloneMap(state.investigation_active_workspace_drafts),
+    action_plan_workspace_drafts:
+      cloneMap(state.action_plan_workspace_drafts),
   };
 }
 
@@ -795,6 +805,8 @@ function emptyState():
       new Map(),
     investigation_active_workspace_drafts:
       new Map(),
+    action_plan_workspace_drafts:
+      new Map(),
   };
 }
 
@@ -817,6 +829,7 @@ function stateFromSnapshot(
     investigation_planning_adoptions: new Map(snapshot.investigation_planning_adoptions.map(([key, value]) => [key, cloneValue(value)])),
     investigation_active_adoptions: new Map(snapshot.investigation_active_adoptions.map(([key, value]) => [key, cloneValue(value)])),
     investigation_active_workspace_drafts: new Map(snapshot.investigation_active_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
+    action_plan_workspace_drafts: new Map(snapshot.action_plan_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
   };
 }
 
@@ -841,6 +854,7 @@ function snapshotFromState(state: InMemoryState): InMemoryCapaDatabaseSnapshot {
     investigation_planning_adoptions: entries(state.investigation_planning_adoptions),
     investigation_active_adoptions: entries(state.investigation_active_adoptions),
     investigation_active_workspace_drafts: entries(state.investigation_active_workspace_drafts),
+    action_plan_workspace_drafts: entries(state.action_plan_workspace_drafts),
   };
 }
 
@@ -2307,6 +2321,35 @@ export class InMemoryCapaDatabase
     return { status: "saved", draft: cloneValue(draft) };
   }
 
+  async findActionPlanWorkspaceDraft(organizationId: OrganizationId, capaCaseId: CapaCaseId): Promise<CapaActionPlanWorkspaceDraft | null> {
+    const draft = this.committed_state.action_plan_workspace_drafts.get(recordKey(organizationId, capaCaseId));
+    return draft === undefined ? null : cloneValue(draft);
+  }
+
+  async saveActionPlanWorkspaceDraft(transaction: TransactionContext, input: SaveCapaActionPlanWorkspaceDraftInput): Promise<SaveCapaActionPlanWorkspaceDraftResult> {
+    const state = this.transactionState(transaction);
+    const validated = validateCapaActionPlanWorkspaceDraft(input.draft);
+    if (validated.status !== "valid") throw new InMemoryIntegrityError("The S60 action-plan workspace draft is invalid.");
+    const draft = validated.value;
+    const hasExpectedCaseContext = input.expected_case_version_id !== undefined || input.expected_record_version !== undefined || input.expected_workflow_state !== undefined;
+    if (hasExpectedCaseContext) {
+      const current = state.cases.get(recordKey(draft.organization_id, draft.capa_case_id));
+      const currentVersion = current === undefined ? undefined : state.case_versions.get(recordKey(draft.organization_id, current.current_version_id));
+      const committedCurrent = this.committed_state.cases.get(recordKey(draft.organization_id, draft.capa_case_id));
+      const committedCurrentVersion = committedCurrent === undefined ? undefined : this.committed_state.case_versions.get(recordKey(draft.organization_id, committedCurrent.current_version_id));
+      const contextMatches = (candidate: typeof current, version: typeof currentVersion) =>
+        input.expected_case_version_id !== undefined && input.expected_record_version !== undefined && input.expected_workflow_state !== undefined && candidate !== undefined && candidate.current_version_id === input.expected_case_version_id && candidate.record_version === input.expected_record_version && candidate.status === input.expected_workflow_state && version !== undefined && version.case_version_id === input.expected_case_version_id && version.version_number === input.expected_record_version && version.status === input.expected_workflow_state;
+      if (!contextMatches(current, currentVersion) || !contextMatches(committedCurrent, committedCurrentVersion)) return { status: "case_changed" };
+    }
+    const key = recordKey(draft.organization_id, draft.capa_case_id);
+    const existing = state.action_plan_workspace_drafts.get(key);
+    const validCreate = input.expected_draft_revision === null && draft.draft_revision === 1 && existing === undefined;
+    const validUpdate = existing !== undefined && input.expected_draft_revision !== null && existing.draft_revision === input.expected_draft_revision && draft.draft_revision === input.expected_draft_revision + 1;
+    if (!validCreate && !validUpdate) return { status: "concurrency_conflict" };
+    state.action_plan_workspace_drafts.set(key, cloneValue(draft));
+    return { status: "saved", draft: cloneValue(draft) };
+  }
+
   async listAdoptionsForOutput(
     organizationId: OrganizationId,
     outputId: string,
@@ -3162,6 +3205,12 @@ export class InMemoryCapaDatabase
       const validated = validateCapaInvestigationActiveWorkspaceDraft(draft);
       if (validated.status !== "valid" || key !== recordKey(draft.organization_id, draft.capa_case_id)) {
         throw new InMemoryIntegrityError("The S40 workspace draft state is invalid.");
+      }
+    }
+    for (const [key, draft] of state.action_plan_workspace_drafts) {
+      const validated = validateCapaActionPlanWorkspaceDraft(draft);
+      if (validated.status !== "valid" || key !== recordKey(draft.organization_id, draft.capa_case_id)) {
+        throw new InMemoryIntegrityError("The S60 action-plan workspace draft state is invalid.");
       }
     }
     for (

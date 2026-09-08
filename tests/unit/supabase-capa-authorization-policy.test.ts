@@ -750,6 +750,25 @@ describe("Supabase S40 workspace authorization mapping", () => {
   });
 });
 
+describe("Supabase S60 action-plan workspace authorization mapping", () => {
+  it.each([
+    ["read_action_plan_workspace_draft", "CAPA_ACTION_PLAN_WORKSPACE_READ", "capa.case.view"],
+    ["edit_action_plan_workspace_draft", "CAPA_ACTION_PLAN_WORKSPACE_EDIT", "capa.case.edit"],
+  ] as const)("maps %s to the existing permission and S60 state", async (operation, purpose, permission) => {
+    const harness = createSqlHarness();
+    harness.enqueue([membershipRow()], [authorityRow({ permissions: [permission] })]);
+    await expect(createPolicy(harness).evaluate(policyRequest({
+      operation,
+      resource: {
+        organization_id: ORGANIZATION_A,
+        resource_type: controlled("CAPA_ACTION_PLAN_WORKSPACE_DRAFT"),
+        workflow_state: "S60",
+      },
+      purpose: controlled(purpose),
+    }))).resolves.toMatchObject({ decision: "allow" });
+  });
+});
+
 describe("G-03 investigation release authorization", () => {
   it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR"])(
     "allows %s with capa.case.submit",

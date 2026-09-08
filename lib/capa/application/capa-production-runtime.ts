@@ -216,6 +216,8 @@ import { SupabaseCapaRootCauseReviewAdvisoryOutputRepository } from "../../datab
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
+import { SupabaseCapaActionPlanWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-action-plan-workspace-draft-repository";
+import { createCapaActionPlanWorkspaceDraftService } from "./capa-action-plan-workspace-draft-service";
 
 import {
   createSupabaseCapaAiOutputReviewRepository,
@@ -860,6 +862,8 @@ export function createCapaProductionRuntime(
     new SupabaseCapaRootCauseReviewAdvisoryOutputRepository(sql);
   const investigationActiveWorkspaceDraftRepository =
     new SupabaseCapaInvestigationActiveWorkspaceDraftRepository(sql);
+  const actionPlanWorkspaceDraftRepository =
+    new SupabaseCapaActionPlanWorkspaceDraftRepository(sql);
 
   const auditRepository =
     new SupabaseAuditRepository(
@@ -1496,6 +1500,17 @@ export function createCapaProductionRuntime(
         transaction_manager: transactionManager,
         authorization_policy: authorizationPolicy,
         return_cycle_resolver: returnCycleResolver,
+        now,
+      });
+    },
+
+    create_action_plan_workspace_draft_service(context) {
+      return createCapaActionPlanWorkspaceDraftService({
+        request_context: context,
+        capa_repository: capaRepository,
+        workspace_repository: actionPlanWorkspaceDraftRepository,
+        transaction_manager: transactionManager,
+        authorization_policy: authorizationPolicy,
         now,
       });
     },

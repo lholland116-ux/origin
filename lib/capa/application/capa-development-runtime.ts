@@ -205,6 +205,8 @@ import {
 } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
+import { createCapaActionPlanWorkspaceDraftService } from "./capa-action-plan-workspace-draft-service";
+import type { CapaActionPlanWorkspaceDraftRepository } from "../../database/repositories/capa-action-plan-workspace-draft-repository";
 
 /**
  * Development-only CAPA runtime.
@@ -463,6 +465,16 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_INVESTIGATION_ACTIVE_WORKSPACE_EDIT_ALLOWED",
       );
 
+    case "read_action_plan_workspace_draft":
+      return controlled(
+        "DEVELOPMENT_AI_ACTION_PLAN_WORKSPACE_READ_ALLOWED",
+      );
+
+    case "edit_action_plan_workspace_draft":
+      return controlled(
+        "DEVELOPMENT_AI_ACTION_PLAN_WORKSPACE_EDIT_ALLOWED",
+      );
+
     case "approve_root_cause":
       return controlled(
         "DEVELOPMENT_ROOT_CAUSE_APPROVAL_ALLOWED",
@@ -554,7 +566,11 @@ function developmentAuthorizationPolicy(
         request.operation ===
           "read_investigation_active_workspace_draft" ||
         request.operation ===
-          "edit_investigation_active_workspace_draft";
+          "edit_investigation_active_workspace_draft" ||
+        request.operation ===
+          "read_action_plan_workspace_draft" ||
+        request.operation ===
+          "edit_action_plan_workspace_draft";
 
       const rootCauseGateBoundarySatisfied =
         !isRootCauseGateOperation ||
@@ -1342,6 +1358,21 @@ export function createCapaDevelopmentRuntime(
         transaction_manager: database,
         authorization_policy: dependencies.authorization_policy,
         return_cycle_resolver: returnCycleResolver,
+        now,
+      });
+    },
+
+    create_action_plan_workspace_draft_service(context) {
+      const workspaceRepository: CapaActionPlanWorkspaceDraftRepository = {
+        findDraft: (organizationId, capaCaseId) => database.findActionPlanWorkspaceDraft(organizationId, capaCaseId),
+        saveDraft: (transaction, input) => database.saveActionPlanWorkspaceDraft(transaction, input),
+      };
+      return createCapaActionPlanWorkspaceDraftService({
+        request_context: context,
+        capa_repository: database,
+        workspace_repository: workspaceRepository,
+        transaction_manager: database,
+        authorization_policy: dependencies.authorization_policy,
         now,
       });
     },
