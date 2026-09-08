@@ -25,6 +25,14 @@ import {
   type CapaRootCausePackageValidationReasonCode,
   type CapaRootCauseReadinessReasonCode,
 } from "../domain/capa-root-cause-package";
+import {
+  CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+  CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+  validateCapaRootCauseReviewReturnResponseContent,
+  validateCapaRootCauseReviewReturnResponseDraft,
+  type CapaRootCauseReviewReturnResponseContent,
+  type CapaRootCauseReviewReturnResponseDraft,
+} from "../domain/capa-root-cause-review-return-response";
 import { CAPA_STATE } from "../domain/capa-state";
 import type {
   AuditEvent,
@@ -51,7 +59,11 @@ import type {
 } from "../../database/repositories/capa-workflow-idempotency-repository";
 import type { TransactionManager } from "../../database/transactions";
 import type { CapaInvestigationActiveAdoptionRepository } from "../../database/repositories/capa-investigation-active-adoption-repository";
+import type { CapaInvestigationActiveWorkspaceDraftRepository } from "../../database/repositories/capa-investigation-active-workspace-draft-repository";
 import { verifyCapaInvestigationActiveAdoptionProvenance } from "./capa-investigation-active-adoption-verifier";
+import type { CapaRootCauseReturnCycle, CapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
+import { validateCapaInvestigationActiveWorkspaceDraft } from "./capa-investigation-active-workspace-draft-validator";
+import { canonicalJson } from "../ai/capa-ai-generation-trace";
 import type { CreateCapaClock, CreateCapaIdGenerator } from "./create-capa";
 import { AuditEventAppendConflictError } from "./create-capa";
 
@@ -73,6 +85,8 @@ export interface SubmitCapaRootCausePackageDependencies {
   readonly capa_repository: CapaRepository;
   readonly audit_repository: AuditRepository;
   readonly adoption_repository: CapaInvestigationActiveAdoptionRepository;
+  readonly workspace_repository: CapaInvestigationActiveWorkspaceDraftRepository;
+  readonly return_cycle_resolver: CapaRootCauseReturnCycleResolver;
   readonly workflow_idempotency_repository: CapaWorkflowIdempotencyRepository;
   readonly authorization_policy: CapaAuthorizationPolicy;
   readonly id_generator: CreateCapaIdGenerator;
@@ -100,6 +114,7 @@ interface CompletedSubmission {
   readonly case_version: CapaCaseVersion;
   readonly evidence_assumption_ledger_section_version: CapaSectionVersion;
   readonly root_cause_package_section_version: CapaSectionVersion;
+  readonly root_cause_review_return_response_section_version?: CapaSectionVersion;
   readonly transition_audit_event_id: AuditEventId;
 }
 
@@ -111,7 +126,11 @@ export type SubmitCapaRootCausePackageResult =
       readonly reason_code:
         | "INVALID_ROOT_CAUSE_SUBMISSION_BODY"
         | "INVALID_EVIDENCE_ASSUMPTION_LEDGER"
-        | "INVALID_ROOT_CAUSE_PACKAGE";
+        | "INVALID_ROOT_CAUSE_PACKAGE"
+        | "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_REQUIRED"
+        | "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_INVALID"
+        | "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT"
+        | "RETURN_RESPONSE_EVIDENCE_REFERENCE_INVALID";
       readonly evidence_assumption_ledger_reason_code?: CapaEvidenceAssumptionLedgerValidationReasonCode;
       readonly root_cause_package_reason_code?: CapaRootCausePackageValidationReasonCode;
     }
@@ -241,11 +260,12 @@ function requireIdempotencyKey(trace: RequestTrace): IdempotencyKey {
 function fingerprint(
   dependencies: SubmitCapaRootCausePackageDependencies,
   command: SubmitCapaRootCausePackageCommand,
-  body: ValidatedBody
+  body: ValidatedBody,
+  response: CapaRootCauseReviewReturnResponseContent | null,
 ): CapaWorkflowRequestFingerprint {
   return createHash("sha256")
     .update(
-      JSON.stringify({
+      canonicalJson({
         fingerprint_version: FINGERPRINT_VERSION,
         organization_id: command.tenant.organization_id,
         capa_case_id: command.capa_case_id,
@@ -254,6 +274,9 @@ function fingerprint(
         expected_current_version_id: command.expected_current_version_id,
         evidence_assumption_ledger: body.evidence_assumption_ledger,
         root_cause_package: body.root_cause_package,
+        ...(response === null
+          ? {}
+          : { root_cause_review_return_response: response }),
         configuration: {
           workflow_version: dependencies.configuration.workflow_version,
           evidence_assumption_ledger_schema_version:
@@ -276,6 +299,7 @@ interface SourceSections {
   readonly investigation_plan: CapaInvestigationPlanContent;
   readonly prior_ledger: CapaSectionVersion | null;
   readonly prior_root_cause: CapaSectionVersion | null;
+  readonly prior_return_response: CapaSectionVersion | null;
 }
 
 async function loadSourceSections(
@@ -325,7 +349,16 @@ async function loadSourceSections(
   const packages = all.filter(
     (section) => section.section_type === CAPA_ROOT_CAUSE_PACKAGE_SECTION_TYPE
   );
-  if (plans.length !== 1 || ledgers.length > 1 || packages.length > 1)
+  const returnResponses = all.filter(
+    (section) =>
+      section.section_type === CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE
+  );
+  if (
+    plans.length !== 1 ||
+    ledgers.length > 1 ||
+    packages.length > 1 ||
+    returnResponses.length > 1
+  )
     throw new SubmitCapaRootCausePackageIntegrityError(
       "The S40 snapshot has ambiguous controlled sections."
     );
@@ -335,6 +368,10 @@ async function loadSourceSections(
         CAPA_EVIDENCE_ASSUMPTION_LEDGER_SCHEMA_VERSION) ||
     (packages[0] !== undefined &&
       packages[0].schema_version !== CAPA_ROOT_CAUSE_PACKAGE_SCHEMA_VERSION)
+    ||
+    (returnResponses[0] !== undefined &&
+      returnResponses[0].schema_version !==
+        CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION)
   )
     throw new SubmitCapaRootCausePackageIntegrityError(
       "The prior controlled section schema metadata is invalid."
@@ -349,12 +386,22 @@ async function loadSourceSections(
     throw new SubmitCapaRootCausePackageIntegrityError(
       "The authoritative investigation plan is malformed."
     );
+  if (returnResponses[0] !== undefined) {
+    const response = validateCapaRootCauseReviewReturnResponseContent(
+      returnResponses[0].content
+    );
+    if (response.status === "invalid")
+      throw new SubmitCapaRootCausePackageIntegrityError(
+        "The prior return-response section is malformed."
+      );
+  }
   return Object.freeze({
     all: Object.freeze(all),
     investigation_plan_section: planSection,
     investigation_plan: plan.value,
     prior_ledger: ledgers[0] ?? null,
     prior_root_cause: packages[0] ?? null,
+    prior_return_response: returnResponses[0] ?? null,
   });
 }
 
@@ -393,9 +440,152 @@ function metadataId(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+type ReturnResponseFailureCode =
+  | "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_REQUIRED"
+  | "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_INVALID"
+  | "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT"
+  | "RETURN_RESPONSE_EVIDENCE_REFERENCE_INVALID";
+
+type ReturnResponseResolution =
+  | { readonly status: "not_required" }
+  | {
+      readonly status: "valid";
+      readonly cycle: CapaRootCauseReturnCycle;
+      readonly draft: CapaRootCauseReviewReturnResponseDraft;
+      readonly content: CapaRootCauseReviewReturnResponseContent;
+    }
+  | { readonly status: "validation_failed"; readonly reason_code: ReturnResponseFailureCode };
+
+function sameReturnCycle(
+  response: CapaRootCauseReviewReturnResponseDraft | CapaRootCauseReviewReturnResponseContent,
+  cycle: CapaRootCauseReturnCycle,
+): boolean {
+  return response.return_transition_audit_event_id ===
+      cycle.return_transition_audit_event_id &&
+    response.source_case_version_id === cycle.source_case_version_id &&
+    response.resulting_case_version_id === cycle.resulting_case_version_id;
+}
+
+function authoritativeResponseContent(
+  response: CapaRootCauseReviewReturnResponseDraft,
+): CapaRootCauseReviewReturnResponseContent {
+  return Object.freeze({
+    schema_version: CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+    response_summary: response.response_summary,
+    actions_taken: response.actions_taken,
+    disposition: response.disposition,
+    supporting_evidence_item_ids: Object.freeze([
+      ...response.supporting_evidence_item_ids,
+    ]),
+    return_transition_audit_event_id: response.return_transition_audit_event_id,
+    source_case_version_id: response.source_case_version_id,
+    resulting_case_version_id: response.resulting_case_version_id,
+    responded_by: Object.freeze({
+      actor_type: "human" as const,
+      actor_id: response.responded_by.actor_id,
+    }),
+    responded_at: response.responded_at,
+  });
+}
+
+async function resolveReturnResponse(
+  dependencies: SubmitCapaRootCausePackageDependencies,
+  capaCase: CapaCase,
+  sourceVersion: CapaCaseVersion,
+  source: SourceSections,
+): Promise<ReturnResponseResolution> {
+  const resolution = await dependencies.return_cycle_resolver.resolve({
+    organization_id: capaCase.organization_id,
+    capa_case_id: capaCase.capa_case_id,
+  });
+  if (resolution.status === "invalid")
+    throw new SubmitCapaRootCausePackageIntegrityError(
+      "The root-cause return-cycle provenance is invalid."
+    );
+  if (resolution.status === "no_active_return_cycle")
+    return { status: "not_required" };
+
+  const workspace = await dependencies.workspace_repository.findDraft(
+    capaCase.organization_id,
+    capaCase.capa_case_id,
+  );
+  if (workspace === null || workspace.root_cause_return_response == null)
+    return {
+      status: "validation_failed",
+      reason_code: "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_REQUIRED",
+    };
+
+  const response = validateCapaRootCauseReviewReturnResponseDraft(
+    workspace.root_cause_return_response,
+  );
+  if (response.status === "invalid")
+    return {
+      status: "validation_failed",
+      reason_code: "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_INVALID",
+    };
+
+  const workspaceValidation = validateCapaInvestigationActiveWorkspaceDraft(
+    workspace,
+  );
+  if (
+    workspaceValidation.status === "invalid" ||
+    workspaceValidation.value.organization_id !== capaCase.organization_id ||
+    workspaceValidation.value.capa_case_id !== capaCase.capa_case_id
+  )
+    throw new SubmitCapaRootCausePackageIntegrityError(
+      "The durable S40 workspace draft is invalid or outside the request boundary."
+    );
+  if (
+    workspaceValidation.value.case_version_id !== sourceVersion.case_version_id ||
+    workspaceValidation.value.record_version !== sourceVersion.version_number
+  )
+    throw new SubmitCapaRootCausePackageIntegrityError(
+      "The durable S40 workspace draft is not bound to the current S40 version."
+    );
+
+  if (!sameReturnCycle(response.value, resolution.cycle))
+    return {
+      status: "validation_failed",
+      reason_code: "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT",
+    };
+
+  if (source.prior_ledger === null)
+    throw new SubmitCapaRootCausePackageIntegrityError(
+      "The active return cycle has no authoritative S40 evidence ledger."
+    );
+  const authoritativeLedger = validateCapaEvidenceAssumptionLedger(
+    source.prior_ledger.content,
+  );
+  if (authoritativeLedger.status === "invalid")
+    throw new SubmitCapaRootCausePackageIntegrityError(
+      "The authoritative S40 evidence ledger is malformed."
+    );
+  const evidenceIds = new Set(
+    authoritativeLedger.value.items.map((item) => item.item_id),
+  );
+  if (
+    response.value.supporting_evidence_item_ids.some(
+      (id) => !evidenceIds.has(id),
+    )
+  )
+    return {
+      status: "validation_failed",
+      reason_code: "RETURN_RESPONSE_EVIDENCE_REFERENCE_INVALID",
+    };
+
+  return {
+    status: "valid",
+    cycle: resolution.cycle,
+    draft: response.value,
+    content: authoritativeResponseContent(response.value),
+  };
+}
+
 async function replay(
   dependencies: SubmitCapaRootCausePackageDependencies,
-  record: CapaWorkflowIdempotencyRecord
+  record: CapaWorkflowIdempotencyRecord,
+  command: SubmitCapaRootCausePackageCommand,
+  body: ValidatedBody,
 ): Promise<SubmitCapaRootCausePackageResult> {
   const [capaCase, sourceVersion, version, audit] = await Promise.all([
     dependencies.capa_repository.findCaseById(
@@ -423,6 +613,7 @@ async function replay(
     sourceVersion === null ||
     version === null ||
     audit === null ||
+    audit === undefined ||
     sourceVersion.organization_id !== record.organization_id ||
     sourceVersion.capa_case_id !== record.capa_case_id ||
     sourceVersion.case_version_id !== record.source_case_version_id ||
@@ -444,10 +635,7 @@ async function replay(
     audit.metadata.resulting_case_version_id !==
       record.resulting_case_version_id ||
     audit.target.object_version_id !== version.case_version_id ||
-    capaCase.current_version_id !== version.case_version_id ||
-    capaCase.status !== TARGET_STATE ||
-    capaCase.record_version !== version.version_number ||
-    audit.aggregate_version !== capaCase.record_version
+    audit.aggregate_version !== version.version_number
   ) {
     throw new SubmitCapaRootCausePackageIntegrityError(
       "The root-cause submission replay record is incomplete."
@@ -495,6 +683,11 @@ async function replay(
     (section): section is CapaSectionVersion =>
       section?.section_type === CAPA_INVESTIGATION_PLAN_SECTION_TYPE
   );
+  const returnResponses = sections.filter(
+    (section): section is CapaSectionVersion =>
+      section?.section_type ===
+      CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE
+  );
   if (
     ledger.length !== 1 ||
     rootCause.length !== 1 ||
@@ -516,6 +709,59 @@ async function replay(
       "The replay section metadata is inconsistent."
     );
   }
+  const persistedReturnResponseId = metadataId(
+    audit.metadata.root_cause_review_return_response_section_version_id,
+  );
+  if (
+    (persistedReturnResponseId === null && returnResponses.length !== 0) ||
+    (persistedReturnResponseId !== null &&
+      (returnResponses.length !== 1 ||
+        returnResponses[0]!.section_version_id !== persistedReturnResponseId))
+  )
+    throw new SubmitCapaRootCausePackageIntegrityError(
+      "The replay return-response section metadata is inconsistent."
+    );
+  let historicalResponse: CapaRootCauseReviewReturnResponseContent | null = null;
+  if (persistedReturnResponseId !== null) {
+    if (
+      returnResponses[0]!.schema_version !==
+      CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION
+    )
+      throw new SubmitCapaRootCausePackageIntegrityError(
+        "The replay return-response schema is invalid."
+      );
+    const persistedResponse =
+      validateCapaRootCauseReviewReturnResponseContent(
+        returnResponses[0]!.content,
+      );
+    if (persistedResponse.status === "invalid")
+      throw new SubmitCapaRootCausePackageIntegrityError(
+        "The replay return-response content is invalid."
+      );
+    if (source.prior_ledger === null)
+      throw new SubmitCapaRootCausePackageIntegrityError(
+        "The replay response has no authoritative S40 evidence ledger."
+      );
+    const authoritativeLedger = validateCapaEvidenceAssumptionLedger(
+      source.prior_ledger.content,
+    );
+    if (authoritativeLedger.status === "invalid")
+      throw new SubmitCapaRootCausePackageIntegrityError(
+        "The replay authoritative S40 evidence ledger is malformed."
+      );
+    const evidenceIds = new Set(
+      authoritativeLedger.value.items.map((item) => item.item_id),
+    );
+    if (
+      persistedResponse.value.supporting_evidence_item_ids.some(
+        (id) => !evidenceIds.has(id),
+      )
+    )
+      throw new SubmitCapaRootCausePackageIntegrityError(
+        "The replay response references an unknown S40 evidence item."
+      );
+    historicalResponse = persistedResponse.value;
+  }
   const validatedPlan = validateCapaInvestigationPlan(plan[0]!.content);
   const validatedLedger = validateCapaEvidenceAssumptionLedger(
     ledger[0]!.content
@@ -532,12 +778,35 @@ async function replay(
     throw new SubmitCapaRootCausePackageIntegrityError(
       "The replay root-cause package is invalid."
     );
+  const reconstructedFingerprint = fingerprint(
+    dependencies,
+    command,
+    body,
+    historicalResponse,
+  );
+  if (reconstructedFingerprint !== record.request_fingerprint)
+    return {
+      status: "idempotency_conflict",
+      reason_code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST",
+    };
+  const historicalCase: CapaCase = {
+    ...capaCase,
+    current_version_id: version.case_version_id,
+    status: version.status,
+    record_version: version.version_number,
+  };
   return {
     status: "already_submitted",
-    capa_case: capaCase,
+    capa_case: historicalCase,
     case_version: version,
     evidence_assumption_ledger_section_version: ledger[0]!,
     root_cause_package_section_version: rootCause[0]!,
+    ...(persistedReturnResponseId === null
+      ? {}
+      : {
+          root_cause_review_return_response_section_version:
+            returnResponses[0]!,
+        }),
     transition_audit_event_id: record.audit_event_id,
   };
 }
@@ -575,6 +844,7 @@ export async function submitCapaRootCausePackage(
       policy_version: command.tenant.authorization_policy_version,
     };
 
+  const idempotencyKey = requireIdempotencyKey(command.request_trace);
   const capaCase = await dependencies.capa_repository.findCaseById(
     organizationId,
     command.capa_case_id
@@ -613,6 +883,28 @@ export async function submitCapaRootCausePackage(
       reason_code: policy.reason_code,
       policy_version: policy.policy_version,
     };
+
+  const existingOperation = await dependencies.transaction_manager.runInTransaction(
+    command.request_trace,
+    (transaction) =>
+      dependencies.workflow_idempotency_repository.findWorkflowOperation(
+        transaction,
+        {
+          organization_id: organizationId,
+          capa_case_id: command.capa_case_id,
+          operation_code: controlled(OPERATION_CODE),
+          idempotency_key: idempotencyKey,
+        },
+      ),
+  );
+  if (existingOperation !== null)
+    return replay(
+      dependencies,
+      existingOperation,
+      command,
+      validated.value,
+    );
+
   if (sourceVersion.status !== SOURCE_STATE)
     return {
       status: "workflow_conflict",
@@ -653,16 +945,28 @@ export async function submitCapaRootCausePackage(
       canonical_blocker_codes: [],
     };
 
-  const idempotencyKey = requireIdempotencyKey(command.request_trace);
+  const returnResponse = await resolveReturnResponse(
+    dependencies,
+    capaCase,
+    sourceVersion,
+    source,
+  );
+  if (returnResponse.status === "validation_failed")
+    return returnResponse;
+
   const requestFingerprint = fingerprint(
     dependencies,
     command,
-    validated.value
+    validated.value,
+    returnResponse.status === "valid" ? returnResponse.content : null,
   );
   const nextVersionId = dependencies.id_generator.generateCaseVersionId();
   const ledgerSectionId = dependencies.id_generator.generateSectionVersionId();
   const rootCauseSectionId =
     dependencies.id_generator.generateSectionVersionId();
+  const returnResponseSectionId = returnResponse.status === "valid"
+    ? dependencies.id_generator.generateSectionVersionId()
+    : null;
   const auditEventId = dependencies.id_generator.generateAuditEventId();
   const timestamp = iso(trustedNow);
   const actor = {
@@ -705,6 +1009,31 @@ export async function submitCapaRootCausePackage(
     created_at: timestamp,
     created_by: actor,
   };
+  const returnResponseSection = returnResponse.status === "valid"
+    ? {
+        organization_id: organizationId,
+        section_version_id: returnResponseSectionId!,
+        capa_case_id: capaCase.capa_case_id,
+        section_type: controlled(
+          CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+        ),
+        version_number: (source.prior_return_response?.version_number ?? 0) + 1,
+        ...(source.prior_return_response === null
+          ? {}
+          : {
+              parent_version_id:
+                source.prior_return_response.section_version_id,
+            }),
+        schema_version: CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+        content: returnResponse.content as unknown as Readonly<
+          Record<string, unknown>
+        >,
+        change_reason: TRANSITION_MEANING,
+        effective_at: returnResponse.draft.responded_at,
+        created_at: timestamp,
+        created_by: actor,
+      }
+    : null;
   const nextVersion: CapaCaseVersion = {
     organization_id: organizationId,
     case_version_id: nextVersionId,
@@ -716,6 +1045,9 @@ export async function submitCapaRootCausePackage(
     section_version_ids: replacedSectionIds(sourceVersion, [
       { prior: source.prior_ledger, next: ledgerSectionId },
       { prior: source.prior_root_cause, next: rootCauseSectionId },
+      ...(returnResponseSection === null
+        ? []
+        : [{ prior: source.prior_return_response, next: returnResponseSectionId! }]),
     ]),
     effective_at: timestamp,
     created_at: timestamp,
@@ -757,6 +1089,11 @@ export async function submitCapaRootCausePackage(
           transaction,
           rootCauseSection
         );
+        if (returnResponseSection !== null)
+          await dependencies.capa_repository.insertSectionVersion(
+            transaction,
+            returnResponseSection,
+          );
         await dependencies.capa_repository.insertCaseVersion(
           transaction,
           nextVersion
@@ -832,6 +1169,12 @@ export async function submitCapaRootCausePackage(
               source.investigation_plan_section.section_version_id,
             evidence_assumption_ledger_section_version_id: ledgerSectionId,
             root_cause_package_section_version_id: rootCauseSectionId,
+            ...(returnResponseSection === null
+              ? {}
+              : {
+                  root_cause_review_return_response_section_version_id:
+                    returnResponseSection.section_version_id,
+                }),
             required_permission: "capa.case.submit",
             relied_on_role_assignment_ids: policy.relied_on_role_assignment_ids,
           },
@@ -852,6 +1195,12 @@ export async function submitCapaRootCausePackage(
             case_version: nextVersion,
             evidence_assumption_ledger_section_version: ledgerSection,
             root_cause_package_section_version: rootCauseSection,
+            ...(returnResponseSection === null
+              ? {}
+              : {
+                  root_cause_review_return_response_section_version:
+                    returnResponseSection,
+                }),
             transition_audit_event_id: auditEventId,
           },
         };
@@ -862,7 +1211,8 @@ export async function submitCapaRootCausePackage(
         status: "idempotency_conflict",
         reason_code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST",
       };
-    if (result.kind === "replay") return replay(dependencies, result.record);
+    if (result.kind === "replay")
+      return replay(dependencies, result.record, command, validated.value);
     return { status: "submitted", ...result.completion };
   } catch (error) {
     if (error instanceof SubmissionConcurrencyError)

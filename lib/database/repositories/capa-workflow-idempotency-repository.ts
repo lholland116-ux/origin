@@ -95,6 +95,16 @@ export type ClaimCapaWorkflowOperationResult =
  * inserted claim with every related business write.
  */
 export interface CapaWorkflowIdempotencyRepository {
+  findWorkflowOperation(
+    transaction: TransactionContext,
+    input: {
+      readonly organization_id: OrganizationId;
+      readonly capa_case_id: CapaCaseId;
+      readonly operation_code: ControlledCode;
+      readonly idempotency_key: IdempotencyKey;
+    },
+  ): Promise<CapaWorkflowIdempotencyRecord | null>;
+
   claimWorkflowOperation(
     transaction: TransactionContext,
     record:

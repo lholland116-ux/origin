@@ -493,6 +493,9 @@ function createHarness(): Harness {
     audit_repository:
       auditRepository,
     workflow_idempotency_repository: {
+      async findWorkflowOperation() {
+        return null;
+      },
       async claimWorkflowOperation(
         transaction,
         record,

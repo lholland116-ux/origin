@@ -11,6 +11,7 @@ import type {
   CapaCaseVersionId,
   CapaSectionVersion,
   CapaSectionVersionId,
+  ControlledCode,
   IdempotencyKey,
   IsoDateTime,
   OrganizationId,
@@ -2604,6 +2605,27 @@ export class InMemoryCapaDatabase
       reason_code:
         "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST",
     };
+  }
+
+  async findWorkflowOperation(
+    transaction: TransactionContext,
+    input: {
+      readonly organization_id: OrganizationId;
+      readonly capa_case_id: CapaCaseId;
+      readonly operation_code: ControlledCode;
+      readonly idempotency_key: IdempotencyKey;
+    },
+  ): Promise<CapaWorkflowIdempotencyRecord | null> {
+    const state = this.transactionState(transaction);
+    const existing = state.workflow_idempotency.get(
+      workflowIdempotencyKey(input.organization_id, input.idempotency_key),
+    );
+    if (
+      existing === undefined ||
+      existing.capa_case_id !== input.capa_case_id ||
+      existing.operation_code !== input.operation_code
+    ) return null;
+    return cloneValue(existing);
   }
 
   /**

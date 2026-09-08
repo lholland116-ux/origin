@@ -1071,6 +1071,8 @@ export function createCapaDevelopmentRuntime(
     SubmitCapaRootCausePackageDependencies = {
     ...submitIntakeDependencies,
     adoption_repository: database,
+    workspace_repository: database,
+    return_cycle_resolver: returnCycleResolver,
   };
 
   const decideRootCauseGateDependencies:

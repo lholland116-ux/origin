@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   SubmitCapaRootCausePackageIntegrityError,
   submitCapaRootCausePackage,
@@ -7,6 +8,7 @@ import {
 import { InMemoryCapaDatabase } from "../../lib/database/in-memory/in-memory-capa-database";
 import { constructCapaInvestigationActiveAdoption } from "../../lib/capa/ai/capa-investigation-active-adoption-validator";
 import { CAPA_INVESTIGATION_ACTIVE_ADOPTION_POLICY_VERSION } from "../../lib/capa/ai/capa-investigation-active-adoption-contract";
+import { canonicalJson } from "../../lib/capa/ai/capa-ai-generation-trace";
 
 const ORG = "20000000-0000-4000-8000-000000000001";
 const USER = "10000000-0000-4000-8000-000000000001";
@@ -18,7 +20,10 @@ const PLAN = "70000000-0000-4000-8000-000000000001";
 const PLAN_B = "70000000-0000-4000-8000-000000000009";
 const LEDGER = "70000000-0000-4000-8000-000000000002";
 const ROOT = "70000000-0000-4000-8000-000000000003";
+const RETURN_RESPONSE = "70000000-0000-4000-8000-000000000004";
 const AUDIT = "80000000-0000-4000-8000-000000000001";
+const RETURN_AUDIT = "80000000-0000-4000-8000-000000000002";
+const RETURN_SOURCE = "40000000-0000-4000-8000-000000000008";
 const HISTORICAL_ADOPTION = "90000000-0000-4000-8000-000000000001";
 const HISTORICAL_OUTPUT = "90000000-0000-4000-8000-000000000002";
 const HISTORICAL_REQUEST = "90000000-0000-4000-8000-000000000003";
@@ -116,6 +121,63 @@ function body(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+function returnResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: "capa-root-cause-review-return-response-draft-1.0.0",
+    response_summary: "The investigator addressed the returned root cause.",
+    actions_taken: "The investigator reviewed the remaining evidence.",
+    disposition: "addressed",
+    supporting_evidence_item_ids: ["E-1"],
+    return_transition_audit_event_id: RETURN_AUDIT,
+    source_case_version_id: RETURN_SOURCE,
+    resulting_case_version_id: SOURCE,
+    responded_by: { actor_type: "human", actor_id: USER },
+    responded_at: NOW,
+    ...overrides,
+  };
+}
+function submissionFingerprint(
+  response: Record<string, unknown> | null = null,
+) {
+  return createHash("sha256")
+    .update(canonicalJson({
+      fingerprint_version: "submit-capa-root-cause-package-fingerprint-1",
+      organization_id: ORG,
+      capa_case_id: CASE,
+      operation_code: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE",
+      expected_record_version: 4,
+      expected_current_version_id: SOURCE,
+      evidence_assumption_ledger: ledger(),
+      root_cause_package: rootCause(),
+      ...(response === null ? {} : { root_cause_review_return_response: response }),
+      configuration: {
+        workflow_version: "workflow-1",
+        evidence_assumption_ledger_schema_version: "capa-evidence-assumption-ledger-1.0.0",
+        root_cause_package_schema_version: "capa-root-cause-package-1.0.0",
+        investigation_plan_schema_version: "capa-investigation-plan-1.0.0",
+        audit_schema_version: "audit-1",
+      },
+    }), "utf8")
+    .digest("hex");
+}
+function workspace(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: "capa-investigation-active-workspace-draft-1.0.0",
+    trust: "untrusted_human_draft",
+    workflow_state: "S40",
+    organization_id: ORG,
+    capa_case_id: CASE,
+    case_version_id: SOURCE,
+    record_version: 4,
+    draft_revision: 1,
+    evidence_assumption_ledger: ledger(),
+    root_cause_package: rootCause(),
+    root_cause_return_response: returnResponse(),
+    updated_by_user_id: USER,
+    updated_at: NOW,
+    ...overrides,
+  };
+}
 function capaCase(overrides: Record<string, unknown> = {}) {
   return {
     organization_id: ORG,
@@ -169,6 +231,31 @@ function planSection(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+function ledgerSection(overrides: Record<string, unknown> = {}) {
+  return planSection({
+    section_version_id: LEDGER,
+    section_type: "CAPA.EVIDENCE_ASSUMPTION_LEDGER",
+    schema_version: "capa-evidence-assumption-ledger-1.0.0",
+    content: ledger(),
+    ...overrides,
+  });
+}
+function activeReturnCycle(overrides: Record<string, unknown> = {}) {
+  return {
+    status: "active",
+    cycle: {
+      return_transition_audit_event_id: RETURN_AUDIT,
+      source_case_version_id: RETURN_SOURCE,
+      resulting_case_version_id: SOURCE,
+      returned_by: { actor_type: "human", actor_id: USER },
+      returned_at: NOW,
+      rationale: "Investigate the remaining uncertainty.",
+      source_record_version: 3,
+      resulting_record_version: 4,
+      ...overrides,
+    },
+  };
+}
 function command(
   applicationBody: unknown = body(),
   overrides: Record<string, unknown> = {}
@@ -209,6 +296,9 @@ function harness(
     claim?: unknown;
     advanced?: unknown;
     policy?: unknown;
+    lookup?: unknown;
+    workspace?: unknown;
+    return_cycle?: unknown;
     failureAt?:
       | "first_section"
       | "second_section"
@@ -302,7 +392,16 @@ function harness(
     capa_repository: repository as never,
     audit_repository: { appendEvent, findEventById } as never,
     adoption_repository: { findAdoptionById: vi.fn().mockResolvedValue(null) } as never,
+    workspace_repository: {
+      findDraft: vi.fn().mockResolvedValue(options.workspace ?? null),
+    } as never,
+    return_cycle_resolver: {
+      resolve: vi.fn().mockResolvedValue(
+        options.return_cycle ?? { status: "no_active_return_cycle" }
+      ),
+    } as never,
     workflow_idempotency_repository: {
+      findWorkflowOperation: vi.fn().mockResolvedValue(options.lookup ?? null),
       claimWorkflowOperation: vi
         .fn()
         .mockResolvedValue(options.claim ?? { status: "claimed" }),
@@ -310,7 +409,7 @@ function harness(
     authorization_policy: policy as never,
     id_generator: {
       generateCaseVersionId: () => NEXT,
-      generateSectionVersionId: () => [LEDGER, ROOT][sectionId++]!,
+      generateSectionVersionId: () => [LEDGER, ROOT, RETURN_RESPONSE][sectionId++]!,
       generateAuditEventId: () => AUDIT,
     } as never,
     clock: { now: () => new Date(NOW) },
@@ -373,6 +472,10 @@ async function statefulHarness(options: { alternateSource?: boolean } = {}) {
     capa_repository: database,
     audit_repository: auditRepository as never,
     adoption_repository: database,
+    workspace_repository: database,
+    return_cycle_resolver: {
+      resolve: vi.fn().mockResolvedValue({ status: "no_active_return_cycle" }),
+    } as never,
     workflow_idempotency_repository: database,
     authorization_policy: policy as never,
     id_generator: {
@@ -484,6 +587,142 @@ describe("S40 root-cause package submission", () => {
     expect(test.policy.evaluate.mock.calls[0]![0]).toMatchObject({
       operation: "submit_for_review",
       resource: { workflow_state: "S40" },
+    });
+  });
+
+  it("preserves first-time S40 to S50 behavior when no return cycle is active", async () => {
+    const test = harness();
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toMatchObject({ status: "submitted" });
+    expect(test.repository.insertSectionVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires a durable response for an active return cycle without writing", async () => {
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      return_cycle: activeReturnCycle(),
+    });
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toEqual({
+      status: "validation_failed",
+      reason_code: "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_REQUIRED",
+    });
+    expect(test.repository.insertSectionVersion).not.toHaveBeenCalled();
+    expect(test.repository.insertCaseVersion).not.toHaveBeenCalled();
+    expect(test.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid durable response", async () => {
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      return_cycle: activeReturnCycle(),
+      workspace: workspace({
+        root_cause_return_response: returnResponse({ disposition: "invalid" }),
+      }),
+    });
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toEqual({
+      status: "validation_failed",
+      reason_code: "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_INVALID",
+    });
+  });
+
+  it("rejects a response bound to a different return cycle", async () => {
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      return_cycle: activeReturnCycle(),
+      workspace: workspace({
+        root_cause_return_response: returnResponse({
+          resulting_case_version_id: RETURN_SOURCE,
+        }),
+      }),
+    });
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toEqual({
+      status: "validation_failed",
+      reason_code: "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT",
+    });
+  });
+
+  it("does not reuse a prior-cycle response for a later return cycle", async () => {
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      return_cycle: activeReturnCycle({
+        return_transition_audit_event_id: "80000000-0000-4000-8000-000000000009",
+        source_case_version_id: "40000000-0000-4000-8000-000000000009",
+      }),
+      workspace: workspace(),
+    });
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toEqual({
+      status: "validation_failed",
+      reason_code: "ROOT_CAUSE_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT",
+    });
+  });
+
+  it("rejects response evidence absent from the authoritative S40 ledger", async () => {
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      return_cycle: activeReturnCycle(),
+      workspace: workspace({
+        root_cause_return_response: returnResponse({
+          supporting_evidence_item_ids: ["E-NOT-IN-LEDGER"],
+        }),
+      }),
+    });
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toEqual({
+      status: "validation_failed",
+      reason_code: "RETURN_RESPONSE_EVIDENCE_REFERENCE_INVALID",
+    });
+  });
+
+  it("materializes the exact durable response and preserves its author", async () => {
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      return_cycle: activeReturnCycle(),
+      workspace: workspace(),
+    });
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toMatchObject({
+      status: "submitted",
+      capa_case: { status: "S50", record_version: 5 },
+      root_cause_review_return_response_section_version: {
+        section_version_id: RETURN_RESPONSE,
+        section_type: "CAPA.ROOT_CAUSE_REVIEW_RETURN_RESPONSE",
+        schema_version: "capa-root-cause-review-return-response-1.0.0",
+        content: {
+          response_summary: "The investigator addressed the returned root cause.",
+          actions_taken: "The investigator reviewed the remaining evidence.",
+          disposition: "addressed",
+          supporting_evidence_item_ids: ["E-1"],
+          return_transition_audit_event_id: RETURN_AUDIT,
+          source_case_version_id: RETURN_SOURCE,
+          resulting_case_version_id: SOURCE,
+          responded_by: { actor_type: "human", actor_id: USER },
+          responded_at: NOW,
+        },
+      },
+    });
+    expect(test.repository.insertSectionVersion).toHaveBeenCalledTimes(3);
+    expect(test.repository.insertCaseVersion.mock.calls[0]![1].section_version_ids).toEqual([
+      PLAN,
+      LEDGER,
+      ROOT,
+      RETURN_RESPONSE,
+    ]);
+    expect(
+      (test.appendEvent.mock.calls[0]![1] as { metadata: Record<string, unknown> })
+        .metadata,
+    ).toMatchObject({
+      root_cause_review_return_response_section_version_id: RETURN_RESPONSE,
     });
   });
 
@@ -895,13 +1134,20 @@ describe("S40 root-cause package submission", () => {
       organization_id: ORG,
       idempotency_key: "submit-1",
       operation_code: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE",
-      request_fingerprint: "a".repeat(64),
+      request_fingerprint: submissionFingerprint(),
       capa_case_id: CASE,
       source_case_version_id: SOURCE,
       resulting_case_version_id: NEXT,
       audit_event_id: AUDIT,
     };
-    const test = harness({ claim: { status: "already_claimed", record } });
+    const test = harness({
+      claim: { status: "already_claimed", record },
+      lookup: record,
+      return_cycle: activeReturnCycle({
+        return_transition_audit_event_id: "90000000-0000-4000-8000-000000000009",
+      }),
+      workspace: { root_cause_return_response: returnResponse() },
+    });
     const resultSections = [
       planSection(),
       planSection({
@@ -957,12 +1203,78 @@ describe("S40 root-cause package submission", () => {
         },
         target: { object_version_id: NEXT },
       });
+    const resolveReturnCycle = vi.spyOn(
+      test.deps.return_cycle_resolver,
+      "resolve",
+    ).mockImplementation(async () => {
+      throw new Error("historical replay must not resolve the current cycle");
+    });
+    const findWorkspaceDraft = vi.spyOn(
+      test.deps.workspace_repository,
+      "findDraft",
+    ).mockImplementation(async () => {
+      throw new Error("historical replay must not read the current workspace");
+    });
     await expect(
       submitCapaRootCausePackage(test.deps, command())
     ).resolves.toMatchObject({ status: "already_submitted" });
+    expect(resolveReturnCycle).not.toHaveBeenCalled();
+    expect(findWorkspaceDraft).not.toHaveBeenCalled();
     expect(test.repository.insertSectionVersion).not.toHaveBeenCalled();
     expect(test.repository.insertCaseVersion).not.toHaveBeenCalled();
     expect(test.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", null],
+    ["wrong schema", { schema_version: "wrong" }],
+    ["wrong cycle", { content: { ...returnResponse(), schema_version: "capa-root-cause-review-return-response-1.0.0", resulting_case_version_id: RETURN_SOURCE } }],
+    ["wrong attribution", { content: { ...returnResponse(), schema_version: "capa-root-cause-review-return-response-1.0.0", responded_by: { actor_type: "human", actor_id: "10000000-0000-4000-8000-000000000009" } } }],
+    ["wrong canonical content", { content: { ...returnResponse(), schema_version: "capa-root-cause-review-return-response-1.0.0", response_summary: "Tampered response." } }],
+  ] as const)("fails closed when persisted response is %s", async (_label, tamper) => {
+    const record = {
+      organization_id: ORG,
+      idempotency_key: "submit-1",
+      operation_code: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE",
+      request_fingerprint: submissionFingerprint({ ...returnResponse(), schema_version: "capa-root-cause-review-return-response-1.0.0" }),
+      capa_case_id: CASE,
+      source_case_version_id: SOURCE,
+      resulting_case_version_id: NEXT,
+      audit_event_id: AUDIT,
+    };
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      claim: { status: "already_claimed", record },
+      lookup: record,
+      return_cycle: activeReturnCycle(),
+      workspace: workspace(),
+    });
+    const responseSection = planSection({
+      section_version_id: RETURN_RESPONSE,
+      section_type: "CAPA.ROOT_CAUSE_REVIEW_RETURN_RESPONSE",
+      schema_version: "capa-root-cause-review-return-response-1.0.0",
+      content: { ...returnResponse(), schema_version: "capa-root-cause-review-return-response-1.0.0" },
+      ...tamper,
+    });
+    const resultSections = [
+      planSection(),
+      ledgerSection(),
+      planSection({ section_version_id: ROOT, section_type: "CAPA.ROOT_CAUSE_PACKAGE", schema_version: "capa-root-cause-package-1.0.0", content: rootCause() }),
+      ...(tamper === null ? [] : [responseSection]),
+    ];
+    test.repository.findCaseById.mockResolvedValue(capaCase({ status: "S50", record_version: 5, current_version_id: NEXT }));
+    test.repository.findCaseVersionById.mockImplementation(async (_o, _c, id) => id === SOURCE ? sourceVersion([PLAN, LEDGER]) : { ...sourceVersion(resultSections.map((section) => section.section_version_id)), case_version_id: NEXT, parent_version_id: SOURCE, status: "S50", version_number: 5 });
+    test.repository.findSectionVersionById.mockImplementation(async (_o, _c, id) => resultSections.find((section) => section.section_version_id === id) ?? null);
+    test.findEventById.mockResolvedValue({ event_id: AUDIT, organization_id: ORG, event_type: "EVT-STATE-TRANSITION", aggregate_type: "CAPA_CASE", aggregate_id: CASE, aggregate_version: 5, action: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE", metadata: { transition_event: "Submit root cause for review", from_state: "S40", to_state: "S50", source_case_version_id: SOURCE, resulting_case_version_id: NEXT, investigation_plan_section_version_id: PLAN, evidence_assumption_ledger_section_version_id: LEDGER, root_cause_package_section_version_id: ROOT, root_cause_review_return_response_section_version_id: RETURN_RESPONSE }, target: { object_version_id: NEXT } });
+    if (tamper === null || "schema_version" in tamper) {
+      await expect(submitCapaRootCausePackage(test.deps, command())).rejects.toBeInstanceOf(SubmitCapaRootCausePackageIntegrityError);
+    } else {
+      await expect(submitCapaRootCausePackage(test.deps, command())).resolves.toEqual({
+        status: "idempotency_conflict",
+        reason_code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST",
+      });
+    }
+    expect(test.repository.insertSectionVersion).not.toHaveBeenCalled();
   });
 
   it("rejects replay when the valid S50 and audit plan differs from the source S40 plan", async () => {
@@ -970,7 +1282,7 @@ describe("S40 root-cause package submission", () => {
       organization_id: ORG,
       idempotency_key: "submit-1",
       operation_code: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE",
-      request_fingerprint: "a".repeat(64),
+      request_fingerprint: submissionFingerprint(),
       capa_case_id: CASE,
       source_case_version_id: SOURCE,
       resulting_case_version_id: NEXT,
@@ -993,6 +1305,7 @@ describe("S40 root-cause package submission", () => {
     const test = harness({
       sections: [sourcePlan],
       claim: { status: "already_claimed", record },
+      lookup: record,
     });
     test.repository.findCaseById.mockResolvedValue(
       capaCase({ status: "S50", record_version: 5, current_version_id: NEXT })
@@ -1062,7 +1375,7 @@ describe("S40 root-cause package submission", () => {
       organization_id: ORG,
       idempotency_key: "submit-1",
       operation_code: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE",
-      request_fingerprint: "a".repeat(64),
+      request_fingerprint: submissionFingerprint(),
       capa_case_id: CASE,
       source_case_version_id: SOURCE,
       resulting_case_version_id: NEXT,
@@ -1071,6 +1384,7 @@ describe("S40 root-cause package submission", () => {
     const test = harness({
       sections: sections as unknown[],
       claim: { status: "already_claimed", record },
+      lookup: record,
     });
     await expect(
       submitCapaRootCausePackage(test.deps, command())
@@ -1083,13 +1397,13 @@ describe("S40 root-cause package submission", () => {
       organization_id: ORG,
       idempotency_key: "submit-1",
       operation_code: "SUBMIT_CAPA_ROOT_CAUSE_PACKAGE",
-      request_fingerprint: "a".repeat(64),
+      request_fingerprint: submissionFingerprint(),
       capa_case_id: CASE,
       source_case_version_id: SOURCE,
       resulting_case_version_id: NEXT,
       audit_event_id: AUDIT,
     };
-    const test = harness({ claim: { status: "already_claimed", record } });
+    const test = harness({ claim: { status: "already_claimed", record }, lookup: record });
     test.repository.findCaseById.mockResolvedValue(
       capaCase({ status: "S50", record_version: 5, current_version_id: NEXT })
     );

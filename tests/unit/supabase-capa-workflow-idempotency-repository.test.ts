@@ -247,9 +247,86 @@ async function claim(
   );
 }
 
+async function find(
+  harness: SqlHarness,
+  overrides: Partial<{
+    readonly organization_id: OrganizationId;
+    readonly capa_case_id: CapaCaseId;
+    readonly operation_code: ControlledCode;
+    readonly idempotency_key: IdempotencyKey;
+  }> = {},
+) {
+  const repository =
+    new SupabaseCapaWorkflowIdempotencyRepository();
+
+  return inTransaction(
+    harness,
+    (transaction) =>
+      repository.findWorkflowOperation(
+        transaction,
+        {
+          organization_id: ORGANIZATION_ID,
+          capa_case_id: CASE_ID,
+          operation_code: OPERATION_CODE,
+          idempotency_key: IDEMPOTENCY_KEY,
+          ...overrides,
+        },
+      ),
+  );
+}
+
 describe(
   "SupabaseCapaWorkflowIdempotencyRepository",
   () => {
+    it("returns null for an absent scoped key without writing", async () => {
+      const harness = createSqlHarness();
+      harness.enqueue([]);
+
+      await expect(find(harness)).resolves.toBeNull();
+      expect(harness.calls).toHaveLength(1);
+      expect(harness.calls[0]?.query).toContain(
+        "select organization_id, idempotency_key, operation_code, request_fingerprint, capa_case_id, source_case_version_id, resulting_case_version_id, audit_event_id from public.capa_workflow_idempotency",
+      );
+      expect(harness.calls[0]?.query).toContain(
+        "where organization_id = ? and capa_case_id = ? and operation_code = ? and idempotency_key = ? limit 1",
+      );
+      expect(harness.calls[0]?.values).toEqual([
+        ORGANIZATION_ID,
+        CASE_ID,
+        OPERATION_CODE,
+        IDEMPOTENCY_KEY,
+      ]);
+    });
+
+    it("returns the exact scoped persisted record including replay data", async () => {
+      const harness = createSqlHarness();
+      harness.enqueue([databaseRow()]);
+
+      await expect(find(harness)).resolves.toEqual(validRecord());
+      expect(harness.calls).toHaveLength(1);
+    });
+
+    it.each([
+      ["organization", { organization_id: "90000000-0000-4000-8000-000000000009" as OrganizationId }],
+      ["case", { capa_case_id: "90000000-0000-4000-8000-000000000009" as CapaCaseId }],
+      ["operation", { operation_code: "APPROVE_ROOT_CAUSE" as ControlledCode }],
+    ])("does not return a record outside the %s scope", async (_label, overrides) => {
+      const harness = createSqlHarness();
+      harness.enqueue([]);
+
+      await expect(find(harness, overrides)).resolves.toBeNull();
+      expect(harness.calls).toHaveLength(1);
+    });
+
+    it("fails closed for a malformed persisted lookup row", async () => {
+      const harness = createSqlHarness();
+      harness.enqueue([databaseRow({ request_fingerprint: "not-a-digest" })]);
+
+      await expect(find(harness)).rejects.toBeInstanceOf(
+        CapaWorkflowIdempotencyConfigurationError,
+      );
+    });
+
     it(
       "claims a new organization-local workflow key",
       async () => {

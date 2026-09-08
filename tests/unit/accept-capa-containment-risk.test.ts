@@ -15,6 +15,7 @@ import type {
   CapaSectionVersionId,
   ControlledCode,
   CorrelationId,
+  IdempotencyKey,
   IsoDateTime,
   OrganizationId,
   RequestId,
@@ -936,6 +937,25 @@ class TestWorkflowIdempotencyRepository
       string,
       CapaWorkflowIdempotencyRecord
     >();
+
+  async findWorkflowOperation(
+    _transaction: TransactionContext,
+    input: {
+      readonly organization_id: OrganizationId;
+      readonly capa_case_id: CapaCaseId;
+      readonly operation_code: ControlledCode;
+      readonly idempotency_key: IdempotencyKey;
+    },
+  ): Promise<CapaWorkflowIdempotencyRecord | null> {
+    const existing = this.records.get(
+      `${input.organization_id}:${input.idempotency_key}`,
+    );
+    return existing === undefined ||
+      existing.capa_case_id !== input.capa_case_id ||
+      existing.operation_code !== input.operation_code
+      ? null
+      : existing;
+  }
 
   async claimWorkflowOperation(
     _transaction:

@@ -23,28 +23,42 @@ import { InMemoryCapaDatabase } from "../../lib/database/in-memory/in-memory-cap
 
 const ORG = "20000000-0000-4000-8000-000000000001";
 const USER = "10000000-0000-4000-8000-000000000001";
+const OTHER_USER = "10000000-0000-4000-8000-000000000002";
 const CASE = "30000000-0000-4000-8000-000000000001";
 const V3 = "40000000-0000-4000-8000-000000000003";
 const V4 = "40000000-0000-4000-8000-000000000004";
 const V5 = "40000000-0000-4000-8000-000000000005";
 const V6 = "40000000-0000-4000-8000-000000000006";
 const V7 = "40000000-0000-4000-8000-000000000007";
+const V8 = "40000000-0000-4000-8000-000000000008";
+const V9 = "40000000-0000-4000-8000-000000000009";
+const V10 = "40000000-0000-4000-8000-000000000010";
 const CONTAINMENT = "70000000-0000-4000-8000-000000000001";
 const PLAN1 = "70000000-0000-4000-8000-000000000002";
 const PLAN2 = "70000000-0000-4000-8000-000000000003";
 const LEDGER = "70000000-0000-4000-8000-000000000004";
 const ROOT = "70000000-0000-4000-8000-000000000005";
+const LEDGER2 = "70000000-0000-4000-8000-000000000006";
+const ROOT2 = "70000000-0000-4000-8000-000000000007";
+const RETURN_RESPONSE = "70000000-0000-4000-8000-000000000008";
+const LEDGER3 = "70000000-0000-4000-8000-000000000009";
+const ROOT3 = "70000000-0000-4000-8000-000000000010";
+const RETURN_RESPONSE2 = "70000000-0000-4000-8000-000000000011";
 const RELEASE_AUDIT = "80000000-0000-4000-8000-000000000001";
 const D3_AUDIT = "80000000-0000-4000-8000-000000000002";
 const D2_AUDIT = "80000000-0000-4000-8000-000000000003";
 const GATE_AUDIT = "80000000-0000-4000-8000-000000000004";
 const GATE_TRANSITION_AUDIT = "80000000-0000-4000-8000-000000000005";
+const RESUBMIT_AUDIT = "80000000-0000-4000-8000-000000000006";
+const GATE_AUDIT_B = "80000000-0000-4000-8000-000000000007";
+const GATE_TRANSITION_AUDIT_B = "80000000-0000-4000-8000-000000000008";
+const RESUBMIT_AUDIT_B = "80000000-0000-4000-8000-000000000009";
 const NOW = "2026-09-01T12:00:00.000Z";
 const human = { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null };
 
-function authentication() {
+function authentication(userId = USER) {
   return {
-    principal: { principal_type: "human", user_id: USER }, session_id: "session",
+    principal: { principal_type: "human", user_id: userId }, session_id: "session",
     authentication_method: "SUPABASE_SESSION", assurance_level: "SINGLE_FACTOR",
     authenticated_at: "2026-09-01T11:00:00.000Z", expires_at: "2026-09-02T12:00:00.000Z", reauthenticated_at: NOW,
   } as never;
@@ -131,9 +145,11 @@ async function lifecycleHarness() {
     decision: "allow", reason_code: "AUTHORIZED", policy_version: "policy-1",
     evaluated_at: NOW, relied_on_role_assignment_ids: ["role-1"],
   }) };
+  const return_cycle_resolver = createCapaRootCauseReturnCycleResolver({ audit_repository: database });
   const common = {
     transaction_manager: database, capa_repository: database, audit_repository: database,
     adoption_repository: database,
+    workspace_repository: database, return_cycle_resolver,
     workflow_idempotency_repository: database, authorization_policy,
     clock: { now: () => new Date(NOW) },
     configuration: { workflow_version: "workflow-1", audit_schema_version: "audit-1", authorization_purpose: "CAPA_WORKFLOW_TRANSITION" as never },
@@ -170,9 +186,9 @@ async function lifecycleHarness() {
   const gate: DecideCapaRootCauseGateDependencies = {
     ...common,
     id_generator: {
-      generateCaseVersionId: () => V7,
+      generateCaseVersionId: (() => { let index = 0; return () => [V7, V9][index++]!; })(),
       generateSectionVersionId: () => ROOT,
-      generateAuditEventId: (() => { let index = 0; return () => [GATE_AUDIT, GATE_TRANSITION_AUDIT][index++]!; })(),
+      generateAuditEventId: (() => { let index = 0; return () => [GATE_AUDIT, GATE_TRANSITION_AUDIT, GATE_AUDIT_B, GATE_TRANSITION_AUDIT_B][index++]!; })(),
     } as never,
     configuration: { ...common.configuration, authorization_purpose: "CAPA_GATE_DECISION" as never,
       step_up_maximum_age_ms: 900000, required_step_up_assurance: "MFA" as never },
@@ -283,5 +299,146 @@ describe("real investigation-to-root-cause lifecycle", () => {
       body: { expected_draft_revision: 1, evidence_assumption_ledger: { items: [] }, root_cause_package: { hypotheses: [], root_cause_not_confirmed: null } },
     })).resolves.toMatchObject({ status: "saved", workspace: { case_version_id: V7, record_version: 7, draft_revision: 2 } });
     await expect(returnTest.workspace.load({ capa_case_id: CASE as never })).resolves.toMatchObject({ status: "loaded", workspace: { case_version_id: V7, record_version: 7, draft_revision: 2 } });
+    const submitIds = returnTest.submit.id_generator as unknown as {
+      generateCaseVersionId: () => string;
+      generateSectionVersionId: () => string;
+      generateAuditEventId: () => string;
+    };
+    submitIds.generateCaseVersionId = () => V8;
+    let sectionIndex = 0;
+    submitIds.generateSectionVersionId = () => [LEDGER2, ROOT2, RETURN_RESPONSE][sectionIndex++ % 3]!;
+    submitIds.generateAuditEventId = () => RESUBMIT_AUDIT;
+    const response = {
+      response_summary: "The investigator addressed the returned root cause.",
+      actions_taken: "The investigator reviewed the remaining evidence.",
+      disposition: "addressed",
+      supporting_evidence_item_ids: ["E-1"],
+    };
+    const authored = await returnTest.workspace.save({
+      capa_case_id: CASE as never,
+      request_trace: trace("response-save"),
+      body: { expected_draft_revision: 2, evidence_assumption_ledger: { items: [] }, root_cause_package: { hypotheses: [], root_cause_not_confirmed: null }, root_cause_return_response: response },
+    });
+    expect(authored).toMatchObject({ status: "saved", workspace: { root_cause_return_response: { responded_by: { actor_id: USER }, responded_at: NOW } } });
+    const resubmitted = await submitCapaRootCausePackage(returnTest.submit, {
+      authentication: authentication(OTHER_USER), tenant: tenant(), capa_case_id: CASE,
+      expected_record_version: 7, expected_current_version_id: V7,
+      request_trace: trace("resubmit"),
+      body: { evidence_assumption_ledger: ledger(), root_cause_package: rootCause() },
+    } as never);
+    expect(resubmitted).toMatchObject({ status: "submitted", capa_case: { status: "S50", record_version: 8, current_version_id: V8 }, root_cause_review_return_response_section_version: { section_version_id: RETURN_RESPONSE, content: { ...response, return_transition_audit_event_id: GATE_TRANSITION_AUDIT, source_case_version_id: V6, resulting_case_version_id: V7, responded_by: { actor_type: "human", actor_id: USER }, responded_at: NOW } } });
+    const resolver = returnTest.submit.return_cycle_resolver;
+    const workspaceRepository = returnTest.submit.workspace_repository;
+    const resolveSpy = vi.spyOn(resolver, "resolve");
+    const findDraftSpy = vi.spyOn(workspaceRepository, "findDraft");
+    const resolverCallsBeforeReplay = resolveSpy.mock.calls.length;
+    const workspaceReadsBeforeReplay = findDraftSpy.mock.calls.length;
+    const replay = await submitCapaRootCausePackage(returnTest.submit, {
+      authentication: authentication(OTHER_USER), tenant: tenant(), capa_case_id: CASE,
+      expected_record_version: 7, expected_current_version_id: V7,
+      request_trace: trace("resubmit"),
+      body: { evidence_assumption_ledger: ledger(), root_cause_package: rootCause() },
+    } as never);
+    expect(replay).toMatchObject({ status: "already_submitted", case_version: { case_version_id: V8 } });
+    expect(resolveSpy).toHaveBeenCalledTimes(resolverCallsBeforeReplay);
+    expect(findDraftSpy).toHaveBeenCalledTimes(workspaceReadsBeforeReplay);
+    const returnedB = await decideCapaRootCauseGate(returnTest.gate, {
+      authentication: authentication(), tenant: tenant(), capa_case_id: CASE,
+      request_trace: trace("gate-return-b"), body: {
+        expected_record_version: 8, expected_current_version_id: V8,
+        decision: "return_for_investigation", rationale: "Investigate Cycle B.",
+      },
+    } as never);
+    expect(returnedB).toMatchObject({ status: "decided", workflow_state: "S40", record_version: 9 });
+    await expect(returnTest.workspace.load({ capa_case_id: CASE as never })).resolves.toMatchObject({
+      status: "loaded",
+      workspace: { workflow_state: "S40", case_version_id: V7, record_version: 7, draft_revision: 3, root_cause_return_response: null },
+    });
+    const responseB = {
+      response_summary: "Cycle B addressed the remaining root cause question.",
+      actions_taken: "The investigator reviewed the new return evidence.",
+      disposition: "addressed",
+      supporting_evidence_item_ids: ["E-1"],
+    };
+    await expect(returnTest.workspace.save({
+      capa_case_id: CASE as never,
+      request_trace: trace("response-save-b"),
+      body: { expected_draft_revision: 3, evidence_assumption_ledger: { items: [] }, root_cause_package: { hypotheses: [], root_cause_not_confirmed: null }, root_cause_return_response: responseB },
+    })).resolves.toMatchObject({ status: "saved", workspace: { draft_revision: 4, root_cause_return_response: { responded_by: { actor_id: USER }, responded_at: NOW } } });
+    submitIds.generateCaseVersionId = () => V10;
+    sectionIndex = 0;
+    submitIds.generateSectionVersionId = () => [LEDGER3, ROOT3, RETURN_RESPONSE2][sectionIndex++ % 3]!;
+    submitIds.generateAuditEventId = () => RESUBMIT_AUDIT_B;
+    const resubmittedB = await submitCapaRootCausePackage(returnTest.submit, {
+      authentication: authentication(OTHER_USER), tenant: tenant(), capa_case_id: CASE,
+      expected_record_version: 9, expected_current_version_id: V9,
+      request_trace: trace("resubmit-b"),
+      body: { evidence_assumption_ledger: ledger(), root_cause_package: rootCause() },
+    } as never);
+    expect(resubmittedB).toMatchObject({
+      status: "submitted",
+      capa_case: { status: "S50", record_version: 10, current_version_id: V10 },
+      root_cause_review_return_response_section_version: {
+        section_version_id: RETURN_RESPONSE2,
+        content: {
+          ...responseB,
+          return_transition_audit_event_id: GATE_TRANSITION_AUDIT_B,
+          source_case_version_id: V8,
+          resulting_case_version_id: V9,
+          responded_by: { actor_type: "human", actor_id: USER },
+          responded_at: NOW,
+        },
+      },
+    });
+    const resolverCallsBeforeCycleAReplay = resolveSpy.mock.calls.length;
+    const workspaceReadsBeforeCycleAReplay = findDraftSpy.mock.calls.length;
+    const replayA = await submitCapaRootCausePackage(returnTest.submit, {
+      authentication: authentication(OTHER_USER), tenant: tenant(), capa_case_id: CASE,
+      expected_record_version: 7, expected_current_version_id: V7,
+      request_trace: trace("resubmit"),
+      body: { evidence_assumption_ledger: ledger(), root_cause_package: rootCause() },
+    } as never);
+    expect(replayA).toMatchObject({
+      status: "already_submitted",
+      capa_case: { status: "S50", record_version: 8, current_version_id: V8 },
+      case_version: { case_version_id: V8, version_number: 8 },
+      root_cause_review_return_response_section_version: {
+        section_version_id: RETURN_RESPONSE,
+        content: { ...response, source_case_version_id: V6, resulting_case_version_id: V7 },
+      },
+    });
+    expect(resolveSpy).toHaveBeenCalledTimes(resolverCallsBeforeCycleAReplay);
+    expect(findDraftSpy).toHaveBeenCalledTimes(workspaceReadsBeforeCycleAReplay);
+    const replayB = await submitCapaRootCausePackage(returnTest.submit, {
+      authentication: authentication(OTHER_USER), tenant: tenant(), capa_case_id: CASE,
+      expected_record_version: 9, expected_current_version_id: V9,
+      request_trace: trace("resubmit-b"),
+      body: { evidence_assumption_ledger: ledger(), root_cause_package: rootCause() },
+    } as never);
+    expect(replayB).toMatchObject({
+      status: "already_submitted",
+      capa_case: { status: "S50", record_version: 10, current_version_id: V10 },
+      case_version: { case_version_id: V10, version_number: 10 },
+      root_cause_review_return_response_section_version: { section_version_id: RETURN_RESPONSE2, content: responseB },
+    });
+    const resolverCallsBeforeFirstSubmissionReplay = resolveSpy.mock.calls.length;
+    const workspaceReadsBeforeFirstSubmissionReplay = findDraftSpy.mock.calls.length;
+    const replayFirstSubmission = await submitCapaRootCausePackage(returnTest.submit, {
+      authentication: authentication(OTHER_USER), tenant: tenant(), capa_case_id: CASE,
+      expected_record_version: 5, expected_current_version_id: V5,
+      request_trace: trace("gate-submit"),
+      body: { evidence_assumption_ledger: ledger(), root_cause_package: rootCause() },
+    } as never);
+    expect(replayFirstSubmission).toMatchObject({
+      status: "already_submitted",
+      capa_case: { status: "S50", record_version: 6, current_version_id: V6 },
+      case_version: { case_version_id: V6, version_number: 6 },
+    });
+    expect(replayFirstSubmission).not.toHaveProperty(
+      "root_cause_review_return_response_section_version",
+    );
+    expect(resolveSpy).toHaveBeenCalledTimes(resolverCallsBeforeFirstSubmissionReplay);
+    expect(findDraftSpy).toHaveBeenCalledTimes(workspaceReadsBeforeFirstSubmissionReplay);
+    expect(await returnTest.database.findCaseById(ORG as never, CASE as never)).toMatchObject({ status: "S50", record_version: 10, current_version_id: V10 });
   });
 });

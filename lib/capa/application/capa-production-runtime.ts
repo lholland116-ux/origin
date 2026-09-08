@@ -1038,6 +1038,8 @@ export function createCapaProductionRuntime(
     SubmitCapaRootCausePackageDependencies = {
     ...submitIntakeDependencies,
     adoption_repository: investigationActiveAdoptionRepository,
+    workspace_repository: investigationActiveWorkspaceDraftRepository,
+    return_cycle_resolver: returnCycleResolver,
   };
 
   const decideRootCauseGateDependencies:

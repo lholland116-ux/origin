@@ -161,6 +161,34 @@ function validateRecord(
   }
 }
 
+function validateLookupInput(
+  input: {
+    readonly organization_id: OrganizationId;
+    readonly capa_case_id: CapaCaseId;
+    readonly operation_code: ControlledCode;
+    readonly idempotency_key: IdempotencyKey;
+  },
+): void {
+  requireUuid(input.organization_id, "organization_id");
+  requireUuid(input.capa_case_id, "capa_case_id");
+  if (
+    input.idempotency_key.length < 1 ||
+    input.idempotency_key.length > MAXIMUM_IDEMPOTENCY_KEY_LENGTH ||
+    input.idempotency_key !== input.idempotency_key.trim()
+  )
+    throw new CapaWorkflowIdempotencyConfigurationError(
+      "idempotency_key must contain 1 through 128 characters without surrounding whitespace.",
+    );
+  if (
+    input.operation_code.length < 1 ||
+    input.operation_code.length > MAXIMUM_OPERATION_CODE_LENGTH ||
+    !CONTROLLED_OPERATION_PATTERN.test(input.operation_code)
+  )
+    throw new CapaWorkflowIdempotencyConfigurationError(
+      "operation_code must be a valid controlled code containing at most 64 characters.",
+    );
+}
+
 function mappedRow(
   value: unknown,
 ): CapaWorkflowIdempotencyRecord {
@@ -249,6 +277,38 @@ function requireSingleRow(
 export class SupabaseCapaWorkflowIdempotencyRepository
   implements CapaWorkflowIdempotencyRepository
 {
+  async findWorkflowOperation(
+    transaction: TransactionContext,
+    input: {
+      readonly organization_id: OrganizationId;
+      readonly capa_case_id: CapaCaseId;
+      readonly operation_code: ControlledCode;
+      readonly idempotency_key: IdempotencyKey;
+    },
+  ): Promise<CapaWorkflowIdempotencyRecord | null> {
+    const sql = requireSupabaseTransaction(transaction);
+    validateLookupInput(input);
+    const rows = await sql<WorkflowClaimRow[]>`
+      select
+        organization_id,
+        idempotency_key,
+        operation_code,
+        request_fingerprint,
+        capa_case_id,
+        source_case_version_id,
+        resulting_case_version_id,
+        audit_event_id
+      from public.capa_workflow_idempotency
+      where organization_id = ${input.organization_id}
+        and capa_case_id = ${input.capa_case_id}
+        and operation_code = ${input.operation_code}
+        and idempotency_key = ${input.idempotency_key}
+      limit 1
+    `;
+    if (rows.length === 0) return null;
+    return requireSingleRow(rows);
+  }
+
   async claimWorkflowOperation(
     transaction: TransactionContext,
     record:
