@@ -16,7 +16,10 @@ import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, applyRootCauseDraftMuta
 import type { CapaInvestigationActiveAdoptionSafeRecord } from "./capa-investigation-active-adoption-client";
 import type { CapaInvestigationActiveHumanCausalRole } from "./capa-investigation-active-advisory-review";
 import type { CapaRootCauseReturnContext } from "./capa-existing-case-client";
-import type { CapaRootCauseReviewReturnResponseEditableContent } from "../../lib/capa/domain/capa-root-cause-review-return-response";
+import type {
+  CapaRootCauseReviewReturnResponseContent,
+  CapaRootCauseReviewReturnResponseEditableContent,
+} from "../../lib/capa/domain/capa-root-cause-review-return-response";
 import { createRootCauseSubmissionAttempt, submitRootCauseSubmissionAttempt,
   type RootCauseSubmissionAttempt } from "./capa-root-cause-submission-client";
 import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace,
@@ -115,11 +118,13 @@ function ReadOnlyHypothesis({ hypothesis }: { readonly hypothesis: CapaCausalHyp
 }
 
 export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recordVersion, currentVersionId,
-  currentUserId, mode, authoritativeLedger, authoritativeRootCausePackage, rootCauseReturnContext, onAuthoritativeRefresh }: {
+  currentUserId, mode, authoritativeLedger, authoritativeRootCausePackage,
+  authoritativeRootCauseReviewReturnResponse, rootCauseReturnContext, onAuthoritativeRefresh }: {
   readonly caseId: string; readonly caseNumber: string; readonly plan: CapaInvestigationPlanContent;
   readonly recordVersion: number; readonly currentVersionId: string; readonly currentUserId: string;
   readonly mode: "S40" | "S50"; readonly authoritativeLedger?: CapaEvidenceAssumptionLedgerContent;
   readonly authoritativeRootCausePackage?: CapaRootCausePackageContent;
+  readonly authoritativeRootCauseReviewReturnResponse?: CapaRootCauseReviewReturnResponseContent;
   readonly rootCauseReturnContext?: CapaRootCauseReturnContext;
   readonly onAuthoritativeRefresh: () => Promise<void>;
 }) {
@@ -446,6 +451,105 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     {!readOnly && hydrationStatus === "ready" ? <p role="status" className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-300">Workspace persistence: {effectiveWorkspaceStatus === "loading" ? "Loading…" : effectiveWorkspaceStatus === "saving" ? "Saving…" : effectiveWorkspaceStatus === "unsaved" ? "Unsaved changes" : effectiveWorkspaceStatus === "conflict" ? "Conflict — reload required" : effectiveWorkspaceStatus === "failed" ? "Save failed" : effectiveWorkspaceStatus === "blocked" ? "Persistence blocked — governed adoption is required" : "Saved"}{draftRevision !== null ? ` · revision ${draftRevision}` : ""}</p> : null}
     {!attributionAvailable && !readOnly ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">Authenticated user identity is unavailable. Human-attributed ledger and root-cause actions are disabled.</p> : null}
     {!readOnly && hydrationStatus === "ready" && workspaceStatus === "failed" ? <button type="button" onClick={() => coordinatorRef.current?.retry()} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm">Retry workspace save</button> : null}
+    {mode === "S50" && authoritativeRootCauseReviewReturnResponse && rootCauseReturnContext ? (
+      <aside
+        aria-labelledby="s50-prior-review-return-heading"
+        className="rounded-3xl border border-amber-400/30 bg-amber-500/10 p-5 sm:p-7"
+      >
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-300">
+          Returned / resubmitted CAPA
+        </p>
+        <h2
+          id="s50-prior-review-return-heading"
+          className="mt-2 text-xl font-semibold"
+        >
+          Prior Reviewer Return
+        </h2>
+        <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <dt className="text-zinc-500">Return rationale</dt>
+            <dd className="mt-1 whitespace-pre-wrap text-zinc-100">
+              {rootCauseReturnContext.rationale}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Returned by</dt>
+            <dd className="mt-1">
+              Human approver · Participant …{rootCauseReturnContext.returnedByActorId.slice(-8)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Returned at</dt>
+            <dd className="mt-1">{rootCauseReturnContext.returnedAt}</dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Prior review source</dt>
+            <dd className="mt-1">S50 record version {rootCauseReturnContext.sourceRecordVersion}</dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Return target</dt>
+            <dd className="mt-1">S40 record version {rootCauseReturnContext.resultingRecordVersion}</dd>
+          </div>
+        </dl>
+      </aside>
+    ) : null}
+    {mode === "S50" && authoritativeRootCauseReviewReturnResponse ? (
+      <section
+        aria-labelledby="s50-investigator-return-response-heading"
+        className="rounded-3xl border border-emerald-400/25 bg-emerald-500/[0.05] p-5 sm:p-7"
+      >
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">
+          Returned / resubmitted CAPA
+        </p>
+        <h2
+          id="s50-investigator-return-response-heading"
+          className="mt-2 text-xl font-semibold"
+        >
+          Investigator Response to Prior Return
+        </h2>
+        <p className="mt-2 text-sm text-zinc-400">
+          Authoritative response submitted with the revised root-cause package. Read-only for approver review.
+        </p>
+        <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <dt className="text-zinc-500">Response Summary</dt>
+            <dd className="mt-1 whitespace-pre-wrap text-zinc-100">
+              {authoritativeRootCauseReviewReturnResponse.response_summary}
+            </dd>
+          </div>
+          <div className="sm:col-span-2">
+            <dt className="text-zinc-500">Actions Taken</dt>
+            <dd className="mt-1 whitespace-pre-wrap text-zinc-100">
+              {authoritativeRootCauseReviewReturnResponse.actions_taken}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Disposition</dt>
+            <dd className="mt-1">
+              {readable(authoritativeRootCauseReviewReturnResponse.disposition)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Supporting Evidence</dt>
+            <dd className="mt-1">
+              {shownIds(authoritativeRootCauseReviewReturnResponse.supporting_evidence_item_ids)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Responded by</dt>
+            <dd className="mt-1">
+              Human · Participant …{authoritativeRootCauseReviewReturnResponse.responded_by.actor_id.slice(-8)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Responded at</dt>
+            <dd className="mt-1">
+              {authoritativeRootCauseReviewReturnResponse.responded_at}
+            </dd>
+          </div>
+        </dl>
+      </section>
+    ) : null}
     {mode === "S50" ? <CapaRootCauseGatePanel caseId={caseId} currentVersionId={currentVersionId} recordVersion={recordVersion} onAuthoritativeRefresh={onAuthoritativeRefresh} /> : null}
     {mode === "S50" ? <CapaRootCauseReviewAdvisoryPanel caseId={caseId} expectedCaseVersionId={currentVersionId} expectedRecordVersion={recordVersion} /> : null}
     <fieldset disabled={editingDisabled}>

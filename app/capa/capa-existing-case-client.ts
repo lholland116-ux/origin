@@ -16,6 +16,12 @@ import {
   validateCapaRootCausePackage,
   type CapaRootCausePackageContent,
 } from "../../lib/capa/domain/capa-root-cause-package";
+import {
+  CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+  CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+  validateCapaRootCauseReviewReturnResponseAuthoritativeContent,
+  type CapaRootCauseReviewReturnResponseContent,
+} from "../../lib/capa/domain/capa-root-cause-review-return-response";
 
 export interface CapaExistingCaseSummary {
   readonly capaCaseId: string;
@@ -37,6 +43,8 @@ export interface CapaExistingCaseSummary {
   readonly evidenceAssumptionLedgerSectionVersionId?: string;
   readonly rootCausePackage?: CapaRootCausePackageContent;
   readonly rootCausePackageSectionVersionId?: string;
+  readonly rootCauseReviewReturnResponse?: CapaRootCauseReviewReturnResponseContent;
+  readonly rootCauseReviewReturnResponseSectionVersionId?: string;
   readonly rootCauseReturnContext?: CapaRootCauseReturnContext;
 }
 
@@ -313,7 +321,17 @@ export function parseCapaExistingCaseResponse(
     CAPA_ROOT_CAUSE_PACKAGE_SECTION_TYPE,
     CAPA_ROOT_CAUSE_PACKAGE_SCHEMA_VERSION,
   );
-  if (planSection === false || ledgerSection === false || packageSection === false) return null;
+  const returnResponseSection = controlledSection(
+    capa.sections,
+    CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+    CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+  );
+  if (
+    planSection === false ||
+    ledgerSection === false ||
+    packageSection === false ||
+    returnResponseSection === false
+  ) return null;
 
   const plan = planSection === null
     ? null
@@ -329,6 +347,13 @@ export function parseCapaExistingCaseResponse(
     ? null
     : validateCapaRootCausePackage(packageSection.content, ledger.value);
   if (packageSection !== null && (rootPackage === null || rootPackage.status === "invalid")) return null;
+
+  const returnResponse = returnResponseSection === null
+    ? null
+    : validateCapaRootCauseReviewReturnResponseAuthoritativeContent(
+        returnResponseSection.content,
+      );
+  if (returnResponse !== null && returnResponse.status === "invalid") return null;
   if (capa.status === "S40" && (plan === null || plan.status !== "valid")) return null;
   if (
     capa.status === "S50" &&
@@ -378,6 +403,13 @@ export function parseCapaExistingCaseResponse(
     ...(packageSection !== null && rootPackage !== null && rootPackage.status === "valid" ? {
       rootCausePackage: rootPackage.value,
       rootCausePackageSectionVersionId: packageSection.section_version_id as string,
+    } : {}),
+    ...(returnResponseSection !== null &&
+    returnResponse !== null &&
+    returnResponse.status === "valid" ? {
+      rootCauseReviewReturnResponse: returnResponse.value,
+      rootCauseReviewReturnResponseSectionVersionId:
+        returnResponseSection.section_version_id as string,
     } : {}),
     ...(rootCauseReturnContext === undefined || rootCauseReturnContext === null ? {} : {
       rootCauseReturnContext,

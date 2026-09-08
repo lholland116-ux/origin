@@ -36,6 +36,11 @@ import {
   SupabaseCapaTenantAccessError,
 } from "../../lib/security/supabase-capa-durable-context";
 
+import {
+  CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+  CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+} from "../../lib/capa/domain/capa-root-cause-review-return-response";
+
 const NOW =
   new Date("2026-08-12T14:00:00.000Z");
 
@@ -47,6 +52,9 @@ const REQUEST_ID =
 
 const CORRELATION_ID =
   "c206f86c-2ba7-490e-bbfd-e31f562c4f30";
+
+const PROJECTION_RETURN_RESPONSE_SECTION_ID =
+  "70000000-0000-4000-8000-000000000009";
 
 function controlled(
   value: string,
@@ -354,6 +362,7 @@ function rootCauseReturnTransition(
 function projectionRuntime(
   pages: readonly (readonly unknown[])[],
   status: "S40" | "S50" = "S40",
+  includeReturnResponse = false,
 ) {
   const selected = runtime();
   const database = Object.create(selected.database) as any;
@@ -378,25 +387,56 @@ function projectionRuntime(
     case_version_id: PROJECTION_VERSION_ID,
     version_number: 9,
     status,
-    section_version_ids: [PROJECTION_SECTION_ID],
+    section_version_ids: [
+      PROJECTION_SECTION_ID,
+      ...(includeReturnResponse
+        ? [PROJECTION_RETURN_RESPONSE_SECTION_ID]
+        : []),
+    ],
     change_reason: "Qualification fixture",
     effective_at: NOW.toISOString(),
     created_at: NOW.toISOString(),
     created_by: { actor_type: "human", actor_id: USER_ID },
   });
-  database.findSectionVersionById = async () => ({
-    organization_id: USER_ID,
-    capa_case_id: PROJECTION_CASE_ID,
-    section_version_id: PROJECTION_SECTION_ID,
-    section_type: "CAPA.INTAKE",
-    version_number: 1,
-    schema_version: "capa-intake-1.0.0",
-    content: validBody(),
-    change_reason: "Qualification fixture",
-    effective_at: NOW.toISOString(),
-    created_at: NOW.toISOString(),
-    created_by: { actor_type: "human", actor_id: USER_ID },
-  });
+  database.findSectionVersionById = async (_organizationId: string, _caseId: string, sectionVersionId: string) =>
+    sectionVersionId === PROJECTION_RETURN_RESPONSE_SECTION_ID
+      ? {
+          organization_id: USER_ID,
+          capa_case_id: PROJECTION_CASE_ID,
+          section_version_id: PROJECTION_RETURN_RESPONSE_SECTION_ID,
+          section_type: CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+          version_number: 1,
+          schema_version: CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+          content: {
+            schema_version: CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+            response_summary: "The reviewer concerns were addressed.",
+            actions_taken: "Reviewed additional evidence.",
+            disposition: "addressed",
+            supporting_evidence_item_ids: [],
+            return_transition_audit_event_id: "70000000-0000-4000-8000-000000000001",
+            source_case_version_id: "70000000-0000-4000-8000-000000000006",
+            resulting_case_version_id: PROJECTION_VERSION_ID,
+            responded_by: { actor_type: "human", actor_id: PROJECTION_ACTOR_ID },
+            responded_at: "2026-09-08T13:24:08.315Z",
+          },
+          change_reason: "Qualification fixture",
+          effective_at: NOW.toISOString(),
+          created_at: NOW.toISOString(),
+          created_by: { actor_type: "human", actor_id: USER_ID },
+        }
+      : {
+          organization_id: USER_ID,
+          capa_case_id: PROJECTION_CASE_ID,
+          section_version_id: PROJECTION_SECTION_ID,
+          section_type: "CAPA.INTAKE",
+          version_number: 1,
+          schema_version: "capa-intake-1.0.0",
+          content: validBody(),
+          change_reason: "Qualification fixture",
+          effective_at: NOW.toISOString(),
+          created_at: NOW.toISOString(),
+          created_by: { actor_type: "human", actor_id: USER_ID },
+        };
 
   const auditRepository = Object.create(
     selected.decide_root_cause_gate_dependencies.audit_repository,
@@ -1446,6 +1486,42 @@ describe("CAPA GET handler", () => {
       (testHarness.runtime.decide_root_cause_gate_dependencies
         .audit_repository as any).listEventsForAggregate,
     ).not.toHaveBeenCalled();
+  });
+
+  it("reads and projects audit context for a returned S50 with an immutable response section", async () => {
+    const testHarness = harness({
+      runtime: projectionRuntime(
+        [[rootCauseReturnTransition()]],
+        "S50",
+        true,
+      ),
+    });
+
+    const response = await handleCapaGet(
+      getRequest(PROJECTION_CASE_ID),
+      testHarness.dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await responseBody(response);
+    expect(body.capa.root_cause_return_context).toEqual({
+      returned_at: "2026-09-08T12:00:00.000Z",
+      returned_by_actor_id: PROJECTION_ACTOR_ID,
+      rationale: "Additional evidence is required before root-cause approval.",
+      source_case_version_id: "70000000-0000-4000-8000-000000000006",
+      resulting_case_version_id: PROJECTION_VERSION_ID,
+      source_record_version: 8,
+      resulting_record_version: 9,
+    });
+    expect(body.capa.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        section_type: CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+      }),
+    ]));
+    expect(
+      (testHarness.runtime.decide_root_cause_gate_dependencies
+        .audit_repository as any).listEventsForAggregate,
+    ).toHaveBeenCalledTimes(1);
   });
 
   it(

@@ -352,6 +352,7 @@ describe(
 const CONTROLLED_PLAN_ID = "30000000-0000-4000-8000-000000000010";
 const CONTROLLED_LEDGER_ID = "30000000-0000-4000-8000-000000000011";
 const CONTROLLED_PACKAGE_ID = "30000000-0000-4000-8000-000000000012";
+const CONTROLLED_RETURN_RESPONSE_ID = "30000000-0000-4000-8000-000000000013";
 const USER_ID = "60000000-0000-4000-8000-000000000001";
 const human = { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null };
 function controlledPlan() { return { section_version_id: CONTROLLED_PLAN_ID, section_type: "CAPA.INVESTIGATION_PLAN",
@@ -372,6 +373,29 @@ function controlledPackage() { return { section_version_id: CONTROLLED_PACKAGE_I
     rationale: "Supported", responsible_user_id: USER_ID, supporting_evidence_item_ids: ["E-1"],
     contradictory_evidence_item_ids: [], linked_assumption_item_ids: [], linked_gap_item_ids: [],
     linked_conflict_item_ids: [], material_to_package: true, provenance: human }], root_cause_not_confirmed: null } }; }
+
+function controlledReturnResponse() {
+  return {
+    section_version_id: CONTROLLED_RETURN_RESPONSE_ID,
+    section_type: "CAPA.ROOT_CAUSE_REVIEW_RETURN_RESPONSE",
+    schema_version: "capa-root-cause-review-return-response-1.0.0",
+    content: {
+      schema_version: "capa-root-cause-review-return-response-1.0.0",
+      response_summary: "The returned root-cause review concerns were addressed.",
+      actions_taken: "Additional investigation was completed and supporting evidence was linked.",
+      disposition: "addressed",
+      supporting_evidence_item_ids: ["E-1"],
+      return_transition_audit_event_id: "70000000-0000-4000-8000-000000000001",
+      source_case_version_id: "70000000-0000-4000-8000-000000000002",
+      resulting_case_version_id: "70000000-0000-4000-8000-000000000003",
+      responded_by: {
+        actor_type: "human",
+        actor_id: USER_ID,
+      },
+      responded_at: "2026-09-08T13:24:08.315Z",
+    },
+  };
+}
 function stateBody(status: "S40" | "S50") {
   const base = responseBody(); return { ...base, capa: { ...base.capa, status,
     sections: [...base.capa.sections, controlledPlan(), ...(status === "S50" ? [controlledLedger(), controlledPackage()] : []),
@@ -410,6 +434,73 @@ describe("CAPA existing-case controlled section parsing", () => {
       const body = stateBody("S50");
       expect(parse({ ...body, capa: { ...body.capa, sections: body.capa.sections.filter((section) => !("section_type" in section) || section.section_type !== type) } })).toBeNull();
     }
+  });
+
+  it("parses an optional authoritative S50 investigator return response and retains its section identity", () => {
+    const body = stateBody("S50");
+    const parsed = parse({
+      ...body,
+      capa: {
+        ...body.capa,
+        sections: [...body.capa.sections, controlledReturnResponse()],
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      rootCauseReviewReturnResponseSectionVersionId: CONTROLLED_RETURN_RESPONSE_ID,
+      rootCauseReviewReturnResponse: {
+        response_summary: "The returned root-cause review concerns were addressed.",
+        actions_taken: "Additional investigation was completed and supporting evidence was linked.",
+        disposition: "addressed",
+        supporting_evidence_item_ids: ["E-1"],
+        responded_by: {
+          actor_type: "human",
+          actor_id: USER_ID,
+        },
+        responded_at: "2026-09-08T13:24:08.315Z",
+      },
+    });
+  });
+
+  it("fails closed for duplicate, incorrectly versioned, or malformed return-response sections", () => {
+    const body = stateBody("S50");
+    const response = controlledReturnResponse();
+
+    expect(parse({
+      ...body,
+      capa: {
+        ...body.capa,
+        sections: [...body.capa.sections, response, controlledReturnResponse()],
+      },
+    })).toBeNull();
+
+    expect(parse({
+      ...body,
+      capa: {
+        ...body.capa,
+        sections: [
+          ...body.capa.sections,
+          { ...response, schema_version: "wrong" },
+        ],
+      },
+    })).toBeNull();
+
+    expect(parse({
+      ...body,
+      capa: {
+        ...body.capa,
+        sections: [
+          ...body.capa.sections,
+          {
+            ...response,
+            content: {
+              ...response.content,
+              response_summary: "",
+            },
+          },
+        ],
+      },
+    })).toBeNull();
   });
   it("parses a valid S40 root-cause return context into camelCase", () => {
     const body = stateBody("S40");

@@ -56,6 +56,10 @@ import type {
   CapaCaseListCursor,
 } from "../../database/repositories/capa-repository";
 
+import {
+  CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+} from "../domain/capa-root-cause-review-return-response";
+
 import type {
   AuditCursor,
   AuditRepository,
@@ -1331,8 +1335,17 @@ export async function handleCapaGet(
       );
     }
 
+    const hasImmutableRootCauseReviewReturnResponse =
+      sectionVersions.some(
+        (section) =>
+          section?.section_type ===
+          CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+      );
+
     const rootCauseReturnContext =
-      capaCase.status === "S40"
+      capaCase.status === "S40" ||
+      (capaCase.status === "S50" &&
+        hasImmutableRootCauseReviewReturnResponse)
         ? await readRootCauseReturnContext(
             runtime
               .decide_root_cause_gate_dependencies

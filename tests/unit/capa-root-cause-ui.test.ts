@@ -5,6 +5,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import CapaRootCauseWorkspace, { normalizedLedgerReferenceIds } from "../../app/capa/CapaRootCauseWorkspace";
 import { emptyInvestigationProgressForm } from "../../app/capa/capa-investigation-progress-client";
+import type {
+  AuditEventId,
+  CapaCaseVersionId,
+  IsoDateTime,
+} from "../../lib/capa/domain/capa-types";
 describe("CS4E S40/S50 browser boundary", () => {
   const intake = readFileSync(resolve("app/capa/CapaIntakeClient.tsx"), "utf8");
   const progress = readFileSync(resolve("app/capa/CapaInvestigationProgressPanel.tsx"), "utf8");
@@ -57,6 +62,39 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).not.toContain("CapaRootCauseReviewAdvisoryPanel caseId={caseId} expectedCaseVersionId={currentVersionId} expectedRecordVersion={recordVersion} onAuthoritativeRefresh");
     expect(advisoryPanel).not.toMatch(/\b(?:Adopt|Accept|Reject|Approve|Submit|Release|Transition|Sign)\b/);
   });
+  it("passes and renders an authoritative returned-CAPA investigator response read-only in S50", () => {
+    expect(intake).toContain(
+      "authoritativeRootCauseReviewReturnResponse={",
+    );
+    expect(intake).toContain(
+      "createdCapa.rootCauseReviewReturnResponse",
+    );
+    expect(workspace).toContain(
+      "Investigator Response to Prior Return",
+    );
+    expect(workspace).toContain(
+      "Authoritative response submitted with the revised root-cause package. Read-only for approver review.",
+    );
+    expect(workspace).toContain(
+      "authoritativeRootCauseReviewReturnResponse.response_summary",
+    );
+    expect(workspace).toContain(
+      "authoritativeRootCauseReviewReturnResponse.actions_taken",
+    );
+    expect(workspace).toContain(
+      "authoritativeRootCauseReviewReturnResponse.disposition",
+    );
+    expect(workspace).toContain(
+      "authoritativeRootCauseReviewReturnResponse.supporting_evidence_item_ids",
+    );
+    expect(workspace).toContain(
+      "authoritativeRootCauseReviewReturnResponse.responded_by.actor_id",
+    );
+    expect(workspace).toContain(
+      "authoritativeRootCauseReviewReturnResponse.responded_at",
+    );
+  });
+
   it("mounts a separate S50 gate while keeping the submitted package read-only", () => {
     expect(workspace).toContain('mode === "S50" ? <CapaRootCauseGatePanel');
     expect(gatePanel).toContain("Approve to S60");
@@ -128,6 +166,111 @@ describe("CS4E S40/S50 browser boundary", () => {
     }));
     expect(S50Markup).not.toContain("Returned from Root Cause Review");
   });
+  it("renders the authoritative investigator response before S50 approval without response editing controls", () => {
+    const human = {
+      source_type: "human" as const,
+      source_reference: null,
+      adopted_by_user_id: null,
+      adopted_at: null,
+    };
+    const plan = {
+      items: [{
+        item_id: "INV-1",
+        investigation_question: "Why?",
+        evidence_target: "Record",
+        investigation_method: "Review",
+        owner_user_id: null,
+        due_date: null,
+        sme_user_ids: [],
+        dependency_item_ids: [],
+        scope_relationship: "Scope",
+        status: "completed" as const,
+        disposition: null,
+        disposition_rationale: null,
+        draft_provenance: human,
+      }],
+    };
+
+    const markup = renderToStaticMarkup(
+      createElement(CapaRootCauseWorkspace, {
+        caseId: "10000000-0000-4000-8000-000000000001",
+        caseNumber: "CAPA-1",
+        mode: "S50" as const,
+        recordVersion: 10,
+        currentVersionId: "20000000-0000-4000-8000-000000000001",
+        currentUserId: "60000000-0000-4000-8000-000000000002",
+        plan,
+        rootCauseReturnContext: {
+          returnedAt: "2026-09-08T12:00:00.000Z",
+          returnedByActorId: "60000000-0000-4000-8000-000000000002",
+          rationale: "Additional evidence is required before root-cause approval.",
+          sourceCaseVersionId: "70000000-0000-4000-8000-000000000006",
+          resultingCaseVersionId: "70000000-0000-4000-8000-000000000007",
+          sourceRecordVersion: 8,
+          resultingRecordVersion: 9,
+        },
+        authoritativeRootCauseReviewReturnResponse: {
+          schema_version: "capa-root-cause-review-return-response-1.0.0",
+          response_summary: "The reviewer concerns were addressed through additional investigation.",
+          actions_taken: "Reviewed the additional evidence and revised the causal rationale.",
+          disposition: "addressed" as const,
+          supporting_evidence_item_ids: ["E-1"],
+          return_transition_audit_event_id:
+            "70000000-0000-4000-8000-000000000001" as AuditEventId,
+          source_case_version_id:
+            "70000000-0000-4000-8000-000000000002" as CapaCaseVersionId,
+          resulting_case_version_id:
+            "70000000-0000-4000-8000-000000000003" as CapaCaseVersionId,
+          responded_by: {
+            actor_type: "human" as const,
+            actor_id:
+              "60000000-0000-4000-8000-000000000002",
+          },
+          responded_at:
+            "2026-09-08T13:24:08.315Z" as IsoDateTime,
+        },
+        onAuthoritativeRefresh: async () => {},
+      }),
+    );
+
+    expect(markup).toContain(
+      "Investigator Response to Prior Return",
+    );
+    expect(markup).toContain("Prior Reviewer Return");
+    expect(markup).toContain(
+      "Additional evidence is required before root-cause approval.",
+    );
+    expect(markup).toContain("Prior review source");
+    expect(markup).toContain("S50 record version 8");
+    expect(markup).toContain("S40 record version 9");
+    expect(markup).toContain(
+      "The reviewer concerns were addressed through additional investigation.",
+    );
+    expect(markup).toContain(
+      "Reviewed the additional evidence and revised the causal rationale.",
+    );
+    expect(markup).toContain("Addressed");
+    expect(markup).toContain("E-1");
+    expect(markup).toContain("Participant …00000002");
+    expect(markup).toContain("2026-09-08T13:24:08.315Z");
+
+    const start = markup.indexOf(
+      'id="s50-investigator-return-response-heading"',
+    );
+    const priorReview = markup.indexOf(
+      'id="s50-prior-review-return-heading"',
+    );
+    const gate = markup.indexOf("Root-Cause Gate");
+
+    expect(start).toBeGreaterThan(-1);
+    expect(priorReview).toBeGreaterThan(-1);
+    expect(priorReview).toBeLessThan(start);
+    expect(gate).toBeGreaterThan(start);
+
+    const reviewChain = markup.slice(priorReview, gate);
+    expect(reviewChain).not.toMatch(/<(?:input|select|textarea|button)\b/);
+  });
+
   it("contains no raw JSON editor or CS4E approval, G-04, MFA, signature controls", () => {
     const cs4e = progress + workspace;
     expect(cs4e).not.toMatch(/JSON\.stringify|raw JSON|G-04|MFA|TOTP|e-signature|Approve root cause/i);
