@@ -11,6 +11,9 @@ import type {
   OrganizationId,
   UserId,
 } from "../domain/capa-types";
+import type {
+  CapaRootCauseReviewReturnResponseDraft,
+} from "../domain/capa-root-cause-review-return-response";
 
 export const CAPA_INVESTIGATION_ACTIVE_WORKSPACE_DRAFT_SCHEMA_VERSION =
   "capa-investigation-active-workspace-draft-1.0.0" as const;
@@ -31,6 +34,8 @@ export interface CapaInvestigationActiveWorkspaceDraft {
   readonly draft_revision: number;
   readonly evidence_assumption_ledger: CapaEvidenceAssumptionLedgerContent;
   readonly root_cause_package: CapaRootCausePackageContent;
+  /** Null for a first-time S40 workspace or before a return response is saved. */
+  readonly root_cause_return_response?: CapaRootCauseReviewReturnResponseDraft | null;
   readonly updated_by_user_id: UserId;
   readonly updated_at: IsoDateTime;
 }

@@ -14,6 +14,9 @@ const ADOPTION = "50000000-0000-4000-8000-000000000001";
 const AT = "2026-09-05T12:00:00.000Z";
 const human = { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null };
 const ai = { source_type: "ai_proposal", source_reference: ADOPTION, adopted_by_user_id: USER, adopted_at: AT };
+const RETURN_EVENT = "60000000-0000-4000-8000-000000000001";
+const RETURN_SOURCE = "70000000-0000-4000-8000-000000000001";
+const RETURN_RESULT = "80000000-0000-4000-8000-000000000001";
 
 function evidence(provenance: Record<string, unknown> = human) {
   return { item_id: "E-1", information_class: "user_provided_statement", statement: "The batch record was reviewed.", evidence_status: "current", assumption_status: null, gap_status: null, conflict_status: null, provenance, owner_user_id: null, information_date: null, source_version: null, context: null, linked_capa_objects: [], supporting_item_ids: [], contradictory_item_ids: [], conflict_item_ids: [], material_to_conclusion: false, critical_to_conclusion: false, recommended_next_step: null, target_date: null, human_disposition: null };
@@ -27,6 +30,22 @@ function draft(overrides: Record<string, unknown> = {}) {
   return { schema_version: CAPA_INVESTIGATION_ACTIVE_WORKSPACE_DRAFT_SCHEMA_VERSION, trust: "untrusted_human_draft", workflow_state: "S40", organization_id: ORG, capa_case_id: CASE, case_version_id: VERSION, record_version: 4, draft_revision: 1, evidence_assumption_ledger: { items: [] }, root_cause_package: { hypotheses: [], root_cause_not_confirmed: null }, updated_by_user_id: USER, updated_at: AT, ...overrides };
 }
 
+function returnResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: "capa-root-cause-review-return-response-draft-1.0.0",
+    response_summary: "The returned concern was reviewed.",
+    actions_taken: "The relevant evidence was rechecked.",
+    disposition: "partially_addressed",
+    supporting_evidence_item_ids: ["E-1"],
+    return_transition_audit_event_id: RETURN_EVENT,
+    source_case_version_id: RETURN_SOURCE,
+    resulting_case_version_id: RETURN_RESULT,
+    responded_by: { actor_type: "human", actor_id: USER },
+    responded_at: AT,
+    ...overrides,
+  };
+}
+
 function expectInvalid(value: unknown, reason_code: string) {
   expect(validateCapaInvestigationActiveWorkspaceDraft(value)).toEqual({ status: "invalid", reason_code });
 }
@@ -38,6 +57,8 @@ describe("S40 investigation-active workspace draft validation", () => {
     const aiGap = { ...evidence(ai), item_id: "G-1", information_class: "missing_information", evidence_status: null, gap_status: "open", recommended_next_step: "Review the controlled archive." };
     expect(validateCapaInvestigationActiveWorkspaceDraft(draft({ draft_revision: 2, evidence_assumption_ledger: { items: [aiGap] }, root_cause_package: { hypotheses: [hypothesis(ai)], root_cause_not_confirmed: null } }))).toMatchObject({ status: "valid", value: { draft_revision: 2 } });
     expect(validateCapaInvestigationActiveWorkspaceDraft(draft({ root_cause_package: { hypotheses: [hypothesis(ai)], root_cause_not_confirmed: null } }))).toMatchObject({ status: "valid" });
+    expect(validateCapaInvestigationActiveWorkspaceDraft(draft({ root_cause_return_response: null }))).toMatchObject({ status: "valid", value: { root_cause_return_response: null } });
+    expect(validateCapaInvestigationActiveWorkspaceDraft(draft({ root_cause_return_response: returnResponse() }))).toMatchObject({ status: "valid", value: { root_cause_return_response: { disposition: "partially_addressed" } } });
   });
 
   it("fails closed for shape, literals, bindings, versions, and timestamps", () => {
@@ -64,5 +85,9 @@ describe("S40 investigation-active workspace draft validation", () => {
     ]) expectInvalid(draft({ evidence_assumption_ledger: { items: [{ ...evidence(provenance) }] } }), "INVALID_WORKSPACE_DRAFT_LEDGER");
     expectInvalid(draft({ root_cause_package: { hypotheses: "not-an-array", root_cause_not_confirmed: null } }), "INVALID_WORKSPACE_DRAFT_ROOT_CAUSE_PACKAGE");
     expectInvalid(draft({ root_cause_package: { hypotheses: [], root_cause_not_confirmed: { rationale: "Continue investigation.", next_steps: ["Review records"], concluded_by_user_id: USER, concluded_at: AT, provenance: ai } } }), "INVALID_WORKSPACE_DRAFT_ROOT_CAUSE_PACKAGE");
+    expectInvalid(draft({ root_cause_return_response: returnResponse({ source_case_version_id: "not-a-uuid" }) }), "INVALID_WORKSPACE_DRAFT_RETURN_RESPONSE");
+    expectInvalid(draft({ root_cause_return_response: returnResponse({ responded_by: { actor_type: "agent", actor_id: USER } }) }), "INVALID_WORKSPACE_DRAFT_RETURN_RESPONSE");
+    expectInvalid(draft({ root_cause_return_response: returnResponse({ responded_by: { actor_type: "human", actor_id: "not-a-uuid" } }) }), "INVALID_WORKSPACE_DRAFT_RETURN_RESPONSE");
+    expectInvalid(draft({ root_cause_return_response: returnResponse({ responded_at: "not-a-time" }) }), "INVALID_WORKSPACE_DRAFT_RETURN_RESPONSE");
   });
 });

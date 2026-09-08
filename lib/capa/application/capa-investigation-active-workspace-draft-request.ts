@@ -6,11 +6,16 @@ import {
   validateCapaRootCausePackage,
   type CapaRootCausePackageContent,
 } from "../domain/capa-root-cause-package";
+import {
+  validateCapaRootCauseReviewReturnResponseEditableContent,
+  type CapaRootCauseReviewReturnResponseEditableContent,
+} from "../domain/capa-root-cause-review-return-response";
 
 export interface CapaInvestigationActiveWorkspaceDraftSaveRequest {
   readonly expected_draft_revision: number | null;
   readonly evidence_assumption_ledger: CapaEvidenceAssumptionLedgerContent;
   readonly root_cause_package: CapaRootCausePackageContent;
+  readonly root_cause_return_response?: CapaRootCauseReviewReturnResponseEditableContent | null;
 }
 
 export type CapaInvestigationActiveWorkspaceDraftRequestValidationResult =
@@ -25,7 +30,8 @@ export type CapaInvestigationActiveWorkspaceDraftRequestValidationResult =
         | "INVALID_WORKSPACE_REQUEST_FIELDS"
         | "INVALID_WORKSPACE_REQUEST_REVISION"
         | "INVALID_WORKSPACE_REQUEST_LEDGER"
-        | "INVALID_WORKSPACE_REQUEST_ROOT_CAUSE_PACKAGE";
+        | "INVALID_WORKSPACE_REQUEST_ROOT_CAUSE_PACKAGE"
+        | "INVALID_WORKSPACE_REQUEST_RETURN_RESPONSE";
       readonly detail_reason_code?: string;
     };
 
@@ -34,6 +40,7 @@ const FIELDS = [
   "evidence_assumption_ledger",
   "root_cause_package",
 ] as const;
+const OPTIONAL_FIELDS = ["root_cause_return_response"] as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
@@ -42,8 +49,10 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 function exactFields(value: Record<string, unknown>): boolean {
-  return Object.keys(value).length === FIELDS.length &&
-    FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field));
+  const hasOptional = Object.prototype.hasOwnProperty.call(value, OPTIONAL_FIELDS[0]);
+  const fields = hasOptional ? [...FIELDS, ...OPTIONAL_FIELDS] : FIELDS;
+  return Object.keys(value).length === fields.length &&
+    fields.every((field) => Object.prototype.hasOwnProperty.call(value, field));
 }
 
 function structurallyValidAiProvenance(value: { readonly source_type: string; readonly source_reference: string | null; readonly adopted_by_user_id: string | null; readonly adopted_at: string | null }): boolean {
@@ -67,6 +76,21 @@ export function validateCapaInvestigationActiveWorkspaceDraftSaveRequest(
       value.expected_draft_revision >= Number.MAX_SAFE_INTEGER)
   ) {
     return { status: "invalid", reason_code: "INVALID_WORKSPACE_REQUEST_REVISION" };
+  }
+
+  let returnResponse: CapaRootCauseReviewReturnResponseEditableContent | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, "root_cause_return_response")) {
+    if (value.root_cause_return_response === null) {
+      returnResponse = null;
+    } else {
+      const response = validateCapaRootCauseReviewReturnResponseEditableContent(
+        value.root_cause_return_response,
+      );
+      if (response.status !== "valid") {
+        return { status: "invalid", reason_code: "INVALID_WORKSPACE_REQUEST_RETURN_RESPONSE", detail_reason_code: response.reason_code };
+      }
+      returnResponse = response.value;
+    }
   }
 
   const ledger = validateCapaEvidenceAssumptionLedger(value.evidence_assumption_ledger);
@@ -103,6 +127,7 @@ export function validateCapaInvestigationActiveWorkspaceDraftSaveRequest(
       expected_draft_revision: value.expected_draft_revision,
       evidence_assumption_ledger: ledger.value,
       root_cause_package: rootCause.value,
+      ...(returnResponse === undefined ? {} : { root_cause_return_response: returnResponse }),
     }),
   };
 }

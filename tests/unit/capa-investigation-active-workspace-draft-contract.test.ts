@@ -26,5 +26,7 @@ describe("S40 investigation-active workspace draft contract", () => {
     expect(draft.workflow_state).toBe("S40");
     expect(draft.evidence_assumption_ledger).toEqual({ items: [] });
     expect(draft.root_cause_package).toEqual({ hypotheses: [], root_cause_not_confirmed: null });
+    expect((draft as Record<string, unknown>).root_cause_return_response).toBeUndefined();
+    expect({ ...draft, root_cause_return_response: null }).toMatchObject({ root_cause_return_response: null });
   });
 });
