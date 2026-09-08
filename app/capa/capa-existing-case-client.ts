@@ -37,6 +37,17 @@ export interface CapaExistingCaseSummary {
   readonly evidenceAssumptionLedgerSectionVersionId?: string;
   readonly rootCausePackage?: CapaRootCausePackageContent;
   readonly rootCausePackageSectionVersionId?: string;
+  readonly rootCauseReturnContext?: CapaRootCauseReturnContext;
+}
+
+export interface CapaRootCauseReturnContext {
+  readonly returnedAt: string;
+  readonly returnedByActorId: string;
+  readonly rationale: string;
+  readonly sourceCaseVersionId: string;
+  readonly resultingCaseVersionId: string;
+  readonly sourceRecordVersion: number;
+  readonly resultingRecordVersion: number;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -74,6 +85,66 @@ function isRecord(
     value !== null &&
     !Array.isArray(value)
   );
+}
+
+function parseRootCauseReturnContext(
+  value: unknown,
+): CapaRootCauseReturnContext | null {
+  if (!isRecord(value)) return null;
+
+  const sourceRecordVersion =
+    typeof value.source_record_version === "number"
+      ? value.source_record_version
+      : null;
+  const resultingRecordVersion =
+    typeof value.resulting_record_version === "number"
+      ? value.resulting_record_version
+      : null;
+
+  const expectedKeys = [
+    "returned_at",
+    "returned_by_actor_id",
+    "rationale",
+    "source_case_version_id",
+    "resulting_case_version_id",
+    "source_record_version",
+    "resulting_record_version",
+  ];
+
+  if (
+    Object.keys(value).sort().join(",") !==
+      expectedKeys.sort().join(",") ||
+    typeof value.returned_at !== "string" ||
+    !Number.isFinite(Date.parse(value.returned_at)) ||
+    typeof value.returned_by_actor_id !== "string" ||
+    !UUID.test(value.returned_by_actor_id) ||
+    typeof value.rationale !== "string" ||
+    value.rationale.trim().length === 0 ||
+    typeof value.source_case_version_id !== "string" ||
+    !UUID.test(value.source_case_version_id) ||
+    typeof value.resulting_case_version_id !== "string" ||
+    !UUID.test(value.resulting_case_version_id) ||
+    sourceRecordVersion === null ||
+    !Number.isSafeInteger(sourceRecordVersion) ||
+    sourceRecordVersion < 1 ||
+    resultingRecordVersion === null ||
+    !Number.isSafeInteger(resultingRecordVersion) ||
+    resultingRecordVersion < 1 ||
+    resultingRecordVersion !==
+      sourceRecordVersion + 1
+  ) {
+    return null;
+  }
+
+  return {
+    returnedAt: value.returned_at,
+    returnedByActorId: value.returned_by_actor_id,
+    rationale: value.rationale,
+    sourceCaseVersionId: value.source_case_version_id,
+    resultingCaseVersionId: value.resulting_case_version_id,
+    sourceRecordVersion,
+    resultingRecordVersion,
+  };
 }
 
 /**
@@ -208,6 +279,25 @@ export function parseCapaExistingCaseResponse(
       ? value.correlation_id
       : options.fallbackCorrelationId;
 
+  const rootCauseReturnContext =
+    Object.prototype.hasOwnProperty.call(
+      capa,
+      "root_cause_return_context",
+    )
+      ? parseRootCauseReturnContext(
+          capa.root_cause_return_context,
+        )
+      : undefined;
+
+  if (
+    Object.prototype.hasOwnProperty.call(
+      capa,
+      "root_cause_return_context",
+    ) && rootCauseReturnContext === null
+  ) {
+    return null;
+  }
+
   const planSection = controlledSection(
     capa.sections,
     CAPA_INVESTIGATION_PLAN_SECTION_TYPE,
@@ -289,5 +379,8 @@ export function parseCapaExistingCaseResponse(
       rootCausePackage: rootPackage.value,
       rootCausePackageSectionVersionId: packageSection.section_version_id as string,
     } : {}),
+    ...(rootCauseReturnContext === undefined || rootCauseReturnContext === null ? {} : {
+      rootCauseReturnContext,
+    }),
   });
 }

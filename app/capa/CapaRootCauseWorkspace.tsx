@@ -15,6 +15,7 @@ import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, applyRootCauseDraftMuta
   validateRootCauseDrafts } from "./capa-root-cause-draft";
 import type { CapaInvestigationActiveAdoptionSafeRecord } from "./capa-investigation-active-adoption-client";
 import type { CapaInvestigationActiveHumanCausalRole } from "./capa-investigation-active-advisory-review";
+import type { CapaRootCauseReturnContext } from "./capa-existing-case-client";
 import { createRootCauseSubmissionAttempt, submitRootCauseSubmissionAttempt,
   type RootCauseSubmissionAttempt } from "./capa-root-cause-submission-client";
 import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace,
@@ -107,11 +108,12 @@ function ReadOnlyHypothesis({ hypothesis }: { readonly hypothesis: CapaCausalHyp
 }
 
 export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recordVersion, currentVersionId,
-  currentUserId, mode, authoritativeLedger, authoritativeRootCausePackage, onAuthoritativeRefresh }: {
+  currentUserId, mode, authoritativeLedger, authoritativeRootCausePackage, rootCauseReturnContext, onAuthoritativeRefresh }: {
   readonly caseId: string; readonly caseNumber: string; readonly plan: CapaInvestigationPlanContent;
   readonly recordVersion: number; readonly currentVersionId: string; readonly currentUserId: string;
   readonly mode: "S40" | "S50"; readonly authoritativeLedger?: CapaEvidenceAssumptionLedgerContent;
   readonly authoritativeRootCausePackage?: CapaRootCausePackageContent;
+  readonly rootCauseReturnContext?: CapaRootCauseReturnContext;
   readonly onAuthoritativeRefresh: () => Promise<void>;
 }) {
   const [ledger, setLedger] = useState(() => mode === "S50" ? authoritativeLedger ?? createInitialLedgerDraft() : createInitialLedgerDraft());
@@ -367,6 +369,17 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   return <section aria-labelledby="root-cause-workspace-heading" className="mt-8 space-y-6">
     <header><p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{readOnly ? "S50 · Submitted read-only record" : "S40 · Investigation Active"}</p>
       <h2 id="root-cause-workspace-heading" className="mt-2 text-2xl font-semibold">{readOnly ? "Root Cause Review" : `Root Cause Workspace — ${caseNumber}`}</h2></header>
+    {mode === "S40" && rootCauseReturnContext ? <aside aria-labelledby="root-cause-return-heading" className="rounded-3xl border border-amber-400/30 bg-amber-500/10 p-5 sm:p-7">
+      <h3 id="root-cause-return-heading" className="text-xl font-semibold">Returned from Root Cause Review</h3>
+      <p className="mt-2 text-sm text-zinc-300">This root-cause package was returned for additional investigation.</p>
+      <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+        <div className="sm:col-span-2"><dt className="text-zinc-500">Return rationale</dt><dd className="mt-1 whitespace-pre-wrap text-zinc-100">{rootCauseReturnContext.rationale}</dd></div>
+        <div><dt className="text-zinc-500">Returned by</dt><dd className="mt-1">Human approver · Participant …{rootCauseReturnContext.returnedByActorId.slice(-8)}</dd></div>
+        <div><dt className="text-zinc-500">Returned at</dt><dd className="mt-1">{rootCauseReturnContext.returnedAt}</dd></div>
+        <div><dt className="text-zinc-500">Source</dt><dd className="mt-1">S50 · record version {rootCauseReturnContext.sourceRecordVersion}</dd></div>
+        <div><dt className="text-zinc-500">Return target</dt><dd className="mt-1">S40 · record version {rootCauseReturnContext.resultingRecordVersion}</dd></div>
+      </dl>
+    </aside> : null}
     {!readOnly && hydrationStatus === "loading" ? <p role="status" className="rounded-xl border border-blue-400/25 bg-blue-500/10 p-3 text-sm text-blue-100">Loading durable workspace…</p> : null}
     {!readOnly && hydrationStatus === "failed" ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">The durable S40 workspace could not be loaded. Refresh or reload is required.</p> : null}
     {!readOnly && hydrationStatus === "ready" ? <p role="status" className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-300">Workspace persistence: {effectiveWorkspaceStatus === "loading" ? "Loading…" : effectiveWorkspaceStatus === "saving" ? "Saving…" : effectiveWorkspaceStatus === "unsaved" ? "Unsaved changes" : effectiveWorkspaceStatus === "conflict" ? "Conflict — reload required" : effectiveWorkspaceStatus === "failed" ? "Save failed" : effectiveWorkspaceStatus === "blocked" ? "Persistence blocked — governed adoption is required" : "Saved"}{draftRevision !== null ? ` · revision ${draftRevision}` : ""}</p> : null}

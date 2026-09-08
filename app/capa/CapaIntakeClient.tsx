@@ -5208,6 +5208,7 @@ export default function CapaIntakeClient({
               mode={createdCapa.status}
               authoritativeLedger={createdCapa.evidenceAssumptionLedger}
               authoritativeRootCausePackage={createdCapa.rootCausePackage}
+              rootCauseReturnContext={createdCapa.rootCauseReturnContext}
               onAuthoritativeRefresh={async () => {
                 await openExistingCase({
                   capaCaseId: createdCapa.capaCaseId,

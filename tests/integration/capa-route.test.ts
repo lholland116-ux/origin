@@ -2,6 +2,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 
 import type {
@@ -287,6 +288,136 @@ function getRequest(
     method: "GET",
     headers,
   });
+}
+
+const PROJECTION_CASE_ID =
+  "70000000-0000-4000-8000-000000000001";
+const PROJECTION_VERSION_ID =
+  "70000000-0000-4000-8000-000000000002";
+const PROJECTION_SECTION_ID =
+  "70000000-0000-4000-8000-000000000003";
+const PROJECTION_ACTOR_ID =
+  "70000000-0000-4000-8000-000000000004";
+
+function rootCauseReturnTransition(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    event_id:
+      "70000000-0000-4000-8000-000000000005",
+    organization_id: USER_ID,
+    request_id: REQUEST_ID,
+    correlation_id: CORRELATION_ID,
+    idempotency_key: "audit-idempotency-key",
+    event_type: "EVT-STATE-TRANSITION",
+    schema_version: "audit-schema-1.0.0",
+    aggregate_type: "CAPA_CASE",
+    aggregate_id: PROJECTION_CASE_ID,
+    aggregate_version: 9,
+    actor: {
+      actor_type: "human",
+      actor_id: PROJECTION_ACTOR_ID,
+    },
+    occurred_at: "2026-09-08T12:00:00.000Z",
+    action: "DECIDE_CAPA_ROOT_CAUSE_GATE",
+    target: {
+      object_type: "CAPA_CASE",
+      object_id: PROJECTION_CASE_ID,
+      object_version_id: PROJECTION_VERSION_ID,
+    },
+    outcome: "succeeded",
+    reason: "Additional evidence is required before root-cause approval.",
+    change: {
+      before_ref: {
+        object_type: "CAPA_CASE_VERSION",
+        object_id: PROJECTION_CASE_ID,
+        object_version_id:
+          "70000000-0000-4000-8000-000000000006",
+      },
+      after_ref: {
+        object_type: "CAPA_CASE_VERSION",
+        object_id: PROJECTION_CASE_ID,
+        object_version_id: PROJECTION_VERSION_ID,
+      },
+    },
+    configuration_versions: {},
+    metadata: {
+      from_state: "S50",
+      to_state: "S40",
+      rationale:
+        "Additional evidence is required before root-cause approval.",
+    },
+    ...overrides,
+  } as never;
+}
+
+function projectionRuntime(
+  pages: readonly (readonly unknown[])[],
+  status: "S40" | "S50" = "S40",
+) {
+  const selected = runtime();
+  const database = Object.create(selected.database) as any;
+  database.findCaseById = async () => ({
+    organization_id: USER_ID,
+    capa_case_id: PROJECTION_CASE_ID,
+    case_number: "CAPA-000010",
+    current_version_id: PROJECTION_VERSION_ID,
+    status,
+    record_version: 9,
+    owner_user_id: USER_ID,
+    confidentiality: "CUSTOMER_CONFIDENTIAL",
+    effective_at: NOW.toISOString(),
+    created_at: NOW.toISOString(),
+    updated_at: NOW.toISOString(),
+    created_by: { actor_type: "human", actor_id: USER_ID },
+    updated_by: { actor_type: "human", actor_id: USER_ID },
+  });
+  database.findCaseVersionById = async () => ({
+    organization_id: USER_ID,
+    capa_case_id: PROJECTION_CASE_ID,
+    case_version_id: PROJECTION_VERSION_ID,
+    version_number: 9,
+    status,
+    section_version_ids: [PROJECTION_SECTION_ID],
+    change_reason: "Qualification fixture",
+    effective_at: NOW.toISOString(),
+    created_at: NOW.toISOString(),
+    created_by: { actor_type: "human", actor_id: USER_ID },
+  });
+  database.findSectionVersionById = async () => ({
+    organization_id: USER_ID,
+    capa_case_id: PROJECTION_CASE_ID,
+    section_version_id: PROJECTION_SECTION_ID,
+    section_type: "CAPA.INTAKE",
+    version_number: 1,
+    schema_version: "capa-intake-1.0.0",
+    content: validBody(),
+    change_reason: "Qualification fixture",
+    effective_at: NOW.toISOString(),
+    created_at: NOW.toISOString(),
+    created_by: { actor_type: "human", actor_id: USER_ID },
+  });
+
+  const auditRepository = Object.create(
+    selected.decide_root_cause_gate_dependencies.audit_repository,
+  ) as any;
+  auditRepository.listEventsForAggregate = vi.fn(async (query: { readonly cursor?: string }) => {
+    const pageIndex = query.cursor === undefined ? 0 : Number(query.cursor);
+    const events = pages[pageIndex] ?? [];
+    return {
+      events,
+      ...(pages[pageIndex + 1] === undefined ? {} : { next_cursor: String(pageIndex + 1) }),
+    };
+  });
+
+  return {
+    ...selected,
+    database,
+    decide_root_cause_gate_dependencies: {
+      ...selected.decide_root_cause_gate_dependencies,
+      audit_repository: auditRepository,
+    },
+  } as CapaDevelopmentRuntime;
 }
 
 function listRequest(
@@ -1182,6 +1313,140 @@ describe("CAPA GET handler", () => {
       ).toEqual(validBody());
     },
   );
+
+  it("projects the latest valid G-04 return across paginated audit events", async () => {
+    const fillerEvents = Array.from({ length: 100 }, (_, index) =>
+      rootCauseReturnTransition({
+        event_id: `70000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`,
+        event_type: "EVT-NOTE",
+        action: "NOTE_RECORDED",
+        metadata: {},
+      }),
+    );
+    const laterSameStateEvent = rootCauseReturnTransition({
+      event_id: "70000000-0000-4000-8000-000000000007",
+      event_type: "EVT-NOTE",
+      action: "INVESTIGATION_NOTE_RECORDED",
+      metadata: {},
+    });
+    const testHarness = harness({
+      runtime: projectionRuntime([
+        fillerEvents,
+        [rootCauseReturnTransition(), laterSameStateEvent],
+      ]),
+    });
+
+    const response = await handleCapaGet(
+      getRequest(PROJECTION_CASE_ID, {
+        "x-correlation-id": CORRELATION_ID,
+      }),
+      testHarness.dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await responseBody(response);
+    expect(body.capa.root_cause_return_context).toEqual({
+      returned_at: "2026-09-08T12:00:00.000Z",
+      returned_by_actor_id: PROJECTION_ACTOR_ID,
+      rationale: "Additional evidence is required before root-cause approval.",
+      source_case_version_id:
+        "70000000-0000-4000-8000-000000000006",
+      resulting_case_version_id: PROJECTION_VERSION_ID,
+      source_record_version: 8,
+      resulting_record_version: 9,
+    });
+
+    const listEvents = (testHarness.runtime
+      .decide_root_cause_gate_dependencies.audit_repository as any)
+      .listEventsForAggregate;
+    expect(listEvents).toHaveBeenCalledTimes(2);
+    expect(listEvents).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      organization_id: USER_ID,
+      aggregate_type: "CAPA_CASE",
+      aggregate_id: PROJECTION_CASE_ID,
+      limit: 100,
+    }));
+    expect(listEvents).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      cursor: "1",
+      limit: 100,
+    }));
+  });
+
+  it.each([
+    ["no transition", []],
+    [
+      "normal S30 to S40 release",
+      [rootCauseReturnTransition({
+        action: "RELEASE_CAPA_INVESTIGATION",
+        reason: "Investigation planning is complete.",
+        metadata: {
+          from_state: "S30",
+          to_state: "S40",
+          rationale: "Investigation planning is complete.",
+        },
+      })],
+    ],
+    [
+      "later different transition into S40",
+      [
+        rootCauseReturnTransition(),
+        rootCauseReturnTransition({
+          event_id: "70000000-0000-4000-8000-000000000008",
+          action: "RELEASE_CAPA_INVESTIGATION",
+          reason: "A later investigation release superseded the return.",
+          metadata: {
+            from_state: "S30",
+            to_state: "S40",
+            rationale: "A later investigation release superseded the return.",
+          },
+        }),
+      ],
+    ],
+    [
+      "inconsistent return rationale",
+      [rootCauseReturnTransition({
+        metadata: {
+          from_state: "S50",
+          to_state: "S40",
+          rationale: "A different rationale.",
+        },
+      })],
+    ],
+  ] as const)("fails closed for %s", async (_label, events) => {
+    const testHarness = harness({
+      runtime: projectionRuntime([events]),
+    });
+    const response = await handleCapaGet(
+      getRequest(PROJECTION_CASE_ID),
+      testHarness.dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await responseBody(response);
+    expect(body.capa).not.toHaveProperty("root_cause_return_context");
+  });
+
+  it("does not read or project audit context when the current CAPA is not S40", async () => {
+    const testHarness = harness({
+      runtime: projectionRuntime(
+        [[rootCauseReturnTransition()]],
+        "S50",
+      ),
+    });
+
+    const response = await handleCapaGet(
+      getRequest(PROJECTION_CASE_ID),
+      testHarness.dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await responseBody(response);
+    expect(body.capa).not.toHaveProperty("root_cause_return_context");
+    expect(
+      (testHarness.runtime.decide_root_cause_gate_dependencies
+        .audit_repository as any).listEventsForAggregate,
+    ).not.toHaveBeenCalled();
+  });
 
   it(
     "returns 401 without a session",

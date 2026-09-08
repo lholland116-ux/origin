@@ -66,6 +66,51 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(gateClient).toContain("requestBody");
     expect(workspace).toContain("Authoritative submitted package; read-only.");
   });
+  it("passes and renders the read-only S40 root-cause return context", () => {
+    expect(intake).toContain("rootCauseReturnContext={createdCapa.rootCauseReturnContext}");
+    expect(workspace).toContain('mode === "S40" && rootCauseReturnContext');
+    expect(workspace).toContain("Returned from Root Cause Review");
+    expect(workspace).toContain("This root-cause package was returned for additional investigation.");
+
+    const human = { source_type: "human" as const, source_reference: null, adopted_by_user_id: null, adopted_at: null };
+    const context = {
+      returnedAt: "2026-09-08T12:00:00.000Z",
+      returnedByActorId: "60000000-0000-4000-8000-000000000002",
+      rationale: "Additional investigation is required.",
+      sourceCaseVersionId: "60000000-0000-4000-8000-000000000003",
+      resultingCaseVersionId: "60000000-0000-4000-8000-000000000004",
+      sourceRecordVersion: 8,
+      resultingRecordVersion: 9,
+    };
+    const plan = { items: [{ item_id: "INV-1", investigation_question: "Why?", evidence_target: "Record", investigation_method: "Review",
+      owner_user_id: null, due_date: null, sme_user_ids: [], dependency_item_ids: [], scope_relationship: "Scope", status: "completed" as const,
+      disposition: null, disposition_rationale: null, draft_provenance: human }] };
+    const markup = renderToStaticMarkup(createElement(CapaRootCauseWorkspace, {
+      caseId: "10000000-0000-4000-8000-000000000001", caseNumber: "CAPA-1", mode: "S40" as const,
+      recordVersion: 9, currentVersionId: "20000000-0000-4000-8000-000000000001", currentUserId: "60000000-0000-4000-8000-000000000002",
+      plan, rootCauseReturnContext: context, onAuthoritativeRefresh: async () => {},
+    }));
+    expect(markup).toContain("Returned from Root Cause Review");
+    expect(markup).toContain("Additional investigation is required.");
+    expect(markup).toContain("S50 · record version 8");
+    expect(markup).toContain("S40 · record version 9");
+    const panel = markup.slice(markup.indexOf("Returned from Root Cause Review"), markup.indexOf("</aside>") + 8);
+    expect(panel).not.toMatch(/<(?:input|select|textarea|button)\b/);
+
+    const withoutContext = renderToStaticMarkup(createElement(CapaRootCauseWorkspace, {
+      caseId: "10000000-0000-4000-8000-000000000001", caseNumber: "CAPA-1", mode: "S40" as const,
+      recordVersion: 9, currentVersionId: "20000000-0000-4000-8000-000000000001", currentUserId: "60000000-0000-4000-8000-000000000002",
+      plan, onAuthoritativeRefresh: async () => {},
+    }));
+    expect(withoutContext).not.toContain("Returned from Root Cause Review");
+
+    const S50Markup = renderToStaticMarkup(createElement(CapaRootCauseWorkspace, {
+      caseId: "10000000-0000-4000-8000-000000000001", caseNumber: "CAPA-1", mode: "S50" as const,
+      recordVersion: 9, currentVersionId: "20000000-0000-4000-8000-000000000001", currentUserId: "60000000-0000-4000-8000-000000000002",
+      plan, rootCauseReturnContext: context, onAuthoritativeRefresh: async () => {},
+    }));
+    expect(S50Markup).not.toContain("Returned from Root Cause Review");
+  });
   it("contains no raw JSON editor or CS4E approval, G-04, MFA, signature controls", () => {
     const cs4e = progress + workspace;
     expect(cs4e).not.toMatch(/JSON\.stringify|raw JSON|G-04|MFA|TOTP|e-signature|Approve root cause/i);
@@ -102,12 +147,22 @@ describe("CS4E S40/S50 browser boundary", () => {
         material_to_package: true, provenance: human }], root_cause_not_confirmed: { rationale: "Evidence was insufficient.",
         next_steps: ["Continue monitoring"], concluded_by_user_id: "30000000-0000-4000-8000-000000000001",
         concluded_at: "2026-09-01T12:00:00.000Z", provenance: human } },
+      rootCauseReturnContext: {
+        returnedAt: "2026-09-08T12:00:00.000Z",
+        returnedByActorId: "60000000-0000-4000-8000-000000000002",
+        rationale: "This must not appear for S50.",
+        sourceCaseVersionId: "60000000-0000-4000-8000-000000000003",
+        resultingCaseVersionId: "60000000-0000-4000-8000-000000000004",
+        sourceRecordVersion: 8,
+        resultingRecordVersion: 9,
+      },
     }));
     expect(markup).toContain("Seal wear was verified."); expect(markup).toContain("Verified Evidence");
     expect(markup).toContain("QMS-DOC-42"); expect(markup).toContain("Maintenance timing contributed to the event.");
     expect(markup).toContain("Confirmed"); expect(markup).toContain("Contributing Factor");
     expect(markup).toContain("Root cause not confirmed"); expect(markup).toContain("Evidence was insufficient.");
     expect(markup).toContain("Continue monitoring"); expect(markup).not.toContain("Record that root cause was not confirmed");
+    expect(markup).not.toContain("Returned from Root Cause Review");
     expect(markup).not.toContain("Submit root cause for review");
     const submittedPackageMarkup = markup.slice(markup.indexOf('id="root-package-heading"'));
     expect(submittedPackageMarkup).not.toContain("<input"); expect(submittedPackageMarkup).not.toContain("<select"); expect(submittedPackageMarkup).not.toContain("<textarea");

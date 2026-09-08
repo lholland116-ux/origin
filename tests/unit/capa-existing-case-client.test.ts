@@ -378,6 +378,18 @@ function stateBody(status: "S40" | "S50") {
       { section_type: "CAPA.UNRELATED", schema_version: "other-1", section_version_id: "30000000-0000-4000-8000-000000000099", content: { ignored: true } }] } };
 }
 
+function validRootCauseReturnContext() {
+  return {
+    returned_at: "2026-09-08T12:00:00.000Z",
+    returned_by_actor_id: "60000000-0000-4000-8000-000000000002",
+    rationale: "Additional investigation is required.",
+    source_case_version_id: "60000000-0000-4000-8000-000000000003",
+    resulting_case_version_id: "60000000-0000-4000-8000-000000000004",
+    source_record_version: 8,
+    resulting_record_version: 9,
+  };
+}
+
 describe("CAPA existing-case controlled section parsing", () => {
   const parse = (body: unknown) => parseCapaExistingCaseResponse(body, { expectedCaseId: CASE_ID, fallbackCorrelationId: FALLBACK_CORRELATION_ID });
   it("parses an S40 plan and retains its section identity", () => {
@@ -398,6 +410,53 @@ describe("CAPA existing-case controlled section parsing", () => {
       const body = stateBody("S50");
       expect(parse({ ...body, capa: { ...body.capa, sections: body.capa.sections.filter((section) => !("section_type" in section) || section.section_type !== type) } })).toBeNull();
     }
+  });
+  it("parses a valid S40 root-cause return context into camelCase", () => {
+    const body = stateBody("S40");
+    const parsed = parse({
+      ...body,
+      capa: {
+        ...body.capa,
+        root_cause_return_context: validRootCauseReturnContext(),
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      rootCauseReturnContext: {
+        returnedAt: "2026-09-08T12:00:00.000Z",
+        returnedByActorId:
+          "60000000-0000-4000-8000-000000000002",
+        rationale: "Additional investigation is required.",
+        sourceCaseVersionId:
+          "60000000-0000-4000-8000-000000000003",
+        resultingCaseVersionId:
+          "60000000-0000-4000-8000-000000000004",
+        sourceRecordVersion: 8,
+        resultingRecordVersion: 9,
+      },
+    });
+  });
+  it.each([
+    ["actor", { returned_by_actor_id: "not-a-uuid" }],
+    ["source version", { source_case_version_id: "not-a-uuid" }],
+    ["resulting version", { resulting_case_version_id: "not-a-uuid" }],
+    ["timestamp", { returned_at: "not-a-timestamp" }],
+    ["rationale", { rationale: "   " }],
+    ["source record version", { source_record_version: 0 }],
+    ["result record version", { resulting_record_version: 10 }],
+    ["unexpected field", { unexpected: true }],
+  ] as const)("rejects malformed present root-cause return context: %s", (_label, override) => {
+    const body = stateBody("S40");
+    expect(parse({
+      ...body,
+      capa: {
+        ...body.capa,
+        root_cause_return_context: {
+          ...validRootCauseReturnContext(),
+          ...override,
+        },
+      },
+    })).toBeNull();
   });
   it("rejects duplicate, schema-mismatched, and malformed ledger/package sections", () => {
     for (const type of ["CAPA.EVIDENCE_ASSUMPTION_LEDGER", "CAPA.ROOT_CAUSE_PACKAGE"]) {

@@ -27,11 +27,14 @@ import type {
 } from "../domain/capa-investigation-plan";
 
 import type {
+  AuditEvent,
   CapaCaseId,
   CapaCaseVersionId,
   CorrelationId,
+  ControlledCode,
   IdempotencyKey,
   IsoDateTime,
+  OrganizationId,
   RequestId,
   RequestTrace,
 } from "../domain/capa-types";
@@ -52,6 +55,11 @@ import {
 import type {
   CapaCaseListCursor,
 } from "../../database/repositories/capa-repository";
+
+import type {
+  AuditCursor,
+  AuditRepository,
+} from "../../database/repositories/audit-repository";
 
 import type {
   CapaRuntime,
@@ -139,6 +147,132 @@ interface ErrorResponseBody {
       readonly message: string;
     }[];
   };
+}
+
+interface CapaRootCauseReturnContextProjection {
+  readonly returned_at: string;
+  readonly returned_by_actor_id: string;
+  readonly rationale: string;
+  readonly source_case_version_id: string;
+  readonly resulting_case_version_id: string;
+  readonly source_record_version: number;
+  readonly resulting_record_version: number;
+}
+
+function isObjectRecord(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+function hasNonEmptyString(
+  value: unknown,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0
+  );
+}
+
+function isValidAuditTimestamp(
+  value: unknown,
+): value is string {
+  return (
+    hasNonEmptyString(value) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function isRootCauseReturnTransition(
+  event: AuditEvent,
+): boolean {
+  return (
+    event.event_type ===
+      "EVT-STATE-TRANSITION" &&
+    event.outcome === "succeeded" &&
+    isObjectRecord(event.metadata) &&
+    event.metadata.to_state === "S40"
+  );
+}
+
+function validatedRootCauseReturnContext(
+  event: AuditEvent | undefined,
+): CapaRootCauseReturnContextProjection | undefined {
+  if (event === undefined) return undefined;
+
+  const metadata = event.metadata;
+  const beforeVersionId =
+    event.change?.before_ref?.object_version_id;
+  const resultingVersionId =
+    event.change?.after_ref?.object_version_id;
+
+  if (
+    event.event_type !==
+      "EVT-STATE-TRANSITION" ||
+    event.action !==
+      "DECIDE_CAPA_ROOT_CAUSE_GATE" ||
+    event.outcome !== "succeeded" ||
+    event.actor?.actor_type !== "human" ||
+    !hasNonEmptyString(event.actor?.actor_id) ||
+    !isValidAuditTimestamp(event.occurred_at) ||
+    !isObjectRecord(metadata) ||
+    metadata.from_state !== "S50" ||
+    metadata.to_state !== "S40" ||
+    !hasNonEmptyString(event.reason) ||
+    !hasNonEmptyString(metadata.rationale) ||
+    metadata.rationale !== event.reason ||
+    !hasNonEmptyString(beforeVersionId) ||
+    !hasNonEmptyString(resultingVersionId) ||
+    !Number.isSafeInteger(event.aggregate_version) ||
+    (event.aggregate_version as number) < 2
+  ) {
+    return undefined;
+  }
+
+  return {
+    returned_at: event.occurred_at,
+    returned_by_actor_id: event.actor.actor_id,
+    rationale: event.reason,
+    source_case_version_id: beforeVersionId,
+    resulting_case_version_id: resultingVersionId,
+    source_record_version:
+      (event.aggregate_version as number) - 1,
+    resulting_record_version:
+      event.aggregate_version as number,
+  };
+}
+
+async function readRootCauseReturnContext(
+  auditRepository: AuditRepository,
+  organizationId: OrganizationId,
+  capaCaseId: CapaCaseId,
+): Promise<CapaRootCauseReturnContextProjection | undefined> {
+  let cursor: AuditCursor | undefined;
+  let latestTransition: AuditEvent | undefined;
+
+  do {
+    const page = await auditRepository.listEventsForAggregate({
+      organization_id: organizationId,
+      aggregate_type: "CAPA_CASE" as ControlledCode,
+      aggregate_id: capaCaseId,
+      limit: 100,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+
+    for (const event of page.events) {
+      if (isRootCauseReturnTransition(event)) {
+        latestTransition = event;
+      }
+    }
+
+    cursor = page.next_cursor;
+  } while (cursor !== undefined);
+
+  return validatedRootCauseReturnContext(latestTransition);
 }
 
 function jsonResponse(
@@ -1197,6 +1331,17 @@ export async function handleCapaGet(
       );
     }
 
+    const rootCauseReturnContext =
+      capaCase.status === "S40"
+        ? await readRootCauseReturnContext(
+            runtime
+              .decide_root_cause_gate_dependencies
+              .audit_repository,
+            context.tenant.organization_id,
+            capaCase.capa_case_id,
+          )
+        : undefined;
+
     return jsonResponse(
       {
         capa: {
@@ -1205,6 +1350,13 @@ export async function handleCapaGet(
             caseVersion,
           sections:
             sectionVersions,
+          ...(rootCauseReturnContext ===
+          undefined
+            ? {}
+            : {
+                root_cause_return_context:
+                  rootCauseReturnContext,
+              }),
         },
         correlation_id:
           trace.correlation_id,
