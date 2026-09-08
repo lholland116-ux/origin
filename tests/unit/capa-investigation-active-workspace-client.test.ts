@@ -5,11 +5,15 @@ import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInve
 const CASE = "20000000-0000-4000-8000-000000000001";
 const VERSION = "30000000-0000-4000-8000-000000000001";
 const CORRELATION = "40000000-0000-4000-8000-000000000001";
+const RETURN_RESPONSE = { schema_version: "capa-root-cause-review-return-response-draft-1.0.0", response_summary: "The investigation response is complete.", actions_taken: "The returned package was reviewed.", disposition: "addressed" as const, supporting_evidence_item_ids: ["E-1"], return_transition_audit_event_id: "50000000-0000-4000-8000-000000000001", source_case_version_id: "60000000-0000-4000-8000-000000000001", resulting_case_version_id: "70000000-0000-4000-8000-000000000001", responded_by: { actor_type: "human" as const, actor_id: "40000000-0000-4000-8000-000000000001" }, responded_at: "2026-09-05T12:00:00.000Z" };
 const ledger = createInitialLedgerDraft();
 const rootCausePackage = createInitialRootCausePackageDraft();
 const workspace = { draft_revision: 1, case_version_id: VERSION, record_version: 4, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage, updated_at: "2026-09-05T12:00:00.000Z" };
 function snapshot(label: string): WorkspaceAutosaveSnapshot { const item = { ...createLedgerItem("verified_evidence", `LED-${label}`), statement: label }; return { evidence_assumption_ledger: { items: [item] }, root_cause_package: rootCausePackage }; }
 function projection(value: WorkspaceAutosaveSnapshot, revision: number): CapaInvestigationActiveWorkspaceProjection { return { draft_revision: revision, case_version_id: VERSION, record_version: 4, evidence_assumption_ledger: value.evidence_assumption_ledger, root_cause_package: value.root_cause_package, updated_at: `2026-09-05T12:00:0${revision}.000Z` } as CapaInvestigationActiveWorkspaceProjection; }
+function responseProjection(value: WorkspaceAutosaveSnapshot, revision: number, response: typeof RETURN_RESPONSE | null): CapaInvestigationActiveWorkspaceProjection {
+  return { ...projection(value, revision), root_cause_return_response: response === null ? null : { editable: { response_summary: response.response_summary, actions_taken: response.actions_taken, disposition: response.disposition, supporting_evidence_item_ids: response.supporting_evidence_item_ids }, metadata: { schema_version: response.schema_version, responded_by: response.responded_by, responded_at: response.responded_at, return_transition_audit_event_id: response.return_transition_audit_event_id, source_case_version_id: response.source_case_version_id, resulting_case_version_id: response.resulting_case_version_id } } } as CapaInvestigationActiveWorkspaceProjection;
+}
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((next) => { resolve = next; }); return { promise, resolve }; }
 afterEach(() => { vi.useRealTimers(); });
 
@@ -28,6 +32,12 @@ describe("S40 investigation-active workspace browser client", () => {
     await expect(reconcileCapaInvestigationActiveWorkspaceAdoptions(CASE, async () => new Response(JSON.stringify({ status: "reconciled", workspace: null, correlation_id: CORRELATION }), { status: 200 }))).resolves.toMatchObject({ status: "loaded", workspace: null });
   });
 
+  it("parses server-bound response metadata separately from editable content", () => {
+    const parsed = parseCapaInvestigationActiveWorkspaceLoad({ workspace: { ...workspace, root_cause_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION });
+    expect(parsed).toMatchObject({ status: "loaded", workspace: { root_cause_return_response: { editable: { response_summary: RETURN_RESPONSE.response_summary, actions_taken: RETURN_RESPONSE.actions_taken, disposition: "addressed", supporting_evidence_item_ids: ["E-1"] }, metadata: { schema_version: RETURN_RESPONSE.schema_version, responded_by: RETURN_RESPONSE.responded_by, responded_at: RETURN_RESPONSE.responded_at, return_transition_audit_event_id: RETURN_RESPONSE.return_transition_audit_event_id } } } });
+    expect(JSON.stringify(parsed)).toContain("responded_by");
+  });
+
   it.each([
     ["malformed reconciliation response", { status: "unexpected", workspace, correlation_id: CORRELATION }],
     ["malformed workspace projection", { status: "reconciled", workspace: { ...workspace, draft_revision: 0 }, correlation_id: CORRELATION }],
@@ -44,11 +54,47 @@ describe("S40 investigation-active workspace browser client", () => {
     const result = await saveCapaInvestigationActiveWorkspace(CASE, { expected_draft_revision: null, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage }, async (_url, init) => { sent = init; return new Response(JSON.stringify({ workspace, correlation_id: CORRELATION }), { status: 200 }); });
     expect(result.status).toBe("saved");
     expect(JSON.parse(String(sent?.body))).toEqual({ expected_draft_revision: null, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage });
+    const trustedInput = { expected_draft_revision: 1, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage, root_cause_return_response: { response_summary: RETURN_RESPONSE.response_summary, actions_taken: RETURN_RESPONSE.actions_taken, disposition: RETURN_RESPONSE.disposition, supporting_evidence_item_ids: RETURN_RESPONSE.supporting_evidence_item_ids, responded_by: RETURN_RESPONSE.responded_by, responded_at: RETURN_RESPONSE.responded_at, schema_version: RETURN_RESPONSE.schema_version, return_transition_audit_event_id: RETURN_RESPONSE.return_transition_audit_event_id, source_case_version_id: RETURN_RESPONSE.source_case_version_id, resulting_case_version_id: RETURN_RESPONSE.resulting_case_version_id } } as any;
+    await saveCapaInvestigationActiveWorkspace(CASE, trustedInput, async (_url, init) => { sent = init; return new Response(JSON.stringify({ workspace: { ...workspace, root_cause_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION }), { status: 200 }); });
+    expect(JSON.parse(String(sent?.body))).toEqual({ expected_draft_revision: 1, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage, root_cause_return_response: { response_summary: RETURN_RESPONSE.response_summary, actions_taken: RETURN_RESPONSE.actions_taken, disposition: RETURN_RESPONSE.disposition, supporting_evidence_item_ids: RETURN_RESPONSE.supporting_evidence_item_ids } });
+    await saveCapaInvestigationActiveWorkspace(CASE, { expected_draft_revision: 1, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage, root_cause_return_response: undefined }, async (_url, init) => { sent = init; return new Response(JSON.stringify({ workspace, correlation_id: CORRELATION }), { status: 200 }); });
+    expect(JSON.parse(String(sent?.body))).not.toHaveProperty("root_cause_return_response");
+    await saveCapaInvestigationActiveWorkspace(CASE, { expected_draft_revision: 1, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage, root_cause_return_response: null }, async (_url, init) => { sent = init; return new Response(JSON.stringify({ workspace, correlation_id: CORRELATION }), { status: 200 }); });
+    expect(JSON.parse(String(sent?.body))).toHaveProperty("root_cause_return_response", null);
     expect(JSON.stringify(result)).not.toContain("organization_id");
     expect(parseCapaInvestigationActiveWorkspaceLoad({ workspace: { ...workspace, draft_revision: 0 }, correlation_id: CORRELATION })).toMatchObject({ status: "failed", code: "INVALID_WORKSPACE_RESPONSE" });
     const failed = await saveCapaInvestigationActiveWorkspace(CASE, { expected_draft_revision: 1, evidence_assumption_ledger: ledger, root_cause_package: rootCausePackage }, async () => new Response(JSON.stringify({ error: { code: "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT", message: "raw database details" } }), { status: 409 }));
     expect(failed.status).toBe("failed");
     if (failed.status === "failed") expect(failed.message).toBe("The workspace changed before this save could be completed.");
+  });
+
+  it("refreshes response attribution from the server and clears it when the server returns null", async () => {
+    vi.useFakeTimers();
+    const first = snapshot("RESPONSE");
+    const second = snapshot("CLEARED");
+    const savedEditable: unknown[] = [];
+    const savedMetadata: unknown[] = [];
+    const save = vi.fn()
+      .mockResolvedValueOnce({ status: "saved" as const, workspace: responseProjection(first, 1, RETURN_RESPONSE), correlation_id: CORRELATION })
+      .mockResolvedValueOnce({ status: "saved" as const, workspace: responseProjection(second, 2, null), correlation_id: CORRELATION });
+    const coordinator = createCapaInvestigationActiveWorkspaceAutosaveCoordinator({
+      save,
+      debounceMs: 1,
+      onSaved: (value) => {
+        const response = value.root_cause_return_response;
+        savedEditable.push(response?.editable ?? null);
+        savedMetadata.push(response?.metadata ?? null);
+      },
+    });
+    coordinator.queue(first);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(savedEditable[0]).toMatchObject({ response_summary: RETURN_RESPONSE.response_summary });
+    expect(savedMetadata[0]).toMatchObject({ responded_by: RETURN_RESPONSE.responded_by, responded_at: RETURN_RESPONSE.responded_at });
+    coordinator.queue(second);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(savedEditable[1]).toBeNull();
+    expect(savedMetadata[1]).toBeNull();
+    coordinator.dispose();
   });
 
   it("progresses from null through server-returned revisions", async () => {

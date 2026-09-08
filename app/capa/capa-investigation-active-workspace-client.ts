@@ -2,6 +2,11 @@ import type { CapaEvidenceAssumptionLedgerContent } from "../../lib/capa/domain/
 import type { CapaRootCausePackageContent } from "../../lib/capa/domain/capa-root-cause-package";
 import { validateCapaEvidenceAssumptionLedger } from "../../lib/capa/domain/capa-evidence-assumption-ledger";
 import { validateCapaRootCausePackage } from "../../lib/capa/domain/capa-root-cause-package";
+import {
+  validateCapaRootCauseReviewReturnResponseDraft,
+  type CapaRootCauseReviewReturnResponseEditableContent,
+  type CapaRootCauseReviewReturnResponseDraft,
+} from "../../lib/capa/domain/capa-root-cause-review-return-response";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -28,7 +33,20 @@ export interface CapaInvestigationActiveWorkspaceProjection {
   readonly record_version: number;
   readonly evidence_assumption_ledger: CapaEvidenceAssumptionLedgerContent;
   readonly root_cause_package: CapaRootCausePackageContent;
+  readonly root_cause_return_response?: CapaInvestigationActiveWorkspaceReturnResponse | null;
   readonly updated_at: string;
+}
+
+export interface CapaInvestigationActiveWorkspaceReturnResponse {
+  readonly editable: CapaRootCauseReviewReturnResponseEditableContent;
+  readonly metadata: {
+    readonly schema_version: CapaRootCauseReviewReturnResponseDraft["schema_version"];
+    readonly responded_by: CapaRootCauseReviewReturnResponseDraft["responded_by"];
+    readonly responded_at: CapaRootCauseReviewReturnResponseDraft["responded_at"];
+    readonly return_transition_audit_event_id: CapaRootCauseReviewReturnResponseDraft["return_transition_audit_event_id"];
+    readonly source_case_version_id: CapaRootCauseReviewReturnResponseDraft["source_case_version_id"];
+    readonly resulting_case_version_id: CapaRootCauseReviewReturnResponseDraft["resulting_case_version_id"];
+  };
 }
 
 export interface CapaInvestigationActiveWorkspaceLoadSuccess {
@@ -53,16 +71,46 @@ export interface CapaInvestigationActiveWorkspaceSaveInput {
   readonly expected_draft_revision: number | null;
   readonly evidence_assumption_ledger: CapaEvidenceAssumptionLedgerContent;
   readonly root_cause_package: CapaRootCausePackageContent;
+  readonly root_cause_return_response?: CapaRootCauseReviewReturnResponseEditableContent | null;
 }
 
 function parseProjection(value: unknown): CapaInvestigationActiveWorkspaceProjection | null {
-  if (!record(value) || !exact(value, ["draft_revision", "case_version_id", "record_version", "evidence_assumption_ledger", "root_cause_package", "updated_at"]) ||
+  if (!record(value) ||
+    !(exact(value, ["draft_revision", "case_version_id", "record_version", "evidence_assumption_ledger", "root_cause_package", "updated_at"]) || exact(value, ["draft_revision", "case_version_id", "record_version", "evidence_assumption_ledger", "root_cause_package", "root_cause_return_response", "updated_at"])) ||
     !positiveSafeInteger(value.draft_revision) || !uuid(value.case_version_id) || !positiveSafeInteger(value.record_version) || !isoDateTime(value.updated_at)) return null;
   const ledger = validateCapaEvidenceAssumptionLedger(value.evidence_assumption_ledger);
   if (ledger.status !== "valid") return null;
   const rootPackage = validateCapaRootCausePackage(value.root_cause_package, ledger.value);
   if (rootPackage.status !== "valid") return null;
-  return Object.freeze({ draft_revision: value.draft_revision, case_version_id: value.case_version_id, record_version: value.record_version, evidence_assumption_ledger: ledger.value, root_cause_package: rootPackage.value, updated_at: value.updated_at });
+  const response = value.root_cause_return_response === undefined || value.root_cause_return_response === null
+    ? null
+    : validateCapaRootCauseReviewReturnResponseDraft(value.root_cause_return_response);
+  if (response !== null && response.status !== "valid") return null;
+  const responseValue = response === null ? null : response.value;
+  return Object.freeze({
+    draft_revision: value.draft_revision,
+    case_version_id: value.case_version_id,
+    record_version: value.record_version,
+    evidence_assumption_ledger: ledger.value,
+    root_cause_package: rootPackage.value,
+    root_cause_return_response: responseValue === null ? null : Object.freeze({
+      editable: Object.freeze({
+        response_summary: responseValue.response_summary,
+        actions_taken: responseValue.actions_taken,
+        disposition: responseValue.disposition,
+        supporting_evidence_item_ids: Object.freeze([...responseValue.supporting_evidence_item_ids]),
+      }),
+      metadata: Object.freeze({
+        schema_version: responseValue.schema_version,
+        responded_by: responseValue.responded_by,
+        responded_at: responseValue.responded_at,
+        return_transition_audit_event_id: responseValue.return_transition_audit_event_id,
+        source_case_version_id: responseValue.source_case_version_id,
+        resulting_case_version_id: responseValue.resulting_case_version_id,
+      }),
+    }),
+    updated_at: value.updated_at,
+  });
 }
 
 function parseFailure(value: unknown): CapaInvestigationActiveWorkspaceFailure {
@@ -116,8 +164,23 @@ export async function reconcileCapaInvestigationActiveWorkspaceAdoptions(caseId:
 
 export async function saveCapaInvestigationActiveWorkspace(caseId: string, input: CapaInvestigationActiveWorkspaceSaveInput, fetcher: typeof fetch = fetch): Promise<CapaInvestigationActiveWorkspaceSaveResult> {
   const requestTrace = trace();
+  const responseInput = input.root_cause_return_response;
+  const safeInput = {
+    expected_draft_revision: input.expected_draft_revision,
+    evidence_assumption_ledger: input.evidence_assumption_ledger,
+    root_cause_package: input.root_cause_package,
+    ...(responseInput === undefined
+      ? {}
+      : { root_cause_return_response: responseInput === null ? null : {
+        response_summary: responseInput.response_summary,
+        actions_taken: responseInput.actions_taken,
+        disposition: responseInput.disposition,
+        supporting_evidence_item_ids: responseInput.supporting_evidence_item_ids,
+      } }
+      ),
+  };
   try {
-    const response = await fetcher(`/api/capa/${encodeURIComponent(caseId)}/investigation-active-workspace`, { method: "PUT", cache: "no-store", headers: { "content-type": "application/json", "x-request-id": requestTrace.requestId, "x-correlation-id": requestTrace.correlationId }, body: JSON.stringify(input) });
+    const response = await fetcher(`/api/capa/${encodeURIComponent(caseId)}/investigation-active-workspace`, { method: "PUT", cache: "no-store", headers: { "content-type": "application/json", "x-request-id": requestTrace.requestId, "x-correlation-id": requestTrace.correlationId }, body: JSON.stringify(safeInput) });
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) return parseFailure(body);
     return parseCapaInvestigationActiveWorkspaceSave(body);
@@ -129,6 +192,7 @@ export async function saveCapaInvestigationActiveWorkspace(caseId: string, input
 export interface WorkspaceAutosaveSnapshot {
   readonly evidence_assumption_ledger: CapaEvidenceAssumptionLedgerContent;
   readonly root_cause_package: CapaRootCausePackageContent;
+  readonly root_cause_return_response?: CapaRootCauseReviewReturnResponseEditableContent | null;
 }
 
 export type WorkspaceAutosaveStatus = "saved" | "unsaved" | "saving" | "conflict" | "failed" | "blocked";
@@ -164,7 +228,14 @@ export function createCapaInvestigationActiveWorkspaceAutosaveCoordinator(input:
     status("saving");
     let result: CapaInvestigationActiveWorkspaceSaveResult;
     try {
-      result = await input.save({ expected_draft_revision: draftRevision, evidence_assumption_ledger: candidate.evidence_assumption_ledger, root_cause_package: candidate.root_cause_package });
+      result = await input.save({
+        expected_draft_revision: draftRevision,
+        evidence_assumption_ledger: candidate.evidence_assumption_ledger,
+        root_cause_package: candidate.root_cause_package,
+        ...(Object.prototype.hasOwnProperty.call(candidate, "root_cause_return_response")
+          ? { root_cause_return_response: candidate.root_cause_return_response }
+          : {}),
+      });
     } catch {
       result = { status: "failed", code: null, message: "The S40 workspace could not be saved.", correlation_id: null };
     }

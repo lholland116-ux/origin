@@ -16,10 +16,11 @@ import { CAPA_LEDGER_INFORMATION_CLASSES, addHypothesis, applyRootCauseDraftMuta
 import type { CapaInvestigationActiveAdoptionSafeRecord } from "./capa-investigation-active-adoption-client";
 import type { CapaInvestigationActiveHumanCausalRole } from "./capa-investigation-active-advisory-review";
 import type { CapaRootCauseReturnContext } from "./capa-existing-case-client";
+import type { CapaRootCauseReviewReturnResponseEditableContent } from "../../lib/capa/domain/capa-root-cause-review-return-response";
 import { createRootCauseSubmissionAttempt, submitRootCauseSubmissionAttempt,
   type RootCauseSubmissionAttempt } from "./capa-root-cause-submission-client";
 import { createCapaInvestigationActiveWorkspaceAutosaveCoordinator, loadCapaInvestigationActiveWorkspace,
-  saveCapaInvestigationActiveWorkspace, reconcileCapaInvestigationActiveWorkspaceAdoptions, type WorkspaceAutosaveStatus, type CapaInvestigationActiveWorkspaceProjection } from "./capa-investigation-active-workspace-client";
+  saveCapaInvestigationActiveWorkspace, reconcileCapaInvestigationActiveWorkspaceAdoptions, type WorkspaceAutosaveStatus, type CapaInvestigationActiveWorkspaceProjection, type CapaInvestigationActiveWorkspaceReturnResponse } from "./capa-investigation-active-workspace-client";
 import {
   beginCapaLedgerItemEditSession,
   commitCapaLedgerItemEditSession,
@@ -53,6 +54,12 @@ const canonicalForReason: Readonly<Record<string, string>> = {
 };
 const shown = (value: string | boolean | null) => value === null ? "—" : typeof value === "boolean" ? (value ? "Yes" : "No") : value;
 const shownIds = (values: readonly string[]) => values.length ? values.join(", ") : "—";
+const EMPTY_RETURN_RESPONSE: CapaRootCauseReviewReturnResponseEditableContent = {
+  response_summary: "",
+  actions_taken: "",
+  disposition: "addressed",
+  supporting_evidence_item_ids: [],
+};
 function aiSourceReferences(ledger: CapaEvidenceAssumptionLedgerContent, rootPackage: CapaRootCausePackageContent): ReadonlySet<string> {
   const references = new Set<string>();
   for (const item of ledger.items) if (item.provenance.source_type === "ai_proposal" && item.provenance.source_reference !== null) references.add(item.provenance.source_reference);
@@ -129,10 +136,13 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   const [hydrationStatus, setHydrationStatus] = useState<"loading" | "ready" | "failed">(mode === "S50" ? "ready" : "loading");
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceAutosaveStatus | "loading">(mode === "S50" ? "saved" : "loading");
   const [draftRevision, setDraftRevision] = useState<number | null>(null);
+  const [investigatorResponse, setInvestigatorResponse] = useState<CapaRootCauseReviewReturnResponseEditableContent | null>(null);
+  const [responseMetadata, setResponseMetadata] = useState<CapaInvestigationActiveWorkspaceReturnResponse["metadata"] | null>(null);
   const [ledgerEditSession, setLedgerEditSession] = useState<CapaLedgerItemEditSession | null>(null);
   const coordinatorRef = useRef<ReturnType<typeof createCapaInvestigationActiveWorkspaceAutosaveCoordinator> | null>(null);
   const ledgerRef = useRef(ledger);
   const rootPackageRef = useRef(rootPackage);
+  const responseRef = useRef<CapaRootCauseReviewReturnResponseEditableContent | null | undefined>(undefined);
   const acknowledgedAiReferencesRef = useRef<ReadonlySet<string>>(new Set());
   ledgerRef.current = ledger;
   rootPackageRef.current = rootPackage;
@@ -170,6 +180,10 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
       onStatus: setWorkspaceStatus,
       onSaved: (workspace) => {
         setDraftRevision(workspace.draft_revision);
+        const response = workspace.root_cause_return_response;
+        responseRef.current = response === undefined || response === null ? (rootCauseReturnContext ? null : undefined) : response.editable;
+        setInvestigatorResponse(response === undefined || response === null ? null : response.editable);
+        setResponseMetadata(response === undefined || response === null ? null : response.metadata);
         acknowledgedAiReferencesRef.current = aiSourceReferences(workspace.evidence_assumption_ledger, workspace.root_cause_package);
       },
     });
@@ -184,6 +198,8 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     const initialRootPackage = createInitialRootCausePackageDraft();
     ledgerRef.current = initialLedger; rootPackageRef.current = initialRootPackage;
     setLedger(initialLedger); setRootPackage(initialRootPackage); setDraftRevision(null);
+    responseRef.current = rootCauseReturnContext ? null : undefined;
+    setInvestigatorResponse(null); setResponseMetadata(null);
     acknowledgedAiReferencesRef.current = new Set(); coordinatorRef.current?.resetFromServer(null);
     void loadCapaInvestigationActiveWorkspace(caseId).then(async (result) => {
       if (!active) return;
@@ -197,12 +213,16 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
       setLedger(loadedLedger); setRootPackage(loadedRootPackage);
       const loadedRevision = reconciled.workspace?.draft_revision ?? null;
       setDraftRevision(loadedRevision); coordinatorRef.current?.resetFromServer(loadedRevision);
+      const loadedResponse = reconciled.workspace?.root_cause_return_response;
+      responseRef.current = loadedResponse === undefined || loadedResponse === null ? (rootCauseReturnContext ? null : undefined) : loadedResponse.editable;
+      setInvestigatorResponse(loadedResponse === undefined || loadedResponse === null ? null : loadedResponse.editable);
+      setResponseMetadata(loadedResponse === undefined || loadedResponse === null ? null : loadedResponse.metadata);
       acknowledgedAiReferencesRef.current = aiSourceReferences(loadedLedger, loadedRootPackage);
       setHydrationStatus("ready"); setWorkspaceStatus("saved");
     });
     return () => { active = false; };
   }, [caseId, readOnly]);
-  const queueWorkspaceSave = (nextLedger: typeof ledger, nextRootPackage: typeof rootPackage) => {
+  const queueWorkspaceSave = (nextLedger: typeof ledger, nextRootPackage: typeof rootPackage, nextResponse: CapaRootCauseReviewReturnResponseEditableContent | null | undefined = responseRef.current) => {
     if (readOnly || !hydrated || coordinatorRef.current === null) return;
     const aiReferences = aiSourceReferences(nextLedger, nextRootPackage);
     if ([...aiReferences].some((reference) => !acknowledgedAiReferencesRef.current.has(reference))) {
@@ -211,7 +231,11 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
     }
     const candidateValidation = validateRootCauseDrafts(plan, nextLedger, nextRootPackage);
     if (candidateValidation.status !== "valid") { coordinatorRef.current.markInvalid(); return; }
-    coordinatorRef.current.queue({ evidence_assumption_ledger: candidateValidation.ledger, root_cause_package: candidateValidation.rootCausePackage });
+    coordinatorRef.current.queue({
+      evidence_assumption_ledger: candidateValidation.ledger,
+      root_cause_package: candidateValidation.rootCausePackage,
+      ...(nextResponse !== undefined ? { root_cause_return_response: nextResponse } : {}),
+    });
   };
   const mutateLedger = (mutation: (value: typeof ledger) => typeof ledger) => {
     const next = applyRootCauseDraftMutation(ledgerRef.current, mutation).draft;
@@ -331,6 +355,7 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
         candidateValidation.ledger,
       root_cause_package:
         candidateValidation.rootCausePackage,
+      ...(responseRef.current !== undefined ? { root_cause_return_response: responseRef.current } : {}),
     });
   };
 
@@ -363,14 +388,34 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
   }
   function applyAdopted(_records: readonly CapaInvestigationActiveAdoptionSafeRecord[], _roles: Readonly<Record<string, CapaInvestigationActiveHumanCausalRole>>, workspace: CapaInvestigationActiveWorkspaceProjection) {
     ledgerRef.current = workspace.evidence_assumption_ledger; rootPackageRef.current = workspace.root_cause_package;
+    const response = workspace.root_cause_return_response;
+    responseRef.current = response === undefined || response === null ? (rootCauseReturnContext ? null : undefined) : response.editable;
+    setInvestigatorResponse(response === undefined || response === null ? null : response.editable);
+    setResponseMetadata(response === undefined || response === null ? null : response.metadata);
     setAttempt(null); setLedgerEditSession(null); setLedger(workspace.evidence_assumption_ledger); setRootPackage(workspace.root_cause_package); setDraftRevision(workspace.draft_revision); acknowledgedAiReferencesRef.current = aiSourceReferences(workspace.evidence_assumption_ledger, workspace.root_cause_package); coordinatorRef.current?.resetFromServer(workspace.draft_revision); setWorkspaceStatus("saved"); setError(null);
   }
+
+  const updateInvestigatorResponse = (patch: Partial<CapaRootCauseReviewReturnResponseEditableContent>) => {
+    if (readOnly || !rootCauseReturnContext) return;
+    const next = { ...(investigatorResponse ?? EMPTY_RETURN_RESPONSE), ...patch };
+    responseRef.current = next;
+    setInvestigatorResponse(next);
+    queueWorkspaceSave(ledgerRef.current, rootPackageRef.current, next);
+  };
+
+  const clearInvestigatorResponse = () => {
+    if (readOnly || !rootCauseReturnContext) return;
+    responseRef.current = null;
+    setInvestigatorResponse(null);
+    setResponseMetadata(null);
+    queueWorkspaceSave(ledgerRef.current, rootPackageRef.current, null);
+  };
 
   return <section aria-labelledby="root-cause-workspace-heading" className="mt-8 space-y-6">
     <header><p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{readOnly ? "S50 · Submitted read-only record" : "S40 · Investigation Active"}</p>
       <h2 id="root-cause-workspace-heading" className="mt-2 text-2xl font-semibold">{readOnly ? "Root Cause Review" : `Root Cause Workspace — ${caseNumber}`}</h2></header>
     {mode === "S40" && rootCauseReturnContext ? <aside aria-labelledby="root-cause-return-heading" className="rounded-3xl border border-amber-400/30 bg-amber-500/10 p-5 sm:p-7">
-      <h3 id="root-cause-return-heading" className="text-xl font-semibold">Returned from Root Cause Review</h3>
+      <h3 id="root-cause-return-heading" className="text-xl font-semibold">Returned from Root Cause Review · REVIEWER RETURN RATIONALE</h3>
       <p className="mt-2 text-sm text-zinc-300">This root-cause package was returned for additional investigation.</p>
       <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
         <div className="sm:col-span-2"><dt className="text-zinc-500">Return rationale</dt><dd className="mt-1 whitespace-pre-wrap text-zinc-100">{rootCauseReturnContext.rationale}</dd></div>
@@ -380,6 +425,22 @@ export default function CapaRootCauseWorkspace({ caseId, caseNumber, plan, recor
         <div><dt className="text-zinc-500">Return target</dt><dd className="mt-1">S40 · record version {rootCauseReturnContext.resultingRecordVersion}</dd></div>
       </dl>
     </aside> : null}
+    {mode === "S40" && rootCauseReturnContext ? <fieldset disabled={editingDisabled} className="border-0 p-0">
+      <section aria-labelledby="root-cause-response-heading" className="rounded-3xl border border-emerald-400/25 bg-emerald-500/[0.05] p-5 sm:p-7">
+      <h2 id="root-cause-response-heading" className="text-xl font-semibold">INVESTIGATOR RESPONSE · Investigator response to return</h2>
+      <p className="mt-2 text-sm text-zinc-400">Record how the returned root-cause review was addressed. This response does not approve, reject, or advance the workflow.</p>
+      <div className="mt-5 grid gap-4">
+        <label className="text-sm">Response Summary<textarea value={investigatorResponse?.response_summary ?? ""} onChange={(event) => updateInvestigatorResponse({ response_summary: event.target.value })} className="mt-1 min-h-24 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
+        <label className="text-sm">Actions Taken<textarea value={investigatorResponse?.actions_taken ?? ""} onChange={(event) => updateInvestigatorResponse({ actions_taken: event.target.value })} className="mt-1 min-h-24 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3" /></label>
+        <label className="text-sm">Disposition<select value={investigatorResponse?.disposition ?? "addressed"} onChange={(event) => updateInvestigatorResponse({ disposition: event.target.value as CapaRootCauseReviewReturnResponseEditableContent["disposition"] })} className="mt-1 block w-full rounded-xl border border-zinc-700 bg-zinc-950 p-2">
+          <option value="addressed">Addressed</option><option value="partially_addressed">Partially addressed</option><option value="unable_to_address">Unable to address</option>
+        </select></label>
+        <fieldset><legend className="text-sm">Supporting Evidence</legend>{references.map((item) => <label key={item.item_id} className="mt-1 block text-xs"><input type="checkbox" checked={(investigatorResponse?.supporting_evidence_item_ids ?? []).includes(item.item_id)} onChange={(event) => updateInvestigatorResponse({ supporting_evidence_item_ids: toggle(investigatorResponse?.supporting_evidence_item_ids ?? [], item.item_id, event.target.checked) })} /> {item.item_id}: {item.statement || "Untitled"}</label>)}</fieldset>
+      </div>
+      {responseMetadata ? <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="text-zinc-500">Last saved by</dt><dd className="mt-1">Human · Participant …{responseMetadata.responded_by.actor_id.slice(-8)}</dd></div><div><dt className="text-zinc-500">Last saved at</dt><dd className="mt-1">{responseMetadata.responded_at}</dd></div></dl> : null}
+      <button type="button" onClick={clearInvestigatorResponse} className="mt-5 rounded-xl border border-zinc-700 px-4 py-2 text-sm">Clear response</button>
+      </section>
+    </fieldset> : null}
     {!readOnly && hydrationStatus === "loading" ? <p role="status" className="rounded-xl border border-blue-400/25 bg-blue-500/10 p-3 text-sm text-blue-100">Loading durable workspace…</p> : null}
     {!readOnly && hydrationStatus === "failed" ? <p role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">The durable S40 workspace could not be loaded. Refresh or reload is required.</p> : null}
     {!readOnly && hydrationStatus === "ready" ? <p role="status" className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-300">Workspace persistence: {effectiveWorkspaceStatus === "loading" ? "Loading…" : effectiveWorkspaceStatus === "saving" ? "Saving…" : effectiveWorkspaceStatus === "unsaved" ? "Unsaved changes" : effectiveWorkspaceStatus === "conflict" ? "Conflict — reload required" : effectiveWorkspaceStatus === "failed" ? "Save failed" : effectiveWorkspaceStatus === "blocked" ? "Persistence blocked — governed adoption is required" : "Saved"}{draftRevision !== null ? ` · revision ${draftRevision}` : ""}</p> : null}

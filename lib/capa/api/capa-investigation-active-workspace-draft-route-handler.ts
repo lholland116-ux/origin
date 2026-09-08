@@ -51,6 +51,7 @@ function projection(workspace: NonNullable<Extract<CapaInvestigationActiveWorksp
     record_version: workspace.record_version,
     evidence_assumption_ledger: workspace.evidence_assumption_ledger,
     root_cause_package: workspace.root_cause_package,
+    root_cause_return_response: workspace.root_cause_return_response ?? null,
     updated_at: workspace.updated_at,
   };
 }

@@ -71,6 +71,19 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(workspace).toContain('mode === "S40" && rootCauseReturnContext');
     expect(workspace).toContain("Returned from Root Cause Review");
     expect(workspace).toContain("This root-cause package was returned for additional investigation.");
+    expect(workspace).toContain("Investigator response to return");
+    expect(workspace).toContain("REVIEWER RETURN RATIONALE");
+    expect(workspace).toContain("INVESTIGATOR RESPONSE");
+    expect(workspace).toContain("This response does not approve, reject, or advance the workflow.");
+    expect(workspace).toContain("Clear response");
+    for (const [value, label] of [["addressed", "Addressed"], ["partially_addressed", "Partially addressed"], ["unable_to_address", "Unable to address"]]) {
+      expect(workspace).toContain(`value="${value}">${label}`);
+    }
+    expect(workspace).toContain("const references = displayLedger.items");
+    expect(workspace).toContain("supporting_evidence_item_ids: toggle");
+    expect(workspace).not.toContain("Supporting Evidence IDs");
+    expect(workspace).not.toContain("root-cause-return-response-evidence-id");
+    expect(workspace).not.toContain("ROOT_CAUSE_REVIEW_RETURN_RESPONSE_REQUIRED");
 
     const human = { source_type: "human" as const, source_reference: null, adopted_by_user_id: null, adopted_at: null };
     const context = {
@@ -96,6 +109,9 @@ describe("CS4E S40/S50 browser boundary", () => {
     expect(markup).toContain("S40 · record version 9");
     const panel = markup.slice(markup.indexOf("Returned from Root Cause Review"), markup.indexOf("</aside>") + 8);
     expect(panel).not.toMatch(/<(?:input|select|textarea|button)\b/);
+    expect(markup).toContain("Investigator response to return");
+    expect(markup).toContain("Response Summary");
+    expect(markup).toContain("Addressed");
 
     const withoutContext = renderToStaticMarkup(createElement(CapaRootCauseWorkspace, {
       caseId: "10000000-0000-4000-8000-000000000001", caseNumber: "CAPA-1", mode: "S40" as const,
@@ -103,6 +119,7 @@ describe("CS4E S40/S50 browser boundary", () => {
       plan, onAuthoritativeRefresh: async () => {},
     }));
     expect(withoutContext).not.toContain("Returned from Root Cause Review");
+    expect(withoutContext).not.toContain("Investigator response to return");
 
     const S50Markup = renderToStaticMarkup(createElement(CapaRootCauseWorkspace, {
       caseId: "10000000-0000-4000-8000-000000000001", caseNumber: "CAPA-1", mode: "S50" as const,
