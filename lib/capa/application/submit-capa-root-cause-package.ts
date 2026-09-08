@@ -1029,7 +1029,7 @@ export async function submitCapaRootCausePackage(
           Record<string, unknown>
         >,
         change_reason: TRANSITION_MEANING,
-        effective_at: returnResponse.draft.responded_at,
+        effective_at: timestamp,
         created_at: timestamp,
         created_by: actor,
       }

@@ -726,6 +726,49 @@ describe("S40 root-cause package submission", () => {
     });
   });
 
+  it("uses submission time for immutable response-section effectiveness while preserving the earlier human response time", async () => {
+    const respondedAt = "2026-09-01T11:59:00.000Z";
+
+    const test = harness({
+      sections: [planSection(), ledgerSection()],
+      return_cycle: activeReturnCycle(),
+      workspace: workspace({
+        root_cause_return_response: returnResponse({
+          responded_at: respondedAt,
+        }),
+      }),
+    });
+
+    await expect(
+      submitCapaRootCausePackage(test.deps, command())
+    ).resolves.toMatchObject({
+      status: "submitted",
+      capa_case: { status: "S50", record_version: 5 },
+    });
+
+    expect(test.repository.insertSectionVersion).toHaveBeenCalledTimes(3);
+
+    const responseSection =
+      test.repository.insertSectionVersion.mock.calls[2]![1];
+
+    expect(responseSection).toMatchObject({
+      section_type: "CAPA.ROOT_CAUSE_REVIEW_RETURN_RESPONSE",
+      effective_at: NOW,
+      created_at: NOW,
+      content: {
+        responded_at: respondedAt,
+        responded_by: {
+          actor_type: "human",
+          actor_id: USER,
+        },
+      },
+    });
+
+    expect(new Date(responseSection.effective_at).getTime()).toBeGreaterThan(
+      new Date(respondedAt).getTime()
+    );
+  });
+
   it("replaces prior ledger/package versions while preserving plan and unrelated sections", async () => {
     const oldLedger = {
       ...planSection({
