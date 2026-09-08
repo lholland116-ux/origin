@@ -52,4 +52,41 @@ describe("CAPA existing-case workspace navigation", () => {
       openExistingCase.indexOf("if (parsedCase === null)"),
     );
   });
+
+  it("recognizes an authoritative S60 case as Action Planning", () => {
+    expect(intake).toMatch(
+      /if \(status === "S60"\)\s*\{\s*return CAPA_STATE_DEFINITIONS\.S60\.name;\s*\}/,
+    );
+    expect(intake).toMatch(
+      /createdCapa\.status === "S60"\s*\? CAPA_STATE_DEFINITIONS\.S60\.name/,
+    );
+    expect(intake).toMatch(
+      /createdCapa\.status === "S60"\s*\? "The approved root-cause conclusion is now in action planning\."/,
+    );
+
+    const s60Header = intake.indexOf(
+      'createdCapa.status === "S60"',
+    );
+    const draftFallback = intake.indexOf(
+      '"CAPA draft created"',
+      s60Header,
+    );
+    expect(s60Header).toBeGreaterThan(-1);
+    expect(draftFallback).toBeGreaterThan(s60Header);
+    expect(intake).not.toContain(
+      'createdCapa.status === "S60"\n                      ? "CAPA draft created"',
+    );
+  });
+
+  it("preserves existing S40 and S50 presentation branches", () => {
+    expect(intake).toMatch(
+      /createdCapa\.status === "S40"\s*\? CAPA_STATE_DEFINITIONS\.S40\.name/,
+    );
+    expect(intake).toMatch(
+      /createdCapa\.status === "S50"\s*\? "The authoritative investigation and root-cause package are submitted for review\."/,
+    );
+    expect(intake).toMatch(
+      /createdCapa\.status === "S40"\s*\? "The authoritative CAPA is in active investigation execution\."/,
+    );
+  });
 });

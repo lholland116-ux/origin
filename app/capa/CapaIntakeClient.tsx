@@ -919,6 +919,10 @@ function statusName(
     return CAPA_STATE_DEFINITIONS.S50.name;
   }
 
+  if (status === "S60") {
+    return CAPA_STATE_DEFINITIONS.S60.name;
+  }
+
   return status;
 }
 
@@ -4186,9 +4190,11 @@ export default function CapaIntakeClient({
                     ? "CAPA intake submitted"
                     : createdCapa.status === "S40"
                       ? CAPA_STATE_DEFINITIONS.S40.name
-                      : createdCapa.status === "S50"
-                        ? CAPA_STATE_DEFINITIONS.S50.name
-                      : "CAPA draft created"}
+                    : createdCapa.status === "S50"
+                      ? CAPA_STATE_DEFINITIONS.S50.name
+                    : createdCapa.status === "S60"
+                      ? CAPA_STATE_DEFINITIONS.S60.name
+                    : "CAPA draft created"}
                 </p>
 
                 <h2 className="mt-2 text-3xl font-semibold">
@@ -4204,6 +4210,8 @@ export default function CapaIntakeClient({
                       ? "The authoritative CAPA is in active investigation execution."
                       : createdCapa.status === "S50"
                         ? "The authoritative investigation and root-cause package are submitted for review."
+                      : createdCapa.status === "S60"
+                        ? "The approved root-cause conclusion is now in action planning."
                       : "The draft record and its audit event were committed atomically."}
                 </p>
               </div>
