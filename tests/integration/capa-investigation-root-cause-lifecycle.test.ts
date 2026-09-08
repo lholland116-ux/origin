@@ -18,6 +18,7 @@ import {
   type UpdateCapaInvestigationProgressDependencies,
 } from "../../lib/capa/application/update-capa-investigation-progress";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "../../lib/capa/application/capa-investigation-active-workspace-draft-service";
+import { createCapaRootCauseReturnCycleResolver } from "../../lib/capa/application/capa-root-cause-return-cycle-resolver";
 import { InMemoryCapaDatabase } from "../../lib/database/in-memory/in-memory-capa-database";
 
 const ORG = "20000000-0000-4000-8000-000000000001";
@@ -182,6 +183,7 @@ async function lifecycleHarness() {
     workspace_repository: database,
     transaction_manager: database,
     authorization_policy,
+    return_cycle_resolver: createCapaRootCauseReturnCycleResolver({ audit_repository: database }),
     now: () => new Date(NOW),
   });
   return { database, release, progress, submit, gate, workspace };

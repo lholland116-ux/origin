@@ -203,6 +203,7 @@ import type {
 import {
   createCapaInvestigationActiveWorkspaceDraftService,
 } from "./capa-investigation-active-workspace-draft-service";
+import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 
 /**
@@ -921,6 +922,10 @@ export function createCapaDevelopmentRuntime(
         : (snapshot) => options.persistence!.state_store.save(snapshot),
     });
 
+  const returnCycleResolver = createCapaRootCauseReturnCycleResolver({
+    audit_repository: database,
+  });
+
   const dependencies:
     CreateCapaDependencies = {
     transaction_manager:
@@ -1334,12 +1339,13 @@ export function createCapaDevelopmentRuntime(
         workspace_repository: database,
         transaction_manager: database,
         authorization_policy: dependencies.authorization_policy,
+        return_cycle_resolver: returnCycleResolver,
         now,
       });
     },
 
     create_investigation_active_workspace_reconciliation_service(context) {
-      return createReconcileCapaInvestigationActiveWorkspaceAdoptionsService({ request_context: context, capa_repository: database, adoption_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, now });
+      return createReconcileCapaInvestigationActiveWorkspaceAdoptionsService({ request_context: context, capa_repository: database, adoption_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, return_cycle_resolver: returnCycleResolver, now });
     },
 
     dependencies,

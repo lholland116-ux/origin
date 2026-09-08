@@ -34,6 +34,7 @@ function setup(adoptions: readonly any[] = [], initialWorkspace: any = null) {
     workspace_repository: { findDraft: vi.fn(async () => workspace), saveDraft } as any,
     transaction_manager: { runInTransaction: vi.fn(async (_trace: unknown, work: (tx: unknown) => unknown) => work({ transaction_id: "tx", request_trace: TRACE })) } as any,
     authorization_policy: { evaluate: vi.fn(async () => ({ decision: "allow", reason_code: "ALLOWED", policy_version: "development-policy-1.0.0", evaluated_at: NOW.toISOString(), relied_on_role_assignment_ids: ["development-role"] })) } as any,
+    return_cycle_resolver: { resolve: vi.fn(async () => ({ status: "no_active_return_cycle" as const })) },
     now: () => NOW,
   });
   return { service, saveDraft, getWorkspace: () => workspace };

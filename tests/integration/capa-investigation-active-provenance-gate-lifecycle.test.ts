@@ -6,6 +6,7 @@ import { createCapaInvestigationActiveAdvisoryReferenceManifest } from "../../li
 import { submitCapaRootCausePackage, type SubmitCapaRootCausePackageDependencies } from "../../lib/capa/application/submit-capa-root-cause-package";
 import { updateCapaInvestigationProgress, type UpdateCapaInvestigationProgressDependencies } from "../../lib/capa/application/update-capa-investigation-progress";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "../../lib/capa/application/capa-investigation-active-workspace-draft-service";
+import { createCapaRootCauseReturnCycleResolver } from "../../lib/capa/application/capa-root-cause-return-cycle-resolver";
 
 const ORG = "10000000-0000-4000-8000-000000000001"; const USER = "20000000-0000-4000-8000-000000000001"; const CASE = "30000000-0000-4000-8000-000000000001"; const V4 = "40000000-0000-4000-8000-000000000004"; const V5 = "40000000-0000-4000-8000-000000000005"; const V6 = "40000000-0000-4000-8000-000000000006"; const V7 = "40000000-0000-4000-8000-000000000007"; const PLAN = "50000000-0000-4000-8000-000000000001"; const PLAN_V5 = "50000000-0000-4000-8000-000000000004"; const PLAN_V6 = "50000000-0000-4000-8000-000000000005"; const LEDGER = "50000000-0000-4000-8000-000000000002"; const ROOT = "50000000-0000-4000-8000-000000000003"; const AUDIT = "60000000-0000-4000-8000-000000000001"; const PROGRESS_AUDIT = "60000000-0000-4000-8000-000000000006"; const PROGRESS_B_AUDIT = "60000000-0000-4000-8000-000000000007"; const OUTPUT = "70000000-0000-4000-8000-000000000001"; const RUN = "70000000-0000-4000-8000-000000000002"; const REQUEST = "80000000-0000-4000-8000-000000000001"; const CORRELATION = "80000000-0000-4000-8000-000000000002"; const GAP_ADOPTION = "90000000-0000-4000-8000-000000000001"; const HYP_ADOPTION = "90000000-0000-4000-8000-000000000002"; const GAP_ADOPTION_AUDIT = "90000000-0000-4000-8000-000000000010"; const HYP_ADOPTION_AUDIT = "90000000-0000-4000-8000-000000000011"; const NOW = "2026-09-05T12:00:00.000Z";
 const human = { source_type: "human" as const, source_reference: null, adopted_by_user_id: null, adopted_at: null };
@@ -66,6 +67,7 @@ async function harness(progression = false) {
     workspace_repository: db,
     transaction_manager: db,
     authorization_policy: { evaluate: vi.fn().mockResolvedValue({ decision: "allow", reason_code: "AUTHORIZED", policy_version: "policy-1", evaluated_at: NOW, relied_on_role_assignment_ids: [] }) },
+    return_cycle_resolver: createCapaRootCauseReturnCycleResolver({ audit_repository: db }),
     now: () => new Date(NOW),
   });
   const submit = (applicationBody = body(), key = "submit", expectedRecordVersion = progression ? 6 : 4, expectedCurrentVersionId = progression ? V6 : V4) => submitCapaRootCausePackage(dependencies, { authentication: authentication(), tenant: tenant(), capa_case_id: CASE, expected_record_version: expectedRecordVersion, expected_current_version_id: expectedCurrentVersionId, request_trace: trace(key), body: applicationBody } as never);

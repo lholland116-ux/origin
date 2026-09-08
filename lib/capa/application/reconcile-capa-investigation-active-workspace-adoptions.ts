@@ -11,6 +11,7 @@ import {
 import type { CapaInvestigationActiveWorkspaceDraftRepository } from "../../database/repositories/capa-investigation-active-workspace-draft-repository";
 import type { CapaAuthorizationPolicy } from "../authorization/capa-policy";
 import type { TransactionManager } from "../../database/transactions";
+import type { CapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 
 export type ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult =
   | { readonly status: "reconciled"; readonly workspace: import("./capa-investigation-active-workspace-draft-contract").CapaInvestigationActiveWorkspaceDraft | null }
@@ -29,6 +30,7 @@ export interface ReconcileCapaInvestigationActiveWorkspaceAdoptionsDependencies 
   readonly workspace_repository: CapaInvestigationActiveWorkspaceDraftRepository;
   readonly transaction_manager: TransactionManager;
   readonly authorization_policy: CapaAuthorizationPolicy;
+  readonly return_cycle_resolver: CapaRootCauseReturnCycleResolver;
   readonly now: () => Date;
 }
 
@@ -49,6 +51,7 @@ export function createReconcileCapaInvestigationActiveWorkspaceAdoptionsService(
     workspace_repository: dependencies.workspace_repository,
     transaction_manager: dependencies.transaction_manager,
     authorization_policy: dependencies.authorization_policy,
+    return_cycle_resolver: dependencies.return_cycle_resolver,
     now: dependencies.now,
   });
   return {

@@ -398,6 +398,62 @@ export type Database = {
           },
         ]
       }
+      capa_investigation_active_workspace_drafts: {
+        Row: {
+          capa_case_id: string
+          case_version_id: string
+          draft_revision: number
+          evidence_assumption_ledger: Json
+          organization_id: string
+          record_version: number
+          root_cause_package: Json
+          root_cause_return_response: Json | null
+          schema_version: string
+          trust: string
+          updated_at: string
+          updated_by_user_id: string
+          workflow_state: string
+        }
+        Insert: {
+          capa_case_id: string
+          case_version_id: string
+          draft_revision: number
+          evidence_assumption_ledger: Json
+          organization_id: string
+          record_version: number
+          root_cause_package: Json
+          root_cause_return_response?: Json | null
+          schema_version: string
+          trust: string
+          updated_at: string
+          updated_by_user_id: string
+          workflow_state: string
+        }
+        Update: {
+          capa_case_id?: string
+          case_version_id?: string
+          draft_revision?: number
+          evidence_assumption_ledger?: Json
+          organization_id?: string
+          record_version?: number
+          root_cause_package?: Json
+          root_cause_return_response?: Json | null
+          schema_version?: string
+          trust?: string
+          updated_at?: string
+          updated_by_user_id?: string
+          workflow_state?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "capa_investigation_active_workspace_drafts_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "capa_organizations"
+            referencedColumns: ["organization_id"]
+          },
+        ]
+      }
       capa_organization_memberships: {
         Row: {
           created_at: string

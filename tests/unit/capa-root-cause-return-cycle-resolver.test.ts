@@ -78,6 +78,16 @@ describe("CAPA root-cause G-04 return-cycle resolver", () => {
     await expect(resolver([event]).resolver.resolve({ organization_id: ORG as never, capa_case_id: CASE as never })).resolves.toEqual({ status: "no_active_return_cycle" });
   });
 
+  it("does not treat a G-03 release without a reason as malformed return history", async () => {
+    const event = transition({
+      action: "RELEASE_CAPA_INVESTIGATION" as never,
+      reason: undefined,
+      target: { object_type: "CAPA_CASE" as never, object_id: CASE, object_version_id: RESULT },
+      metadata: { gate: "G-03", transition_event: "Authorize investigation execution", from_state: "S30", to_state: "S40", release_comment: null },
+    });
+    await expect(resolver([event]).resolver.resolve({ organization_id: ORG as never, capa_case_id: CASE as never })).resolves.toEqual({ status: "no_active_return_cycle" });
+  });
+
   it("returns the complete server-derived cycle for a valid G-04 return", async () => {
     await expect(resolver([transition()]).resolver.resolve({ organization_id: ORG as never, capa_case_id: CASE as never })).resolves.toMatchObject({
       status: "active",

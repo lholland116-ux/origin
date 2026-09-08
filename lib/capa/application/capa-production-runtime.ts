@@ -214,6 +214,7 @@ import { SupabaseCapaInvestigationActiveAdvisoryOutputRepository } from "../../d
 import { SupabaseCapaInvestigationActiveWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-investigation-active-workspace-draft-repository";
 import { SupabaseCapaRootCauseReviewAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-root-cause-review-advisory-output-repository";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
+import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 
 import {
@@ -864,6 +865,9 @@ export function createCapaProductionRuntime(
     new SupabaseAuditRepository(
       sql,
     );
+  const returnCycleResolver = createCapaRootCauseReturnCycleResolver({
+    audit_repository: auditRepository,
+  });
 
   const creationIdempotencyRepository =
     new SupabaseCapaCreationIdempotencyRepository();
@@ -1489,12 +1493,13 @@ export function createCapaProductionRuntime(
         workspace_repository: investigationActiveWorkspaceDraftRepository,
         transaction_manager: transactionManager,
         authorization_policy: authorizationPolicy,
+        return_cycle_resolver: returnCycleResolver,
         now,
       });
     },
 
     create_investigation_active_workspace_reconciliation_service(context) {
-      return createReconcileCapaInvestigationActiveWorkspaceAdoptionsService({ request_context: context, capa_repository: capaRepository, adoption_repository: investigationActiveAdoptionRepository, workspace_repository: investigationActiveWorkspaceDraftRepository, transaction_manager: transactionManager, authorization_policy: authorizationPolicy, now });
+      return createReconcileCapaInvestigationActiveWorkspaceAdoptionsService({ request_context: context, capa_repository: capaRepository, adoption_repository: investigationActiveAdoptionRepository, workspace_repository: investigationActiveWorkspaceDraftRepository, transaction_manager: transactionManager, authorization_policy: authorizationPolicy, return_cycle_resolver: returnCycleResolver, now });
     },
 
     dependencies,

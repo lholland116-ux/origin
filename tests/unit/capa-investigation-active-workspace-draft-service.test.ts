@@ -1,17 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCapaInvestigationActiveWorkspaceDraftService } from "../../lib/capa/application/capa-investigation-active-workspace-draft-service";
+import { CapaInvestigationActiveWorkspaceDraftIntegrityError, createCapaInvestigationActiveWorkspaceDraftService } from "../../lib/capa/application/capa-investigation-active-workspace-draft-service";
 
 const ORG = "10000000-0000-4000-8000-000000000001" as never;
 const CASE = "20000000-0000-4000-8000-000000000001" as never;
 const VERSION_1 = "30000000-0000-4000-8000-000000000001" as never;
 const VERSION_2 = "30000000-0000-4000-8000-000000000002" as never;
+const RETURN_EVENT = "50000000-0000-4000-8000-000000000002" as never;
 const USER = "40000000-0000-4000-8000-000000000001" as never;
 const OTHER_USER = "40000000-0000-4000-8000-000000000002" as never;
 const NOW = new Date("2026-09-05T12:00:00.000Z");
+const LATER = new Date("2026-09-05T12:10:00.000Z");
+const LATER_AGAIN = new Date("2026-09-05T12:20:00.000Z");
+const FINAL = new Date("2026-09-05T12:30:00.000Z");
 
 const emptyPayload = {
   evidence_assumption_ledger: { items: [] },
   root_cause_package: { hypotheses: [], root_cause_not_confirmed: null },
+};
+const returnResponse = {
+  response_summary: "The investigation response addresses the review feedback.",
+  actions_taken: "The team updated the investigation analysis.",
+  disposition: "addressed",
+  supporting_evidence_item_ids: ["E-1"],
+};
+const activeCycle = {
+  return_transition_audit_event_id: RETURN_EVENT,
+  source_case_version_id: VERSION_2,
+  resulting_case_version_id: VERSION_1,
+  returned_by: { actor_type: "human", actor_id: USER },
+  returned_at: "2026-09-05T10:00:00.000Z",
+  rationale: "More investigation is required.",
+  source_record_version: 3,
+  resulting_record_version: 4,
 };
 
 function context(user = USER) {
@@ -75,20 +95,42 @@ function setup(overrides: Record<string, unknown> = {}) {
   const transactionManager = {
     runInTransaction: vi.fn(async (_trace, work) => work({ transaction_id: "tx" })),
   } as any;
+  const returnCycleResolver = (Object.prototype.hasOwnProperty.call(overrides, "return_cycle_resolver")
+    ? overrides.return_cycle_resolver
+    : { resolve: vi.fn(async () => ({ status: "no_active_return_cycle" })) }) as any;
   const service = createCapaInvestigationActiveWorkspaceDraftService({
-    request_context: context(),
+    request_context: (overrides.request_context ?? context()) as any,
     capa_repository: repository,
     workspace_repository: repository,
     transaction_manager: transactionManager,
     authorization_policy: policy,
-    now: () => NOW,
+    return_cycle_resolver: returnCycleResolver,
+    now: (overrides.now ?? (() => NOW)) as () => Date,
   });
-  return { service, repository, policy, transactionManager, capaCase, caseVersion };
+  return { service, repository, policy, transactionManager, returnCycleResolver, capaCase, caseVersion };
 }
 
 const trace = { request_id: "70000000-0000-4000-8000-000000000001", correlation_id: "80000000-0000-4000-8000-000000000001" } as any;
 
 describe("S40 investigation-active workspace application service", () => {
+  it("fails closed when load is composed without a return-cycle resolver", async () => {
+    const test = setup({ return_cycle_resolver: undefined });
+    await expect(test.service.load({ capa_case_id: CASE })).rejects.toThrow(new CapaInvestigationActiveWorkspaceDraftIntegrityError("The root-cause return-cycle resolver is not configured."));
+  });
+
+  it("fails closed when save is composed without a return-cycle resolver", async () => {
+    const test = setup({ return_cycle_resolver: undefined });
+    await expect(test.service.save({ capa_case_id: CASE, body: { expected_draft_revision: null, ...emptyPayload }, request_trace: trace })).rejects.toThrow("The root-cause return-cycle resolver is not configured.");
+    expect(test.repository.saveDraft).not.toHaveBeenCalled();
+  });
+
+  it("preserves first-time legacy behavior with a wired resolver reporting no active cycle", async () => {
+    const resolver = { resolve: vi.fn(async () => ({ status: "no_active_return_cycle" })) };
+    const test = setup({ return_cycle_resolver: resolver });
+    await expect(test.service.load({ capa_case_id: CASE })).resolves.toEqual({ status: "loaded", workspace: null });
+    await expect(test.service.save({ capa_case_id: CASE, body: { expected_draft_revision: null, ...emptyPayload }, request_trace: trace })).resolves.toMatchObject({ status: "saved", workspace: { root_cause_return_response: null } });
+  });
+
   it("loads an absent workspace as null and permits a workspace saved against an older S40 version", async () => {
     const absent = setup();
     await expect(absent.service.load({ capa_case_id: CASE })).resolves.toEqual({ status: "loaded", workspace: null });
@@ -124,10 +166,63 @@ describe("S40 investigation-active workspace application service", () => {
     expect(test.repository.findCaseById).not.toHaveBeenCalled();
   });
 
-  it("computes the next revision, maps atomic conflicts, and does not read the workspace before saving", async () => {
+  it("rejects a return response when no authoritative active return cycle exists", async () => {
+    const test = setup();
+    await expect(test.service.save({ capa_case_id: CASE, body: { expected_draft_revision: null, ...emptyPayload, root_cause_return_response: returnResponse }, request_trace: trace })).resolves.toEqual({ status: "validation_failed", reason_code: "INVALID_WORKSPACE_REQUEST_RETURN_RESPONSE", detail_reason_code: "NO_ACTIVE_ROOT_CAUSE_RETURN_CYCLE" });
+    expect(test.repository.saveDraft).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes omit, explicit same-content save, material response change, and explicit clear", async () => {
+    let stored: any = null;
+    const resolver = { resolve: vi.fn(async () => ({ status: "active", cycle: activeCycle })) };
+    const saveDraft = vi.fn(async (_transaction, input) => {
+      stored = input.draft;
+      return { status: "saved", draft: stored };
+    });
+    const userA = setup({
+      return_cycle_resolver: { resolve: vi.fn(async () => ({ status: "active", cycle: activeCycle })) },
+      findDraft: vi.fn(async () => stored),
+      saveDraft,
+    });
+    const created = await userA.service.save({ capa_case_id: CASE, body: { expected_draft_revision: null, ...emptyPayload, root_cause_return_response: returnResponse }, request_trace: trace });
+    expect(created).toMatchObject({ status: "saved", workspace: { draft_revision: 1, root_cause_return_response: { ...returnResponse, return_transition_audit_event_id: RETURN_EVENT, source_case_version_id: VERSION_2, resulting_case_version_id: VERSION_1, responded_by: { actor_type: "human", actor_id: USER }, responded_at: NOW.toISOString() } } });
+    const userBAtT2 = setup({ request_context: context(OTHER_USER), now: () => LATER, return_cycle_resolver: resolver, findDraft: vi.fn(async () => stored), saveDraft });
+    const omitted = await userBAtT2.service.save({ capa_case_id: CASE, body: { expected_draft_revision: 1, evidence_assumption_ledger: { items: [] }, root_cause_package: emptyPayload.root_cause_package }, request_trace: trace });
+    expect(omitted).toMatchObject({ status: "saved", workspace: { draft_revision: 2, updated_by_user_id: OTHER_USER, updated_at: LATER.toISOString(), root_cause_return_response: { responded_by: { actor_type: "human", actor_id: USER }, responded_at: NOW.toISOString() } } });
+    const userBAtT3 = setup({ request_context: context(OTHER_USER), now: () => LATER_AGAIN, return_cycle_resolver: resolver, findDraft: vi.fn(async () => stored), saveDraft });
+    const sameContent = await userBAtT3.service.save({ capa_case_id: CASE, body: { expected_draft_revision: 2, ...emptyPayload, root_cause_return_response: returnResponse }, request_trace: trace });
+    expect(sameContent).toMatchObject({ status: "saved", workspace: { draft_revision: 3, root_cause_return_response: { responded_by: { actor_type: "human", actor_id: USER }, responded_at: NOW.toISOString() } } });
+    const changed = await userBAtT3.service.save({ capa_case_id: CASE, body: { expected_draft_revision: 3, ...emptyPayload, root_cause_return_response: { ...returnResponse, response_summary: "The investigation response was materially revised." } }, request_trace: trace });
+    expect(changed).toMatchObject({ status: "saved", workspace: { draft_revision: 4, root_cause_return_response: { response_summary: "The investigation response was materially revised.", responded_by: { actor_type: "human", actor_id: OTHER_USER }, responded_at: LATER_AGAIN.toISOString() } } });
+    const userBAtT5 = setup({ request_context: context(OTHER_USER), now: () => FINAL, return_cycle_resolver: resolver, findDraft: vi.fn(async () => stored), saveDraft });
+    await expect(userBAtT5.service.save({ capa_case_id: CASE, body: { expected_draft_revision: 4, ...emptyPayload, root_cause_return_response: null }, request_trace: trace })).resolves.toMatchObject({ status: "saved", workspace: { draft_revision: 5, record_version: 4, root_cause_return_response: null } });
+  });
+
+  it("does not expose, reinterpret, or restamp a stale-cycle response omitted from an unrelated save", async () => {
+    const stale = {
+      schema_version: "capa-root-cause-review-return-response-draft-1.0.0",
+      ...returnResponse,
+      return_transition_audit_event_id: "50000000-0000-4000-8000-000000000003",
+      source_case_version_id: VERSION_2,
+      resulting_case_version_id: VERSION_1,
+      responded_by: { actor_type: "human", actor_id: USER },
+      responded_at: NOW.toISOString(),
+    };
+    let saved: any;
+    const test = setup({
+      return_cycle_resolver: { resolve: vi.fn(async () => ({ status: "active", cycle: activeCycle })) },
+      findDraft: vi.fn(async () => ({ schema_version: "capa-investigation-active-workspace-draft-1.0.0", trust: "untrusted_human_draft", workflow_state: "S40", organization_id: ORG, capa_case_id: CASE, case_version_id: VERSION_1, record_version: 4, draft_revision: 1, ...emptyPayload, root_cause_return_response: stale, updated_by_user_id: USER, updated_at: NOW.toISOString() })),
+      saveDraft: vi.fn(async (_transaction, input) => { saved = input.draft; return { status: "saved", draft: saved }; }),
+    });
+    await expect(test.service.load({ capa_case_id: CASE })).resolves.toMatchObject({ status: "loaded", workspace: { root_cause_return_response: null } });
+    await expect(test.service.save({ capa_case_id: CASE, body: { expected_draft_revision: 1, ...emptyPayload }, request_trace: trace })).resolves.toMatchObject({ status: "saved", workspace: { root_cause_return_response: null } });
+    expect(saved.root_cause_return_response).toEqual(stale);
+  });
+
+  it("computes the next revision, maps atomic conflicts, and reads the workspace to preserve return-response attribution", async () => {
     const test = setup();
     await expect(test.service.save({ capa_case_id: CASE, body: { expected_draft_revision: 1, ...emptyPayload }, request_trace: trace })).resolves.toMatchObject({ status: "saved", workspace: { draft_revision: 2 } });
-    expect(test.repository.findDraft).not.toHaveBeenCalled();
+    expect(test.repository.findDraft).toHaveBeenCalledWith(ORG, CASE);
     test.repository.saveDraft.mockResolvedValue({ status: "concurrency_conflict" });
     await expect(test.service.save({ capa_case_id: CASE, body: { expected_draft_revision: 1, ...emptyPayload }, request_trace: trace })).resolves.toEqual({ status: "concurrency_conflict" });
   });

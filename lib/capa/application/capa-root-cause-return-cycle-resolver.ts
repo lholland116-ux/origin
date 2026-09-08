@@ -224,17 +224,15 @@ export function createCapaRootCauseReturnCycleResolver(
       );
       const latest = candidates[candidates.length - 1];
       if (latest === undefined) return { status: "no_active_return_cycle" };
+      const isG04Like = latest.action === ROOT_CAUSE_GATE_ACTION ||
+        latest.metadata.gate === G04_GATE ||
+        latest.metadata.transition_event === RETURN_TRANSITION;
+      if (!isG04Like) return { status: "no_active_return_cycle" };
       if (!transitionEnvelopeIsValid(latest, input.organization_id, input.capa_case_id)) {
         return { status: "invalid", reason_code: "INVALID_RETURN_CYCLE_PROVENANCE" };
       }
-      if (
-        latest.action === ROOT_CAUSE_GATE_ACTION ||
-        latest.metadata.gate === G04_GATE ||
-        latest.metadata.transition_event === RETURN_TRANSITION
-      ) {
-        if (!isG04Return(latest, input.organization_id, input.capa_case_id)) {
-          return { status: "invalid", reason_code: "INVALID_RETURN_CYCLE_PROVENANCE" };
-        }
+      if (!isG04Return(latest, input.organization_id, input.capa_case_id)) {
+        return { status: "invalid", reason_code: "INVALID_RETURN_CYCLE_PROVENANCE" };
       }
       const cycle = activeCycle(
         latest,

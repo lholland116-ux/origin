@@ -12,7 +12,7 @@ export class SupabaseCapaInvestigationActiveWorkspaceDraftRepositoryError extend
 }
 function fail(): never { throw new SupabaseCapaInvestigationActiveWorkspaceDraftRepositoryError(); }
 function fromRow(row: Row): CapaInvestigationActiveWorkspaceDraft {
-  const value = { schema_version: row.schema_version, trust: row.trust, workflow_state: row.workflow_state, organization_id: row.organization_id, capa_case_id: row.capa_case_id, case_version_id: row.case_version_id, record_version: typeof row.record_version === "number" ? row.record_version : Number(row.record_version), draft_revision: typeof row.draft_revision === "number" ? row.draft_revision : Number(row.draft_revision), evidence_assumption_ledger: row.evidence_assumption_ledger, root_cause_package: row.root_cause_package, updated_by_user_id: row.updated_by_user_id, updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at };
+  const value = { schema_version: row.schema_version, trust: row.trust, workflow_state: row.workflow_state, organization_id: row.organization_id, capa_case_id: row.capa_case_id, case_version_id: row.case_version_id, record_version: typeof row.record_version === "number" ? row.record_version : Number(row.record_version), draft_revision: typeof row.draft_revision === "number" ? row.draft_revision : Number(row.draft_revision), evidence_assumption_ledger: row.evidence_assumption_ledger, root_cause_package: row.root_cause_package, root_cause_return_response: row.root_cause_return_response === undefined || row.root_cause_return_response === null ? null : row.root_cause_return_response, updated_by_user_id: row.updated_by_user_id, updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at };
   const validated = validateCapaInvestigationActiveWorkspaceDraft(value);
   if (validated.status !== "valid") fail();
   return validated.value;
@@ -23,6 +23,10 @@ function input(value: SaveCapaInvestigationActiveWorkspaceDraftInput): CapaInves
   return validated.value;
 }
 function json(value: unknown): postgres.JSONValue { try { return JSON.parse(JSON.stringify(value)) as postgres.JSONValue; } catch { return fail(); } }
+function responseJson(draft: CapaInvestigationActiveWorkspaceDraft): postgres.JSONValue | null {
+  const response = draft.root_cause_return_response;
+  return response === undefined || response === null ? null : json(response);
+}
 async function caseContextMatches(sql: postgres.TransactionSql, draft: CapaInvestigationActiveWorkspaceDraft, value: SaveCapaInvestigationActiveWorkspaceDraftInput): Promise<boolean> {
   const rows = await sql<readonly { readonly current_version_id: string; readonly record_version: number | string; readonly status: string }[]>`select capa_case.current_version_id, capa_case.record_version, capa_case.status
     from public.capa_cases as capa_case
@@ -62,7 +66,7 @@ export class SupabaseCapaInvestigationActiveWorkspaceDraftRepository implements 
     if (value.expected_draft_revision === null) {
       if (draft.draft_revision !== 1) return { status: "concurrency_conflict" };
       if (hasExpectedCaseContext) {
-        const guardedRows = await sql<Row[]>`insert into public.capa_investigation_active_workspace_drafts (organization_id, capa_case_id, case_version_id, record_version, draft_revision, schema_version, trust, workflow_state, evidence_assumption_ledger, root_cause_package, updated_by_user_id, updated_at) select ${draft.organization_id}, ${draft.capa_case_id}, ${draft.case_version_id}, ${draft.record_version}, ${draft.draft_revision}, ${draft.schema_version}, ${draft.trust}, ${draft.workflow_state}, ${sql.json(json(draft.evidence_assumption_ledger))}, ${sql.json(json(draft.root_cause_package))}, ${draft.updated_by_user_id}, ${draft.updated_at} where exists (
+        const guardedRows = await sql<Row[]>`insert into public.capa_investigation_active_workspace_drafts (organization_id, capa_case_id, case_version_id, record_version, draft_revision, schema_version, trust, workflow_state, evidence_assumption_ledger, root_cause_package, root_cause_return_response, updated_by_user_id, updated_at) select ${draft.organization_id}, ${draft.capa_case_id}, ${draft.case_version_id}, ${draft.record_version}, ${draft.draft_revision}, ${draft.schema_version}, ${draft.trust}, ${draft.workflow_state}, ${sql.json(json(draft.evidence_assumption_ledger))}, ${sql.json(json(draft.root_cause_package))}, ${responseJson(draft) === null ? null : sql.json(responseJson(draft)!)}, ${draft.updated_by_user_id}, ${draft.updated_at} where exists (
           select 1
           from public.capa_cases as capa_case
           where capa_case.organization_id = ${draft.organization_id}
@@ -87,12 +91,12 @@ export class SupabaseCapaInvestigationActiveWorkspaceDraftRepository implements 
         if (guardedRows.length !== 1) fail();
         return { status: "saved", draft: fromRow(guardedRows[0]) };
       }
-      const rows = await sql<Row[]>`insert into public.capa_investigation_active_workspace_drafts (organization_id, capa_case_id, case_version_id, record_version, draft_revision, schema_version, trust, workflow_state, evidence_assumption_ledger, root_cause_package, updated_by_user_id, updated_at) values (${draft.organization_id}, ${draft.capa_case_id}, ${draft.case_version_id}, ${draft.record_version}, ${draft.draft_revision}, ${draft.schema_version}, ${draft.trust}, ${draft.workflow_state}, ${sql.json(json(draft.evidence_assumption_ledger))}, ${sql.json(json(draft.root_cause_package))}, ${draft.updated_by_user_id}, ${draft.updated_at}) on conflict (organization_id, capa_case_id) do nothing returning *`;
+      const rows = await sql<Row[]>`insert into public.capa_investigation_active_workspace_drafts (organization_id, capa_case_id, case_version_id, record_version, draft_revision, schema_version, trust, workflow_state, evidence_assumption_ledger, root_cause_package, root_cause_return_response, updated_by_user_id, updated_at) values (${draft.organization_id}, ${draft.capa_case_id}, ${draft.case_version_id}, ${draft.record_version}, ${draft.draft_revision}, ${draft.schema_version}, ${draft.trust}, ${draft.workflow_state}, ${sql.json(json(draft.evidence_assumption_ledger))}, ${sql.json(json(draft.root_cause_package))}, ${responseJson(draft) === null ? null : sql.json(responseJson(draft)!)}, ${draft.updated_by_user_id}, ${draft.updated_at}) on conflict (organization_id, capa_case_id) do nothing returning *`;
       if (rows.length === 0) return { status: "concurrency_conflict" }; if (rows.length !== 1) fail(); return { status: "saved", draft: fromRow(rows[0]) };
     }
     if (draft.draft_revision !== value.expected_draft_revision + 1) return { status: "concurrency_conflict" };
     if (hasExpectedCaseContext) {
-      const guardedRows = await sql<Row[]>`update public.capa_investigation_active_workspace_drafts set case_version_id = ${draft.case_version_id}, record_version = ${draft.record_version}, draft_revision = ${draft.draft_revision}, schema_version = ${draft.schema_version}, trust = ${draft.trust}, workflow_state = ${draft.workflow_state}, evidence_assumption_ledger = ${sql.json(json(draft.evidence_assumption_ledger))}, root_cause_package = ${sql.json(json(draft.root_cause_package))}, updated_by_user_id = ${draft.updated_by_user_id}, updated_at = ${draft.updated_at} where organization_id = ${draft.organization_id}
+      const guardedRows = await sql<Row[]>`update public.capa_investigation_active_workspace_drafts set case_version_id = ${draft.case_version_id}, record_version = ${draft.record_version}, draft_revision = ${draft.draft_revision}, schema_version = ${draft.schema_version}, trust = ${draft.trust}, workflow_state = ${draft.workflow_state}, evidence_assumption_ledger = ${sql.json(json(draft.evidence_assumption_ledger))}, root_cause_package = ${sql.json(json(draft.root_cause_package))}, root_cause_return_response = ${responseJson(draft) === null ? null : sql.json(responseJson(draft)!)}, updated_by_user_id = ${draft.updated_by_user_id}, updated_at = ${draft.updated_at} where organization_id = ${draft.organization_id}
         and capa_case_id = ${draft.capa_case_id}
         and draft_revision = ${value.expected_draft_revision}
         and exists (
@@ -120,7 +124,7 @@ export class SupabaseCapaInvestigationActiveWorkspaceDraftRepository implements 
       if (guardedRows.length !== 1) fail();
       return { status: "saved", draft: fromRow(guardedRows[0]) };
     }
-    const rows = await sql<Row[]>`update public.capa_investigation_active_workspace_drafts set case_version_id = ${draft.case_version_id}, record_version = ${draft.record_version}, draft_revision = ${draft.draft_revision}, schema_version = ${draft.schema_version}, trust = ${draft.trust}, workflow_state = ${draft.workflow_state}, evidence_assumption_ledger = ${sql.json(json(draft.evidence_assumption_ledger))}, root_cause_package = ${sql.json(json(draft.root_cause_package))}, updated_by_user_id = ${draft.updated_by_user_id}, updated_at = ${draft.updated_at} where organization_id = ${draft.organization_id}
+    const rows = await sql<Row[]>`update public.capa_investigation_active_workspace_drafts set case_version_id = ${draft.case_version_id}, record_version = ${draft.record_version}, draft_revision = ${draft.draft_revision}, schema_version = ${draft.schema_version}, trust = ${draft.trust}, workflow_state = ${draft.workflow_state}, evidence_assumption_ledger = ${sql.json(json(draft.evidence_assumption_ledger))}, root_cause_package = ${sql.json(json(draft.root_cause_package))}, root_cause_return_response = ${responseJson(draft) === null ? null : sql.json(responseJson(draft)!)}, updated_by_user_id = ${draft.updated_by_user_id}, updated_at = ${draft.updated_at} where organization_id = ${draft.organization_id}
       and capa_case_id = ${draft.capa_case_id}
       and draft_revision = ${value.expected_draft_revision} returning *`;
     if (rows.length === 0) return { status: "concurrency_conflict" }; if (rows.length !== 1) fail(); return { status: "saved", draft: fromRow(rows[0]) };
