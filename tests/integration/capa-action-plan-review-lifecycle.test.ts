@@ -5,6 +5,10 @@ import {
   handleCapaGet,
   type CapaApiHandlerDependencies,
 } from "../../lib/capa/api/capa-route-handler";
+import {
+  createCapaActionPlanReviewAttempt,
+  submitCapaActionPlanReviewAttempt,
+} from "../../app/capa/capa-action-plan-review-client";
 import { createCapaDevelopmentRuntime } from "../../lib/capa/application/capa-development-runtime";
 import { resolveDevelopmentCapaRequestContext } from "../../lib/security/supabase-capa-context";
 
@@ -60,6 +64,7 @@ describe("integrated S70 action-plan review qualification", () => {
   it("approves through the API handler and reads back S80 plus the durable decision", async () => {
     const test = await harness();
     try {
+      const workspaceBefore = await test.database.findActionPlanWorkspaceDraft(USER, CASE);
       const response = await handleCapaActionPlanReview(reviewRequest("approve", "approve-1"), CASE, test.dependencies);
       expect(response.status).toBe(200);
       const body = await response.json();
@@ -69,6 +74,8 @@ describe("integrated S70 action-plan review qualification", () => {
       const readBody = await readBack.json();
       expect(readBody.capa).toMatchObject({ status: "S80", record_version: 8, current_version_id: body.capa.resulting_case_version_id });
       expect(readBody.capa.current_version.section_version_ids).toContain(ACTION_PLAN);
+      expect(await test.database.findActionPlanWorkspaceDraft(USER, CASE)).toEqual(workspaceBefore);
+      expect(test.database.exportSnapshot().action_plan_review_decisions).toHaveLength(1);
       await expect(test.runtime.decide_action_plan_review_dependencies.review_decision_repository.findDecision(USER as never, CASE as never, SOURCE as never)).resolves.toMatchObject({ decision: "approve", rationale: "Approved for implementation.", resulting_case_version_id: body.capa.resulting_case_version_id });
       expect(JSON.stringify(readBody)).not.toContain("implementation_evidence_submitted");
     } finally { test.restoreRole(); }
@@ -87,7 +94,41 @@ describe("integrated S70 action-plan review qualification", () => {
       expect(readBody.capa).toMatchObject({ status: "S60", record_version: 8, current_version_id: body.capa.resulting_case_version_id });
       expect(readBody.capa.current_version.section_version_ids).toContain(ACTION_PLAN);
       expect(await test.database.findActionPlanWorkspaceDraft(USER, CASE)).toEqual(before);
+      expect(test.database.exportSnapshot().action_plan_review_decisions).toHaveLength(1);
       await expect(test.runtime.decide_action_plan_review_dependencies.review_decision_repository.findDecision(USER as never, CASE as never, SOURCE as never)).resolves.toMatchObject({ decision: "return", rationale: "Revise before implementation." });
+    } finally { test.restoreRole(); }
+  });
+
+  it("matches the CS5 browser parser to the actual CS4 route response", async () => {
+    const test = await harness();
+    try {
+      const attempt = createCapaActionPlanReviewAttempt({
+        caseId: CASE,
+        recordVersion: 7,
+        currentVersionId: SOURCE,
+        sourceCaseVersionId: SOURCE,
+        actionPlanSectionVersionId: ACTION_PLAN,
+        decision: "approve",
+        rationale: "Approved for implementation.",
+        idempotencyKey: "client-route-contract-1",
+      });
+      expect(attempt).not.toBeNull();
+      const result = await submitCapaActionPlanReviewAttempt(attempt!, async (_input, init) =>
+        handleCapaActionPlanReview(
+          new Request(`https://example.test/api/capa/${CASE}/action-plan-review`, init),
+          CASE,
+          test.dependencies,
+        ),
+      );
+      expect(result).toMatchObject({
+        status: "decided",
+        decision: "approve",
+        workflowState: "S80",
+        recordVersion: 8,
+        sourceCaseVersionId: SOURCE,
+        actionPlanSectionVersionId: ACTION_PLAN,
+        replayed: false,
+      });
     } finally { test.restoreRole(); }
   });
 
@@ -103,6 +144,7 @@ describe("integrated S70 action-plan review qualification", () => {
       expect(conflict.status).toBe(409);
       expect(await conflict.json()).toMatchObject({ error: { code: "CAPA_IDEMPOTENCY_CONFLICT" } });
       expect((await test.database.findCaseById(USER, CASE))!.record_version).toBe(8);
+      expect(test.database.exportSnapshot().action_plan_review_decisions).toHaveLength(1);
     } finally { test.restoreRole(); }
   });
 
@@ -123,6 +165,22 @@ describe("integrated S70 action-plan review qualification", () => {
       expect(await response.json()).toMatchObject({ error: { code: "CAPA_ACCESS_DENIED" } });
       await expect(denied.runtime.decide_action_plan_review_dependencies.review_decision_repository.findDecision(USER as never, CASE as never, SOURCE as never)).resolves.toBeNull();
     } finally { denied.restoreRole(); }
+
+    const stepUp = await harness();
+    try {
+      Object.assign(stepUp.dependencies, {
+        get_session_facts: vi.fn().mockResolvedValue({
+          ...facts(),
+          verified_aal: "aal1",
+          verified_reauthenticated_at_epoch_seconds: undefined,
+        }),
+      });
+      const response = await handleCapaActionPlanReview(reviewRequest("approve", "step-up-1"), CASE, stepUp.dependencies);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: { code: "CAPA_STEP_UP_REQUIRED" } });
+      expect(await stepUp.database.findCaseById(USER, CASE)).toMatchObject({ status: "S70", record_version: 7, current_version_id: SOURCE });
+      await expect(stepUp.runtime.decide_action_plan_review_dependencies.review_decision_repository.findDecision(USER as never, CASE as never, SOURCE as never)).resolves.toBeNull();
+    } finally { stepUp.restoreRole(); }
   });
 
   it("rolls back decision, workflow, audit, and idempotency state after a post-save failure, then permits exact retry", async () => {
@@ -140,6 +198,23 @@ describe("integrated S70 action-plan review qualification", () => {
       const retry = await handleCapaActionPlanReview(reviewRequest("approve", "atomicity-1"), CASE, test.dependencies);
       expect(retry.status).toBe(200);
       expect(await retry.json()).toMatchObject({ status: "decided", decision: "approve", capa: { status: "S80", record_version: 8 } });
+    } finally { test.restoreRole(); }
+  });
+
+  it("rolls back a returned decision through the same transaction infrastructure", async () => {
+    const test = await harness();
+    try {
+      const base = test.runtime.decide_action_plan_review_dependencies.review_decision_repository;
+      const failingRuntime = { ...test.runtime, decide_action_plan_review_dependencies: { ...test.runtime.decide_action_plan_review_dependencies, review_decision_repository: { findDecision: base.findDecision.bind(base), saveDecision: async (transaction: never, decision: never) => { await base.saveDecision(transaction, decision); throw new Error("injected return review persistence failure"); } } } };
+      Object.assign(test.dependencies, { get_runtime: vi.fn().mockReturnValue(failingRuntime) });
+      const failed = await handleCapaActionPlanReview(reviewRequest("return", "atomicity-return-1"), CASE, test.dependencies);
+      expect(failed.status).toBe(500);
+      expect(await test.database.findCaseById(USER, CASE)).toMatchObject({ status: "S70", record_version: 7, current_version_id: SOURCE });
+      await expect(base.findDecision(USER as never, CASE as never, SOURCE as never)).resolves.toBeNull();
+      Object.assign(test.dependencies, { get_runtime: vi.fn().mockReturnValue(test.runtime) });
+      const retry = await handleCapaActionPlanReview(reviewRequest("return", "atomicity-return-1"), CASE, test.dependencies);
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toMatchObject({ status: "decided", decision: "return", capa: { status: "S60", record_version: 8 } });
     } finally { test.restoreRole(); }
   });
 });
