@@ -24,20 +24,46 @@ describe("S70 governed action-plan review advisory", () => {
   it("uses only the AG-REVIEW S70 capability", () => { const evaluate = vi.fn(() => ({ eligible: true })); const gate = new ActivationBackedCapaActionPlanReviewAdvisoryAgentGate({ evaluate } as never); const context = { workflow_state: "S70", active_roles: [{ role_id: "CAPA_REVIEWER" }] } as never; expect(gate.evaluate({ context, agent: CAPA_ACTION_PLAN_REVIEW_ADVISORY_AGENT, operation: CAPA_ACTION_PLAN_REVIEW_ADVISORY_OPERATION })).toBe(true); expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({ agent_id: "AG-REVIEW", workflow_state: "S70", operation: "assemble_review_packet", output_schema_version: CAPA_ACTION_PLAN_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION })); });
 
   it.each([
-    ["source case version", { source_case_version_id: ROOT }],
-    ["action-plan section", { action_plan_section_version_id: ROOT }],
-  ])("rejects a generated advisory bound to the wrong %s", async (_label, change) => {
-    const context = {
-      trust: "authoritative_server_context", organization_id: "50000000-0000-4000-8000-000000000001", capa_case_id: "60000000-0000-4000-8000-000000000001", case_version_id: VERSION, record_version: 7, workflow_state: "S70", actor: "70000000-0000-4000-8000-000000000001", active_roles: [{ role_id: "CAPA_REVIEWER" }],
-      case_version: { version_number: 7, parent_version_id: null, change_reason: "submit action plan" },
-      sections: { action_plan: { section_version_id: SECTION, content: { items: [{ item_id: ACTION }], effectiveness_checks: [] } }, root_cause_package: { content: { hypotheses: [{ hypothesis_id: ROOT }] } }, investigation_ledger: { content: { items: [] } } },
-    };
-    const response = { ...valid, ...change, run_id: "80000000-0000-4000-8000-000000000001", output_id: "90000000-0000-4000-8000-000000000001", output_schema_version: CAPA_ACTION_PLAN_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION };
-    const trace = { package: { package_schema_version: "capa-action-plan-review-advisory-prompt-package-1.0.0", scope: { organization_id: context.organization_id, capa_case_id: context.capa_case_id, case_version_id: VERSION, record_version: 7, workflow_state: "S70" }, trace: { run_id: response.run_id, request_id: "a0000000-0000-4000-8000-000000000001", correlation_id: "b0000000-0000-4000-8000-000000000001" }, generation_contract: { operation: "assemble_review_packet", output_schema_version: CAPA_ACTION_PLAN_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION } } };
-    const service = new CapaActionPlanReviewAdvisoryService({
-      context_resolver: { resolve: vi.fn(async () => ({ status: "resolved" as const, assembly: { authoritative: context, reference_manifest: [{ reference_key: "R1" }], model_safe_context: {} } })), assertCaseUnchanged: vi.fn(async () => true) },
-      authorizer: { authorize: vi.fn(async () => true) }, agent_gate: { evaluate: vi.fn(() => true) }, generator: { generate: vi.fn(async () => ({ response, trace })) }, output_repository: { save: vi.fn(async () => "saved") }, transaction_manager: { runInTransaction: vi.fn(async (_trace, callback) => callback({})) },
-    } as never);
-    await expect(service.execute({ organization_id: context.organization_id as never, capa_case_id: context.capa_case_id as never, user_id: context.actor as never, request_id: "a0000000-0000-4000-8000-000000000001" as never, correlation_id: "b0000000-0000-4000-8000-000000000001" as never, request: { expected_case_version_id: VERSION as never, expected_record_version: 7 } })).rejects.toMatchObject({ reason_code: "INVALID_ADVISORY_RESULT" });
+    ["source case version", { source_case_version_id: ROOT }, "SOURCE_CASE_VERSION_MISMATCH", "response.source_case_version_id"],
+    ["action-plan section", { action_plan_section_version_id: ROOT }, "ACTION_PLAN_SECTION_VERSION_MISMATCH", "response.action_plan_section_version_id"],
+    ["affected action", { proposal: { ...valid.proposal, findings: [{ ...valid.proposal.findings[0], affected_action_ids: [ROOT] }] } }, "AFFECTED_ACTION_ID_NOT_AUTHORITATIVE", "response.proposal.findings[0].affected_action_ids[0]"],
+    ["affected root cause", { proposal: { ...valid.proposal, findings: [{ ...valid.proposal.findings[0], affected_root_cause_ids: [ACTION] }] } }, "AFFECTED_ROOT_CAUSE_ID_NOT_AUTHORITATIVE", "response.proposal.findings[0].affected_root_cause_ids[0]"],
+    ["reference key", { proposal: { ...valid.proposal, findings: [{ ...valid.proposal.findings[0], reference_keys: ["R2"] }] } }, "REFERENCE_KEY_NOT_IN_MANIFEST", "response.proposal.findings[0].reference_keys[0]"],
+  ] as const)("reports the safe diagnostic for a generated %s mismatch", async (_label, change, diagnostic_reason_code, diagnostic_path) => {
+    const service = createService(change);
+    await expect(execute(service)).rejects.toMatchObject({ reason_code: "INVALID_ADVISORY_RESULT", diagnostic_reason_code, diagnostic_path, diagnostic_finding_count: 1, diagnostic_affected_action_id_count: 1, diagnostic_affected_root_cause_id_count: 1, diagnostic_reference_key_count: 1, diagnostic_expected_workflow_state: "S70" });
+  });
+
+  it("reports a trace correlation mismatch without exposing the value", async () => {
+    const service = createService({}, { correlation_id: ROOT });
+    await expect(execute(service)).rejects.toMatchObject({ reason_code: "INVALID_ADVISORY_RESULT", diagnostic_reason_code: "TRACE_CORRELATION_BINDING_MISMATCH", diagnostic_path: "trace.package.trace.correlation_id" });
+  });
+
+  it("preserves valid advisory behavior", async () => {
+    const save = vi.fn(async () => "saved");
+    const service = createService({}, {}, save);
+    await expect(execute(service)).resolves.toMatchObject({ advisory: { advisory_only: true }, snapshot: { case_version_id: VERSION, record_version: 7 } });
+    expect(save).toHaveBeenCalledOnce();
   });
 });
+
+const context = {
+  trust: "authoritative_server_context", organization_id: "50000000-0000-4000-8000-000000000001", capa_case_id: "60000000-0000-4000-8000-000000000001", case_version_id: VERSION, record_version: 7, workflow_state: "S70", actor: "70000000-0000-4000-8000-000000000001", active_roles: [{ role_id: "CAPA_REVIEWER" }],
+  case_version: { version_number: 7, parent_version_id: null, change_reason: "submit action plan" },
+  sections: { action_plan: { section_version_id: SECTION, content: { items: [{ item_id: ACTION }], effectiveness_checks: [] } }, root_cause_package: { content: { hypotheses: [{ hypothesis_id: ROOT }] } }, investigation_ledger: { content: { items: [] } } },
+} as const;
+const requestId = "a0000000-0000-4000-8000-000000000001";
+const correlationId = "b0000000-0000-4000-8000-000000000001";
+
+function createService(responseChange: Record<string, unknown> = {}, traceChange: Record<string, unknown> = {}, save = vi.fn(async () => "saved")) {
+  const response = { ...valid, ...responseChange, run_id: "80000000-0000-4000-8000-000000000001", output_id: "90000000-0000-4000-8000-000000000001", output_schema_version: CAPA_ACTION_PLAN_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION };
+  const trace = { package: { package_schema_version: "capa-action-plan-review-advisory-prompt-package-1.0.0", scope: { organization_id: context.organization_id, capa_case_id: context.capa_case_id, case_version_id: VERSION, record_version: 7, workflow_state: "S70" }, trace: { run_id: response.run_id, request_id: requestId, correlation_id: correlationId, ...traceChange }, generation_contract: { operation: "assemble_review_packet", output_schema_version: CAPA_ACTION_PLAN_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION } } };
+  return new CapaActionPlanReviewAdvisoryService({
+    context_resolver: { resolve: vi.fn(async () => ({ status: "resolved" as const, assembly: { authoritative: context, reference_manifest: [{ reference_key: "R1" }], model_safe_context: {} } })), assertCaseUnchanged: vi.fn(async () => true) },
+    authorizer: { authorize: vi.fn(async () => true) }, agent_gate: { evaluate: vi.fn(() => true) }, generator: { generate: vi.fn(async () => ({ response, trace })) }, output_repository: { save }, transaction_manager: { runInTransaction: vi.fn(async (_trace, callback) => callback({})) },
+  } as never);
+}
+
+function execute(service: CapaActionPlanReviewAdvisoryService) {
+  return service.execute({ organization_id: context.organization_id as never, capa_case_id: context.capa_case_id as never, user_id: context.actor as never, request_id: requestId as never, correlation_id: correlationId as never, request: { expected_case_version_id: VERSION as never, expected_record_version: 7 } });
+}
