@@ -57,6 +57,10 @@ import {
   resolveDevelopmentCapaRequestContext,
 } from "../../lib/security/supabase-capa-context";
 
+import {
+  InMemoryCapaActionPlanReviewDecisionRepository,
+} from "../../lib/database/in-memory/in-memory-capa-action-plan-review-decision-repository";
+
 const NOW =
   new Date(
     "2026-08-12T14:00:00.000Z",
@@ -1407,6 +1411,42 @@ describe(
       );
     });
 
+    it("allows the existing gate operation for S70 and denies non-S70 action-plan review", async () => {
+      await withDevelopmentOrganization(
+        SHARED_DEVELOPMENT_ORGANIZATION_ID,
+        async () => {
+          await withDevelopmentRole("CAPA_APPROVER", async () => {
+            const policy = createPolicy();
+            const context = developmentContext(OTHER_ORGANIZATION_ID);
+            const request = policyRequest({
+              authentication: context.authentication,
+              tenant: context.tenant,
+              operation: "approve_action_plan",
+              resource: {
+                organization_id: context.tenant.organization_id,
+                resource_type: controlled("CAPA_CASE"),
+                workflow_state: "S70",
+                relationship: controlled("NOT_CASE_OWNER"),
+              },
+              purpose: controlled("CAPA_GATE_DECISION"),
+            });
+            await expect(policy.evaluate(request)).resolves.toMatchObject({
+              decision: "allow",
+              reason_code: "DEVELOPMENT_ACTION_PLAN_REVIEW_ALLOWED",
+            });
+            await expect(policy.evaluate({
+              ...request,
+              resource: { ...request.resource, workflow_state: "S60" },
+            })).resolves.toMatchObject({ decision: "deny", reason_code: "DEVELOPMENT_POLICY_DENIED" });
+            await expect(policy.evaluate({
+              ...request,
+              resource: { ...request.resource, relationship: controlled("CASE_OWNER") },
+            })).resolves.toMatchObject({ decision: "deny", reason_code: "DEVELOPMENT_POLICY_DENIED" });
+          });
+        },
+      );
+    });
+
     it.each([
       "CAPA_OWNER",
       "CAPA_REVIEWER",
@@ -2179,6 +2219,18 @@ describe(
         workflow_idempotency_repository: runtime.database,
       }));
       expect(runtime.decide_root_cause_gate_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
+    });
+
+    it("wires the human-controlled S70 action-plan review to the shared development transaction runtime", () => {
+      const runtime = createCapaDevelopmentRuntime({ now: () => NOW });
+      expect(runtime.decide_action_plan_review_dependencies).toEqual(expect.objectContaining({
+        transaction_manager: runtime.database,
+        capa_repository: runtime.database,
+        audit_repository: runtime.database,
+        workflow_idempotency_repository: runtime.database,
+        review_decision_repository: expect.any(InMemoryCapaActionPlanReviewDecisionRepository),
+      }));
+      expect(runtime.decide_action_plan_review_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
     });
   },
 );

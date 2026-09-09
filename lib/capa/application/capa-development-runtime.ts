@@ -22,6 +22,9 @@ import type {
 import type {
   DecideCapaRootCauseGateDependencies,
 } from "./decide-capa-root-cause-gate";
+import type {
+  DecideCapaActionPlanReviewDependencies,
+} from "./decide-capa-action-plan-review";
 
 import {
   randomUUID,
@@ -198,6 +201,7 @@ import type {
   TransactionId,
 } from "../../database/transactions";
 import { InMemoryCapaParticipantEligibilityRepository } from "../../database/in-memory/in-memory-capa-participant-eligibility-repository";
+import { InMemoryCapaActionPlanReviewDecisionRepository } from "../../database/in-memory/in-memory-capa-action-plan-review-decision-repository";
 import {
   CapaDevelopmentFileStateStore,
 } from "../../database/development/capa-development-file-state-store";
@@ -501,6 +505,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_ROOT_CAUSE_RETURN_ALLOWED",
       );
 
+    case "approve_action_plan":
+      return controlled(
+        "DEVELOPMENT_ACTION_PLAN_REVIEW_ALLOWED",
+      );
+
     default:
       return controlled(
         "DEVELOPMENT_POLICY_DENIED",
@@ -545,6 +554,9 @@ function developmentAuthorizationPolicy(
           "approve_root_cause" ||
         request.operation ===
           "return_root_cause_for_investigation";
+
+      const isActionPlanReviewGateOperation =
+        request.operation === "approve_action_plan";
 
       const genericOperationIsSupported =
         request.operation ===
@@ -605,11 +617,28 @@ function developmentAuthorizationPolicy(
             "NOT_CASE_OWNER"
         );
 
+      const actionPlanReviewGateBoundarySatisfied =
+        !isActionPlanReviewGateOperation ||
+        (
+          developmentRoleId ===
+            "CAPA_APPROVER" &&
+          request.purpose ===
+            "CAPA_GATE_DECISION" &&
+          request.resource.workflow_state ===
+            "S70" &&
+          request.resource.relationship ===
+            "NOT_CASE_OWNER"
+        );
+
       const operationIsSupported =
         genericOperationIsSupported ||
         (
           isRootCauseGateOperation &&
           rootCauseGateBoundarySatisfied
+        ) ||
+        (
+          isActionPlanReviewGateOperation &&
+          actionPlanReviewGateBoundarySatisfied
         );
 
       if (
@@ -1137,6 +1166,20 @@ export function createCapaDevelopmentRuntime(
     },
   };
 
+  const decideActionPlanReviewDependencies:
+    DecideCapaActionPlanReviewDependencies = {
+    ...decideRootCauseGateDependencies,
+    review_decision_repository:
+      new InMemoryCapaActionPlanReviewDecisionRepository(),
+    configuration: {
+      workflow_version: dependencies.configuration.workflow_version,
+      audit_schema_version: dependencies.configuration.audit_schema_version,
+      step_up_maximum_age_ms: 15 * 60 * 1000,
+      required_step_up_assurance: controlled("MFA"),
+      authorization_purpose: controlled("CAPA_GATE_DECISION"),
+    },
+  };
+
   const updateInvestigationProgressDependencies:
     UpdateCapaInvestigationProgressDependencies = {
     ...submitIntakeDependencies,
@@ -1445,6 +1488,9 @@ export function createCapaDevelopmentRuntime(
 
     decide_root_cause_gate_dependencies:
       decideRootCauseGateDependencies,
+
+    decide_action_plan_review_dependencies:
+      decideActionPlanReviewDependencies,
     prompt_assembly_service:
       promptAssemblyService,
 

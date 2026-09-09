@@ -22,6 +22,9 @@ import type {
 import type {
   DecideCapaRootCauseGateDependencies,
 } from "./decide-capa-root-cause-gate";
+import type {
+  DecideCapaActionPlanReviewDependencies,
+} from "./decide-capa-action-plan-review";
 
 import type {
   CreateCapaDependencies,
@@ -272,6 +275,10 @@ export interface CapaRuntime {
   /** Human-controlled S50 root-cause gate dependencies. */
   readonly decide_root_cause_gate_dependencies:
     DecideCapaRootCauseGateDependencies;
+
+  /** Human-controlled S70 action-plan review decision dependencies. */
+  readonly decide_action_plan_review_dependencies:
+    DecideCapaActionPlanReviewDependencies;
 
   /**
    * Controlled provider-neutral prompt assembly. This boundary does not

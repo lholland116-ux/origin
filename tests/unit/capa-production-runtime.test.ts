@@ -106,6 +106,10 @@ import {
   SupabaseCapaRootCauseReviewAdvisoryOutputRepository,
 } from "../../lib/database/supabase/supabase-capa-root-cause-review-advisory-output-repository";
 
+import {
+  SupabaseCapaActionPlanReviewDecisionRepository,
+} from "../../lib/database/supabase/supabase-capa-action-plan-review-decision-repository";
+
 const NOW =
   new Date(
     "2026-08-19T12:00:00.000Z",
@@ -1127,6 +1131,19 @@ describe(
         audit_repository: expect.any(SupabaseAuditRepository),
       }));
       expect(runtime.decide_root_cause_gate_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
+    });
+
+    it("wires the human-controlled S70 action-plan review to the shared SQL runtime", () => {
+      const runtime = createCapaProductionRuntime({ now: () => NOW, sql: SQL });
+      expect(runtime.decide_action_plan_review_dependencies).toEqual(expect.objectContaining({
+        transaction_manager: runtime.dependencies.transaction_manager,
+        capa_repository: runtime.database,
+        audit_repository: runtime.dependencies.audit_repository,
+        workflow_idempotency_repository: expect.any(SupabaseCapaWorkflowIdempotencyRepository),
+        review_decision_repository: expect.any(SupabaseCapaActionPlanReviewDecisionRepository),
+      }));
+      expect(runtime.decide_action_plan_review_dependencies.review_decision_repository).not.toBe(runtime.database);
+      expect(runtime.decide_action_plan_review_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
     });
   },
 );

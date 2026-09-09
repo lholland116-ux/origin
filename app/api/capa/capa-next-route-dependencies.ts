@@ -369,6 +369,10 @@ export function createCapaActionPlanAdvisoryApiDependencies(): CapaActionPlanAdv
   return { ...dependencies, create_advisory_service(context) { return dependencies.get_runtime().create_action_plan_advisory_service(context); } };
 }
 
+export function createCapaActionPlanReviewApiDependencies(): CapaApiHandlerDependencies {
+  return createCapaApiHandlerDependencies();
+}
+
 export function createCapaInvestigationActiveWorkspaceReconciliationApiDependencies(): CapaInvestigationActiveWorkspaceReconciliationApiDependencies {
   const dependencies = createCapaApiHandlerDependencies();
   return { ...dependencies, create_reconciliation_service(context) { return dependencies.get_runtime().create_investigation_active_workspace_reconciliation_service(context); } };

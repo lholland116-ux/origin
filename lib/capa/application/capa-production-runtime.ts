@@ -22,6 +22,9 @@ import type {
 import type {
   DecideCapaRootCauseGateDependencies,
 } from "./decide-capa-root-cause-gate";
+import type {
+  DecideCapaActionPlanReviewDependencies,
+} from "./decide-capa-action-plan-review";
 
 import { randomUUID } from "node:crypto";
 
@@ -218,6 +221,7 @@ import { SupabaseCapaInvestigationActiveAdvisoryOutputRepository } from "../../d
 import { SupabaseCapaInvestigationActiveWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-investigation-active-workspace-draft-repository";
 import { SupabaseCapaRootCauseReviewAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-root-cause-review-advisory-output-repository";
 import { SupabaseCapaActionPlanAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-action-plan-advisory-output-repository";
+import { SupabaseCapaActionPlanReviewDecisionRepository } from "../../database/supabase/supabase-capa-action-plan-review-decision-repository";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
@@ -875,6 +879,8 @@ export function createCapaProductionRuntime(
     new SupabaseCapaInvestigationActiveWorkspaceDraftRepository(sql);
   const actionPlanWorkspaceDraftRepository =
     new SupabaseCapaActionPlanWorkspaceDraftRepository(sql);
+  const actionPlanReviewDecisionRepository =
+    new SupabaseCapaActionPlanReviewDecisionRepository(sql);
 
   const auditRepository =
     new SupabaseAuditRepository(
@@ -1069,6 +1075,20 @@ export function createCapaProductionRuntime(
   const decideRootCauseGateDependencies:
     DecideCapaRootCauseGateDependencies = {
     ...approveScopeDependencies,
+    configuration: {
+      workflow_version: workflowVersion,
+      audit_schema_version: auditSchemaVersion,
+      step_up_maximum_age_ms: stepUpMaximumAge,
+      required_step_up_assurance: requiredStepUpAssurance,
+      authorization_purpose: controlled("CAPA_GATE_DECISION"),
+    },
+  };
+
+  const decideActionPlanReviewDependencies:
+    DecideCapaActionPlanReviewDependencies = {
+    ...decideRootCauseGateDependencies,
+    review_decision_repository:
+      actionPlanReviewDecisionRepository,
     configuration: {
       workflow_version: workflowVersion,
       audit_schema_version: auditSchemaVersion,
@@ -1574,6 +1594,9 @@ export function createCapaProductionRuntime(
 
     decide_root_cause_gate_dependencies:
       decideRootCauseGateDependencies,
+
+    decide_action_plan_review_dependencies:
+      decideActionPlanReviewDependencies,
 
     prompt_assembly_service:
       promptAssemblyService,

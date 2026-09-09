@@ -14,6 +14,10 @@ import {
   submitCapaRootCausePackage,
 } from "../application/submit-capa-root-cause-package";
 import { submitCapaActionPlan } from "../application/submit-capa-action-plan";
+import { decideCapaActionPlanReview } from "../application/decide-capa-action-plan-review";
+import {
+  CAPA_ACTION_PLAN_REVIEW_DECISION_SCHEMA_VERSION,
+} from "../domain/capa-action-plan-review-decision";
 
 import {
   decideCapaRootCauseGate,
@@ -31,6 +35,7 @@ import type {
   AuditEvent,
   CapaCaseId,
   CapaCaseVersionId,
+  CapaSectionVersionId,
   CorrelationId,
   ControlledCode,
   IdempotencyKey,
@@ -813,6 +818,50 @@ function parsedSubmitActionPlanBody(value: unknown): ParsedSubmitActionPlanBody 
   if (Object.keys(value).length !== 2 || typeof value.expected_record_version !== "number" || !Number.isSafeInteger(value.expected_record_version) || value.expected_record_version < 1 || typeof value.expected_current_version_id !== "string") return null;
   const versionId = normalizedUuid(value.expected_current_version_id);
   return versionId === null || versionId !== value.expected_current_version_id ? null : { expected_record_version: value.expected_record_version, expected_current_version_id: versionId as CapaCaseVersionId };
+}
+
+interface ParsedActionPlanReviewBody {
+  readonly expected_record_version: number;
+  readonly expected_current_version_id: CapaCaseVersionId;
+  readonly application_body: Readonly<{
+    readonly schema_version: typeof CAPA_ACTION_PLAN_REVIEW_DECISION_SCHEMA_VERSION;
+    readonly source_case_version_id: CapaCaseVersionId;
+    readonly action_plan_section_version_id: CapaSectionVersionId;
+    readonly decision: "approve" | "return";
+    readonly rationale: string;
+  }>;
+}
+
+function parsedActionPlanReviewBody(value: unknown): ParsedActionPlanReviewBody | null {
+  if (!isObjectRecord(value) || Object.keys(value).length !== 7) return null;
+  const expectedKeys = [
+    "action_plan_section_version_id",
+    "decision",
+    "expected_current_version_id",
+    "expected_record_version",
+    "rationale",
+    "schema_version",
+    "source_case_version_id",
+  ];
+  if (Object.keys(value).sort().join(",") !== expectedKeys.join(",")) return null;
+  if (!Number.isSafeInteger(value.expected_record_version) || (value.expected_record_version as number) < 1) return null;
+  if (typeof value.expected_current_version_id !== "string" || normalizedUuid(value.expected_current_version_id) !== value.expected_current_version_id) return null;
+  if (value.schema_version !== CAPA_ACTION_PLAN_REVIEW_DECISION_SCHEMA_VERSION) return null;
+  if (typeof value.source_case_version_id !== "string" || normalizedUuid(value.source_case_version_id) !== value.source_case_version_id) return null;
+  if (typeof value.action_plan_section_version_id !== "string" || normalizedUuid(value.action_plan_section_version_id) !== value.action_plan_section_version_id) return null;
+  if (value.decision !== "approve" && value.decision !== "return") return null;
+  if (typeof value.rationale !== "string" || value.rationale.length === 0 || value.rationale.trim() !== value.rationale) return null;
+  return {
+    expected_record_version: value.expected_record_version as number,
+    expected_current_version_id: value.expected_current_version_id as CapaCaseVersionId,
+    application_body: Object.freeze({
+      schema_version: CAPA_ACTION_PLAN_REVIEW_DECISION_SCHEMA_VERSION,
+      source_case_version_id: value.source_case_version_id as CapaCaseVersionId,
+      action_plan_section_version_id: value.action_plan_section_version_id as CapaSectionVersionId,
+      decision: value.decision,
+      rationale: value.rationale,
+    }),
+  };
 }
 
 function parsedSubmitRootCauseBody(
@@ -2504,6 +2553,75 @@ export async function handleCapaSubmitActionPlan(
     const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
     if (contextResponse !== null) return contextResponse;
     return safeUnexpectedError(dependencies, trace, "action-plan submission", error);
+  }
+}
+
+/** Framework-neutral POST handler for the human-controlled S70 action-plan review. */
+export async function handleCapaActionPlanReview(
+  request: Request,
+  capaCaseId: string,
+  dependencies: CapaApiHandlerDependencies,
+): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  try {
+    const context = await authenticatedContext(dependencies);
+    if (context === null) return errorResponse(trace, 401, "UNAUTHORIZED", "Authentication is required.");
+    const normalizedCaseId = normalizedUuid(capaCaseId);
+    if (normalizedCaseId === null || normalizedCaseId !== capaCaseId) return errorResponse(trace, 400, "INVALID_CAPA_CASE_ID", "A valid CAPA case identifier is required.");
+    const key = request.headers.get("idempotency-key");
+    if (key === null || key.length === 0 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH || key.trim() !== key) return errorResponse(trace, 400, "INVALID_IDEMPOTENCY_KEY", "A valid idempotency key is required.");
+    const parsedJson = await parseJsonBody(request);
+    if (!parsedJson.valid) return errorResponse(trace, 400, "INVALID_JSON", "The request body must be valid JSON.");
+    const body = parsedActionPlanReviewBody(parsedJson.body);
+    if (body === null) return errorResponse(trace, 400, "INVALID_CAPA_ACTION_PLAN_REVIEW", "The action-plan review request is invalid.");
+    const result = await decideCapaActionPlanReview(
+      dependencies.get_runtime().decide_action_plan_review_dependencies,
+      {
+        authentication: context.authentication,
+        tenant: context.tenant,
+        capa_case_id: normalizedCaseId as CapaCaseId,
+        expected_record_version: body.expected_record_version,
+        expected_current_version_id: body.expected_current_version_id,
+        request_trace: { ...trace, idempotency_key: key as IdempotencyKey },
+        body: body.application_body,
+      },
+    );
+    if (result.status === "validation_failed") return errorResponse(trace, 400, "CAPA_ACTION_PLAN_REVIEW_VALIDATION_FAILED", "The action-plan review request did not pass controlled validation.", [{ path: "review", message: result.reason_code }]);
+    if (result.status === "authorization_denied") return errorResponse(trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.");
+    if (result.status === "step_up_required") return errorResponse(trace, 403, "CAPA_STEP_UP_REQUIRED", "Fresh step-up authentication is required.");
+    if (result.status === "not_found_or_not_authorized") return errorResponse(trace, 404, "CAPA_NOT_FOUND", "The CAPA case was not found.");
+    if (result.status === "idempotency_conflict") return errorResponse(trace, 409, "CAPA_IDEMPOTENCY_CONFLICT", "The idempotency key was already used for a different CAPA request.");
+    if (result.status === "concurrency_conflict") return errorResponse(trace, 409, "CAPA_CONCURRENCY_CONFLICT", "The CAPA record changed before action-plan review could be completed.");
+    if (result.status === "workflow_conflict") return errorResponse(trace, 409, "CAPA_WORKFLOW_CONFLICT", "The CAPA case is not available for Action Plan Review.");
+    return jsonResponse({
+      status: "decided",
+      decision: result.decision,
+      capa: {
+        capa_case_id: result.capa_case.capa_case_id,
+        case_number: result.capa_case.case_number,
+        status: result.capa_case.status,
+        workflow_state: result.workflow_state,
+        record_version: result.capa_case.record_version,
+        current_version_id: result.capa_case.current_version_id,
+        source_case_version_id: result.source_case_version_id,
+        action_plan_section_version_id: result.action_plan_section_version.section_version_id,
+        resulting_case_version_id: result.resulting_case_version_id,
+      },
+      review_decision: {
+        schema_version: result.review_decision.schema_version,
+        decision: result.review_decision.decision,
+        rationale: result.review_decision.rationale,
+        reviewer_user_id: result.review_decision.reviewer_user_id,
+        decided_at: result.review_decision.decided_at,
+      },
+      transition_audit_event_id: result.transition_audit_event_id,
+      replayed: result.status === "already_decided",
+      correlation_id: trace.correlation_id,
+    }, 200);
+  } catch (error) {
+    const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
+    if (contextResponse !== null) return contextResponse;
+    return safeUnexpectedError(dependencies, trace, "action-plan review", error);
   }
 }
 
