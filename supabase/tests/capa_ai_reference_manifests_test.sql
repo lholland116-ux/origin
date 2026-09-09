@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(45);
+select plan(65);
 
 set constraints all deferred;
 
@@ -202,6 +202,42 @@ select ok(exists (
     and function_record.prosrc like '%new.status = ''completed_draft''%'
     and function_record.prosrc like '%capa-action-plan-advisory-reference-manifest-1.0.0%'
 ), 'manifest requirement includes completed S60 AG-ACTION output');
+
+select ok(exists (
+  select 1
+  from pg_catalog.pg_constraint
+  where conrelid = 'public.capa_ai_reference_manifests'::regclass
+    and conname = 'capa_ai_reference_manifests_schema_version'
+    and pg_get_constraintdef(oid) like '%capa-action-plan-review-advisory-reference-manifest-1.0.0%'
+), 'reference-manifest schema permits the governed S70 manifest version');
+
+select ok(exists (
+  select 1
+  from pg_catalog.pg_proc as function_record
+  join pg_catalog.pg_namespace as namespace_record
+    on namespace_record.oid = function_record.pronamespace
+  where namespace_record.nspname = 'private'
+    and function_record.proname = 'capa_require_s40_reference_manifest'
+    and function_record.prosrc like '%new.agent_id = ''AG-REVIEW''%'
+    and function_record.prosrc like '%new.agent_version = ''ag-review-1.0.0''%'
+    and function_record.prosrc like '%new.output_schema_version = ''capa_action_plan_review_advisory-1.0.0''%'
+    and function_record.prosrc like '%new.status = ''completed_draft''%'
+    and function_record.prosrc like '%capa-action-plan-review-advisory-reference-manifest-1.0.0%'
+), 'manifest requirement includes completed S70 AG-REVIEW output');
+
+select ok(exists (
+  select 1
+  from pg_catalog.pg_proc as function_record
+  join pg_catalog.pg_namespace as namespace_record
+    on namespace_record.oid = function_record.pronamespace
+  where namespace_record.nspname = 'private'
+    and function_record.proname = 'capa_require_s40_reference_manifest'
+    and function_record.prosrc like '%source_case_version_id%'
+    and function_record.prosrc like '%action_plan_section_version_id%'
+), 'S70 manifest enforcement includes authoritative source and action-plan section bindings');
+
+select ok(obj_description('public.capa_ai_reference_manifests'::regclass) like '%S70%',
+  'reference-manifest provenance comment includes S70');
 
 -- Controlled database fixtures. The S40 output is inserted first, followed by
 -- its trace and server-only manifest, proving the deferred triple-write order.
@@ -689,6 +725,481 @@ select throws_ok($$
   end
   $missing_s60_manifest$
 $$, '23514', 'S60 AG-ACTION AI output requires an exact durable reference manifest.', 'completed S60 AG-ACTION output cannot commit without a manifest');
+
+-- ---------------------------------------------------------------------------
+-- Controlled S70 AG-REVIEW action-plan review advisory qualification
+-- ---------------------------------------------------------------------------
+
+set constraints all deferred;
+
+insert into public.capa_cases (
+  capa_case_id, organization_id, case_number, current_version_id, status,
+  owner_user_id, confidentiality, record_version, effective_at, created_at,
+  created_by_actor_type, created_by_actor_id, updated_at,
+  updated_by_actor_type, updated_by_actor_id
+) values (
+  'c4300000-0000-4000-8000-000000000001',
+  'c1000000-0000-4000-8000-000000000001', 'CAPA-S70-MANIFEST',
+  'c4400000-0000-4000-8000-000000000001', 'S70',
+  'c1200000-0000-4000-8000-000000000001', 'CUSTOMER_CONFIDENTIAL', 4,
+  '2026-09-05T00:00:00Z', '2026-09-05T00:00:00Z', 'human', 'sql-test',
+  '2026-09-05T00:00:00Z', 'human', 'sql-test'
+);
+
+insert into public.capa_case_versions (
+  case_version_id, organization_id, capa_case_id, version_number,
+  change_reason, status, effective_at, created_at,
+  created_by_actor_type, created_by_actor_id
+) values (
+  'c4400000-0000-4000-8000-000000000001',
+  'c1000000-0000-4000-8000-000000000001',
+  'c4300000-0000-4000-8000-000000000001', 4,
+  'S70 manifest qualification', 'S70', '2026-09-05T00:00:00Z',
+  '2026-09-05T00:00:00Z', 'human', 'sql-test'
+);
+
+insert into public.capa_ai_outputs (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, agent_id, agent_version,
+  output_schema_version, status, proposal, output_payload, advisory_only,
+  workflow_mutated, human_acceptance_required
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000001',
+  'c4600000-0000-4000-8000-000000000001',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'AG-REVIEW', 'ag-review-1.0.0',
+  'capa_action_plan_review_advisory-1.0.0', 'completed_draft', '{}'::jsonb,
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  true, false, true
+);
+
+insert into public.capa_ai_generation_traces (
+  organization_id, run_id, output_id, capa_case_id, case_version_id,
+  record_version, output_status, request_id, correlation_id, prompt_package_id,
+  trace_schema_version, fingerprint_algorithm, prompt_package,
+  prompt_package_sha256, rendered_prompt_sha256, evidence_manifest,
+  evidence_manifest_sha256, policy_manifest, policy_manifest_sha256,
+  model_profile_version, assembled_at
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4600000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000001',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4, 'completed_draft',
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001',
+  'c4900000-0000-4000-8000-000000000002',
+  'capa-ai-generation-trace-1.0.0', 'sha256-canonical-json-v1', '{}'::jsonb,
+  repeat('a', 64), repeat('b', 64), '{}'::jsonb, repeat('c', 64), '{}',
+  repeat('d', 64), 's70-review-profile-1.0.0', '2026-09-05T00:00:00Z'
+);
+
+insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000001',
+  'c4600000-0000-4000-8000-000000000001',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"entries":[],"manifest_schema_version":"capa-action-plan-review-advisory-reference-manifest-1.0.0","source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('e', 64)
+);
+
+set constraints all immediate;
+select is((select count(*)::integer from public.capa_ai_outputs where output_id = 'c4500000-0000-4000-8000-000000000001'), 1, 'qualified S70 output persists');
+select is((select count(*)::integer from public.capa_ai_generation_traces where output_id = 'c4500000-0000-4000-8000-000000000001'), 1, 'qualified S70 generation trace persists');
+select is((select count(*)::integer from public.capa_ai_reference_manifests where output_id = 'c4500000-0000-4000-8000-000000000001'), 1, 'qualified S70 reference manifest persists');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000099',
+  'c4400000-0000-4000-8000-000000000099', 4,
+  'c4700000-0000-4000-8000-000000000099',
+  'c4800000-0000-4000-8000-000000000099', 'completed_draft',
+  'wrong-s70-schema', 'sha256-canonical-json-v1', '{}'::jsonb, repeat('f', 64)
+) $$, '23514', null, 'wrong S70 reference-manifest schema is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000002',
+  'c4600000-0000-4000-8000-000000000002',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000002',
+  'c4800000-0000-4000-8000-000000000002', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 organization binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000004',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 output binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 run binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000099',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 case binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000099', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000099","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 case-version binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 99,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 record-version binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000099',
+  'c4800000-0000-4000-8000-000000000001', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 request binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000099', 'completed_draft',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 correlation binding is rejected');
+
+select throws_ok($$ insert into public.capa_ai_reference_manifests (
+  organization_id, output_id, run_id, capa_case_id, case_version_id,
+  record_version, request_id, correlation_id, output_status,
+  manifest_schema_version, fingerprint_algorithm, reference_manifest,
+  reference_manifest_sha256
+) values (
+  'c1000000-0000-4000-8000-000000000001',
+  'c4500000-0000-4000-8000-000000000099',
+  'c4600000-0000-4000-8000-000000000099',
+  'c4300000-0000-4000-8000-000000000001',
+  'c4400000-0000-4000-8000-000000000001', 4,
+  'c4700000-0000-4000-8000-000000000001',
+  'c4800000-0000-4000-8000-000000000001', 'service_failed',
+  'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+  'sha256-canonical-json-v1',
+  '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+  repeat('f', 64)
+) $$, '23503', null, 'wrong S70 output-status binding is rejected');
+
+select throws_ok($$
+  do $s70_wrong_s60_manifest$
+  begin
+    insert into public.capa_ai_outputs (
+      organization_id, output_id, run_id, capa_case_id, case_version_id,
+      record_version, request_id, correlation_id, agent_id, agent_version,
+      output_schema_version, status, proposal, output_payload, advisory_only,
+      workflow_mutated, human_acceptance_required
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c4500000-0000-4000-8000-000000000002',
+      'c4600000-0000-4000-8000-000000000002',
+      'c4300000-0000-4000-8000-000000000001',
+      'c4400000-0000-4000-8000-000000000001', 4,
+      'c4700000-0000-4000-8000-000000000002',
+      'c4800000-0000-4000-8000-000000000002', 'AG-REVIEW', 'ag-review-1.0.0',
+      'capa_action_plan_review_advisory-1.0.0', 'completed_draft', '{}'::jsonb,
+      '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+      true, false, true
+    );
+    insert into public.capa_ai_generation_traces (
+      organization_id, run_id, output_id, capa_case_id, case_version_id,
+      record_version, output_status, request_id, correlation_id, prompt_package_id,
+      trace_schema_version, fingerprint_algorithm, prompt_package,
+      prompt_package_sha256, rendered_prompt_sha256, evidence_manifest,
+      evidence_manifest_sha256, policy_manifest, policy_manifest_sha256,
+      model_profile_version, assembled_at
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c4600000-0000-4000-8000-000000000002',
+      'c4500000-0000-4000-8000-000000000002',
+      'c4300000-0000-4000-8000-000000000001',
+      'c4400000-0000-4000-8000-000000000001', 4, 'completed_draft',
+      'c4700000-0000-4000-8000-000000000002',
+      'c4800000-0000-4000-8000-000000000002',
+      'c4900000-0000-4000-8000-000000000005',
+      'capa-ai-generation-trace-1.0.0', 'sha256-canonical-json-v1', '{}'::jsonb,
+      repeat('a', 64), repeat('b', 64), '{}'::jsonb, repeat('c', 64), '{}',
+      repeat('d', 64), 's70-review-profile-1.0.0', '2026-09-05T00:00:00Z'
+    );
+    set constraints capa_ai_outputs_require_generation_trace immediate;
+    insert into public.capa_ai_reference_manifests (
+      organization_id, output_id, run_id, capa_case_id, case_version_id,
+      record_version, request_id, correlation_id, output_status,
+      manifest_schema_version, fingerprint_algorithm, reference_manifest,
+      reference_manifest_sha256
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c4500000-0000-4000-8000-000000000002',
+      'c4600000-0000-4000-8000-000000000002',
+      'c4300000-0000-4000-8000-000000000001',
+      'c4400000-0000-4000-8000-000000000001', 4,
+      'c4700000-0000-4000-8000-000000000002',
+      'c4800000-0000-4000-8000-000000000002', 'completed_draft',
+      'capa-action-plan-advisory-reference-manifest-1.0.0',
+      'sha256-canonical-json-v1',
+      '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+      repeat('f', 64)
+    );
+    set constraints capa_ai_outputs_require_s40_reference_manifest immediate;
+  end
+  $s70_wrong_s60_manifest$
+$$, '23514', null, 'S70 output cannot satisfy an S60 manifest contract');
+
+set constraints all deferred;
+
+select throws_ok($$
+  do $s60_wrong_s70_manifest$
+  begin
+    insert into public.capa_ai_outputs (
+      organization_id, output_id, run_id, capa_case_id, case_version_id,
+      record_version, request_id, correlation_id, agent_id, agent_version,
+      output_schema_version, status, proposal, output_payload, advisory_only,
+      workflow_mutated, human_acceptance_required
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c3500000-0000-4000-8000-000000000002',
+      'c3600000-0000-4000-8000-000000000002',
+      'c3300000-0000-4000-8000-000000000001',
+      'c3400000-0000-4000-8000-000000000001', 4,
+      'c3700000-0000-4000-8000-000000000002',
+      'c3800000-0000-4000-8000-000000000002', 'AG-ACTION', 'ag-action-1.0.0',
+      'capa_action_plan_advisory-1.0.0', 'completed_draft', '{}'::jsonb,
+      '{}'::jsonb, true, false, true
+    );
+    insert into public.capa_ai_generation_traces (
+      organization_id, run_id, output_id, capa_case_id, case_version_id,
+      record_version, output_status, request_id, correlation_id, prompt_package_id,
+      trace_schema_version, fingerprint_algorithm, prompt_package,
+      prompt_package_sha256, rendered_prompt_sha256, evidence_manifest,
+      evidence_manifest_sha256, policy_manifest, policy_manifest_sha256,
+      model_profile_version, assembled_at
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c3600000-0000-4000-8000-000000000002',
+      'c3500000-0000-4000-8000-000000000002',
+      'c3300000-0000-4000-8000-000000000001',
+      'c3400000-0000-4000-8000-000000000001', 4, 'completed_draft',
+      'c3700000-0000-4000-8000-000000000002',
+      'c3800000-0000-4000-8000-000000000002',
+      'c3900000-0000-4000-8000-000000000002',
+      'capa-ai-generation-trace-1.0.0', 'sha256-canonical-json-v1', '{}',
+      repeat('a', 64), repeat('b', 64), '{}', repeat('c', 64), '{}',
+      repeat('d', 64), 's60-action-profile-1.0.0', '2026-09-05T00:00:00Z'
+    );
+    insert into public.capa_ai_reference_manifests (
+      organization_id, output_id, run_id, capa_case_id, case_version_id,
+      record_version, request_id, correlation_id, output_status,
+      manifest_schema_version, fingerprint_algorithm, reference_manifest,
+      reference_manifest_sha256
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c3500000-0000-4000-8000-000000000002',
+      'c3600000-0000-4000-8000-000000000002',
+      'c3300000-0000-4000-8000-000000000001',
+      'c3400000-0000-4000-8000-000000000001', 4,
+      'c3700000-0000-4000-8000-000000000002',
+      'c3800000-0000-4000-8000-000000000002', 'completed_draft',
+      'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+      'sha256-canonical-json-v1',
+      '{"source_case_version_id":"c3400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+      repeat('f', 64)
+    );
+    set constraints capa_ai_outputs_require_s40_reference_manifest immediate;
+  end
+  $s60_wrong_s70_manifest$
+$$, '23514', 'S60 AG-ACTION AI output requires an exact durable reference manifest.', 'S60 output cannot satisfy an S70 manifest contract');
+
+set constraints all deferred;
+
+select throws_ok($$
+  do $s70_wrong_action_plan_section$
+  begin
+    insert into public.capa_ai_outputs (
+      organization_id, output_id, run_id, capa_case_id, case_version_id,
+      record_version, request_id, correlation_id, agent_id, agent_version,
+      output_schema_version, status, proposal, output_payload, advisory_only,
+      workflow_mutated, human_acceptance_required
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c4500000-0000-4000-8000-000000000003',
+      'c4600000-0000-4000-8000-000000000003',
+      'c4300000-0000-4000-8000-000000000001',
+      'c4400000-0000-4000-8000-000000000001', 4,
+      'c4700000-0000-4000-8000-000000000003',
+      'c4800000-0000-4000-8000-000000000003', 'AG-REVIEW', 'ag-review-1.0.0',
+      'capa_action_plan_review_advisory-1.0.0', 'completed_draft', '{}'::jsonb,
+      '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000001"}'::jsonb,
+      true, false, true
+    );
+    insert into public.capa_ai_generation_traces (
+      organization_id, run_id, output_id, capa_case_id, case_version_id,
+      record_version, output_status, request_id, correlation_id, prompt_package_id,
+      trace_schema_version, fingerprint_algorithm, prompt_package,
+      prompt_package_sha256, rendered_prompt_sha256, evidence_manifest,
+      evidence_manifest_sha256, policy_manifest, policy_manifest_sha256,
+      model_profile_version, assembled_at
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c4600000-0000-4000-8000-000000000003',
+      'c4500000-0000-4000-8000-000000000003',
+      'c4300000-0000-4000-8000-000000000001',
+      'c4400000-0000-4000-8000-000000000001', 4, 'completed_draft',
+      'c4700000-0000-4000-8000-000000000003',
+      'c4800000-0000-4000-8000-000000000003',
+      'c4900000-0000-4000-8000-000000000004',
+      'capa-ai-generation-trace-1.0.0', 'sha256-canonical-json-v1', '{}',
+      repeat('a', 64), repeat('b', 64), '{}', repeat('c', 64), '{}',
+      repeat('d', 64), 's70-review-profile-1.0.0', '2026-09-05T00:00:00Z'
+    );
+    insert into public.capa_ai_reference_manifests (
+      organization_id, output_id, run_id, capa_case_id, case_version_id,
+      record_version, request_id, correlation_id, output_status,
+      manifest_schema_version, fingerprint_algorithm, reference_manifest,
+      reference_manifest_sha256
+    ) values (
+      'c1000000-0000-4000-8000-000000000001',
+      'c4500000-0000-4000-8000-000000000003',
+      'c4600000-0000-4000-8000-000000000003',
+      'c4300000-0000-4000-8000-000000000001',
+      'c4400000-0000-4000-8000-000000000001', 4,
+      'c4700000-0000-4000-8000-000000000003',
+      'c4800000-0000-4000-8000-000000000003', 'completed_draft',
+      'capa-action-plan-review-advisory-reference-manifest-1.0.0',
+      'sha256-canonical-json-v1',
+      '{"source_case_version_id":"c4400000-0000-4000-8000-000000000001","action_plan_section_version_id":"c4900000-0000-4000-8000-000000000099"}'::jsonb,
+      repeat('f', 64)
+    );
+    set constraints capa_ai_outputs_require_s40_reference_manifest immediate;
+  end
+  $s70_wrong_action_plan_section$
+$$, '23514', 'S70 AG-REVIEW AI output requires an exact authoritative action-plan review reference manifest.', 'wrong S70 action-plan section binding is rejected');
 
 select * from finish();
 rollback;
