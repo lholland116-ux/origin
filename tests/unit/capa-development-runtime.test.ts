@@ -57,9 +57,6 @@ import {
   resolveDevelopmentCapaRequestContext,
 } from "../../lib/security/supabase-capa-context";
 
-import {
-  InMemoryCapaActionPlanReviewDecisionRepository,
-} from "../../lib/database/in-memory/in-memory-capa-action-plan-review-decision-repository";
 
 const NOW =
   new Date(
@@ -2228,7 +2225,7 @@ describe(
         capa_repository: runtime.database,
         audit_repository: runtime.database,
         workflow_idempotency_repository: runtime.database,
-        review_decision_repository: expect.any(InMemoryCapaActionPlanReviewDecisionRepository),
+        review_decision_repository: runtime.database,
       }));
       expect(runtime.decide_action_plan_review_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
     });

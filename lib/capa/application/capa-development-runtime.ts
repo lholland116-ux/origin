@@ -201,7 +201,6 @@ import type {
   TransactionId,
 } from "../../database/transactions";
 import { InMemoryCapaParticipantEligibilityRepository } from "../../database/in-memory/in-memory-capa-participant-eligibility-repository";
-import { InMemoryCapaActionPlanReviewDecisionRepository } from "../../database/in-memory/in-memory-capa-action-plan-review-decision-repository";
 import {
   CapaDevelopmentFileStateStore,
 } from "../../database/development/capa-development-file-state-store";
@@ -1170,7 +1169,7 @@ export function createCapaDevelopmentRuntime(
     DecideCapaActionPlanReviewDependencies = {
     ...decideRootCauseGateDependencies,
     review_decision_repository:
-      new InMemoryCapaActionPlanReviewDecisionRepository(),
+      database,
     configuration: {
       workflow_version: dependencies.configuration.workflow_version,
       audit_schema_version: dependencies.configuration.audit_schema_version,

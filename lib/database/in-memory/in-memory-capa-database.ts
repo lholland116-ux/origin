@@ -49,6 +49,14 @@ import type {
   CapaWorkflowIdempotencyRepository,
   ClaimCapaWorkflowOperationResult,
 } from "../repositories/capa-workflow-idempotency-repository";
+import {
+  CapaActionPlanReviewDecisionRepositoryError,
+  cloneCapaActionPlanReviewDecision,
+  normalizeCapaActionPlanReviewDecision,
+  type CapaActionPlanReviewDecisionRecord,
+  type CapaActionPlanReviewDecisionRepository,
+  type SaveCapaActionPlanReviewDecisionResult,
+} from "../repositories/capa-action-plan-review-decision-repository";
 
 import type {
   TransactionContext,
@@ -410,6 +418,8 @@ interface InMemoryState {
     Map<string, CapaInvestigationActiveWorkspaceDraft>;
   readonly action_plan_workspace_drafts:
     Map<string, CapaActionPlanWorkspaceDraft>;
+  readonly action_plan_review_decisions:
+    Map<string, CapaActionPlanReviewDecisionRecord>;
 }
 
 interface ActiveTransaction {
@@ -627,6 +637,14 @@ function recordKey(
   return `${organizationId}:${recordId}`;
 }
 
+function actionPlanReviewDecisionKey(
+  organizationId: OrganizationId,
+  capaCaseId: CapaCaseId,
+  sourceCaseVersionId: CapaCaseVersionId,
+): string {
+  return `${organizationId}:${capaCaseId}:${sourceCaseVersionId}`;
+}
+
 function caseNumberKey(
   organizationId:
     OrganizationId,
@@ -769,6 +787,8 @@ function cloneState(
       cloneMap(state.investigation_active_workspace_drafts),
     action_plan_workspace_drafts:
       cloneMap(state.action_plan_workspace_drafts),
+    action_plan_review_decisions:
+      cloneMap(state.action_plan_review_decisions),
   };
 }
 
@@ -816,6 +836,8 @@ function emptyState():
       new Map(),
     action_plan_workspace_drafts:
       new Map(),
+    action_plan_review_decisions:
+      new Map(),
   };
 }
 
@@ -839,6 +861,7 @@ function stateFromSnapshot(
     investigation_active_adoptions: new Map(snapshot.investigation_active_adoptions.map(([key, value]) => [key, cloneValue(value)])),
     investigation_active_workspace_drafts: new Map(snapshot.investigation_active_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
     action_plan_workspace_drafts: new Map(snapshot.action_plan_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
+    action_plan_review_decisions: new Map((snapshot.action_plan_review_decisions ?? []).map(([key, value]) => [key, cloneValue(value)])),
   };
 }
 
@@ -864,6 +887,7 @@ function snapshotFromState(state: InMemoryState): InMemoryCapaDatabaseSnapshot {
     investigation_active_adoptions: entries(state.investigation_active_adoptions),
     investigation_active_workspace_drafts: entries(state.investigation_active_workspace_drafts),
     action_plan_workspace_drafts: entries(state.action_plan_workspace_drafts),
+    action_plan_review_decisions: entries(state.action_plan_review_decisions),
   };
 }
 
@@ -1554,7 +1578,8 @@ export class InMemoryCapaDatabase
     CapaInvestigationPlanningAdvisoryOutputRepository,
     CapaInvestigationPlanningAdoptionRepository,
     CapaInvestigationActiveAdoptionRepository,
-    CapaInvestigationActiveWorkspaceDraftRepository
+    CapaInvestigationActiveWorkspaceDraftRepository,
+    CapaActionPlanReviewDecisionRepository
 {
   private committed_state:
     InMemoryState;
@@ -2408,6 +2433,48 @@ export class InMemoryCapaDatabase
     if (!validCreate && !validUpdate) return { status: "concurrency_conflict" };
     state.action_plan_workspace_drafts.set(key, cloneValue(draft));
     return { status: "saved", draft: cloneValue(draft) };
+  }
+
+  async saveDecision(
+    transaction: TransactionContext,
+    value: CapaActionPlanReviewDecisionRecord,
+  ): Promise<SaveCapaActionPlanReviewDecisionResult> {
+    const state = this.transactionState(transaction);
+    let decision: CapaActionPlanReviewDecisionRecord;
+    try {
+      decision = normalizeCapaActionPlanReviewDecision(value);
+    } catch (error) {
+      if (error instanceof CapaActionPlanReviewDecisionRepositoryError) throw error;
+      throw new CapaActionPlanReviewDecisionRepositoryError(
+        "The CAPA action-plan review decision record is invalid.",
+      );
+    }
+    const key = actionPlanReviewDecisionKey(
+      decision.organization_id,
+      decision.capa_case_id,
+      decision.source_case_version_id,
+    );
+    const existing = state.action_plan_review_decisions.get(key);
+    if (existing !== undefined) {
+      return {
+        status: "conflict",
+        reason_code: "DECISION_ALREADY_COMMITTED",
+        decision: cloneCapaActionPlanReviewDecision(existing),
+      };
+    }
+    state.action_plan_review_decisions.set(key, cloneCapaActionPlanReviewDecision(decision));
+    return { status: "saved", decision: cloneCapaActionPlanReviewDecision(decision) };
+  }
+
+  async findDecision(
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sourceCaseVersionId: CapaCaseVersionId,
+  ): Promise<CapaActionPlanReviewDecisionRecord | null> {
+    const decision = this.committed_state.action_plan_review_decisions.get(
+      actionPlanReviewDecisionKey(organizationId, capaCaseId, sourceCaseVersionId),
+    );
+    return decision === undefined ? null : cloneCapaActionPlanReviewDecision(decision);
   }
 
   async listAdoptionsForOutput(
@@ -3271,6 +3338,20 @@ export class InMemoryCapaDatabase
       const validated = validateCapaActionPlanWorkspaceDraft(draft);
       if (validated.status !== "valid" || key !== recordKey(draft.organization_id, draft.capa_case_id)) {
         throw new InMemoryIntegrityError("The S60 action-plan workspace draft state is invalid.");
+      }
+    }
+    for (const [key, decision] of state.action_plan_review_decisions) {
+      try {
+        const normalized = normalizeCapaActionPlanReviewDecision(decision);
+        if (
+          key !== actionPlanReviewDecisionKey(
+            normalized.organization_id,
+            normalized.capa_case_id,
+            normalized.source_case_version_id,
+          )
+        ) throw new Error();
+      } catch {
+        throw new InMemoryIntegrityError("The S70 action-plan review decision state is invalid.");
       }
     }
     for (
