@@ -22,6 +22,9 @@ import FreshTotpStepUp from "./FreshTotpStepUp";
 import CapaInvestigationPlanPanel from "./CapaInvestigationPlanPanel";
 import CapaRootCauseWorkspace from "./CapaRootCauseWorkspace";
 import { capaRootCauseWorkspaceKey } from "./capa-root-cause-draft";
+import CapaActionPlanWorkspace, {
+  type CapaActionPlanTargetOption,
+} from "./CapaActionPlanWorkspace";
 
 import {
   createCapaScopeApprovalAttempt,
@@ -924,6 +927,26 @@ function statusName(
   }
 
   return status;
+}
+
+function actionPlanTargetOptions(
+  capa: CapaExistingCaseSummary,
+): readonly CapaActionPlanTargetOption[] {
+  const options: CapaActionPlanTargetOption[] = [];
+  for (const hypothesis of capa.rootCausePackage?.hypotheses ?? []) {
+    if (hypothesis.causal_role === "proposed_root_cause") {
+      options.push({ target_type: "cause", target_id: hypothesis.hypothesis_id, label: `Cause · ${hypothesis.statement}` });
+    }
+    if (hypothesis.causal_role === "contributing_factor") {
+      options.push({ target_type: "contributing_factor", target_id: hypothesis.hypothesis_id, label: `Contributing factor · ${hypothesis.statement}` });
+    }
+  }
+  for (const item of capa.evidenceAssumptionLedger?.items ?? []) {
+    if (item.information_class === "missing_information") {
+      options.push({ target_type: "gap", target_id: item.item_id, label: `Gap · ${item.statement}` });
+    }
+  }
+  return options;
 }
 
 export default function CapaIntakeClient({
@@ -5220,6 +5243,28 @@ export default function CapaIntakeClient({
                 createdCapa.rootCauseReviewReturnResponse
               }
               rootCauseReturnContext={createdCapa.rootCauseReturnContext}
+              onAuthoritativeRefresh={async () => {
+                await openExistingCase({
+                  capaCaseId: createdCapa.capaCaseId,
+                  caseNumber: createdCapa.caseNumber,
+                  status: createdCapa.status,
+                  recordVersion: createdCapa.recordVersion,
+                  currentVersionId: createdCapa.currentVersionId,
+                  createdAt: createdCapa.createdAt,
+                  updatedAt: createdCapa.createdAt,
+                });
+                await loadCases("replace");
+              }}
+            />
+          ) : null}
+
+          {createdCapa.status === "S60" ? (
+            <CapaActionPlanWorkspace
+              key={createdCapa.currentVersionId}
+              caseId={createdCapa.capaCaseId}
+              caseNumber={createdCapa.caseNumber}
+              currentUserId={currentUserId}
+              targetOptions={actionPlanTargetOptions(createdCapa)}
               onAuthoritativeRefresh={async () => {
                 await openExistingCase({
                   capaCaseId: createdCapa.capaCaseId,

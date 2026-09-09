@@ -28,7 +28,7 @@ describe("CAPA existing-case workspace navigation", () => {
         /onAuthoritativeRefresh=\{async \(\) => \{[\s\S]*?await loadCases\("replace"\);[\s\S]*?\}\s*\}\s*\/>/g,
       ) ?? [];
 
-    expect(refreshBlocks).toHaveLength(2);
+    expect(refreshBlocks).toHaveLength(3);
     for (const block of refreshBlocks) {
       expect(block).toContain("await openExistingCase({");
       expect(block).not.toContain("scrollToWorkspace");
