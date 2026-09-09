@@ -71,6 +71,7 @@ import {
 import { createRequestScopedCapaInvestigationActiveAdvisoryService } from "./capa-investigation-active-advisory-runtime-factory";
 import { createRequestScopedCapaRootCauseReviewAdvisoryService } from "./capa-root-cause-review-advisory-runtime-factory";
 import { createRequestScopedCapaActionPlanAdvisoryService } from "./capa-action-plan-advisory-runtime-factory";
+import { createRequestScopedCapaActionPlanReviewAdvisoryService } from "./capa-action-plan-review-advisory-runtime-factory";
 import { createRequestScopedCapaInvestigationActiveAdoptionService } from "./capa-investigation-active-adoption-runtime-factory";
 import { RepositoryCapaInvestigationActiveAdoptionSourceResolver } from "./capa-investigation-active-adoption-source-resolver";
 
@@ -104,6 +105,7 @@ import type {
 import type { CapaInvestigationActiveAdvisoryStructuredModelClient } from "../ai/capa-investigation-active-advisory-model-profile";
 import type { CapaRootCauseReviewAdvisoryStructuredModelClient } from "../ai/capa-root-cause-review-advisory-model-generator";
 import type { CapaActionPlanAdvisoryStructuredModelClient } from "../ai/capa-action-plan-advisory-model-generator";
+import type { CapaActionPlanReviewAdvisoryStructuredModelClient } from "../ai/capa-action-plan-review-advisory-model-generator";
 
 import {
   createOpenAICapaInvestigationPlanningAdvisoryStructuredModelClient,
@@ -111,6 +113,7 @@ import {
 import { createOpenAICapaInvestigationActiveAdvisoryStructuredModelClient } from "../ai/openai-capa-investigation-active-advisory-structured-model-client";
 import { createOpenAICapaRootCauseReviewAdvisoryStructuredModelClient } from "../ai/openai-capa-root-cause-review-advisory-structured-model-client";
 import { createOpenAICapaActionPlanAdvisoryStructuredModelClient } from "../ai/openai-capa-action-plan-advisory-structured-model-client";
+import { createOpenAICapaActionPlanReviewAdvisoryStructuredModelClient } from "../ai/openai-capa-action-plan-review-advisory-structured-model-client";
 
 import {
   CAPA_KNOWLEDGE_QUERY_CONSTRUCTION_VERSION,
@@ -221,6 +224,7 @@ import { SupabaseCapaInvestigationActiveAdvisoryOutputRepository } from "../../d
 import { SupabaseCapaInvestigationActiveWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-investigation-active-workspace-draft-repository";
 import { SupabaseCapaRootCauseReviewAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-root-cause-review-advisory-output-repository";
 import { SupabaseCapaActionPlanAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-action-plan-advisory-output-repository";
+import { SupabaseCapaActionPlanReviewAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-action-plan-review-advisory-output-repository";
 import { SupabaseCapaActionPlanReviewDecisionRepository } from "../../database/supabase/supabase-capa-action-plan-review-decision-repository";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
@@ -343,6 +347,7 @@ export interface CapaProductionRootCauseReviewAdvisoryConfiguration {
   readonly structured_model_client?: CapaRootCauseReviewAdvisoryStructuredModelClient;
 }
 export interface CapaProductionActionPlanAdvisoryConfiguration { readonly model: string; readonly structured_model_client?: CapaActionPlanAdvisoryStructuredModelClient; }
+export interface CapaProductionActionPlanReviewAdvisoryConfiguration { readonly model: string; readonly structured_model_client?: CapaActionPlanReviewAdvisoryStructuredModelClient; }
 
 export interface CapaProductionRuntimeOptions {
   /**
@@ -393,6 +398,7 @@ export interface CapaProductionRuntimeOptions {
   readonly root_cause_review_advisory?:
     CapaProductionRootCauseReviewAdvisoryConfiguration;
   readonly action_plan_advisory?: CapaProductionActionPlanAdvisoryConfiguration;
+  readonly action_plan_review_advisory?: CapaProductionActionPlanReviewAdvisoryConfiguration;
 }
 
 export class CapaProductionRuntimeConfigurationError
@@ -598,6 +604,7 @@ function validateRootCauseReviewAdvisoryConfiguration(
   });
 }
 function validateActionPlanAdvisoryConfiguration(configuration: CapaProductionActionPlanAdvisoryConfiguration): CapaProductionActionPlanAdvisoryConfiguration { return Object.freeze({ model: requireNonEmptyConfigurationValue(configuration.model, "action_plan_advisory.model"), structured_model_client: configuration.structured_model_client }); }
+function validateActionPlanReviewAdvisoryConfiguration(configuration: CapaProductionActionPlanReviewAdvisoryConfiguration): CapaProductionActionPlanReviewAdvisoryConfiguration { return Object.freeze({ model: requireNonEmptyConfigurationValue(configuration.model, "action_plan_review_advisory.model"), structured_model_client: configuration.structured_model_client }); }
 
 function productionIntakeAdvisoryConfigurationFromEnvironment():
   CapaProductionIntakeAdvisoryConfiguration | undefined {
@@ -737,6 +744,7 @@ function productionRootCauseReviewAdvisoryConfigurationFromEnvironment(): CapaPr
   return { model };
 }
 function productionActionPlanAdvisoryConfigurationFromEnvironment(): CapaProductionActionPlanAdvisoryConfiguration | undefined { const model = process.env.CAPA_ACTION_PLAN_ADVISORY_MODEL; if (model === undefined) return undefined; if (model.trim().length === 0) throw new CapaProductionRuntimeConfigurationError("CAPA_ACTION_PLAN_ADVISORY_MODEL must be a non-empty controlled server value."); return { model }; }
+function productionActionPlanReviewAdvisoryConfigurationFromEnvironment(): CapaProductionActionPlanReviewAdvisoryConfiguration | undefined { const model = process.env.CAPA_ACTION_PLAN_REVIEW_ADVISORY_MODEL; if (model === undefined) return undefined; if (model.trim().length === 0) throw new CapaProductionRuntimeConfigurationError("CAPA_ACTION_PLAN_REVIEW_ADVISORY_MODEL must be a non-empty controlled server value."); return { model }; }
 
 function createIdGenerator(
   generateUuid: () => string,
@@ -850,6 +858,7 @@ export function createCapaProductionRuntime(
       ? undefined
       : validateRootCauseReviewAdvisoryConfiguration(options.root_cause_review_advisory);
   const actionPlanAdvisoryConfiguration = options.action_plan_advisory === undefined ? undefined : validateActionPlanAdvisoryConfiguration(options.action_plan_advisory);
+  const actionPlanReviewAdvisoryConfiguration = options.action_plan_review_advisory === undefined ? undefined : validateActionPlanReviewAdvisoryConfiguration(options.action_plan_review_advisory);
 
   const sql =
     options.sql ??
@@ -875,6 +884,7 @@ export function createCapaProductionRuntime(
   const rootCauseReviewAdvisoryOutputRepository =
     new SupabaseCapaRootCauseReviewAdvisoryOutputRepository(sql);
   const actionPlanAdvisoryOutputRepository = new SupabaseCapaActionPlanAdvisoryOutputRepository(sql);
+  const actionPlanReviewAdvisoryOutputRepository = new SupabaseCapaActionPlanReviewAdvisoryOutputRepository(sql);
   const investigationActiveWorkspaceDraftRepository =
     new SupabaseCapaInvestigationActiveWorkspaceDraftRepository(sql);
   const actionPlanWorkspaceDraftRepository =
@@ -1168,6 +1178,7 @@ export function createCapaProductionRuntime(
   let rootCauseReviewAdvisoryModelClient:
     CapaRootCauseReviewAdvisoryStructuredModelClient | undefined;
   let actionPlanAdvisoryModelClient: CapaActionPlanAdvisoryStructuredModelClient | undefined;
+  let actionPlanReviewAdvisoryModelClient: CapaActionPlanReviewAdvisoryStructuredModelClient | undefined;
 
   if (
     intakeAdvisoryConfiguration !==
@@ -1307,6 +1318,10 @@ export function createCapaProductionRuntime(
   if (actionPlanAdvisoryConfiguration !== undefined) {
     if (actionPlanAdvisoryConfiguration.structured_model_client !== undefined) actionPlanAdvisoryModelClient = actionPlanAdvisoryConfiguration.structured_model_client;
     else { const apiKey = process.env.OPENAI_API_KEY; if (typeof apiKey !== "string" || apiKey.trim().length === 0) throw new CapaProductionRuntimeConfigurationError("OPENAI_API_KEY is required when the CAPA action-plan advisory uses the OpenAI structured model adapter."); actionPlanAdvisoryModelClient = createOpenAICapaActionPlanAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model: actionPlanAdvisoryConfiguration.model }); }
+  }
+  if (actionPlanReviewAdvisoryConfiguration !== undefined) {
+    if (actionPlanReviewAdvisoryConfiguration.structured_model_client !== undefined) actionPlanReviewAdvisoryModelClient = actionPlanReviewAdvisoryConfiguration.structured_model_client;
+    else { const apiKey = process.env.OPENAI_API_KEY; if (typeof apiKey !== "string" || apiKey.trim().length === 0) throw new CapaProductionRuntimeConfigurationError("OPENAI_API_KEY is required when the CAPA action-plan review advisory uses the OpenAI structured model adapter."); actionPlanReviewAdvisoryModelClient = createOpenAICapaActionPlanReviewAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model: actionPlanReviewAdvisoryConfiguration.model }); }
   }
 
   const toolGateway = createCapaToolGateway({
@@ -1538,6 +1553,11 @@ export function createCapaProductionRuntime(
       return createRequestScopedCapaActionPlanAdvisoryService({ request_context: context, capa_repository: capaRepository, workspace_repository: actionPlanWorkspaceDraftRepository, authorization_policy: authorizationPolicy, agent_activation_service: agentActivationService, structured_model_client: actionPlanAdvisoryModelClient, output_repository: actionPlanAdvisoryOutputRepository, transaction_manager: transactionManager, now, generate_uuid: generateUuid });
     },
 
+    create_action_plan_review_advisory_service(context) {
+      if (actionPlanReviewAdvisoryConfiguration === undefined || actionPlanReviewAdvisoryModelClient === undefined) throw new CapaProductionRuntimeConfigurationError("The CAPA action-plan review advisory runtime is not configured.");
+      return createRequestScopedCapaActionPlanReviewAdvisoryService({ request_context: context, capa_repository: capaRepository, authorization_policy: authorizationPolicy, agent_activation_service: agentActivationService, structured_model_client: actionPlanReviewAdvisoryModelClient, output_repository: actionPlanReviewAdvisoryOutputRepository, transaction_manager: transactionManager, now, generate_uuid: generateUuid });
+    },
+
     create_investigation_active_adoption_service(context) {
       return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: transactionManager, adoption_repository: investigationActiveAdoptionRepository, audit_repository: auditRepository, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(investigationActiveAdvisoryOutputRepository), workspace_repository: investigationActiveWorkspaceDraftRepository, authorization_policy: authorizationPolicy, now, generate_uuid: generateUuid, audit_schema_version: auditSchemaVersion });
     },
@@ -1649,6 +1669,7 @@ export function getCapaProductionRuntime():
         root_cause_review_advisory:
           productionRootCauseReviewAdvisoryConfigurationFromEnvironment(),
         action_plan_advisory: productionActionPlanAdvisoryConfigurationFromEnvironment(),
+        action_plan_review_advisory: productionActionPlanReviewAdvisoryConfigurationFromEnvironment(),
       });
   }
 

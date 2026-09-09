@@ -80,6 +80,7 @@ import type {
   CapaRootCauseReviewAdvisoryService,
 } from "../ai/capa-root-cause-review-advisory-service";
 import type { CapaActionPlanAdvisoryService } from "../ai/capa-action-plan-advisory-service";
+import type { CapaActionPlanReviewAdvisoryService } from "../ai/capa-action-plan-review-advisory-service";
 
 import type {
   CapaAiOutputReviewService,
@@ -208,6 +209,11 @@ export interface CapaRuntime {
   readonly create_action_plan_advisory_service: (
     context: CapaRequestContext,
   ) => CapaActionPlanAdvisoryService;
+
+  /** Creates a request-scoped advisory-only S70 action-plan review service. */
+  readonly create_action_plan_review_advisory_service: (
+    context: CapaRequestContext,
+  ) => CapaActionPlanReviewAdvisoryService;
 
   /** Creates a human-controlled selective S40 adoption service; it cannot perform S40→S50. */
   readonly create_investigation_active_adoption_service: (

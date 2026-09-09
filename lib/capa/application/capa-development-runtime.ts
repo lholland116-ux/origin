@@ -86,6 +86,7 @@ import {
   createRequestScopedCapaRootCauseReviewAdvisoryService,
 } from "./capa-root-cause-review-advisory-runtime-factory";
 import { createRequestScopedCapaActionPlanAdvisoryService } from "./capa-action-plan-advisory-runtime-factory";
+import { createRequestScopedCapaActionPlanReviewAdvisoryService } from "./capa-action-plan-review-advisory-runtime-factory";
 import {
   createRequestScopedCapaInvestigationActiveAdoptionService,
 } from "./capa-investigation-active-adoption-runtime-factory";
@@ -98,6 +99,8 @@ import type { CapaRootCauseReviewAdvisoryStructuredModelClient } from "../ai/cap
 import { createOpenAICapaRootCauseReviewAdvisoryStructuredModelClient } from "../ai/openai-capa-root-cause-review-advisory-structured-model-client";
 import type { CapaActionPlanAdvisoryStructuredModelClient } from "../ai/capa-action-plan-advisory-model-generator";
 import { createOpenAICapaActionPlanAdvisoryStructuredModelClient } from "../ai/openai-capa-action-plan-advisory-structured-model-client";
+import type { CapaActionPlanReviewAdvisoryStructuredModelClient } from "../ai/capa-action-plan-review-advisory-model-generator";
+import { createOpenAICapaActionPlanReviewAdvisoryStructuredModelClient } from "../ai/openai-capa-action-plan-review-advisory-structured-model-client";
 
 import type {
   CapaIntakeAdvisoryStructuredModelClient,
@@ -266,6 +269,7 @@ export interface CapaDevelopmentRootCauseReviewAdvisoryConfiguration {
   readonly structured_model_client: CapaRootCauseReviewAdvisoryStructuredModelClient;
 }
 export interface CapaDevelopmentActionPlanAdvisoryConfiguration { readonly structured_model_client: CapaActionPlanAdvisoryStructuredModelClient; }
+export interface CapaDevelopmentActionPlanReviewAdvisoryConfiguration { readonly structured_model_client: CapaActionPlanReviewAdvisoryStructuredModelClient; }
 
 export interface CapaDevelopmentPersistenceConfiguration {
   readonly state_store: CapaDevelopmentFileStateStore;
@@ -293,6 +297,7 @@ export interface CapaDevelopmentRuntimeOptions {
   readonly root_cause_review_advisory?:
     CapaDevelopmentRootCauseReviewAdvisoryConfiguration;
   readonly action_plan_advisory?: CapaDevelopmentActionPlanAdvisoryConfiguration;
+  readonly action_plan_review_advisory?: CapaDevelopmentActionPlanReviewAdvisoryConfiguration;
 }
 
 export class CapaDevelopmentRuntimeDisabledError
@@ -464,6 +469,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_ACTION_PLAN_ADVISORY_ALLOWED",
       );
 
+    case "request_ai_action_plan_review_advisory":
+      return controlled(
+        "DEVELOPMENT_AI_ACTION_PLAN_REVIEW_ADVISORY_ALLOWED",
+      );
+
     case "adopt_ai_investigation_planning_proposal":
       return controlled(
         "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADOPTION_ALLOWED",
@@ -590,6 +600,8 @@ function developmentAuthorizationPolicy(
           "request_ai_root_cause_review_advisory" ||
         request.operation ===
           "request_ai_action_plan_advisory" ||
+        request.operation ===
+          "request_ai_action_plan_review_advisory" ||
         request.operation ===
           "adopt_ai_investigation_planning_proposal" ||
         request.operation ===
@@ -969,6 +981,7 @@ export function createCapaDevelopmentRuntime(
   const rootCauseReviewAdvisoryConfiguration =
     options.root_cause_review_advisory;
   const actionPlanAdvisoryConfiguration = options.action_plan_advisory;
+  const actionPlanReviewAdvisoryConfiguration = options.action_plan_review_advisory;
 
   const database =
     new InMemoryCapaDatabase({
@@ -1427,6 +1440,11 @@ export function createCapaDevelopmentRuntime(
       return createRequestScopedCapaActionPlanAdvisoryService({ request_context: context, capa_repository: database, workspace_repository: { findDraft: database.findActionPlanWorkspaceDraft.bind(database), findDraftForUpdate: database.findActionPlanWorkspaceDraftForUpdate.bind(database), saveDraft: database.saveActionPlanWorkspaceDraft.bind(database) }, authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: actionPlanAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, now, generate_uuid: generateUuid });
     },
 
+    create_action_plan_review_advisory_service(context) {
+      if (actionPlanReviewAdvisoryConfiguration === undefined) throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+      return createRequestScopedCapaActionPlanReviewAdvisoryService({ request_context: context, capa_repository: database, authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: actionPlanReviewAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, now, generate_uuid: generateUuid });
+    },
+
     create_investigation_active_adoption_service(context) {
       return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: database, adoption_repository: database, audit_repository: database, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(database), workspace_repository: database, authorization_policy: dependencies.authorization_policy, now, generate_uuid: generateUuid, audit_schema_version: dependencies.configuration.audit_schema_version });
     },
@@ -1550,6 +1568,7 @@ export function getCapaDevelopmentRuntime():
         root_cause_review_advisory:
           developmentRootCauseReviewAdvisoryConfigurationFromEnvironment(),
         action_plan_advisory: (() => { const model = process.env.CAPA_ACTION_PLAN_ADVISORY_MODEL; if (model === undefined) return undefined; const apiKey = process.env.OPENAI_API_KEY; if (apiKey === undefined || apiKey.trim().length === 0) return undefined; return { structured_model_client: createOpenAICapaActionPlanAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model }) }; })(),
+        action_plan_review_advisory: (() => { const model = process.env.CAPA_ACTION_PLAN_REVIEW_ADVISORY_MODEL; if (model === undefined) return undefined; const apiKey = process.env.OPENAI_API_KEY; if (apiKey === undefined || apiKey.trim().length === 0) return undefined; return { structured_model_client: createOpenAICapaActionPlanReviewAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model }) }; })(),
 
         persistence,
       });

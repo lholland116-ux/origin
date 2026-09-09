@@ -21,6 +21,9 @@ import type { CapaInvestigationActiveAdvisoryGenerationTraceCapture, CapaContain
 import type { CapaRootCauseReviewAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-ai-generation-trace";
 import type { CapaActionPlanAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-ai-generation-trace";
 import type { CapaActionPlanAdvisoryReferenceManifest } from "../repositories/capa-action-plan-advisory-output-repository";
+import type { CapaActionPlanReviewAdvisoryResponse } from "../../capa/ai/capa-action-plan-review-advisory-contract";
+import type { CapaActionPlanReviewAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-action-plan-review-advisory-model-generator";
+import type { CapaActionPlanReviewAdvisoryReferenceManifest } from "../repositories/capa-action-plan-review-advisory-output-repository";
 import type { CapaInvestigationActiveAdvisoryReferenceManifestDocument } from "../../capa/ai/capa-investigation-active-advisory-reference-manifest";
 import type { CapaRootCauseReviewAdvisoryReferenceManifest } from "../repositories/capa-root-cause-review-advisory-output-repository";
 import type { PersistedCapaInvestigationPlanningAdoption } from "../repositories/capa-investigation-planning-adoption-repository";
@@ -97,6 +100,7 @@ export interface CapaDevelopmentRootCauseReviewAdvisoryOutputSnapshotRecord {
 }
 
 export interface CapaDevelopmentActionPlanAdvisoryOutputSnapshotRecord { readonly organization_id: OrganizationId; readonly capa_case_id: CapaCaseId; readonly case_version_id: CapaCaseVersionId; readonly record_version: number; readonly request_trace: RequestTrace; readonly response: CapaActionPlanAdvisoryResponse; readonly generation_trace: CapaActionPlanAdvisoryGenerationTraceCapture; readonly reference_manifest: CapaActionPlanAdvisoryReferenceManifest; readonly created_at: IsoDateTime; }
+export interface CapaDevelopmentActionPlanReviewAdvisoryOutputSnapshotRecord { readonly organization_id: OrganizationId; readonly capa_case_id: CapaCaseId; readonly case_version_id: CapaCaseVersionId; readonly record_version: number; readonly request_trace: RequestTrace; readonly response: CapaActionPlanReviewAdvisoryResponse; readonly generation_trace: CapaActionPlanReviewAdvisoryGenerationTraceCapture; readonly reference_manifest: CapaActionPlanReviewAdvisoryReferenceManifest; readonly created_at: IsoDateTime; }
 
 export type CapaDevelopmentAdvisoryOutputSnapshotRecord =
   | CapaDevelopmentIntakeAdvisoryOutputSnapshotRecord
@@ -104,7 +108,8 @@ export type CapaDevelopmentAdvisoryOutputSnapshotRecord =
   | CapaDevelopmentInvestigationPlanningAdvisoryOutputSnapshotRecord
   | CapaDevelopmentInvestigationActiveAdvisoryOutputSnapshotRecord
   | CapaDevelopmentRootCauseReviewAdvisoryOutputSnapshotRecord
-  | CapaDevelopmentActionPlanAdvisoryOutputSnapshotRecord;
+  | CapaDevelopmentActionPlanAdvisoryOutputSnapshotRecord
+  | CapaDevelopmentActionPlanReviewAdvisoryOutputSnapshotRecord;
 
 export interface CapaDevelopmentStateSnapshot {
   readonly schema_version: typeof CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION;

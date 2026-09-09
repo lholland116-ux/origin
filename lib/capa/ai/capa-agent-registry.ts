@@ -452,6 +452,17 @@ const DEFINITIONS = [
         output_schema_version:
           "capa_review_packet_draft-1.0.0" as never,
       },
+      {
+        eligible_states: ["S70"],
+        operation: "assemble_review_packet",
+        allowed_tools: [
+          "TOOL-CASE-READ",
+          "TOOL-EVIDENCE-READ",
+          "TOOL-STRUCTURED-DRAFT",
+        ],
+        output_schema_version:
+          "capa_action_plan_review_advisory-1.0.0" as never,
+      },
     ],
   }),
   definition({

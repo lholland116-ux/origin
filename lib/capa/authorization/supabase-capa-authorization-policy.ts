@@ -81,6 +81,8 @@ const OPERATION_PERMISSION = {
     "capa.ai.root_cause.review",
   request_ai_action_plan_advisory:
     "capa.ai.intake.advise",
+  request_ai_action_plan_review_advisory:
+    "capa.ai.root_cause.review",
   adopt_ai_investigation_planning_proposal:
     "capa.review.disposition",
   adopt_ai_investigation_active_proposal:
@@ -155,6 +157,8 @@ const OPERATION_PURPOSE = {
     "CAPA_AI_ROOT_CAUSE_REVIEW_ADVISORY",
   request_ai_action_plan_advisory:
     "CAPA_AI_ACTION_PLAN_ADVISORY",
+  request_ai_action_plan_review_advisory:
+    "CAPA_AI_ACTION_PLAN_REVIEW_ADVISORY",
   adopt_ai_investigation_planning_proposal:
     "CAPA_AI_INVESTIGATION_PLANNING_ADOPTION",
   adopt_ai_investigation_active_proposal:
@@ -262,6 +266,11 @@ const REQUIRED_WORKFLOW_STATES:
     request_ai_action_plan_advisory:
       new Set([
         CAPA_STATE.ACTION_PLANNING,
+      ]),
+
+    request_ai_action_plan_review_advisory:
+      new Set([
+        CAPA_STATE.ACTION_PLAN_REVIEW,
       ]),
 
     adopt_ai_investigation_planning_proposal:
