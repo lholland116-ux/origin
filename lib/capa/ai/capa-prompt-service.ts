@@ -52,7 +52,7 @@ export interface CapaPromptAssemblyService {
 const INITIAL_PROMPT_CONFIGURATION =
   createCapaPromptConfiguration({
     registry_version:
-      "capa-agent-registry-1.2.0",
+      "capa-agent-registry-1.3.0",
     agent_id: "AG-INTAKE",
     agent_version:
       "ag-intake-1.0.0",

@@ -16,6 +16,7 @@ import {
   saveActionPlanWorkspace,
   type CapaActionPlanWorkspaceProjection,
 } from "./capa-action-plan-workspace-client";
+import CapaActionPlanAdvisoryPanel from "./CapaActionPlanAdvisoryPanel";
 
 export interface CapaActionPlanTargetOption {
   readonly target_type: CapaActionLinkTargetType;
@@ -26,6 +27,8 @@ export interface CapaActionPlanTargetOption {
 interface CapaActionPlanWorkspaceProps {
   readonly caseId: string;
   readonly caseNumber: string;
+  readonly currentVersionId: string;
+  readonly recordVersion: number;
   readonly currentUserId: string;
   readonly targetOptions: readonly CapaActionPlanTargetOption[];
   readonly onAuthoritativeRefresh: () => Promise<void>;
@@ -115,9 +118,11 @@ function draftFromWorkspace(workspace: CapaActionPlanWorkspaceProjection | null)
   return workspace === null ? { plan: emptyPlan(), revision: null } : { plan: workspace.action_plan, revision: workspace.draft_revision };
 }
 
-export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentUserId, targetOptions, onAuthoritativeRefresh }: CapaActionPlanWorkspaceProps) {
+export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVersionId, recordVersion, currentUserId, targetOptions, onAuthoritativeRefresh }: CapaActionPlanWorkspaceProps) {
   const [plan, setPlan] = useState<CapaActionPlanContent>(() => emptyPlan());
   const [draftRevision, setDraftRevision] = useState<number | null>(null);
+  const [caseVersionId, setCaseVersionId] = useState<string | null>(currentVersionId);
+  const [authoritativeRecordVersion, setAuthoritativeRecordVersion] = useState<number>(recordVersion);
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [saveStatus, setSaveStatus] = useState<"loading" | "saved" | "unsaved" | "saving" | "conflict" | "failed">("loading");
   const [message, setMessage] = useState<string | null>(null);
@@ -131,7 +136,7 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentUse
     const result = await loadActionPlanWorkspace(caseId);
     if (result.status === "failed") { setLoadStatus("failed"); setSaveStatus("failed"); setMessage(result.message); return; }
     const next = draftFromWorkspace(result.workspace);
-    setPlan(next.plan); setDraftRevision(next.revision); setLoadStatus("ready"); setSaveStatus("saved");
+    setPlan(next.plan); setDraftRevision(next.revision); setCaseVersionId(result.workspace?.case_version_id ?? currentVersionId); setAuthoritativeRecordVersion(result.workspace?.record_version ?? recordVersion); setLoadStatus("ready"); setSaveStatus("saved");
   }
 
   useEffect(() => { void hydrate(); }, [caseId]);
@@ -190,6 +195,8 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentUse
     {loadStatus === "loading" ? <p role="status" className="mt-5 text-sm text-zinc-400">Loading durable Action Planning workspace…</p> : null}
     {loadStatus === "failed" ? <button type="button" onClick={() => void hydrate()} className="mt-4 text-sm text-blue-200 underline">Retry workspace load</button> : null}
 
+    {caseVersionId !== null ? <CapaActionPlanAdvisoryPanel caseId={caseId} caseVersionId={caseVersionId} recordVersion={authoritativeRecordVersion} /> : null}
+
     <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
       <p className="text-sm font-semibold text-zinc-100">Readiness for Action Plan Review</p>
       {readiness.status === "ready_for_review" ? <p className="mt-2 text-sm text-emerald-200">Ready for Action Plan Review</p> : <>
@@ -199,12 +206,12 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentUse
       <p className="mt-3 text-xs text-zinc-500">Submission to Action Plan Review will become available when the controlled submission step is enabled.</p>
     </div>
 
-    <div className="mt-6 space-y-5">{plan.items.map((item, index) => {
+    <div className="mt-6 min-w-0 space-y-5">{plan.items.map((item, index) => {
       const customType = item.action_type !== null && !BASELINE_ACTION_TYPES.has(item.action_type);
       const selectedTarget = customTarget[item.item_id] ?? { target_type: targetOptions[0]?.target_type ?? "cause", target_id: targetOptions[0]?.target_id ?? "" };
-      return <fieldset key={item.item_id} disabled={editingDisabled} className="rounded-2xl border border-zinc-800 bg-zinc-950/55 p-4">
+      return <fieldset key={item.item_id} disabled={editingDisabled} className="min-w-0 w-full rounded-2xl border border-zinc-800 bg-zinc-950/55 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3"><legend className="font-semibold text-zinc-100">Action {index + 1}</legend><span className="text-xs text-zinc-500">Human-authored draft</span><button type="button" onClick={() => removeItem(item.item_id)} className="text-sm text-red-300">Remove action</button></div>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <label className="text-sm text-zinc-300">Action type<select value={customType ? "__custom__" : item.action_type ?? ""} onChange={(event) => updateItem(item.item_id, { action_type: event.target.value === "__custom__" || event.target.value === "" ? (event.target.value === "__custom__" ? item.action_type : null) : event.target.value })} className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-zinc-100"><option value="">Select a type</option>{CAPA_ACTION_TYPES.map((type) => <option key={type} value={type}>{ACTION_TYPE_LABELS[type]}</option>)}<option value="__custom__">Custom controlled code</option></select>{customType || item.action_type === null ? <input aria-label="Custom action type code" value={customType ? item.action_type ?? "" : ""} onChange={(event) => updateItem(item.item_id, { action_type: textOrNull(event.target.value) })} placeholder="Organization-approved code" className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-zinc-100" /> : null}</label>
           <label className="text-sm text-zinc-300">Action item status<select value={item.status} onChange={(event) => updateItem(item.item_id, { status: event.target.value as CapaActionPlanItem["status"] })} className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-zinc-100">{CAPA_ACTION_STATUSES.map((status) => <option key={status} value={status}>{ACTION_STATUS_LABELS[status]}</option>)}</select><span className="mt-1 block text-xs text-zinc-500">Status is planning metadata; “Approved” is not G-05 approval.</span></label>
           <label className="text-sm text-zinc-300 sm:col-span-2">Description<textarea value={fieldValue(item.description)} onChange={(event) => updateItem(item.item_id, { description: textOrNull(event.target.value) })} className="mt-2 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-zinc-100" /></label>
@@ -213,7 +220,7 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentUse
           {(["deliverable", "implementation_evidence", "unintended_consequence_assessment"] as const).map((field) => <label key={field} className="text-sm text-zinc-300 sm:col-span-2">{field === "implementation_evidence" ? "Implementation evidence plan" : field === "unintended_consequence_assessment" ? "Unintended consequence assessment" : "Deliverable"}<textarea value={fieldValue(item[field])} onChange={(event) => updateItem(item.item_id, { [field]: textOrNull(event.target.value) })} className="mt-2 min-h-20 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-zinc-100" /></label>)}
         </div>
 
-        <div className="mt-5 rounded-xl border border-zinc-800 p-3"><p className="text-sm font-semibold text-zinc-200">Linked authoritative targets</p>{item.linked_targets.map((target, targetIndex) => <div key={`${target.target_type}:${target.target_id}`} className="mt-3 grid gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]"><span className="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300">{target.target_type}: {target.target_id}</span><input value={target.rationale} onChange={(event) => updateItem(item.item_id, { linked_targets: item.linked_targets.map((candidate, index) => index === targetIndex ? { ...candidate, rationale: event.target.value } : candidate) })} placeholder="Why this target is linked" className="min-h-10 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100" /><button type="button" onClick={() => updateItem(item.item_id, { linked_targets: item.linked_targets.filter((_candidate, index) => index !== targetIndex) })} className="text-sm text-red-300">Remove</button></div>)}{targetOptions.length === 0 ? <p className="mt-3 text-xs text-zinc-500">No authoritative root-cause or evidence targets are available for selection.</p> : <div className="mt-3 flex flex-col gap-2 sm:flex-row"><select aria-label="Target to link" value={`${selectedTarget.target_type}:${selectedTarget.target_id}`} onChange={(event) => { const [target_type, ...id] = event.target.value.split(":"); setCustomTarget((current) => ({ ...current, [item.item_id]: { target_type: target_type as CapaActionLinkTargetType, target_id: id.join(":") } })); }} className="min-h-10 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100">{targetOptions.map((target) => <option key={`${target.target_type}:${target.target_id}`} value={`${target.target_type}:${target.target_id}`}>{target.label}</option>)}</select><button type="button" onClick={() => addTarget(item)} className="min-h-10 rounded-lg border border-zinc-700 px-3 text-sm text-zinc-200">Add linked target</button></div>}</div>
+        <div className="mt-5 rounded-xl border border-zinc-800 p-3"><p className="text-sm font-semibold text-zinc-200">Linked authoritative targets</p>{item.linked_targets.map((target, targetIndex) => <div key={`${target.target_type}:${target.target_id}`} className="mt-3 grid gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]"><span className="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300">{target.target_type}: {target.target_id}</span><input value={target.rationale} onChange={(event) => updateItem(item.item_id, { linked_targets: item.linked_targets.map((candidate, index) => index === targetIndex ? { ...candidate, rationale: event.target.value } : candidate) })} placeholder="Why this target is linked" className="min-h-10 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100" /><button type="button" onClick={() => updateItem(item.item_id, { linked_targets: item.linked_targets.filter((_candidate, index) => index !== targetIndex) })} className="text-sm text-red-300">Remove</button></div>)}{targetOptions.length === 0 ? <p className="mt-3 text-xs text-zinc-500">No authoritative root-cause or evidence targets are available for selection.</p> : <div className="mt-3 flex flex-col gap-2 sm:flex-row"><select aria-label="Target to link" value={`${selectedTarget.target_type}:${selectedTarget.target_id}`} onChange={(event) => { const [target_type, ...id] = event.target.value.split(":"); setCustomTarget((current) => ({ ...current, [item.item_id]: { target_type: target_type as CapaActionLinkTargetType, target_id: id.join(":") } })); }} className="min-h-10 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100">{targetOptions.map((target) => <option key={`${target.target_type}:${target.target_id}`} value={`${target.target_type}:${target.target_id}`}>{target.label}</option>)}</select><button type="button" onClick={() => addTarget(item)} className="min-h-10 rounded-lg border border-zinc-700 px-3 text-sm text-zinc-200">Add linked target</button></div>}</div>
 
         <div className="mt-5 rounded-xl border border-zinc-800 p-3"><p className="text-sm font-semibold text-zinc-200">Dependencies</p>{plan.items.length < 2 ? <p className="mt-2 text-xs text-zinc-500">Add another action to define a dependency.</p> : <div className="mt-2 flex flex-wrap gap-3">{plan.items.filter((candidate) => candidate.item_id !== item.item_id).map((candidate) => <label key={candidate.item_id} className="text-sm text-zinc-400"><input type="checkbox" checked={item.dependency_item_ids.includes(candidate.item_id)} onChange={(event) => updateItem(item.item_id, { dependency_item_ids: event.target.checked ? [...item.dependency_item_ids, candidate.item_id] : item.dependency_item_ids.filter((id) => id !== candidate.item_id) })} /> Action {plan.items.findIndex((entry) => entry.item_id === candidate.item_id) + 1}</label>)}</div>}</div>
 

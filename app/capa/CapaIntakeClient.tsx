@@ -5263,6 +5263,8 @@ export default function CapaIntakeClient({
               key={createdCapa.currentVersionId}
               caseId={createdCapa.capaCaseId}
               caseNumber={createdCapa.caseNumber}
+              currentVersionId={createdCapa.currentVersionId}
+              recordVersion={createdCapa.recordVersion}
               currentUserId={currentUserId}
               targetOptions={actionPlanTargetOptions(createdCapa)}
               onAuthoritativeRefresh={async () => {

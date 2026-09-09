@@ -298,7 +298,7 @@ const DEFINITIONS = [
     agent_id: "AG-ACTION",
     name: "CAPA Action Planner",
     version: "ag-action-1.0.0",
-    status: "evaluation",
+    status: "approved",
     purpose:
       "Draft cause-linked actions, deliverables, risks, evidence needs and measurable effectiveness criteria.",
     states: ["S60", "S70"],
@@ -320,6 +320,32 @@ const DEFINITIONS = [
       "unintended_consequence_questions",
       "implementation_evidence",
       "effectiveness_criteria",
+    ],
+    activation_capabilities: [
+      {
+        eligible_states: ["S60"],
+        operation: "generate_action_plan_advisory",
+        allowed_tools: [
+          "TOOL-CASE-READ",
+          "TOOL-EVIDENCE-READ",
+          "TOOL-STRUCTURED-DRAFT",
+        ],
+        output_schema_version:
+          "capa_action_plan_advisory-1.0.0" as never,
+      },
+      {
+        eligible_states: ["S70"],
+        operation: "draft_action_plan",
+        allowed_tools: [
+          "TOOL-CASE-READ",
+          "TOOL-EVIDENCE-READ",
+          "TOOL-RETRIEVE",
+          "TOOL-STRUCTURED-DRAFT",
+          "TOOL-FEEDBACK",
+        ],
+        output_schema_version:
+          "capa_action_plan_draft-1.0.0" as never,
+      },
     ],
   }),
   definition({
@@ -510,7 +536,7 @@ export interface CapaAgentRegistry {
 class InitialCapaAgentRegistry
   implements CapaAgentRegistry {
   readonly registry_version =
-    "capa-agent-registry-1.2.0";
+    "capa-agent-registry-1.3.0";
 
   private readonly byAgentId =
     new Map(

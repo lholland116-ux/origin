@@ -16,8 +16,11 @@ import type { CapaContainmentRiskAdvisoryResponse } from "../../capa/ai/capa-con
 import type { CapaInvestigationPlanAdvisoryResponse } from "../../capa/ai/capa-investigation-planning-advisory-contract";
 import type { CapaInvestigationActiveAdvisoryResponse } from "../../capa/ai/capa-investigation-active-advisory-contract";
 import type { CapaRootCauseReviewAdvisoryResponse } from "../../capa/ai/capa-root-cause-review-advisory-contract";
+import type { CapaActionPlanAdvisoryResponse } from "../../capa/ai/capa-action-plan-advisory-contract";
 import type { CapaInvestigationActiveAdvisoryGenerationTraceCapture, CapaContainmentRiskAdvisoryGenerationTraceCapture, CapaInvestigationPlanningAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-ai-generation-trace";
 import type { CapaRootCauseReviewAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-ai-generation-trace";
+import type { CapaActionPlanAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-ai-generation-trace";
+import type { CapaActionPlanAdvisoryReferenceManifest } from "../repositories/capa-action-plan-advisory-output-repository";
 import type { CapaInvestigationActiveAdvisoryReferenceManifestDocument } from "../../capa/ai/capa-investigation-active-advisory-reference-manifest";
 import type { CapaRootCauseReviewAdvisoryReferenceManifest } from "../repositories/capa-root-cause-review-advisory-output-repository";
 import type { PersistedCapaInvestigationPlanningAdoption } from "../repositories/capa-investigation-planning-adoption-repository";
@@ -92,12 +95,15 @@ export interface CapaDevelopmentRootCauseReviewAdvisoryOutputSnapshotRecord {
   readonly created_at: IsoDateTime;
 }
 
+export interface CapaDevelopmentActionPlanAdvisoryOutputSnapshotRecord { readonly organization_id: OrganizationId; readonly capa_case_id: CapaCaseId; readonly case_version_id: CapaCaseVersionId; readonly record_version: number; readonly request_trace: RequestTrace; readonly response: CapaActionPlanAdvisoryResponse; readonly generation_trace: CapaActionPlanAdvisoryGenerationTraceCapture; readonly reference_manifest: CapaActionPlanAdvisoryReferenceManifest; readonly created_at: IsoDateTime; }
+
 export type CapaDevelopmentAdvisoryOutputSnapshotRecord =
   | CapaDevelopmentIntakeAdvisoryOutputSnapshotRecord
   | CapaDevelopmentContainmentRiskAdvisoryOutputSnapshotRecord
   | CapaDevelopmentInvestigationPlanningAdvisoryOutputSnapshotRecord
   | CapaDevelopmentInvestigationActiveAdvisoryOutputSnapshotRecord
-  | CapaDevelopmentRootCauseReviewAdvisoryOutputSnapshotRecord;
+  | CapaDevelopmentRootCauseReviewAdvisoryOutputSnapshotRecord
+  | CapaDevelopmentActionPlanAdvisoryOutputSnapshotRecord;
 
 export interface CapaDevelopmentStateSnapshot {
   readonly schema_version: typeof CAPA_DEVELOPMENT_STATE_SNAPSHOT_SCHEMA_VERSION;

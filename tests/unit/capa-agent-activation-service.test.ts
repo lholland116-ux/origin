@@ -77,7 +77,7 @@ describe(
 
         expect(service.registry_version)
           .toBe(
-            "capa-agent-registry-1.2.0",
+            "capa-agent-registry-1.3.0",
           );
         expect(Object.isFrozen(service))
           .toBe(true);

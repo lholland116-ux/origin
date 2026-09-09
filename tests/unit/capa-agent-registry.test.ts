@@ -42,7 +42,7 @@ describe(
         expect(
           registry.registry_version,
         ).toBe(
-          "capa-agent-registry-1.2.0",
+          "capa-agent-registry-1.3.0",
         );
         expect(Object.isFrozen(registry))
           .toBe(true);
@@ -74,6 +74,7 @@ describe(
               status === "approved",
           ),
         ).toEqual([
+          "approved",
           "approved",
           "approved",
           "approved",

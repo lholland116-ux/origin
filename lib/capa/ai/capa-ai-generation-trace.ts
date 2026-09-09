@@ -30,6 +30,10 @@ import {
   CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT,
   CAPA_ROOT_CAUSE_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION,
 } from "./capa-root-cause-review-advisory-contract";
+import {
+  CAPA_ACTION_PLAN_ADVISORY_OUTPUT,
+  CAPA_ACTION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION,
+} from "./capa-action-plan-advisory-contract";
 
 /**
  * Durable-generation-trace schema identity.
@@ -1419,4 +1423,22 @@ export function createCapaRootCauseReviewAdvisoryGenerationTrace(input: {
     policy_manifest: policyManifest,
     fingerprints,
   });
+}
+
+export interface CapaActionPlanAdvisoryGenerationTraceCapture {
+  readonly trace_schema_version: typeof CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION;
+  readonly package: Readonly<{ package_schema_version: "capa-action-plan-advisory-prompt-package-1.0.0"; scope: Readonly<{ organization_id: string; capa_case_id: string; case_version_id: string; record_version: number; workflow_state: "S60" }>; agent: Readonly<{ agent_id: "AG-ACTION"; agent_version: "ag-action-1.0.0" }>; trace: Readonly<{ run_id: CapaAiRunId; prompt_package_id: CapaPromptPackageId; request_id: RequestId; correlation_id: CorrelationId; assembled_at: IsoDateTime }>; context_provenance: Readonly<{ model_safe_context: unknown }>; governance: Readonly<{ advisory_only: true; workflow_mutated: false; controlled_record_mutated: false; human_acceptance_required: true }>; generation_contract: Readonly<{ operation: "generate_action_plan_advisory"; requested_output: typeof CAPA_ACTION_PLAN_ADVISORY_OUTPUT; output_schema_version: typeof CAPA_ACTION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION; model_profile_version: string; output_schema_name: string; output_schema_sha256: string; store: false; maximum_output_characters: number }> }>; rendered_prompt: string; model_profile_version: string; output_schema_name: string; output_schema: unknown; store: false; maximum_output_characters: number; evidence_manifest: Readonly<{ evidence_manifest_schema_version: "capa-action-plan-advisory-evidence-manifest-1.0.0"; retrieval_performed: false; item_count: 0; items: readonly [] }>; policy_manifest: Readonly<{ policy_manifest_schema_version: "capa-action-plan-advisory-policy-manifest-1.0.0"; agent: Readonly<{ agent_id: "AG-ACTION"; agent_version: "ag-action-1.0.0" }>; workflow_state: "S60"; operation: "generate_action_plan_advisory"; requested_output: typeof CAPA_ACTION_PLAN_ADVISORY_OUTPUT; output_schema_version: typeof CAPA_ACTION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION; generation: Readonly<{ model_profile_version: string; output_schema_name: string; output_schema_sha256: string }>; authority: Readonly<{ advisory_only: true; workflow_mutated: false; controlled_record_mutated: false; human_acceptance_required: true }>; prohibitions: readonly string[] }>; fingerprints: Readonly<{ algorithm: typeof CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM; prompt_package_sha256: string; rendered_prompt_sha256: string; evidence_manifest_sha256: string; policy_manifest_sha256: string; output_schema_sha256: string }>;
+}
+
+export function createCapaActionPlanAdvisoryGenerationTrace(input: { readonly rendered_prompt: string; readonly model_profile_version: string; readonly output_schema_name: string; readonly output_schema: unknown; readonly maximum_output_characters: number; readonly package: Omit<CapaActionPlanAdvisoryGenerationTraceCapture["package"], "package_schema_version" | "generation_contract"> }): CapaActionPlanAdvisoryGenerationTraceCapture {
+  const output_schema = deepFreezeCapaAiGenerationTraceValue(snapshotCapaAiGenerationTraceValue(input.output_schema));
+  const output_schema_sha256 = fingerprintCanonicalJson(output_schema);
+  const governance = { advisory_only: true as const, workflow_mutated: false as const, controlled_record_mutated: false as const, human_acceptance_required: true as const };
+  const generation_contract = { operation: "generate_action_plan_advisory" as const, requested_output: CAPA_ACTION_PLAN_ADVISORY_OUTPUT, output_schema_version: CAPA_ACTION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION, model_profile_version: input.model_profile_version, output_schema_name: input.output_schema_name, output_schema_sha256, store: false as const, maximum_output_characters: input.maximum_output_characters };
+  const pkg = deepFreezeCapaAiGenerationTraceValue(snapshotCapaAiGenerationTraceValue({ ...input.package, package_schema_version: "capa-action-plan-advisory-prompt-package-1.0.0" as const, generation_contract })) as CapaActionPlanAdvisoryGenerationTraceCapture["package"];
+  const evidence_manifest = { evidence_manifest_schema_version: "capa-action-plan-advisory-evidence-manifest-1.0.0" as const, retrieval_performed: false as const, item_count: 0 as const, items: [] as const };
+  const policy_manifest = { policy_manifest_schema_version: "capa-action-plan-advisory-policy-manifest-1.0.0" as const, agent: { agent_id: "AG-ACTION" as const, agent_version: "ag-action-1.0.0" as const }, workflow_state: "S60" as const, operation: "generate_action_plan_advisory" as const, requested_output: CAPA_ACTION_PLAN_ADVISORY_OUTPUT, output_schema_version: CAPA_ACTION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION, generation: { model_profile_version: input.model_profile_version, output_schema_name: input.output_schema_name, output_schema_sha256 }, authority: governance, prohibitions: ["approval", "submission", "workflow advancement", "controlled-record mutation", "risk acceptance", "implementation claim", "effectiveness claim", "automatic assignment"] as const };
+  const frozenEvidence = deepFreezeCapaAiGenerationTraceValue(snapshotCapaAiGenerationTraceValue(evidence_manifest));
+  const frozenPolicy = deepFreezeCapaAiGenerationTraceValue(snapshotCapaAiGenerationTraceValue(policy_manifest));
+  return deepFreezeCapaAiGenerationTraceValue({ trace_schema_version: CAPA_AI_GENERATION_TRACE_SCHEMA_VERSION, package: pkg, rendered_prompt: input.rendered_prompt, model_profile_version: input.model_profile_version, output_schema_name: input.output_schema_name, output_schema, store: false as const, maximum_output_characters: input.maximum_output_characters, evidence_manifest: frozenEvidence, policy_manifest: frozenPolicy, fingerprints: { algorithm: CAPA_AI_GENERATION_FINGERPRINT_ALGORITHM, prompt_package_sha256: fingerprintCanonicalJson(pkg), rendered_prompt_sha256: sha256Utf8(input.rendered_prompt), evidence_manifest_sha256: fingerprintCanonicalJson(frozenEvidence), policy_manifest_sha256: fingerprintCanonicalJson(frozenPolicy), output_schema_sha256 } }) as CapaActionPlanAdvisoryGenerationTraceCapture;
 }

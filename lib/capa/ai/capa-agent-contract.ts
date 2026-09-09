@@ -60,6 +60,7 @@ export const CAPA_AGENT_OPERATIONS = [
   "analyze_evidence",
   "facilitate_root_cause",
   "draft_action_plan",
+  "generate_action_plan_advisory",
   "review_implementation_evidence",
   "analyze_effectiveness",
   "assemble_review_packet",
