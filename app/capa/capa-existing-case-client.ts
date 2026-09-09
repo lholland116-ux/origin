@@ -22,6 +22,12 @@ import {
   validateCapaRootCauseReviewReturnResponseAuthoritativeContent,
   type CapaRootCauseReviewReturnResponseContent,
 } from "../../lib/capa/domain/capa-root-cause-review-return-response";
+import {
+  CAPA_ACTION_PLAN_SCHEMA_VERSION,
+  CAPA_ACTION_PLAN_SECTION_TYPE,
+  validateCapaActionPlan,
+  type CapaActionPlanContent,
+} from "../../lib/capa/domain/capa-action-plan";
 
 export interface CapaExistingCaseSummary {
   readonly capaCaseId: string;
@@ -46,6 +52,8 @@ export interface CapaExistingCaseSummary {
   readonly rootCauseReviewReturnResponse?: CapaRootCauseReviewReturnResponseContent;
   readonly rootCauseReviewReturnResponseSectionVersionId?: string;
   readonly rootCauseReturnContext?: CapaRootCauseReturnContext;
+  readonly actionPlan?: CapaActionPlanContent;
+  readonly actionPlanSectionVersionId?: string;
 }
 
 export interface CapaRootCauseReturnContext {
@@ -326,11 +334,17 @@ export function parseCapaExistingCaseResponse(
     CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
     CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
   );
+  const actionPlanSection = controlledSection(
+    capa.sections,
+    CAPA_ACTION_PLAN_SECTION_TYPE,
+    CAPA_ACTION_PLAN_SCHEMA_VERSION,
+  );
   if (
     planSection === false ||
     ledgerSection === false ||
     packageSection === false ||
-    returnResponseSection === false
+    returnResponseSection === false ||
+    actionPlanSection === false
   ) return null;
 
   const plan = planSection === null
@@ -353,13 +367,21 @@ export function parseCapaExistingCaseResponse(
     : validateCapaRootCauseReviewReturnResponseAuthoritativeContent(
         returnResponseSection.content,
       );
+  const actionPlan = actionPlanSection === null
+    ? null
+    : validateCapaActionPlan(actionPlanSection.content);
   if (returnResponse !== null && returnResponse.status === "invalid") return null;
+  if (actionPlan !== null && actionPlan.status === "invalid") return null;
   if (capa.status === "S40" && (plan === null || plan.status !== "valid")) return null;
   if (
     capa.status === "S50" &&
     (plan === null || plan.status !== "valid" ||
       ledger === null || ledger.status !== "valid" ||
       rootPackage === null || rootPackage.status !== "valid")
+  ) return null;
+  if (
+    capa.status === "S70" &&
+    (actionPlan === null || actionPlan.status !== "valid")
   ) return null;
 
   return Object.freeze({
@@ -410,6 +432,13 @@ export function parseCapaExistingCaseResponse(
       rootCauseReviewReturnResponse: returnResponse.value,
       rootCauseReviewReturnResponseSectionVersionId:
         returnResponseSection.section_version_id as string,
+    } : {}),
+    ...(actionPlanSection !== null &&
+    actionPlan !== null &&
+    actionPlan.status === "valid" ? {
+      actionPlan: actionPlan.value,
+      actionPlanSectionVersionId:
+        actionPlanSection.section_version_id as string,
     } : {}),
     ...(rootCauseReturnContext === undefined || rootCauseReturnContext === null ? {} : {
       rootCauseReturnContext,

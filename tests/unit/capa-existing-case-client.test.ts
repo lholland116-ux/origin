@@ -256,6 +256,38 @@ describe(
       },
     );
 
+    it("exposes the authoritative S70 action-plan section and its identity", () => {
+      const body = responseBody();
+      expect(
+        parseCapaExistingCaseResponse(
+          {
+            ...body,
+            capa: {
+              ...body.capa,
+              status: "S70",
+              sections: [
+                ...body.capa.sections,
+                {
+                  section_version_id: "30000000-0000-4000-8000-000000000002",
+                  section_type: "CAPA.ACTION_PLAN",
+                  schema_version: "capa-action-plan-1.0.0",
+                  content: { items: [], effectiveness_checks: [] },
+                },
+              ],
+            },
+          },
+          {
+            expectedCaseId: CASE_ID,
+            fallbackCorrelationId: FALLBACK_CORRELATION_ID,
+          },
+        ),
+      ).toMatchObject({
+        status: "S70",
+        actionPlan: { items: [], effectiveness_checks: [] },
+        actionPlanSectionVersionId: "30000000-0000-4000-8000-000000000002",
+      });
+    });
+
     it(
       "rejects a representation without an authoritative source type",
       () => {

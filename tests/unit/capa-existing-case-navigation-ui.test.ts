@@ -28,7 +28,7 @@ describe("CAPA existing-case workspace navigation", () => {
         /onAuthoritativeRefresh=\{async \(\) => \{[\s\S]*?await loadCases\("replace"\);[\s\S]*?\}\s*\}\s*\/>/g,
       ) ?? [];
 
-    expect(refreshBlocks).toHaveLength(3);
+    expect(refreshBlocks).toHaveLength(4);
     for (const block of refreshBlocks) {
       expect(block).toContain("await openExistingCase({");
       expect(block).not.toContain("scrollToWorkspace");
@@ -107,5 +107,18 @@ describe("CAPA existing-case workspace navigation", () => {
     expect(intake).not.toMatch(/createdCapa\.status === "S70"\s*\? \(\s*<CapaActionPlanWorkspace/);
     expect(intake).toContain("Approval has not yet occurred.");
     expect(intake).not.toContain('createdCapa.status === "S70"\n            ? "The draft record and its audit event were committed atomically."');
+  });
+
+  it("keeps S80 as the read-only Implementation Active fallback", () => {
+    expect(intake).toMatch(
+      /if \(status === "S80"\)\s*\{\s*return CAPA_STATE_DEFINITIONS\.S80\.name;\s*\}/,
+    );
+    expect(intake).toMatch(
+      /createdCapa\.status === "S80"\s*\? CAPA_STATE_DEFINITIONS\.S80\.name/,
+    );
+    expect(intake).toContain(
+      "The action plan has been approved for implementation. Implementation evidence has not yet been submitted.",
+    );
+    expect(intake).not.toContain("CapaImplementationWorkspace");
   });
 });
