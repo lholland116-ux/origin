@@ -144,13 +144,14 @@ export async function submitCapaActionPlan(dependencies: SubmitCapaActionPlanDep
       const workspaceResult = await loadWorkspace(dependencies, transaction, capaCase, sourceVersion);
       if (workspaceResult.status === "invalid") return { kind: "validation" as const, detail_reason_code: workspaceResult.detail_reason_code };
       if (fingerprint(dependencies, command, workspaceResult.value) !== existingOperation.request_fingerprint) return { kind: "conflict" as const };
-      return { kind: "replay" as const, result: await replay(dependencies, existingOperation, command, workspaceResult.value) };
+      return { kind: "replay" as const, workspace: workspaceResult.value };
     });
     if (replayOutcome.kind === "validation") return { status: "validation_failed", reason_code: "INVALID_ACTION_PLAN_WORKSPACE", detail_reason_code: replayOutcome.detail_reason_code };
     if (replayOutcome.kind === "conflict") return { status: "idempotency_conflict", reason_code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST" };
-    return replayOutcome.result;
+    return replay(dependencies, existingOperation, command, replayOutcome.workspace);
   }
   if (sourceVersion.status !== SOURCE_STATE || capaCase.status !== SOURCE_STATE) return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };
+  const source = await loadSourceMaterial(dependencies, capaCase, sourceVersion);
   try {
     const result = await dependencies.transaction_manager.runInTransaction(command.request_trace, async (transaction) => {
       const workspaceResult = await loadWorkspace(dependencies, transaction, capaCase, sourceVersion);
@@ -158,7 +159,6 @@ export async function submitCapaActionPlan(dependencies: SubmitCapaActionPlanDep
       const workspace = workspaceResult.value;
       const actionPlanValidation = validateCapaActionPlan(workspace.action_plan);
       if (actionPlanValidation.status !== "valid") return { kind: "validation" as const, detail_reason_code: actionPlanValidation.reason_code };
-      const source = await loadSourceMaterial(dependencies, capaCase, sourceVersion);
       const targetValidation = validateAuthoritativeActionPlanTargets(actionPlanValidation.value, source);
       if (targetValidation.status === "invalid") return { kind: "validation" as const, detail_reason_code: targetValidation.reason_code };
       const readiness = evaluateCapaActionPlanReadiness(actionPlanValidation.value);
