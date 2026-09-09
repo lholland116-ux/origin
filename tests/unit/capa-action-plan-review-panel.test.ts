@@ -37,4 +37,20 @@ describe("S70 action-plan review panel", () => {
     expect(intake).toContain("<CapaActionPlanReviewPanel");
     expect(intake).not.toMatch(/createdCapa\.status === "S70"\s*\?\s*\(\s*<CapaActionPlanWorkspace/);
   });
+
+  it("keeps the AI review advisory separate from human decisions", () => {
+    expect(panel).toContain("AI Review Advisory");
+    expect(panel).toContain("Generate AI review");
+    expect(panel).toContain("Generating AI review…");
+    expect(panel).toContain("Overall assessment");
+    expect(panel).toContain("AI recommended disposition");
+    expect(panel).toContain("Reviewer attention:");
+    expect(panel).toContain("Supporting references:");
+    expect(panel).toContain("Approve and Return remain independent human-controlled actions.");
+    expect(panel).toContain('onClick={() => void generateAdvisory()}');
+    expect(panel).toContain('onClick={() => begin("approve")}');
+    expect(panel).toContain('onClick={() => begin("return")}');
+    expect(panel).not.toContain("recommended_disposition === \"approve\" &&");
+    expect(panel).not.toContain("recommended_disposition === \"return\" &&");
+  });
 });

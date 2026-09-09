@@ -7,6 +7,11 @@ import {
   submitCapaActionPlanReviewAttempt,
   type CapaActionPlanReviewAttempt,
 } from "./capa-action-plan-review-client";
+import {
+  buildCapaActionPlanReviewAdvisoryRequest,
+  fetchCapaActionPlanReviewAdvisory,
+  type CapaActionPlanReviewAdvisorySuccess,
+} from "./capa-action-plan-review-advisory-client";
 import type {
   CapaActionPlanContent,
   CapaActionPlanItem,
@@ -27,6 +32,16 @@ function targetLabel(targetType: string) {
   if (targetType === "contributing_factor") return "Contributing factor";
   if (targetType === "gap") return "Investigation gap";
   return "Risk";
+}
+
+function advisoryLabel(value: string) {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function dispositionLabel(value: string) {
+  if (value === "approve") return "Approve";
+  if (value === "return") return "Return for action planning";
+  return "Unable to recommend";
 }
 
 function ActionPlanItemView({ item }: { readonly item: CapaActionPlanItem }) {
@@ -132,6 +147,28 @@ export default function CapaActionPlanReviewPanel({
   const [error, setError] = useState<string | null>(null);
   const [reasons, setReasons] = useState<readonly string[]>([]);
   const [success, setSuccess] = useState<string | null>(null);
+  const [advisory, setAdvisory] = useState<CapaActionPlanReviewAdvisorySuccess | null>(null);
+  const [advisoryRequesting, setAdvisoryRequesting] = useState(false);
+  const [advisoryError, setAdvisoryError] = useState<string | null>(null);
+
+  async function generateAdvisory() {
+    setAdvisoryRequesting(true);
+    setAdvisoryError(null);
+    const result = await fetchCapaActionPlanReviewAdvisory(
+      caseId,
+      buildCapaActionPlanReviewAdvisoryRequest({
+        expectedCaseVersionId: currentVersionId,
+        expectedRecordVersion: recordVersion,
+      }),
+      actionPlanSectionVersionId,
+    );
+    if ("advisory" in result) {
+      setAdvisory(result);
+    } else {
+      setAdvisoryError(result.message);
+    }
+    setAdvisoryRequesting(false);
+  }
 
   function begin(decision: CapaActionPlanReviewDecision) {
     const next = createCapaActionPlanReviewAttempt({
@@ -228,6 +265,61 @@ export default function CapaActionPlanReviewPanel({
           </ul>
         </div>
       ) : null}
+
+      <section aria-labelledby="action-plan-review-advisory-heading" className="mt-6 rounded-2xl border border-sky-400/25 bg-sky-500/[0.04] p-5">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-300">AI assistance · advisory only</p>
+        <h4 id="action-plan-review-advisory-heading" className="mt-2 text-xl font-semibold">AI Review Advisory</h4>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">
+          The submitted controlled S70 baseline remains the primary review artifact. AI output supports review but cannot approve, return, or transition this CAPA.
+        </p>
+        <button type="button" disabled={advisoryRequesting || submitting || attempt !== null} onClick={() => void generateAdvisory()} className="mt-5 min-h-11 rounded-xl border border-sky-300/40 bg-sky-400/10 px-4 py-2.5 text-sm font-semibold text-sky-100 disabled:opacity-50">
+          {advisoryRequesting ? "Generating AI review…" : "Generate AI review"}
+        </button>
+        {advisoryRequesting ? <p role="status" className="mt-3 text-sm text-sky-200">Generating a governed advisory for the current submitted baseline…</p> : null}
+        {advisoryError ? <p role="alert" className="mt-3 text-sm text-red-200">{advisoryError}</p> : null}
+
+        {advisory ? (
+          <div className="mt-6 space-y-5">
+            <div className="rounded-xl border border-sky-300/25 bg-sky-400/10 p-4 text-sm text-sky-100">
+              <p className="font-semibold">Advisory only — human review is required.</p>
+              <p className="mt-2">Overall assessment: <span className="font-semibold">{advisoryLabel(advisory.advisory.proposal.overall_assessment)}</span></p>
+              <p className="mt-1">AI recommended disposition: <span className="font-semibold">{dispositionLabel(advisory.advisory.proposal.recommended_disposition)}</span></p>
+            </div>
+
+            <section aria-labelledby="action-plan-review-advisory-findings-heading">
+              <h5 id="action-plan-review-advisory-findings-heading" className="text-lg font-semibold">Findings</h5>
+              {advisory.advisory.proposal.findings.length === 0 ? (
+                <p className="mt-2 text-sm text-zinc-500">No material findings were returned.</p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {advisory.advisory.proposal.findings.map((finding) => (
+                    <article key={finding.finding_id} className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
+                      <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.12em]">
+                        <span className="text-zinc-300">{advisoryLabel(finding.category)}</span>
+                        <span className="rounded-full border border-amber-400/30 px-2 py-1 text-amber-200">{advisoryLabel(finding.severity)}</span>
+                      </div>
+                      <h6 className="mt-3 font-semibold text-zinc-100">{finding.summary}</h6>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-400">{finding.rationale}</p>
+                      <p className="mt-3 text-sm text-zinc-300"><span className="font-semibold">Reviewer attention:</span> {finding.suggested_reviewer_attention}</p>
+                      {finding.affected_action_ids.length > 0 ? <p className="mt-2 break-all text-xs text-zinc-500">Affected actions: {finding.affected_action_ids.join(", ")}</p> : null}
+                      {finding.affected_root_cause_ids.length > 0 ? <p className="mt-1 break-all text-xs text-zinc-500">Affected root causes: {finding.affected_root_cause_ids.join(", ")}</p> : null}
+                      {finding.reference_keys.length > 0 ? <p className="mt-1 break-all text-xs text-zinc-500">Supporting references: {finding.reference_keys.join(", ")}</p> : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section aria-labelledby="action-plan-review-advisory-limitations-heading" className="border-t border-zinc-800 pt-4">
+              <h5 id="action-plan-review-advisory-limitations-heading" className="text-sm font-semibold text-zinc-200">Limitations and human review</h5>
+              <ul className="mt-2 space-y-2 text-sm text-zinc-400">
+                {advisory.advisory.proposal.limitations.map((limitation, index) => <li key={`${limitation}-${index}`}>{limitation}</li>)}
+              </ul>
+              <p className="mt-3 text-sm text-zinc-300">The human reviewer may disagree with this recommendation. Approve and Return remain independent human-controlled actions.</p>
+            </section>
+          </div>
+        ) : null}
+      </section>
 
       {success ? <div role="status" className="mt-5 rounded-xl border border-emerald-400/25 bg-emerald-500/10 p-3 text-sm text-emerald-200">{success}</div> : null}
       {error ? <div role="alert" className="mt-5 rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200"><p>{error}</p>{reasons.length > 0 ? <ul className="mt-2 list-disc pl-5">{reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}{attempt && !submitting ? <button type="button" onClick={() => void submit(attempt)} className="mt-2 underline">Retry exact review decision</button> : null}</div> : null}
