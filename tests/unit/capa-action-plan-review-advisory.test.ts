@@ -3,16 +3,40 @@ import { CAPA_ACTION_PLAN_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION } from "../../li
 import { validateCapaActionPlanReviewAdvisoryModelOutput } from "../../lib/capa/ai/capa-action-plan-review-advisory-validator";
 import { ActivationBackedCapaActionPlanReviewAdvisoryAgentGate, CAPA_ACTION_PLAN_REVIEW_ADVISORY_AGENT } from "../../lib/capa/ai/capa-action-plan-review-advisory-agent-gate";
 import { CAPA_ACTION_PLAN_REVIEW_ADVISORY_OPERATION } from "../../lib/capa/ai/capa-action-plan-review-advisory-agent-gate";
+import { CapaActionPlanReviewAdvisoryModelGenerator } from "../../lib/capa/ai/capa-action-plan-review-advisory-model-generator";
+import { OpenAICapaActionPlanReviewAdvisoryStructuredModelClient } from "../../lib/capa/ai/openai-capa-action-plan-review-advisory-structured-model-client";
 import { CapaActionPlanReviewAdvisoryService } from "../../lib/capa/ai/capa-action-plan-review-advisory-service";
 
 const VERSION = "10000000-0000-4000-8000-000000000001";
 const SECTION = "20000000-0000-4000-8000-000000000001";
-const ACTION = "30000000-0000-4000-8000-000000000001";
-const ROOT = "40000000-0000-4000-8000-000000000001";
+const ACTION = "A-1";
+const ROOT = "H-1";
 const valid = { schema_version: CAPA_ACTION_PLAN_REVIEW_ADVISORY_OUTPUT_SCHEMA_VERSION, status: "completed_draft", source_case_version_id: VERSION, action_plan_section_version_id: SECTION, proposal: { overall_assessment: "needs_attention", findings: [{ finding_id: "F1", category: "owner_completeness", severity: "high", summary: "The action needs an owner.", rationale: "Ownership is not established in the submitted baseline.", affected_action_ids: [ACTION], affected_root_cause_ids: [ROOT], reference_keys: ["R1"], suggested_reviewer_attention: "Confirm the accountable owner before approval." }], recommended_disposition: "return", limitations: ["The advisory is not a human review decision."] }, citations: [], advisory_only: true, workflow_mutated: false, controlled_record_mutated: false, approval_claimed: false, workflow_transition: null, human_acceptance_required: true };
 
 describe("S70 governed action-plan review advisory", () => {
   it("validates a grounded advisory with explicit S70 baseline bindings", () => { const result = validateCapaActionPlanReviewAdvisoryModelOutput(JSON.stringify(valid)); expect(result.source_case_version_id).toBe(VERSION); expect(result.action_plan_section_version_id).toBe(SECTION); expect(Object.isFrozen(result)).toBe(true); });
+  it("constrains model-visible IDs to the authoritative S70 identity fields", async () => {
+    const modelClient = { generateStructured: vi.fn(async (_input: any) => ({ output_text: JSON.stringify(valid) })) };
+    const generator = new CapaActionPlanReviewAdvisoryModelGenerator({ model_client: modelClient, createRunId: () => "80000000-0000-4000-8000-000000000001" as never, createPromptPackageId: () => "81000000-0000-4000-8000-000000000001" as never, createOutputId: () => "90000000-0000-4000-8000-000000000001" as never, now: () => "2026-09-09T00:00:00.000Z" as never });
+    await generator.generate({ context: { authoritative: context as never, reference_manifest: [{ reference_key: "R1" }] as never, model_safe_context: {} as never }, request_id: "a0000000-0000-4000-8000-000000000001" as never, correlation_id: "b0000000-0000-4000-8000-000000000001" as never });
+    const input = modelClient.generateStructured.mock.calls[0]![0] as any;
+    const findingProperties = input.output_schema.properties.proposal.properties.findings.items.properties;
+    expect(findingProperties.affected_action_ids.items.enum).toEqual([ACTION]);
+    expect(findingProperties.affected_root_cause_ids.items.enum).toEqual([ROOT]);
+    expect(findingProperties.reference_keys.items.enum).toEqual(["R1"]);
+    expect(input.prompt).toContain("exact authoritative hypothesis_id values");
+  });
+  it("allows an empty affected root-cause binding when no root cause applies", () => {
+    const output = validateCapaActionPlanReviewAdvisoryModelOutput(JSON.stringify({ ...valid, proposal: { ...valid.proposal, findings: [{ ...valid.proposal.findings[0], affected_root_cause_ids: [] }] } }));
+    expect(output.proposal.findings[0]!.affected_root_cause_ids).toEqual([]);
+  });
+  it("forwards the request-specific schema to OpenAI", async () => {
+    const schema = { type: "object", properties: { controlled: { type: "string", enum: [ROOT] } } };
+    const create = vi.fn(async () => ({ output_text: "{}" }));
+    const client = new OpenAICapaActionPlanReviewAdvisoryStructuredModelClient({ responses: { create } } as never, { model: "gpt-5" });
+    await client.generateStructured({ prompt: "controlled", model_profile_version: "capa-action-plan-review-advisory-model-profile-1.0.0", output_schema_name: "capa_action_plan_review_advisory_1_0_0", output_schema: schema, maximum_output_characters: 40_000, store: false });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ text: { format: { schema, strict: true, type: "json_schema", name: "capa_action_plan_review_advisory_1_0_0" } } }));
+  });
   it.each([
     ["invalid recommendation", { proposal: { ...valid.proposal, recommended_disposition: "approve_now" } }],
     ["malformed source version", { source_case_version_id: "not-a-source-version" }],

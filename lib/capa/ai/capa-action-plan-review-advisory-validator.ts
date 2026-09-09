@@ -15,7 +15,8 @@ const object = (value: unknown): value is Record<string, unknown> => typeof valu
 const exact = (value: Record<string, unknown>, fields: readonly string[]) => Object.keys(value).length === fields.length && fields.every((field) => Object.hasOwn(value, field));
 const text = (value: unknown, max = TEXT): value is string => typeof value === "string" && value.length > 0 && value.length <= max && value.trim() === value;
 const uuid = (value: unknown): value is string => typeof value === "string" && UUID.test(value);
-const ids = (value: unknown): readonly string[] => { if (!Array.isArray(value) || value.length > MAX || value.some((item) => !uuid(item))) fail("INVALID_IDENTIFIER"); return value as readonly string[]; };
+const controlledIdentifier = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.trim() === value;
+const ids = (value: unknown): readonly string[] => { if (!Array.isArray(value) || value.length > MAX || value.some((item) => !controlledIdentifier(item))) fail("INVALID_IDENTIFIER"); return value as readonly string[]; };
 const refs = (value: unknown): readonly string[] => { if (!Array.isArray(value) || value.length > MAX || value.some((item) => typeof item !== "string" || !REF.test(item))) fail("INVALID_REFERENCE"); return value as readonly string[]; };
 
 export function validateCapaActionPlanReviewAdvisoryModelOutput(value: string): RawCapaActionPlanReviewAdvisoryModelOutput {
