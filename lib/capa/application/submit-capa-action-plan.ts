@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { evaluateCapaAuthorizationPreconditions } from "../authorization/capa-permissions";
 import type { CapaAuthorizationPolicy } from "../authorization/capa-policy";
 import { CAPA_ACTION_PLAN_SCHEMA_VERSION, CAPA_ACTION_PLAN_SECTION_TYPE, evaluateCapaActionPlanReadiness, validateCapaActionPlan, type CapaActionPlanContent, type CapaActionPlanReadinessBlockerCode } from "../domain/capa-action-plan";
+import { CAPA_EVIDENCE_ASSUMPTION_LEDGER_SCHEMA_VERSION, CAPA_EVIDENCE_ASSUMPTION_LEDGER_SECTION_TYPE, validateCapaEvidenceAssumptionLedger, type CapaEvidenceAssumptionLedgerContent } from "../domain/capa-evidence-assumption-ledger";
+import { CAPA_ROOT_CAUSE_PACKAGE_SCHEMA_VERSION, CAPA_ROOT_CAUSE_PACKAGE_SECTION_TYPE, validateCapaRootCausePackage, type CapaRootCausePackageContent } from "../domain/capa-root-cause-package";
 import { CAPA_STATE } from "../domain/capa-state";
 import type { AuditEvent, AuditEventId, CapaCase, CapaCaseId, CapaCaseVersion, CapaCaseVersionId, CapaSectionVersion, CapaSectionVersionId, ControlledCode, IdempotencyKey, IsoDateTime, RequestTrace } from "../domain/capa-types";
 import type { AuthenticationContext } from "../../security/auth-context";
@@ -31,8 +33,9 @@ export interface SubmitCapaActionPlanDependencies { readonly transaction_manager
 export interface SubmitCapaActionPlanCommand { readonly authentication: AuthenticationContext; readonly tenant: TenantContext; readonly capa_case_id: CapaCaseId; readonly expected_record_version: number; readonly expected_current_version_id: CapaCaseVersionId; readonly request_trace: RequestTrace; readonly body: unknown; }
 
 interface ValidatedBody { readonly expected_record_version: number; readonly expected_current_version_id: CapaCaseVersionId; }
-interface SourceMaterial { readonly all: readonly CapaSectionVersion[]; readonly prior_action_plan: CapaSectionVersion | null; }
+interface SourceMaterial { readonly all: readonly CapaSectionVersion[]; readonly prior_action_plan: CapaSectionVersion | null; readonly root_cause_package: CapaRootCausePackageContent | null; readonly evidence_assumption_ledger: CapaEvidenceAssumptionLedgerContent | null; }
 interface WorkspaceMaterial { readonly action_plan: CapaActionPlanContent; readonly draft_revision: number; }
+const ACTION_PLAN_TARGET_VALIDATION_REASON_CODE = "ACTION_PLAN_LINK_TARGET_NOT_AUTHORITATIVE" as const;
 interface CompletedSubmission { readonly capa_case: CapaCase; readonly case_version: CapaCaseVersion; readonly action_plan_section_version: CapaSectionVersion; readonly transition_audit_event_id: AuditEventId; }
 export type SubmitCapaActionPlanResult =
   | ({ readonly status: "submitted" } & CompletedSubmission)
@@ -64,10 +67,39 @@ async function loadSourceMaterial(dependencies: SubmitCapaActionPlanDependencies
   const all = loaded as CapaSectionVersion[];
   if (all.some((section) => section.organization_id !== capaCase.organization_id || section.capa_case_id !== capaCase.capa_case_id || !Number.isSafeInteger(section.version_number) || section.version_number < 1)) throw new SubmitCapaActionPlanIntegrityError();
   const actionPlans = all.filter((section) => section.section_type === CAPA_ACTION_PLAN_SECTION_TYPE);
+  const rootCausePackages = all.filter((section) => section.section_type === CAPA_ROOT_CAUSE_PACKAGE_SECTION_TYPE);
+  const evidenceLedgers = all.filter((section) => section.section_type === CAPA_EVIDENCE_ASSUMPTION_LEDGER_SECTION_TYPE);
   if (actionPlans.length > 1) throw new SubmitCapaActionPlanIntegrityError("The S60 snapshot has ambiguous action-plan sections.");
+  if (rootCausePackages.length > 1 || evidenceLedgers.length > 1) throw new SubmitCapaActionPlanIntegrityError("The S60 snapshot has ambiguous authoritative target sections.");
   if (actionPlans[0] !== undefined && actionPlans[0].schema_version !== CAPA_ACTION_PLAN_SCHEMA_VERSION) throw new SubmitCapaActionPlanIntegrityError("The prior action-plan schema metadata is invalid.");
   if (actionPlans[0] !== undefined && validateCapaActionPlan(actionPlans[0].content).status !== "valid") throw new SubmitCapaActionPlanIntegrityError("The prior action-plan section is malformed.");
-  return { all: Object.freeze(all), prior_action_plan: actionPlans[0] ?? null };
+  const ledgerSection = evidenceLedgers[0];
+  const rootCauseSection = rootCausePackages[0];
+  let ledger: CapaEvidenceAssumptionLedgerContent | null = null;
+  if (ledgerSection !== undefined) {
+    if (ledgerSection.schema_version !== CAPA_EVIDENCE_ASSUMPTION_LEDGER_SCHEMA_VERSION) throw new SubmitCapaActionPlanIntegrityError("The authoritative evidence ledger schema metadata is invalid.");
+    const validatedLedger = validateCapaEvidenceAssumptionLedger(ledgerSection.content);
+    if (validatedLedger.status !== "valid") throw new SubmitCapaActionPlanIntegrityError("The authoritative evidence ledger is malformed.");
+    ledger = validatedLedger.value;
+  }
+  let rootCausePackage: CapaRootCausePackageContent | null = null;
+  if (rootCauseSection !== undefined) {
+    if (rootCauseSection.schema_version !== CAPA_ROOT_CAUSE_PACKAGE_SCHEMA_VERSION) throw new SubmitCapaActionPlanIntegrityError("The authoritative root-cause package schema metadata is invalid.");
+    const validatedRootCause = validateCapaRootCausePackage(rootCauseSection.content, ledger ?? { items: [] });
+    if (validatedRootCause.status !== "valid") throw new SubmitCapaActionPlanIntegrityError("The authoritative root-cause package is malformed.");
+    rootCausePackage = validatedRootCause.value;
+  }
+  return { all: Object.freeze(all), prior_action_plan: actionPlans[0] ?? null, root_cause_package: rootCausePackage, evidence_assumption_ledger: ledger };
+}
+function validateAuthoritativeActionPlanTargets(actionPlan: CapaActionPlanContent, source: SourceMaterial): { readonly status: "valid" } | { readonly status: "invalid"; readonly reason_code: typeof ACTION_PLAN_TARGET_VALIDATION_REASON_CODE } {
+  const rootCauseTargets = new Map((source.root_cause_package?.hypotheses ?? []).filter((hypothesis) => hypothesis.causal_role === "proposed_root_cause").map((hypothesis) => [hypothesis.hypothesis_id, hypothesis]));
+  const contributingFactorTargets = new Map((source.root_cause_package?.hypotheses ?? []).filter((hypothesis) => hypothesis.causal_role === "contributing_factor").map((hypothesis) => [hypothesis.hypothesis_id, hypothesis]));
+  const gapTargets = new Map((source.evidence_assumption_ledger?.items ?? []).filter((item) => item.information_class === "missing_information").map((item) => [item.item_id, item]));
+  for (const item of actionPlan.items) for (const target of item.linked_targets) {
+    const eligible = target.target_type === "cause" ? rootCauseTargets.has(target.target_id) : target.target_type === "contributing_factor" ? contributingFactorTargets.has(target.target_id) : target.target_type === "gap" ? gapTargets.has(target.target_id) : false;
+    if (!eligible) return { status: "invalid", reason_code: ACTION_PLAN_TARGET_VALIDATION_REASON_CODE };
+  }
+  return { status: "valid" };
 }
 function replacedSectionIds(sourceVersion: CapaCaseVersion, prior: CapaSectionVersion | null, next: CapaSectionVersionId): readonly CapaSectionVersionId[] { const ids = sourceVersion.section_version_ids.map((id) => prior !== null && id === prior.section_version_id ? next : id); if (prior === null) ids.push(next); if (new Set(ids).size !== ids.length) throw new SubmitCapaActionPlanIntegrityError("The resulting section identity set is invalid."); if (prior !== null && !ids.includes(next)) throw new SubmitCapaActionPlanIntegrityError("The action-plan section replacement is ambiguous."); return Object.freeze(ids); }
 async function loadWorkspace(dependencies: SubmitCapaActionPlanDependencies, transaction: TransactionContext, capaCase: CapaCase, sourceVersion: CapaCaseVersion): Promise<{ readonly status: "valid"; readonly value: WorkspaceMaterial } | { readonly status: "invalid"; readonly detail_reason_code: string }> {
@@ -106,7 +138,6 @@ export async function submitCapaActionPlan(dependencies: SubmitCapaActionPlanDep
   const sourceVersion = await dependencies.capa_repository.findCaseVersionById(organizationId, capaCase.capa_case_id, command.expected_current_version_id); if (sourceVersion === null || sourceVersion.organization_id !== organizationId || sourceVersion.capa_case_id !== capaCase.capa_case_id) return { status: "not_found_or_not_authorized" };
   const policy = await dependencies.authorization_policy.evaluate({ authentication: command.authentication, tenant: command.tenant, operation: "submit_action_plan", resource: { organization_id: organizationId, resource_type: controlled("CAPA_CASE"), resource_id: capaCase.capa_case_id, resource_version_id: sourceVersion.case_version_id, capa_case_id: capaCase.capa_case_id, case_version_id: sourceVersion.case_version_id, workflow_state: sourceVersion.status }, purpose: dependencies.configuration.authorization_purpose, trusted_now: trustedNow });
   if (policy.decision !== "allow") return { status: "authorization_denied", reason_code: policy.reason_code, policy_version: policy.policy_version };
-  const source = await loadSourceMaterial(dependencies, capaCase, sourceVersion);
   const existingOperation = await dependencies.transaction_manager.runInTransaction(command.request_trace, (transaction) => dependencies.workflow_idempotency_repository.findWorkflowOperation(transaction, { organization_id: organizationId, capa_case_id: command.capa_case_id, operation_code: controlled(OPERATION_CODE), idempotency_key: idempotencyKey }));
   if (existingOperation !== null) {
     const replayOutcome = await dependencies.transaction_manager.runInTransaction(command.request_trace, async (transaction) => {
@@ -127,6 +158,9 @@ export async function submitCapaActionPlan(dependencies: SubmitCapaActionPlanDep
       const workspace = workspaceResult.value;
       const actionPlanValidation = validateCapaActionPlan(workspace.action_plan);
       if (actionPlanValidation.status !== "valid") return { kind: "validation" as const, detail_reason_code: actionPlanValidation.reason_code };
+      const source = await loadSourceMaterial(dependencies, capaCase, sourceVersion);
+      const targetValidation = validateAuthoritativeActionPlanTargets(actionPlanValidation.value, source);
+      if (targetValidation.status === "invalid") return { kind: "validation" as const, detail_reason_code: targetValidation.reason_code };
       const readiness = evaluateCapaActionPlanReadiness(actionPlanValidation.value);
       if (readiness.status === "blocked") return { kind: "blocked" as const, blocker_codes: readiness.blocker_codes };
       const requestFingerprint = fingerprint(dependencies, command, workspace);
