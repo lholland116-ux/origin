@@ -40,6 +40,7 @@ export type CapaAuthorizationOperation =
   | "edit_case"
   | "submit_intake"
   | "submit_for_review"
+  | "submit_action_plan"
   | "review_knowledge_citation"
   | "request_ai_intake_advisory"
   | "request_ai_containment_risk_advisory"
@@ -78,6 +79,7 @@ export type CapaAuthorizationOperation =
 export const HUMAN_ONLY_CAPA_OPERATIONS =
   new Set<CapaAuthorizationOperation>([
     "submit_intake",
+    "submit_action_plan",
     "review_knowledge_citation",
     "request_ai_intake_advisory",
     "request_ai_containment_risk_advisory",

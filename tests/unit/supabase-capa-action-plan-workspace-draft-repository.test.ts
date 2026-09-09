@@ -35,6 +35,15 @@ describe("Supabase S60 action-plan workspace draft repository", () => {
     await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(malformed.sql as never).findDraft(ORG as never, CASE as never)).rejects.toThrow(SupabaseCapaActionPlanWorkspaceDraftRepositoryError);
   });
 
+  it("reads the current workspace with a transaction-owned FOR UPDATE lock", async () => {
+    const locked = harness([draft(4)]);
+    await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(locked.sql as never).findDraftForUpdate(locked.transaction, ORG as never, CASE as never)).resolves.toMatchObject({ draft_revision: 4 });
+    expect(locked.calls[0].text).toMatch(/select \* from public\.capa_action_plan_workspace_drafts[\s\S]*organization_id[\s\S]*capa_case_id[\s\S]*limit 2 for update/);
+    expect(locked.calls[0].values).toEqual([ORG, CASE]);
+    const duplicate = harness([draft(3), draft(4)]);
+    await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(duplicate.sql as never).findDraftForUpdate(duplicate.transaction, ORG as never, CASE as never)).rejects.toThrow(SupabaseCapaActionPlanWorkspaceDraftRepositoryError);
+  });
+
   it("uses insert-on-conflict create CAS and revision-constrained update CAS", async () => {
     const created = harness([draft()]);
     await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(created.sql as never).saveDraft(created.transaction, { draft: draft(), expected_draft_revision: null })).resolves.toMatchObject({ status: "saved" });

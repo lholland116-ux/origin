@@ -16,6 +16,11 @@ import {
   saveActionPlanWorkspace,
   type CapaActionPlanWorkspaceProjection,
 } from "./capa-action-plan-workspace-client";
+import {
+  createActionPlanSubmissionAttempt,
+  submitActionPlanSubmissionAttempt,
+  type ActionPlanSubmissionAttempt,
+} from "./capa-action-plan-submission-client";
 import CapaActionPlanAdvisoryPanel from "./CapaActionPlanAdvisoryPanel";
 
 export interface CapaActionPlanTargetOption {
@@ -126,13 +131,15 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [saveStatus, setSaveStatus] = useState<"loading" | "saved" | "unsaved" | "saving" | "conflict" | "failed">("loading");
   const [message, setMessage] = useState<string | null>(null);
+  const [submissionStatus, setSubmissionStatus] = useState<"idle" | "submitting" | "submitted" | "failed">("idle");
+  const [submissionMessage, setSubmissionMessage] = useState<string | null>(null);
+  const [submissionAttempt, setSubmissionAttempt] = useState<ActionPlanSubmissionAttempt | null>(null);
   const [customTarget, setCustomTarget] = useState<Record<string, { target_type: CapaActionLinkTargetType; target_id: string }>>({});
 
   const readiness = useMemo(() => evaluateCapaActionPlanReadiness(plan), [plan]);
-  const actionIds = useMemo(() => plan.items.map((item) => item.item_id), [plan.items]);
 
   async function hydrate() {
-    setLoadStatus("loading"); setSaveStatus("loading"); setMessage(null);
+    setLoadStatus("loading"); setSaveStatus("loading"); setMessage(null); setSubmissionStatus("idle"); setSubmissionMessage(null); setSubmissionAttempt(null);
     const result = await loadActionPlanWorkspace(caseId);
     if (result.status === "failed") { setLoadStatus("failed"); setSaveStatus("failed"); setMessage(result.message); return; }
     const next = draftFromWorkspace(result.workspace);
@@ -182,7 +189,22 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
     setMessage(result.message);
   }
 
-  const editingDisabled = loadStatus !== "ready" || saveStatus === "saving" || saveStatus === "conflict";
+  async function submitForReview() {
+    if (readiness.status !== "ready_for_review" || loadStatus !== "ready" || saveStatus !== "saved") return;
+    const attempt = submissionAttempt ?? createActionPlanSubmissionAttempt({ caseId, recordVersion: authoritativeRecordVersion, currentVersionId: currentVersionId, idempotencyKey: crypto.randomUUID() });
+    if (attempt === null) { setSubmissionStatus("failed"); setSubmissionMessage("The authoritative CAPA version could not be verified for submission."); return; }
+    setSubmissionAttempt(attempt); setSubmissionStatus("submitting"); setSubmissionMessage(null);
+    const result = await submitActionPlanSubmissionAttempt(attempt);
+    if (result.status === "submitted") {
+      setSubmissionStatus("submitted"); setSubmissionMessage("Action plan submitted for review.");
+      await onAuthoritativeRefresh();
+      return;
+    }
+    setSubmissionStatus("failed"); setSubmissionMessage(result.message);
+    if (result.requiresRefresh) await onAuthoritativeRefresh();
+  }
+
+  const editingDisabled = loadStatus !== "ready" || saveStatus === "saving" || saveStatus === "conflict" || submissionStatus === "submitting" || submissionStatus === "submitted";
 
   return <section aria-labelledby="action-plan-workspace-heading" className="mt-8 rounded-3xl border border-blue-400/20 bg-blue-500/[0.05] p-5 sm:p-7">
     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">S60 · Human-controlled draft workspace</p>
@@ -203,7 +225,9 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
         <p className="mt-2 text-sm text-amber-200">Not ready for Action Plan Review</p>
         <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-zinc-400">{readiness.blocker_codes.map((code) => <li key={code}>{BLOCKER_LABELS[code] ?? code}</li>)}</ul>
       </>}
-      <p className="mt-3 text-xs text-zinc-500">Submission to Action Plan Review will become available when the controlled submission step is enabled.</p>
+      <p className="mt-3 text-xs text-zinc-500">The server resolves the durable S60 workspace when this action is submitted.</p>
+      {submissionMessage !== null ? <p role={submissionStatus === "failed" ? "alert" : "status"} className="mt-3 text-sm text-amber-100">{submissionMessage}</p> : null}
+      <button type="button" disabled={editingDisabled || saveStatus !== "saved" || readiness.status !== "ready_for_review"} onClick={() => void submitForReview()} className="mt-4 min-h-11 rounded-xl bg-emerald-600 px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{submissionStatus === "submitting" ? "Submitting…" : "Submit action plan for review"}</button>
     </div>
 
     <div className="mt-6 min-w-0 space-y-5">{plan.items.map((item, index) => {

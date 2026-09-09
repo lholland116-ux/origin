@@ -13,6 +13,7 @@ import type {
 import type {
   SubmitCapaRootCausePackageDependencies,
 } from "./submit-capa-root-cause-package";
+import type { SubmitCapaActionPlanDependencies } from "./submit-capa-action-plan";
 
 import type {
   UpdateCapaInvestigationProgressDependencies,
@@ -420,6 +421,11 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_SUBMIT_FOR_REVIEW_ALLOWED",
       );
 
+    case "submit_action_plan":
+      return controlled(
+        "DEVELOPMENT_SUBMIT_ACTION_PLAN_ALLOWED",
+      );
+
     case "review_knowledge_citation":
       return controlled(
         "DEVELOPMENT_KNOWLEDGE_CITATION_REVIEW_ALLOWED",
@@ -557,6 +563,8 @@ function developmentAuthorizationPolicy(
           "edit_case" ||
         request.operation ===
           "submit_for_review" ||
+        request.operation ===
+          "submit_action_plan" ||
         request.operation ===
           "review_knowledge_citation" ||
         request.operation ===
@@ -1104,6 +1112,19 @@ export function createCapaDevelopmentRuntime(
     return_cycle_resolver: returnCycleResolver,
   };
 
+  const submitActionPlanDependencies: SubmitCapaActionPlanDependencies = {
+    ...submitIntakeDependencies,
+      workspace_repository: {
+        findDraft: (organizationId, capaCaseId) => database.findActionPlanWorkspaceDraft(organizationId, capaCaseId),
+        findDraftForUpdate: (transaction, organizationId, capaCaseId) => database.findActionPlanWorkspaceDraftForUpdate(transaction, organizationId, capaCaseId),
+        saveDraft: (transaction, input) => database.saveActionPlanWorkspaceDraft(transaction, input),
+    },
+    configuration: {
+      ...submitIntakeDependencies.configuration,
+      authorization_purpose: controlled("CAPA_ACTION_PLAN_SUBMISSION"),
+    },
+  };
+
   const decideRootCauseGateDependencies:
     DecideCapaRootCauseGateDependencies = {
     ...approveScopeDependencies,
@@ -1361,7 +1382,7 @@ export function createCapaDevelopmentRuntime(
 
     create_action_plan_advisory_service(context) {
       if (actionPlanAdvisoryConfiguration === undefined) throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
-      return createRequestScopedCapaActionPlanAdvisoryService({ request_context: context, capa_repository: database, workspace_repository: { findDraft: database.findActionPlanWorkspaceDraft.bind(database), saveDraft: database.saveActionPlanWorkspaceDraft.bind(database) }, authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: actionPlanAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, now, generate_uuid: generateUuid });
+      return createRequestScopedCapaActionPlanAdvisoryService({ request_context: context, capa_repository: database, workspace_repository: { findDraft: database.findActionPlanWorkspaceDraft.bind(database), findDraftForUpdate: database.findActionPlanWorkspaceDraftForUpdate.bind(database), saveDraft: database.saveActionPlanWorkspaceDraft.bind(database) }, authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: actionPlanAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, now, generate_uuid: generateUuid });
     },
 
     create_investigation_active_adoption_service(context) {
@@ -1383,6 +1404,7 @@ export function createCapaDevelopmentRuntime(
     create_action_plan_workspace_draft_service(context) {
       const workspaceRepository: CapaActionPlanWorkspaceDraftRepository = {
         findDraft: (organizationId, capaCaseId) => database.findActionPlanWorkspaceDraft(organizationId, capaCaseId),
+        findDraftForUpdate: (transaction, organizationId, capaCaseId) => database.findActionPlanWorkspaceDraftForUpdate(transaction, organizationId, capaCaseId),
         saveDraft: (transaction, input) => database.saveActionPlanWorkspaceDraft(transaction, input),
       };
       return createCapaActionPlanWorkspaceDraftService({
@@ -1417,6 +1439,9 @@ export function createCapaDevelopmentRuntime(
 
     submit_root_cause_dependencies:
       submitRootCauseDependencies,
+
+    submit_action_plan_dependencies:
+      submitActionPlanDependencies,
 
     decide_root_cause_gate_dependencies:
       decideRootCauseGateDependencies,

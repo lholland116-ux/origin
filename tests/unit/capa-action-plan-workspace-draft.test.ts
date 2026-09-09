@@ -92,6 +92,20 @@ describe("S60 action-plan workspace contract and persistence", () => {
     expect((await db.findActionPlanWorkspaceDraft(ORG as never, CASE as never))?.draft_revision).toBe(2);
   });
 
+  it("reads the transaction-visible workspace revision for update", async () => {
+    const db = database();
+    await db.runInTransaction({ request_id: "seed-lock-1" as never, correlation_id: "seed-lock-1" as never }, (tx) => db.saveActionPlanWorkspaceDraft(tx, { draft: draft() as never, expected_draft_revision: null }));
+    await db.runInTransaction({ request_id: "seed-lock-2" as never, correlation_id: "seed-lock-2" as never }, (tx) => db.saveActionPlanWorkspaceDraft(tx, { draft: draft({ draft_revision: 2 }) as never, expected_draft_revision: 1 }));
+    await db.runInTransaction({ request_id: "seed-lock-3" as never, correlation_id: "seed-lock-3" as never }, (tx) => db.saveActionPlanWorkspaceDraft(tx, { draft: draft({ draft_revision: 3 }) as never, expected_draft_revision: 2 }));
+    await db.runInTransaction({ request_id: "lock" as never, correlation_id: "lock" as never }, async (tx) => {
+      const locked = await db.findActionPlanWorkspaceDraftForUpdate(tx, ORG as never, CASE as never);
+      expect(locked).toMatchObject({ draft_revision: 3 });
+      await db.saveActionPlanWorkspaceDraft(tx, { draft: draft({ draft_revision: 4 }) as never, expected_draft_revision: 3 });
+      await expect(db.findActionPlanWorkspaceDraftForUpdate(tx, ORG as never, CASE as never)).resolves.toMatchObject({ draft_revision: 4 });
+    });
+    await expect(db.findActionPlanWorkspaceDraft(ORG as never, CASE as never)).resolves.toMatchObject({ draft_revision: 4 });
+  });
+
   it("round-trips the durable workspace through the development snapshot", async () => {
     const source = database();
     await source.runInTransaction({ request_id: "snapshot-1" as never, correlation_id: "snapshot-1" as never }, (tx) => source.saveActionPlanWorkspaceDraft(tx, { draft: draft() as never, expected_draft_revision: null }));

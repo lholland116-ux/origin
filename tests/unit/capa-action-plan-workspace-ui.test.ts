@@ -22,8 +22,9 @@ describe("S60 action-planning workspace UI", () => {
   });
 
   it("covers durable editing, controlled targets, dependencies, effectiveness planning, and readiness", () => {
-    for (const text of ["loadActionPlanWorkspace", "saveActionPlanWorkspace", "expected_draft_revision", "Add action", "Remove action", "Corrective", "Preventive", "Correction", "Containment", "Assign to me", "Due date", "Linked authoritative targets", "Dependencies", "Effectiveness check required", "Effectiveness planning", "Ready for Action Plan Review", "Not ready for Action Plan Review", "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT"]) expect(workspace).toContain(text);
+    for (const text of ["loadActionPlanWorkspace", "saveActionPlanWorkspace", "expected_draft_revision", "Add action", "Remove action", "Corrective", "Preventive", "Correction", "Containment", "Assign to me", "Due date", "Linked authoritative targets", "Dependencies", "Effectiveness check required", "Effectiveness planning", "Ready for Action Plan Review", "Not ready for Action Plan Review", "Submit action plan for review", "createActionPlanSubmissionAttempt", "submitActionPlanSubmissionAttempt", "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT"]) expect(workspace).toContain(text);
     expect(workspace).not.toContain("Submit to S70");
     expect(workspace).not.toContain("Approve action plan");
+    expect(workspace).not.toContain("deleteActionPlanWorkspace");
   });
 });

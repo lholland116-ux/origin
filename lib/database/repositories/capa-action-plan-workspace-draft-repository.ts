@@ -18,5 +18,6 @@ export type SaveCapaActionPlanWorkspaceDraftResult =
 /** Storage for one current non-authoritative S60 workspace per CAPA case. */
 export interface CapaActionPlanWorkspaceDraftRepository {
   findDraft(organizationId: OrganizationId, capaCaseId: CapaCaseId): Promise<CapaActionPlanWorkspaceDraft | null>;
+  findDraftForUpdate(transaction: TransactionContext, organizationId: OrganizationId, capaCaseId: CapaCaseId): Promise<CapaActionPlanWorkspaceDraft | null>;
   saveDraft(transaction: TransactionContext, input: SaveCapaActionPlanWorkspaceDraftInput): Promise<SaveCapaActionPlanWorkspaceDraftResult>;
 }

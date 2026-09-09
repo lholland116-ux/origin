@@ -13,6 +13,7 @@ import type {
 import type {
   SubmitCapaRootCausePackageDependencies,
 } from "./submit-capa-root-cause-package";
+import type { SubmitCapaActionPlanDependencies } from "./submit-capa-action-plan";
 
 import type {
   UpdateCapaInvestigationProgressDependencies,
@@ -263,6 +264,10 @@ export interface CapaRuntime {
   /** Human-controlled S40 to S50 root-cause submission dependencies. */
   readonly submit_root_cause_dependencies:
     SubmitCapaRootCausePackageDependencies;
+
+  /** Human-controlled S60 to S70 action-plan submission dependencies. */
+  readonly submit_action_plan_dependencies:
+    SubmitCapaActionPlanDependencies;
 
   /** Human-controlled S50 root-cause gate dependencies. */
   readonly decide_root_cause_gate_dependencies:

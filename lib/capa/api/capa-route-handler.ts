@@ -13,6 +13,7 @@ import {
 import {
   submitCapaRootCausePackage,
 } from "../application/submit-capa-root-cause-package";
+import { submitCapaActionPlan } from "../application/submit-capa-action-plan";
 
 import {
   decideCapaRootCauseGate,
@@ -800,6 +801,18 @@ interface ParsedSubmitRootCauseBody {
     readonly evidence_assumption_ledger: unknown;
     readonly root_cause_package: unknown;
   }>;
+}
+
+interface ParsedSubmitActionPlanBody {
+  readonly expected_record_version: number;
+  readonly expected_current_version_id: CapaCaseVersionId;
+}
+
+function parsedSubmitActionPlanBody(value: unknown): ParsedSubmitActionPlanBody | null {
+  if (!isObjectRecord(value)) return null;
+  if (Object.keys(value).length !== 2 || typeof value.expected_record_version !== "number" || !Number.isSafeInteger(value.expected_record_version) || value.expected_record_version < 1 || typeof value.expected_current_version_id !== "string") return null;
+  const versionId = normalizedUuid(value.expected_current_version_id);
+  return versionId === null || versionId !== value.expected_current_version_id ? null : { expected_record_version: value.expected_record_version, expected_current_version_id: versionId as CapaCaseVersionId };
 }
 
 function parsedSubmitRootCauseBody(
@@ -2457,6 +2470,40 @@ export async function handleCapaSubmitRootCause(
       "root-cause submission",
       error
     );
+  }
+}
+
+/** Framework-neutral POST handler for controlled S60 action-plan submission. */
+export async function handleCapaSubmitActionPlan(
+  request: Request,
+  capaCaseId: string,
+  dependencies: CapaApiHandlerDependencies,
+): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  try {
+    const context = await authenticatedContext(dependencies);
+    if (context === null) return errorResponse(trace, 401, "UNAUTHORIZED", "Authentication is required.");
+    const normalizedCaseId = normalizedUuid(capaCaseId);
+    if (normalizedCaseId === null || normalizedCaseId !== capaCaseId) return errorResponse(trace, 400, "INVALID_CAPA_CASE_ID", "A valid CAPA case identifier is required.");
+    const key = request.headers.get("idempotency-key");
+    if (key === null || key.length === 0 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH || key.trim() !== key) return errorResponse(trace, 400, "INVALID_IDEMPOTENCY_KEY", "A valid idempotency key is required.");
+    const parsedJson = await parseJsonBody(request);
+    if (!parsedJson.valid) return errorResponse(trace, 400, "INVALID_JSON", "The request body must be valid JSON.");
+    const body = parsedSubmitActionPlanBody(parsedJson.body);
+    if (body === null) return errorResponse(trace, 400, "INVALID_CAPA_ACTION_PLAN_SUBMISSION", "The action-plan submission request is invalid.");
+    const result = await submitCapaActionPlan(dependencies.get_runtime().submit_action_plan_dependencies, { authentication: context.authentication, tenant: context.tenant, capa_case_id: normalizedCaseId as CapaCaseId, expected_record_version: body.expected_record_version, expected_current_version_id: body.expected_current_version_id, request_trace: { ...trace, idempotency_key: key as IdempotencyKey }, body: parsedJson.body });
+    if (result.status === "validation_failed") return errorResponse(trace, 400, "CAPA_ACTION_PLAN_SUBMISSION_VALIDATION_FAILED", "The action-plan submission did not pass controlled validation.", [{ path: "submission", message: result.reason_code }, ...(result.detail_reason_code === undefined ? [] : [{ path: "workspace.action_plan", message: result.detail_reason_code }])]);
+    if (result.status === "submission_blocked") return errorResponse(trace, 409, "CAPA_ACTION_PLAN_SUBMISSION_BLOCKED", "The action plan does not satisfy Action Plan Review readiness.", result.blocker_codes.map((code) => ({ path: "readiness.blocker_codes", message: code })));
+    if (result.status === "authorization_denied") return errorResponse(trace, 403, "CAPA_ACCESS_DENIED", "The CAPA operation is not authorized.");
+    if (result.status === "not_found_or_not_authorized") return errorResponse(trace, 404, "CAPA_NOT_FOUND", "The CAPA case was not found.");
+    if (result.status === "idempotency_conflict") return errorResponse(trace, 409, "CAPA_IDEMPOTENCY_CONFLICT", "The idempotency key was already used for a different CAPA request.");
+    if (result.status === "concurrency_conflict") return errorResponse(trace, 409, "CAPA_CONCURRENCY_CONFLICT", "The CAPA record changed before action-plan submission could be completed.");
+    if (result.status === "workflow_conflict") return errorResponse(trace, 409, "CAPA_WORKFLOW_CONFLICT", "The CAPA case is not in S60 Action Planning.");
+    return jsonResponse({ capa: { capa_case_id: result.capa_case.capa_case_id, case_number: result.capa_case.case_number, status: result.capa_case.status, record_version: result.capa_case.record_version, current_version_id: result.capa_case.current_version_id, submitted_version_id: result.case_version.case_version_id, action_plan_section_version_id: result.action_plan_section_version.section_version_id, submitted_at: result.case_version.effective_at, transition_audit_event_id: result.transition_audit_event_id }, replayed: result.status === "already_submitted", correlation_id: trace.correlation_id }, 200);
+  } catch (error) {
+    const contextResponse = contextResolutionErrorResponse(dependencies, trace, error);
+    if (contextResponse !== null) return contextResponse;
+    return safeUnexpectedError(dependencies, trace, "action-plan submission", error);
   }
 }
 

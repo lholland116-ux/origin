@@ -78,6 +78,14 @@ export class SupabaseCapaActionPlanWorkspaceDraftRepository implements CapaActio
     return rows[0] === undefined ? null : fromRow(rows[0]);
   }
 
+  async findDraftForUpdate(transaction: TransactionContext, organizationId: OrganizationId, capaCaseId: CapaCaseId): Promise<CapaActionPlanWorkspaceDraft | null> {
+    let sql: postgres.TransactionSql;
+    try { sql = requireSupabaseTransaction(transaction); } catch { fail(); }
+    const rows = await sql<Row[]>`select * from public.capa_action_plan_workspace_drafts where organization_id = ${organizationId} and capa_case_id = ${capaCaseId} limit 2 for update`;
+    if (rows.length > 1) fail();
+    return rows[0] === undefined ? null : fromRow(rows[0]);
+  }
+
   async saveDraft(transaction: TransactionContext, value: SaveCapaActionPlanWorkspaceDraftInput): Promise<SaveCapaActionPlanWorkspaceDraftResult> {
     let sql: postgres.TransactionSql;
     let draft: CapaActionPlanWorkspaceDraft;

@@ -2380,6 +2380,12 @@ export class InMemoryCapaDatabase
     return draft === undefined ? null : cloneValue(draft);
   }
 
+  async findActionPlanWorkspaceDraftForUpdate(transaction: TransactionContext, organizationId: OrganizationId, capaCaseId: CapaCaseId): Promise<CapaActionPlanWorkspaceDraft | null> {
+    const state = this.transactionState(transaction);
+    const draft = state.action_plan_workspace_drafts.get(recordKey(organizationId, capaCaseId));
+    return draft === undefined ? null : cloneValue(draft);
+  }
+
   async saveActionPlanWorkspaceDraft(transaction: TransactionContext, input: SaveCapaActionPlanWorkspaceDraftInput): Promise<SaveCapaActionPlanWorkspaceDraftResult> {
     const state = this.transactionState(transaction);
     const validated = validateCapaActionPlanWorkspaceDraft(input.draft);

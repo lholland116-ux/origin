@@ -13,6 +13,7 @@ import type {
 import type {
   SubmitCapaRootCausePackageDependencies,
 } from "./submit-capa-root-cause-package";
+import type { SubmitCapaActionPlanDependencies } from "./submit-capa-action-plan";
 
 import type {
   UpdateCapaInvestigationProgressDependencies,
@@ -1056,6 +1057,15 @@ export function createCapaProductionRuntime(
     return_cycle_resolver: returnCycleResolver,
   };
 
+  const submitActionPlanDependencies: SubmitCapaActionPlanDependencies = {
+    ...submitIntakeDependencies,
+    workspace_repository: actionPlanWorkspaceDraftRepository,
+    configuration: {
+      ...submitIntakeDependencies.configuration,
+      authorization_purpose: controlled("CAPA_ACTION_PLAN_SUBMISSION"),
+    },
+  };
+
   const decideRootCauseGateDependencies:
     DecideCapaRootCauseGateDependencies = {
     ...approveScopeDependencies,
@@ -1558,6 +1568,9 @@ export function createCapaProductionRuntime(
 
     submit_root_cause_dependencies:
       submitRootCauseDependencies,
+
+    submit_action_plan_dependencies:
+      submitActionPlanDependencies,
 
     decide_root_cause_gate_dependencies:
       decideRootCauseGateDependencies,

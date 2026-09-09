@@ -89,4 +89,23 @@ describe("CAPA existing-case workspace navigation", () => {
       /createdCapa\.status === "S40"\s*\? "The authoritative CAPA is in active investigation execution\."/,
     );
   });
+
+  it("recognizes S70 as pending Action Plan Review without exposing draft-created messaging", () => {
+    expect(intake).toMatch(
+      /if \(status === "S70"\)\s*\{\s*return CAPA_STATE_DEFINITIONS\.S70\.name;\s*\}/,
+    );
+    expect(intake).toMatch(
+      /createdCapa\.status === "S70"\s*\? CAPA_STATE_DEFINITIONS\.S70\.name/,
+    );
+    expect(intake).toMatch(
+      /createdCapa\.status === "S70"\s*\? "The action plan has been submitted for human review\. Approval has not yet occurred\."/,
+    );
+    const s70Label = intake.indexOf(': createdCapa.status === "S70"');
+    const draftFallback = intake.indexOf(': "CAPA draft created"', s70Label);
+    expect(s70Label).toBeGreaterThan(-1);
+    expect(draftFallback).toBeGreaterThan(s70Label);
+    expect(intake).not.toMatch(/createdCapa\.status === "S70"\s*\? \(\s*<CapaActionPlanWorkspace/);
+    expect(intake).toContain("Approval has not yet occurred.");
+    expect(intake).not.toContain('createdCapa.status === "S70"\n            ? "The draft record and its audit event were committed atomically."');
+  });
 });

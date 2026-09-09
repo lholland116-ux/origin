@@ -66,6 +66,7 @@ const OPERATION_PERMISSION = {
   edit_case: "capa.case.edit",
   submit_intake: "capa.case.submit",
   submit_for_review: "capa.case.submit",
+  submit_action_plan: "capa.case.edit",
   review_knowledge_citation:
     "capa.knowledge.citation.review",
   request_ai_intake_advisory:
@@ -138,6 +139,8 @@ const OPERATION_PURPOSE = {
     "CAPA_WORKFLOW_TRANSITION",
   submit_for_review:
     "CAPA_WORKFLOW_TRANSITION",
+  submit_action_plan:
+    "CAPA_ACTION_PLAN_SUBMISSION",
   review_knowledge_citation:
     "CAPA_KNOWLEDGE_CITATION_REVIEW",
   request_ai_intake_advisory:
@@ -303,6 +306,11 @@ const REQUIRED_WORKFLOW_STATES:
 
     submit_for_review:
       SUBMISSION_STATES,
+
+    submit_action_plan:
+      new Set([
+        CAPA_STATE.ACTION_PLANNING,
+      ]),
 
     approve_scope:
       new Set([
