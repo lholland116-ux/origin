@@ -3,8 +3,8 @@ import type { CapaAiOutputId } from "./capa-prompt-contract";
 import {
   CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM,
   CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION,
-} from "./capa-investigation-active-advisory-reference-manifest";
-import { isCapaInvestigationActiveAdvisoryReferenceKey } from "./capa-investigation-active-advisory-reference-manifest";
+  isCapaInvestigationActiveAdvisoryReferenceKey,
+} from "./capa-investigation-active-advisory-reference-manifest-contract";
 import {
   CAPA_INVESTIGATION_ACTIVE_ADOPTION_MAXIMUM_IDEMPOTENCY_KEY_CHARACTERS,
   CAPA_INVESTIGATION_ACTIVE_ADOPTION_MAXIMUM_ITEMS,

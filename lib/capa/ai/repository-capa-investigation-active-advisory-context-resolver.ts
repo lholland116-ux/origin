@@ -36,7 +36,12 @@ import type {
   CapaInvestigationActiveAdvisoryReferenceManifestEntry,
 } from "./capa-investigation-active-advisory-context";
 
-export const CAPA_INVESTIGATION_ACTIVE_ADVISORY_MAXIMUM_REFERENCES = 100;
+export {
+  CAPA_INVESTIGATION_ACTIVE_ADVISORY_MAXIMUM_REFERENCES,
+} from "./capa-investigation-active-advisory-reference-manifest-contract";
+import {
+  CAPA_INVESTIGATION_ACTIVE_ADVISORY_MAXIMUM_REFERENCES,
+} from "./capa-investigation-active-advisory-reference-manifest-contract";
 
 interface NormalizedUntrustedDraft {
   readonly ledger: CapaEvidenceAssumptionLedgerContent;

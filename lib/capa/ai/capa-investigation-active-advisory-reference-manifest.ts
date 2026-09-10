@@ -10,12 +10,17 @@ import type {
 } from "./capa-investigation-active-advisory-context";
 import {
   CAPA_INVESTIGATION_ACTIVE_ADVISORY_MAXIMUM_REFERENCES,
-} from "./repository-capa-investigation-active-advisory-context-resolver";
+  CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM,
+  CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION,
+  isCapaInvestigationActiveAdvisoryReferenceKey as validReferenceKey,
+} from "./capa-investigation-active-advisory-reference-manifest-contract";
 
-export const CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION =
-  "capa-investigation-active-reference-manifest-1.0.0" as const;
-export const CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM =
-  "sha256-canonical-json-v1" as const;
+export {
+  CAPA_INVESTIGATION_ACTIVE_ADVISORY_MAXIMUM_REFERENCES,
+  CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_FINGERPRINT_ALGORITHM,
+  CAPA_INVESTIGATION_ACTIVE_REFERENCE_MANIFEST_SCHEMA_VERSION,
+  isCapaInvestigationActiveAdvisoryReferenceKey,
+} from "./capa-investigation-active-advisory-reference-manifest-contract";
 
 export interface CapaInvestigationActiveAdvisoryReferenceManifestDocument {
   readonly manifest_schema_version:
@@ -38,22 +43,6 @@ function freeze<T>(value: T): T {
     for (const child of Object.values(value as Record<string, unknown>)) freeze(child);
   }
   return value;
-}
-
-function validReferenceKey(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const match = /^R([1-9][0-9]*)$/.exec(value);
-  if (match === null) return false;
-  const number = Number(match[1]);
-  return Number.isSafeInteger(number) &&
-    number >= 1 &&
-    number <= CAPA_INVESTIGATION_ACTIVE_ADVISORY_MAXIMUM_REFERENCES;
-}
-
-export function isCapaInvestigationActiveAdvisoryReferenceKey(
-  value: unknown,
-): value is CapaInvestigationActiveAdvisoryReferenceManifestEntry["reference_key"] {
-  return validReferenceKey(value);
 }
 
 function validTrust(value: unknown): value is CapaInvestigationActiveAdvisoryReferenceTrust {
