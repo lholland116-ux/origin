@@ -16,4 +16,12 @@ describe("S60 action-plan advisory route", () => {
     expect((await handleCapaActionPlanAdvisoryPost(request({ ...body, extra: true }), CASE, dependencies())).status).toBe(400);
     for (const [reason, status] of [["ADVISORY_ACCESS_DENIED", 403], ["CASE_NOT_IN_ACTION_PLANNING", 409], ["WORKFLOW_MUTATION_DETECTED", 409], ["ADVISORY_GENERATION_FAILED", 500]] as const) { const service = { execute: vi.fn(async () => { throw new CapaActionPlanAdvisoryServiceError(reason); }) }; expect((await handleCapaActionPlanAdvisoryPost(request(), CASE, dependencies({ create_advisory_service: vi.fn(() => service) }))).status).toBe(status); }
   });
+  it("logs only safe diagnostic metadata for an invalid advisory result and keeps the browser error generic", async () => {
+    const logger = { error: vi.fn() };
+    const service = { execute: vi.fn(async () => { throw new CapaActionPlanAdvisoryServiceError("INVALID_ADVISORY_RESULT", undefined, { reason_code: "INVALID_TARGET_BINDING", path: "response.proposal.action_candidates[0].linked_targets[0].target_id", action_candidate_count: 1, finding_count: 0, affected_action_id_count: 0, affected_root_cause_id_count: 0, reference_key_count: 1, expected_workflow_state: "S60" }); }) };
+    const response = await handleCapaActionPlanAdvisoryPost(request(), CASE, dependencies({ create_advisory_service: vi.fn(() => service), logger }));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: { message: "The CAPA request could not be completed." } });
+    expect(logger.error).toHaveBeenCalledWith("CAPA API action-plan advisory failed.", expect.objectContaining({ reason_code: "INVALID_ADVISORY_RESULT", diagnostic_reason_code: "INVALID_TARGET_BINDING", diagnostic_path: "response.proposal.action_candidates[0].linked_targets[0].target_id", diagnostic_action_candidate_count: 1, diagnostic_reference_key_count: 1, diagnostic_expected_workflow_state: "S60" }));
+  });
 });

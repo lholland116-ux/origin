@@ -20,7 +20,7 @@ const REF = /^R[1-9][0-9]{0,2}$/;
 export type CapaActionPlanAdvisoryValidationLocation =
   | "root" | "proposal" | "concern" | "suggestion" | "action_candidate" | "effectiveness_suggestion" | "proposed_action_plan";
 export type CapaActionPlanAdvisoryValidationReasonCode =
-  | "INVALID_JSON" | "INVALID_SHAPE" | "INVALID_CONTROLLED_FIELDS" | "INVALID_TEXT" | "INVALID_REFERENCE" | "INVALID_ACTION_PLAN" | "INVALID_PROVENANCE";
+  | "INVALID_JSON" | "INVALID_SHAPE" | "INVALID_CONTROLLED_FIELDS" | "INVALID_TEXT" | "INVALID_REFERENCE" | "INVALID_ACTION_PLAN" | "INVALID_PROVENANCE" | "INVALID_ACTION_CANDIDATE" | "INVALID_ACTION_TYPE" | "INVALID_TARGET_BINDING" | "INVALID_EFFECTIVENESS_CANDIDATE";
 
 export class CapaActionPlanAdvisoryOutputValidationError extends Error {
   constructor(readonly reason_code: CapaActionPlanAdvisoryValidationReasonCode, readonly diagnostic_location: CapaActionPlanAdvisoryValidationLocation) {
@@ -43,7 +43,7 @@ function nullableUuid(value: unknown): value is string | null { return value ===
 
 function validateEffectivenessPlanning(value: unknown): CapaActionPlanAdvisoryEffectivenessPlanning | null {
   if (value === null) return null;
-  if (!object(value) || !exact(value, ["recommendation", "acceptance_criteria", "evaluation_method", "data_source", "timing", "responsible_role", "sample_or_rationale"]) || !text(value.recommendation) || !text(value.acceptance_criteria) || !text(value.evaluation_method) || !text(value.data_source) || !text(value.timing) || !text(value.responsible_role) || !text(value.sample_or_rationale)) fail("INVALID_SHAPE", "action_candidate");
+  if (!object(value) || !exact(value, ["recommendation", "acceptance_criteria", "evaluation_method", "data_source", "timing", "responsible_role", "sample_or_rationale"]) || !text(value.recommendation) || !text(value.acceptance_criteria) || !text(value.evaluation_method) || !text(value.data_source) || !text(value.timing) || !text(value.responsible_role) || !text(value.sample_or_rationale)) fail("INVALID_EFFECTIVENESS_CANDIDATE", "action_candidate");
   return {
     recommendation: value.recommendation,
     acceptance_criteria: value.acceptance_criteria,
@@ -56,14 +56,15 @@ function validateEffectivenessPlanning(value: unknown): CapaActionPlanAdvisoryEf
 }
 
 function validateActionCandidate(value: unknown): CapaActionPlanAdvisoryActionCandidate {
-  if (!object(value) || !exact(value, ["suggestion_key", "action_type", "description", "deliverable", "implementation_evidence", "unintended_consequence_assessment", "linked_targets", "effectiveness_planning", "reference_keys", "human_review_question"]) || typeof value.suggestion_key !== "string" || !KEY.test(value.suggestion_key) || typeof value.action_type !== "string" || !(CAPA_ACTION_TYPES as readonly string[]).includes(value.action_type) || !text(value.description) || !text(value.deliverable) || !text(value.implementation_evidence) || !text(value.unintended_consequence_assessment) || !question(value.human_review_question)) fail("INVALID_SHAPE", "action_candidate");
-  if (!Array.isArray(value.linked_targets) || value.linked_targets.length === 0 || value.linked_targets.length > MAX_ITEMS) fail("INVALID_SHAPE", "action_candidate");
+  if (!object(value) || !exact(value, ["suggestion_key", "action_type", "description", "deliverable", "implementation_evidence", "unintended_consequence_assessment", "linked_targets", "effectiveness_planning", "reference_keys", "human_review_question"]) || typeof value.suggestion_key !== "string" || !KEY.test(value.suggestion_key) || !text(value.description) || !text(value.deliverable) || !text(value.implementation_evidence) || !text(value.unintended_consequence_assessment) || !question(value.human_review_question)) fail("INVALID_ACTION_CANDIDATE", "action_candidate");
+  if (typeof value.action_type !== "string" || !(CAPA_ACTION_TYPES as readonly string[]).includes(value.action_type)) fail("INVALID_ACTION_TYPE", "action_candidate");
+  if (!Array.isArray(value.linked_targets) || value.linked_targets.length === 0 || value.linked_targets.length > MAX_ITEMS) fail("INVALID_TARGET_BINDING", "action_candidate");
   const linkedTargets = value.linked_targets.map((target) => {
-    if (!object(target) || !exact(target, ["target_type", "target_id", "rationale"]) || (target.target_type !== "cause" && target.target_type !== "contributing_factor" && target.target_type !== "gap") || !text(target.target_id) || !text(target.rationale)) fail("INVALID_SHAPE", "action_candidate");
+    if (!object(target) || !exact(target, ["target_type", "target_id", "rationale"]) || (target.target_type !== "cause" && target.target_type !== "contributing_factor" && target.target_type !== "gap") || !text(target.target_id) || !text(target.rationale)) fail("INVALID_TARGET_BINDING", "action_candidate");
     return { target_type: target.target_type, target_id: target.target_id, rationale: target.rationale } as const;
   });
   const identities = linkedTargets.map((target) => `${target.target_type}:${target.target_id}`);
-  if (new Set(identities).size !== identities.length) fail("INVALID_SHAPE", "action_candidate");
+  if (new Set(identities).size !== identities.length) fail("INVALID_TARGET_BINDING", "action_candidate");
   return {
     suggestion_key: value.suggestion_key,
     action_type: value.action_type as CapaActionPlanAdvisoryActionCandidate["action_type"],
