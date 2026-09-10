@@ -22,6 +22,7 @@ import {
   type ActionPlanSubmissionAttempt,
 } from "./capa-action-plan-submission-client";
 import CapaActionPlanAdvisoryPanel from "./CapaActionPlanAdvisoryPanel";
+import type { CapaActionPlanAdvisoryActionCandidate } from "../../lib/capa/ai/capa-action-plan-advisory-contract";
 
 export interface CapaActionPlanTargetOption {
   readonly target_type: CapaActionLinkTargetType;
@@ -92,6 +93,34 @@ function newActionItem(): CapaActionPlanItem {
     due_date: null, status: "planned", deliverable: null, implementation_evidence: null,
     dependency_item_ids: [], unintended_consequence_assessment: null, effectiveness_check_required: false,
     draft_provenance: humanProvenance(),
+  };
+}
+
+export function createActionPlanItemFromAdvisoryCandidate(
+  candidate: CapaActionPlanAdvisoryActionCandidate,
+  adopterUserId: string,
+  adoptedAt: string,
+  itemId: string,
+): CapaActionPlanItem {
+  return {
+    item_id: itemId,
+    action_type: candidate.action_type,
+    description: candidate.description,
+    linked_targets: candidate.linked_targets.map((target) => ({ ...target })),
+    owner_user_id: null,
+    due_date: null,
+    status: "planned",
+    deliverable: candidate.deliverable,
+    implementation_evidence: candidate.implementation_evidence,
+    dependency_item_ids: [],
+    unintended_consequence_assessment: candidate.unintended_consequence_assessment,
+    effectiveness_check_required: false,
+    draft_provenance: {
+      source_type: "ai_proposal",
+      source_reference: candidate.suggestion_key,
+      adopted_by_user_id: adopterUserId,
+      adopted_at: adoptedAt,
+    },
   };
 }
 
@@ -173,6 +202,31 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
     changePlan(next);
   }
 
+  function adoptCandidate(candidate: CapaActionPlanAdvisoryActionCandidate): string | null {
+    if (plan.items.some((item) => item.draft_provenance.source_type === "ai_proposal" && item.draft_provenance.source_reference === candidate.suggestion_key)) return null;
+    if (candidate.linked_targets.some((target) => !targetOptions.some((option) => option.target_type === target.target_type && option.target_id === target.target_id))) return null;
+    const itemId = newId();
+    changePlan({ ...plan, items: [...plan.items, createActionPlanItemFromAdvisoryCandidate(candidate, currentUserId, new Date().toISOString(), itemId)] });
+    return itemId;
+  }
+
+  function adoptEffectivenessPlanning(candidate: CapaActionPlanAdvisoryActionCandidate, actionItemId: string): boolean {
+    const planning = candidate.effectiveness_planning;
+    if (planning === null || !plan.items.some((item) => item.item_id === actionItemId)) return false;
+    if (plan.effectiveness_checks.some((check) => check.action_item_ids.length === 1 && check.action_item_ids[0] === actionItemId && check.draft_provenance.source_reference === `${candidate.suggestion_key}:effectiveness`)) return false;
+    const adoptedAt = new Date().toISOString();
+    changePlan({
+      ...updateAction(plan, actionItemId, { effectiveness_check_required: true }),
+      effectiveness_checks: [...plan.effectiveness_checks, {
+        check_id: newId(), action_item_ids: [actionItemId], acceptance_criteria: planning.acceptance_criteria,
+        evaluation_method: planning.evaluation_method, data_source: planning.data_source, timing: planning.timing,
+        responsible_role: planning.responsible_role, sample_or_rationale: planning.sample_or_rationale,
+        draft_provenance: { source_type: "ai_proposal", source_reference: `${candidate.suggestion_key}:effectiveness`, adopted_by_user_id: currentUserId, adopted_at: adoptedAt },
+      }],
+    });
+    return true;
+  }
+
   function addTarget(item: CapaActionPlanItem) {
     const selected = customTarget[item.item_id] ?? (targetOptions[0] === undefined ? undefined : { target_type: targetOptions[0].target_type, target_id: targetOptions[0].target_id });
     if (selected === undefined || item.linked_targets.some((target) => target.target_type === selected.target_type && target.target_id === selected.target_id)) return;
@@ -217,7 +271,7 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
     {loadStatus === "loading" ? <p role="status" className="mt-5 text-sm text-zinc-400">Loading durable Action Planning workspace…</p> : null}
     {loadStatus === "failed" ? <button type="button" onClick={() => void hydrate()} className="mt-4 text-sm text-blue-200 underline">Retry workspace load</button> : null}
 
-    {caseVersionId !== null ? <CapaActionPlanAdvisoryPanel caseId={caseId} caseVersionId={caseVersionId} recordVersion={authoritativeRecordVersion} /> : null}
+    {caseVersionId !== null ? <CapaActionPlanAdvisoryPanel caseId={caseId} caseVersionId={caseVersionId} recordVersion={authoritativeRecordVersion} onAdoptCandidate={adoptCandidate} onAdoptEffectivenessPlanning={adoptEffectivenessPlanning} /> : null}
 
     <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
       <p className="text-sm font-semibold text-zinc-100">Readiness for Action Plan Review</p>
@@ -234,7 +288,7 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
       const customType = item.action_type !== null && !BASELINE_ACTION_TYPES.has(item.action_type);
       const selectedTarget = customTarget[item.item_id] ?? { target_type: targetOptions[0]?.target_type ?? "cause", target_id: targetOptions[0]?.target_id ?? "" };
       return <fieldset key={item.item_id} disabled={editingDisabled} className="min-w-0 w-full rounded-2xl border border-zinc-800 bg-zinc-950/55 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3"><legend className="font-semibold text-zinc-100">Action {index + 1}</legend><span className="text-xs text-zinc-500">Human-authored draft</span><button type="button" onClick={() => removeItem(item.item_id)} className="text-sm text-red-300">Remove action</button></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><legend className="font-semibold text-zinc-100">Action {index + 1}</legend><span className="text-xs text-zinc-500">{item.draft_provenance.source_type === "ai_proposal" ? "AI suggestion · Human adopted" : "Human-authored draft"}</span><button type="button" onClick={() => removeItem(item.item_id)} className="text-sm text-red-300">Remove action</button></div>
         <div className="mt-4 grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <label className="text-sm text-zinc-300">Action type<select value={customType ? "__custom__" : item.action_type ?? ""} onChange={(event) => updateItem(item.item_id, { action_type: event.target.value === "__custom__" || event.target.value === "" ? (event.target.value === "__custom__" ? item.action_type : null) : event.target.value })} className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-zinc-100"><option value="">Select a type</option>{CAPA_ACTION_TYPES.map((type) => <option key={type} value={type}>{ACTION_TYPE_LABELS[type]}</option>)}<option value="__custom__">Custom controlled code</option></select>{customType || item.action_type === null ? <input aria-label="Custom action type code" value={customType ? item.action_type ?? "" : ""} onChange={(event) => updateItem(item.item_id, { action_type: textOrNull(event.target.value) })} placeholder="Organization-approved code" className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-zinc-100" /> : null}</label>
           <label className="text-sm text-zinc-300">Action item status<select value={item.status} onChange={(event) => updateItem(item.item_id, { status: event.target.value as CapaActionPlanItem["status"] })} className="mt-2 min-h-11 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 text-zinc-100">{CAPA_ACTION_STATUSES.map((status) => <option key={status} value={status}>{ACTION_STATUS_LABELS[status]}</option>)}</select><span className="mt-1 block text-xs text-zinc-500">Status is planning metadata; “Approved” is not G-05 approval.</span></label>
@@ -256,6 +310,6 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
 
     {plan.effectiveness_checks.length > 0 ? <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4"><h3 className="font-semibold text-zinc-100">Effectiveness planning</h3>{plan.effectiveness_checks.map((check, index) => <fieldset key={check.check_id} disabled={editingDisabled} className="mt-4 rounded-xl border border-zinc-800 p-3"><legend className="text-sm text-zinc-300">Check {index + 1}</legend><div className="mt-2 flex flex-wrap gap-3 text-sm text-zinc-400">{plan.items.map((item) => <label key={item.item_id}><input type="checkbox" checked={check.action_item_ids.includes(item.item_id)} onChange={(event) => changePlan(updateCheck(plan, check.check_id, { action_item_ids: event.target.checked ? [...check.action_item_ids, item.item_id] : check.action_item_ids.filter((id) => id !== item.item_id) }))} /> Action {plan.items.indexOf(item) + 1}</label>)}</div><div className="mt-3 grid gap-3 sm:grid-cols-2">{(["acceptance_criteria", "evaluation_method", "data_source", "timing", "responsible_role", "sample_or_rationale"] as const).map((field) => <label key={field} className="text-sm text-zinc-300">{field.replaceAll("_", " ")}<textarea value={fieldValue(check[field])} onChange={(event) => changePlan(updateCheck(plan, check.check_id, { [field]: textOrNull(event.target.value) }))} className="mt-2 min-h-16 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-zinc-100" /></label>)}</div><button type="button" onClick={() => changePlan({ ...plan, effectiveness_checks: plan.effectiveness_checks.filter((candidate) => candidate.check_id !== check.check_id) })} className="mt-3 text-sm text-red-300">Remove check</button></fieldset>)}</div> : null}
 
-    <div className="mt-6 flex flex-wrap items-center justify-between gap-3"><p role="status" className="text-sm text-zinc-400">{saveStatus === "saved" ? `Saved${draftRevision === null ? " · new workspace" : ` · draft revision ${draftRevision}`}` : saveStatus === "saving" ? "Saving…" : saveStatus === "unsaved" ? "Unsaved changes" : ""}</p><button type="button" disabled={editingDisabled || saveStatus !== "unsaved"} onClick={() => void save()} className="min-h-11 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Save Action Planning draft</button></div>
+    <div className="mt-6 flex flex-wrap items-center justify-between gap-3"><p role="status" className="text-sm text-zinc-400">{saveStatus === "saved" ? `Saved${draftRevision === null ? " · new workspace" : ` · durable draft revision ${draftRevision}`}` : saveStatus === "saving" ? "Saving…" : saveStatus === "unsaved" ? `UNSAVED local changes · durable revision ${draftRevision ?? "new"}` : saveStatus === "conflict" ? `CONFLICT · local changes are not durable${draftRevision === null ? "" : ` · last durable revision ${draftRevision}`}` : saveStatus === "failed" ? "UNSAVED · local changes are not durable" : ""}</p><button type="button" disabled={editingDisabled || saveStatus !== "unsaved"} onClick={() => void save()} className="min-h-11 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Save Action Planning draft</button></div>
   </section>;
 }

@@ -1,8 +1,46 @@
 import type { CapaAiOutputId, CapaAiRunId, ControlledVersion } from "./capa-prompt-contract";
-import type { CapaActionPlanContent } from "../domain/capa-action-plan";
+import type {
+  CapaActionLinkTargetType,
+  CapaActionPlanContent,
+} from "../domain/capa-action-plan";
 
 export const CAPA_ACTION_PLAN_ADVISORY_OUTPUT = "action_plan_advisory_draft" as const;
 export const CAPA_ACTION_PLAN_ADVISORY_OUTPUT_SCHEMA_VERSION = "capa_action_plan_advisory-1.0.0" as const;
+
+export interface CapaActionPlanAdvisoryEffectivenessPlanning {
+  readonly recommendation: string;
+  readonly acceptance_criteria: string;
+  readonly evaluation_method: string;
+  readonly data_source: string;
+  readonly timing: string;
+  readonly responsible_role: string;
+  readonly sample_or_rationale: string;
+}
+
+export interface CapaActionPlanAdvisoryActionCandidateTarget {
+  readonly target_type: Exclude<CapaActionLinkTargetType, "risk">;
+  readonly target_id: string;
+  readonly rationale: string;
+}
+
+/**
+ * A complete, adoptable action proposal. It contains no owner, due date,
+ * authoritative action ID, or controlled-record provenance. Those values are
+ * deliberately supplied only when a human adopts the proposal into the local
+ * S60 draft.
+ */
+export interface CapaActionPlanAdvisoryActionCandidate {
+  readonly suggestion_key: string;
+  readonly action_type: "corrective" | "preventive" | "correction" | "containment";
+  readonly description: string;
+  readonly deliverable: string;
+  readonly implementation_evidence: string;
+  readonly unintended_consequence_assessment: string;
+  readonly linked_targets: readonly CapaActionPlanAdvisoryActionCandidateTarget[];
+  readonly effectiveness_planning: CapaActionPlanAdvisoryEffectivenessPlanning | null;
+  readonly reference_keys: readonly string[];
+  readonly human_review_question: string;
+}
 
 export interface CapaActionPlanAdvisorySuggestion {
   readonly suggestion_key: string;
@@ -35,6 +73,7 @@ export interface CapaActionPlanAdvisoryProposal {
   readonly advisory_summary: string;
   readonly completeness_linkage_concerns: readonly CapaActionPlanAdvisoryCompletenessConcern[];
   readonly action_improvements: readonly CapaActionPlanAdvisorySuggestion[];
+  readonly action_candidates: readonly CapaActionPlanAdvisoryActionCandidate[];
   readonly effectiveness_planning_improvements: readonly CapaActionPlanAdvisoryEffectivenessSuggestion[];
   readonly proposed_action_plan: CapaActionPlanContent | null;
 }

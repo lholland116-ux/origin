@@ -16,15 +16,21 @@ describe("S60 action-planning workspace UI", () => {
     expect(workspace).toContain("CapaActionPlanAdvisoryPanel");
     expect(advisory).toContain("AG-ACTION");
     expect(advisory).toContain("GOVERNED AI ADVISORY");
-    expect(advisory).toContain("No workspace adoption was performed");
+    expect(advisory).toContain("Adopt into Action Plan");
+    expect(advisory).toContain("Nothing was saved automatically");
+    expect(advisory).toContain("onAdoptCandidate");
+    expect(advisory).toContain("Adopt effectiveness planning");
     expect(advisory).not.toContain("Approve action plan");
     expect(advisory).not.toContain("Submit to S70");
   });
 
   it("covers durable editing, controlled targets, dependencies, effectiveness planning, and readiness", () => {
-    for (const text of ["loadActionPlanWorkspace", "saveActionPlanWorkspace", "expected_draft_revision", "Add action", "Remove action", "Corrective", "Preventive", "Correction", "Containment", "Assign to me", "Due date", "Linked authoritative targets", "Dependencies", "Effectiveness check required", "Effectiveness planning", "Ready for Action Plan Review", "Not ready for Action Plan Review", "Submit action plan for review", "createActionPlanSubmissionAttempt", "submitActionPlanSubmissionAttempt", "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT"]) expect(workspace).toContain(text);
+    for (const text of ["loadActionPlanWorkspace", "saveActionPlanWorkspace", "expected_draft_revision", "Add action", "Remove action", "Corrective", "Preventive", "Correction", "Containment", "Assign to me", "Due date", "Linked authoritative targets", "Dependencies", "Effectiveness check required", "Effectiveness planning", "Ready for Action Plan Review", "Not ready for Action Plan Review", "Submit action plan for review", "createActionPlanSubmissionAttempt", "submitActionPlanSubmissionAttempt", "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT", "createActionPlanItemFromAdvisoryCandidate", "UNSAVED local changes", "durable draft revision"]) expect(workspace).toContain(text);
     expect(workspace).not.toContain("Submit to S70");
     expect(workspace).not.toContain("Approve action plan");
     expect(workspace).not.toContain("deleteActionPlanWorkspace");
+    expect(workspace).toContain("items: [...plan.items, createActionPlanItemFromAdvisoryCandidate");
+    expect(workspace).toContain("source_reference === candidate.suggestion_key");
+    expect(workspace).toContain("effectiveness_check_required: false");
   });
 });
