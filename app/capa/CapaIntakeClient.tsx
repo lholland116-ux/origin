@@ -5284,6 +5284,7 @@ export default function CapaIntakeClient({
               recordVersion={createdCapa.recordVersion}
               currentUserId={currentUserId}
               targetOptions={actionPlanTargetOptions(createdCapa)}
+              returnContext={createdCapa.actionPlanReturnContext}
               onAuthoritativeRefresh={async () => {
                 await openExistingCase({
                   capaCaseId: createdCapa.capaCaseId,
@@ -5310,6 +5311,7 @@ export default function CapaIntakeClient({
               currentVersionId={createdCapa.currentVersionId}
               actionPlanSectionVersionId={createdCapa.actionPlanSectionVersionId}
               actionPlan={createdCapa.actionPlan}
+              reviewHistory={createdCapa.actionPlanReviewHistory}
               onAuthoritativeRefresh={async () => {
                 await openExistingCase({
                   capaCaseId: createdCapa.capaCaseId,

@@ -33,4 +33,16 @@ describe("S60 action-planning workspace UI", () => {
     expect(workspace).toContain("source_reference === candidate.suggestion_key");
     expect(workspace).toContain("effectiveness_check_required: false");
   });
+
+  it("presents returned-workspace rationale and a human-owned response without client cycle authority", () => {
+    expect(workspace).toContain("S70 · Return / Rework");
+    expect(workspace).toContain("Action Plan returned for rework");
+    expect(workspace).toContain("Reviewer Return rationale");
+    expect(workspace).toContain("Owner response");
+    expect(workspace).toContain("An owner response is required before resubmission.");
+    expect(workspace).toContain("action_plan_return_response: { response_narrative: responseNarrative }");
+    expect(workspace).toContain("returnContext !== undefined");
+    expect(workspace).not.toContain("return_transition_audit_event_id:");
+    expect(workspace).not.toContain("resubmitted_case_version_id:");
+  });
 });

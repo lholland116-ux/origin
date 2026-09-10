@@ -1,6 +1,9 @@
 import {
   validateCapaActionPlan,
 } from "../domain/capa-action-plan";
+import {
+  validateCapaActionPlanReviewReturnResponseDraft,
+} from "../domain/capa-action-plan-review-return-response";
 import type {
   CapaActionPlanWorkspaceDraft,
 } from "./capa-action-plan-workspace-draft-contract";
@@ -19,6 +22,7 @@ export const CAPA_ACTION_PLAN_WORKSPACE_DRAFT_VALIDATION_REASON_CODES = [
   "INVALID_WORKSPACE_DRAFT_RECORD_VERSION",
   "INVALID_WORKSPACE_DRAFT_REVISION",
   "INVALID_WORKSPACE_DRAFT_ACTION_PLAN",
+  "INVALID_WORKSPACE_DRAFT_RETURN_RESPONSE",
 ] as const;
 
 export type CapaActionPlanWorkspaceDraftValidationReasonCode =
@@ -43,6 +47,7 @@ const FIELDS = [
   "updated_by_user_id",
   "updated_at",
 ] as const;
+const RETURN_RESPONSE_FIELD = "action_plan_return_response" as const;
 
 function invalid(
   reason_code: CapaActionPlanWorkspaceDraftValidationReasonCode,
@@ -60,8 +65,10 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function exactFields(value: Record<string, unknown>): boolean {
-  return Object.keys(value).length === FIELDS.length &&
-    FIELDS.every((field) => Object.prototype.hasOwnProperty.call(value, field));
+  const hasResponse = Object.prototype.hasOwnProperty.call(value, RETURN_RESPONSE_FIELD);
+  const fields = hasResponse ? [...FIELDS, RETURN_RESPONSE_FIELD] : FIELDS;
+  return Object.keys(value).length === fields.length &&
+    fields.every((field) => Object.prototype.hasOwnProperty.call(value, field));
 }
 
 function uuid(value: unknown): value is string {
@@ -90,6 +97,19 @@ export function validateCapaActionPlanWorkspaceDraft(
   const actionPlan = validateCapaActionPlan(value.action_plan);
   if (actionPlan.status !== "valid") return invalid("INVALID_WORKSPACE_DRAFT_ACTION_PLAN", actionPlan.reason_code);
 
+  let returnResponse = undefined;
+  if (Object.prototype.hasOwnProperty.call(value, RETURN_RESPONSE_FIELD)) {
+    if (value.action_plan_return_response !== null) {
+      const response = validateCapaActionPlanReviewReturnResponseDraft(
+        value.action_plan_return_response,
+      );
+      if (response.status !== "valid") return invalid("INVALID_WORKSPACE_DRAFT_RETURN_RESPONSE");
+      returnResponse = response.value;
+    } else {
+      returnResponse = null;
+    }
+  }
+
   return Object.freeze({
     status: "valid",
     value: Object.freeze({
@@ -102,6 +122,7 @@ export function validateCapaActionPlanWorkspaceDraft(
       record_version: value.record_version,
       draft_revision: value.draft_revision,
       action_plan: actionPlan.value,
+      ...(returnResponse === undefined ? {} : { action_plan_return_response: returnResponse }),
       updated_by_user_id: value.updated_by_user_id as never,
       updated_at: value.updated_at as never,
     }),

@@ -10,6 +10,15 @@ const VERSION = "30000000-0000-4000-8000-000000000001";
 const CORRELATION = "40000000-0000-4000-8000-000000000001";
 const PLAN = { items: [], effectiveness_checks: [] };
 const WORKSPACE = { draft_revision: 2, case_version_id: VERSION, record_version: 4, action_plan: PLAN, updated_at: "2026-09-09T12:00:00.000Z" };
+const RETURN_RESPONSE = {
+  schema_version: "capa-action-plan-review-return-response-draft-1.0.0",
+  response_narrative: "The returned review comments were addressed.",
+  return_transition_audit_event_id: "50000000-0000-4000-8000-000000000001",
+  source_case_version_id: "30000000-0000-4000-8000-000000000002",
+  resulting_case_version_id: VERSION,
+  responded_by: { actor_type: "human", actor_id: "40000000-0000-4000-8000-000000000001" },
+  responded_at: "2026-09-09T12:00:00.000Z",
+};
 
 describe("S60 action-plan workspace browser client", () => {
   it("parses an absent load and hydrates a saved workspace", async () => {
@@ -23,6 +32,15 @@ describe("S60 action-plan workspace browser client", () => {
     expect(result).toMatchObject({ status: "saved", workspace: { draft_revision: 2 } });
     expect(JSON.parse(String(sent?.body))).toEqual({ expected_draft_revision: 2, action_plan: PLAN });
     expect(JSON.stringify(sent?.body)).not.toContain("organization_id");
+  });
+
+  it("round-trips a server-bound return response and sends only its editable narrative", async () => {
+    const sent: RequestInit[] = [];
+    const result = await loadActionPlanWorkspace(CASE, async (_url, init) => new Response(JSON.stringify({ workspace: { ...WORKSPACE, action_plan_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION }), { status: 200 }));
+    expect(result).toMatchObject({ status: "loaded", workspace: { action_plan_return_response: { editable: { response_narrative: RETURN_RESPONSE.response_narrative }, metadata: { return_transition_audit_event_id: RETURN_RESPONSE.return_transition_audit_event_id } } } });
+    const saved = await saveActionPlanWorkspace(CASE, { expected_draft_revision: 2, action_plan: PLAN, action_plan_return_response: { response_narrative: RETURN_RESPONSE.response_narrative } }, async (_url, init) => { if (init !== undefined) sent.push(init); return new Response(JSON.stringify({ workspace: { ...WORKSPACE, action_plan_return_response: RETURN_RESPONSE }, correlation_id: CORRELATION }), { status: 200 }); });
+    expect(saved).toMatchObject({ status: "saved", workspace: { action_plan_return_response: { editable: { response_narrative: RETURN_RESPONSE.response_narrative } } } });
+    expect(JSON.parse(String(sent[0]?.body))).toEqual({ expected_draft_revision: 2, action_plan: PLAN, action_plan_return_response: { response_narrative: RETURN_RESPONSE.response_narrative } });
   });
 
   it("maps controlled failures and does not retry a stale write", async () => {

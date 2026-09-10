@@ -228,6 +228,7 @@ import { SupabaseCapaActionPlanReviewAdvisoryOutputRepository } from "../../data
 import { SupabaseCapaActionPlanReviewDecisionRepository } from "../../database/supabase/supabase-capa-action-plan-review-decision-repository";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
+import { createCapaActionPlanReturnCycleResolver } from "./capa-action-plan-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import { SupabaseCapaActionPlanWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-action-plan-workspace-draft-repository";
 import { createCapaActionPlanWorkspaceDraftService } from "./capa-action-plan-workspace-draft-service";
@@ -899,6 +900,10 @@ export function createCapaProductionRuntime(
   const returnCycleResolver = createCapaRootCauseReturnCycleResolver({
     audit_repository: auditRepository,
   });
+  const actionPlanReturnCycleResolver = createCapaActionPlanReturnCycleResolver({
+    capa_repository: capaRepository,
+    review_decision_repository: actionPlanReviewDecisionRepository,
+  });
 
   const creationIdempotencyRepository =
     new SupabaseCapaCreationIdempotencyRepository();
@@ -1075,6 +1080,7 @@ export function createCapaProductionRuntime(
 
   const submitActionPlanDependencies: SubmitCapaActionPlanDependencies = {
     ...submitIntakeDependencies,
+    return_cycle_resolver: actionPlanReturnCycleResolver,
     workspace_repository: actionPlanWorkspaceDraftRepository,
     configuration: {
       ...submitIntakeDependencies.configuration,
@@ -1581,6 +1587,7 @@ export function createCapaProductionRuntime(
         workspace_repository: actionPlanWorkspaceDraftRepository,
         transaction_manager: transactionManager,
         authorization_policy: authorizationPolicy,
+        return_cycle_resolver: actionPlanReturnCycleResolver,
         now,
       });
     },

@@ -92,6 +92,11 @@ describe("integrated S70 action-plan review qualification", () => {
       const readBack = await handleCapaGet(new Request(`https://example.test/api/capa?id=${CASE}`), test.dependencies);
       const readBody = await readBack.json();
       expect(readBody.capa).toMatchObject({ status: "S60", record_version: 8, current_version_id: body.capa.resulting_case_version_id });
+      expect(readBody.capa.action_plan_return_context).toMatchObject({
+        rationale: "Revise before implementation.",
+        source_case_version_id: SOURCE,
+        resulting_case_version_id: body.capa.resulting_case_version_id,
+      });
       expect(readBody.capa.current_version.section_version_ids).toContain(ACTION_PLAN);
       expect(await test.database.findActionPlanWorkspaceDraft(USER, CASE)).toEqual(before);
       expect(test.database.exportSnapshot().action_plan_review_decisions).toHaveLength(1);

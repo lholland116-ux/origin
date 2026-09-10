@@ -50,6 +50,7 @@ function projection(workspace: NonNullable<Extract<CapaActionPlanWorkspaceDraftS
     case_version_id: workspace.case_version_id,
     record_version: workspace.record_version,
     action_plan: workspace.action_plan,
+    action_plan_return_response: workspace.action_plan_return_response ?? null,
     updated_at: workspace.updated_at,
   };
 }

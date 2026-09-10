@@ -54,6 +54,39 @@ describe("S60 action-plan workspace application service", () => {
     await expect(updated.service.save({ capa_case_id: CASE, body: { ...body, expected_draft_revision: 1 }, request_trace: trace })).resolves.toMatchObject({ status: "saved", workspace: { draft_revision: 2 } });
   });
 
+  it("server-binds a return response to the active S70 cycle without changing the action plan", async () => {
+    const base = setup();
+    const cycle = {
+      return_transition_audit_event_id: "50000000-0000-4000-8000-000000000001",
+      source_case_version_id: "30000000-0000-4000-8000-000000000002",
+      resulting_case_version_id: VERSION,
+    };
+    const service = createCapaActionPlanWorkspaceDraftService({
+      ...base.dependencies,
+      return_cycle_resolver: { resolve: vi.fn(async () => ({ status: "active", cycle })) },
+    } as any);
+    const actionPlan = { items: [], effectiveness_checks: [] };
+    const result = await service.save({
+      capa_case_id: CASE,
+      body: { expected_draft_revision: null, action_plan: actionPlan, action_plan_return_response: { response_narrative: "The returned review comments were addressed." } },
+      request_trace: trace,
+    });
+    expect(result).toMatchObject({
+      status: "saved",
+      workspace: {
+        action_plan: actionPlan,
+        action_plan_return_response: {
+          response_narrative: "The returned review comments were addressed.",
+          return_transition_audit_event_id: cycle.return_transition_audit_event_id,
+          source_case_version_id: cycle.source_case_version_id,
+          resulting_case_version_id: cycle.resulting_case_version_id,
+          responded_by: { actor_type: "human", actor_id: USER },
+          responded_at: NOW.toISOString(),
+        },
+      },
+    });
+  });
+
   it("rejects client-owned envelope fields and invalid workflow state before persistence", async () => {
     const test = setup();
     await expect(test.service.save({ capa_case_id: CASE, body: { ...body, organization_id: ORG }, request_trace: trace })).resolves.toMatchObject({ status: "validation_failed", reason_code: "INVALID_WORKSPACE_REQUEST_FIELDS" });

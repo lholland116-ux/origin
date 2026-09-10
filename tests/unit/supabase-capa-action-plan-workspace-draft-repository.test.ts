@@ -15,6 +15,16 @@ function draft(revision = 1): any {
   return { schema_version: CAPA_ACTION_PLAN_WORKSPACE_DRAFT_SCHEMA_VERSION, trust: "untrusted_human_draft", workflow_state: "S60", organization_id: ORG, capa_case_id: CASE, case_version_id: VERSION, record_version: 4, draft_revision: revision, action_plan: { items: [], effectiveness_checks: [] }, updated_by_user_id: USER, updated_at: AT };
 }
 
+const returnResponse = {
+  schema_version: "capa-action-plan-review-return-response-draft-1.0.0",
+  response_narrative: "The returned review comments were addressed.",
+  return_transition_audit_event_id: "50000000-0000-4000-8000-000000000001",
+  source_case_version_id: "30000000-0000-4000-8000-000000000002",
+  resulting_case_version_id: VERSION,
+  responded_by: { actor_type: "human", actor_id: USER },
+  responded_at: AT,
+};
+
 function harness(...responses: unknown[]) {
   const queue = [...responses];
   const calls: any[] = [];
@@ -33,6 +43,8 @@ describe("Supabase S60 action-plan workspace draft repository", () => {
     await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(valid.sql as never).findDraft(ORG as never, CASE as never)).resolves.toMatchObject({ draft_revision: 1 });
     const malformed = harness([{ ...draft(), workflow_state: "S50" }]);
     await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(malformed.sql as never).findDraft(ORG as never, CASE as never)).rejects.toThrow(SupabaseCapaActionPlanWorkspaceDraftRepositoryError);
+    const returned = harness([{ ...draft(), action_plan_return_response: returnResponse }]);
+    await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(returned.sql as never).findDraft(ORG as never, CASE as never)).resolves.toMatchObject({ action_plan_return_response: returnResponse });
   });
 
   it("reads the current workspace with a transaction-owned FOR UPDATE lock", async () => {
@@ -48,6 +60,7 @@ describe("Supabase S60 action-plan workspace draft repository", () => {
     const created = harness([draft()]);
     await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(created.sql as never).saveDraft(created.transaction, { draft: draft(), expected_draft_revision: null })).resolves.toMatchObject({ status: "saved" });
     expect(created.calls[0].text).toMatch(/insert into public\.capa_action_plan_workspace_drafts[\s\S]*on conflict/);
+    expect(created.calls[0].text).toMatch(/action_plan_return_response/);
     const updated = harness([draft(2)]);
     await expect(new SupabaseCapaActionPlanWorkspaceDraftRepository(updated.sql as never).saveDraft(updated.transaction, { draft: draft(2), expected_draft_revision: 1 })).resolves.toMatchObject({ status: "saved" });
     expect(updated.calls[0].text).toMatch(/update public\.capa_action_plan_workspace_drafts[\s\S]*draft_revision = \? returning \*/);

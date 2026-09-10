@@ -69,4 +69,13 @@ describe("S70 action-plan review panel", () => {
     expect(panel).not.toContain("recommended_disposition === \"approve\" &&");
     expect(panel).not.toContain("recommended_disposition === \"return\" &&");
   });
+
+  it("presents completed Return/Response cycles as immutable, separate history", () => {
+    expect(panel).toContain("Previous Return / Response cycles");
+    expect(panel).toContain("Reviewer Return rationale");
+    expect(panel).toContain("Owner response · immutable controlled history");
+    expect(panel).toContain("Return / Response cycle {index + 1}");
+    expect(panel).toContain("reviewHistory.map");
+    expect(panel).not.toContain("setReviewHistory");
+  });
 });

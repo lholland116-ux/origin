@@ -6,6 +6,8 @@ import type { CapaActionPlanWorkspaceDraftRepository } from "../../database/repo
 import type { TransactionManager } from "../../database/transactions";
 import type { CapaRequestContext } from "../../security/supabase-capa-context";
 import type { CapaActionPlanWorkspaceDraft } from "./capa-action-plan-workspace-draft-contract";
+import type { CapaActionPlanReviewReturnResponseDraft } from "../domain/capa-action-plan-review-return-response";
+import type { CapaActionPlanReturnCycle, CapaActionPlanReturnCycleResolver } from "./capa-action-plan-return-cycle-resolver";
 import {
   CAPA_ACTION_PLAN_WORKSPACE_DRAFT_SCHEMA_VERSION,
 } from "./capa-action-plan-workspace-draft-contract";
@@ -54,6 +56,7 @@ export interface CapaActionPlanWorkspaceDraftServiceDependencies {
   readonly workspace_repository: CapaActionPlanWorkspaceDraftRepository;
   readonly transaction_manager: TransactionManager;
   readonly authorization_policy: CapaAuthorizationPolicy;
+  readonly return_cycle_resolver?: CapaActionPlanReturnCycleResolver;
   readonly now: () => Date;
 }
 
@@ -138,6 +141,7 @@ function constructDraft(
   context: CapaRequestContext,
   current: { readonly capa_case: CapaCase; readonly case_version: CapaCaseVersion },
   now: Date,
+  returnResponse: CapaActionPlanReviewReturnResponseDraft | null,
 ): CapaActionPlanWorkspaceDraft {
   const draft = {
     schema_version: CAPA_ACTION_PLAN_WORKSPACE_DRAFT_SCHEMA_VERSION,
@@ -149,12 +153,80 @@ function constructDraft(
     record_version: current.case_version.version_number,
     draft_revision: request.expected_draft_revision === null ? 1 : request.expected_draft_revision + 1,
     action_plan: request.action_plan,
+    action_plan_return_response: returnResponse,
     updated_by_user_id: context.owner_user_id,
     updated_at: iso(now),
   };
   const validated = validateCapaActionPlanWorkspaceDraft(draft);
   if (validated.status !== "valid") throw new CapaActionPlanWorkspaceDraftIntegrityError(`The constructed workspace draft is invalid: ${validated.reason_code}.`);
   return validated.value;
+}
+
+async function activeReturnCycle(
+  dependencies: CapaActionPlanWorkspaceDraftServiceDependencies,
+  capaCaseId: CapaCaseId,
+): Promise<CapaActionPlanReturnCycle | null> {
+  if (dependencies.return_cycle_resolver === undefined) return null;
+  const resolution = await dependencies.return_cycle_resolver.resolve({
+    organization_id: dependencies.request_context.tenant.organization_id,
+    capa_case_id: capaCaseId,
+  });
+  if (resolution.status === "invalid") {
+    throw new CapaActionPlanWorkspaceDraftIntegrityError("The action-plan return-cycle provenance is invalid.");
+  }
+  return resolution.status === "active" ? resolution.cycle : null;
+}
+
+function sameCycle(
+  response: CapaActionPlanReviewReturnResponseDraft,
+  cycle: CapaActionPlanReturnCycle,
+): boolean {
+  return response.return_transition_audit_event_id === cycle.return_transition_audit_event_id &&
+    response.source_case_version_id === cycle.source_case_version_id &&
+    response.resulting_case_version_id === cycle.resulting_case_version_id;
+}
+
+function responseForCycle(
+  request: CapaActionPlanWorkspaceDraftSaveRequest,
+  previous: CapaActionPlanWorkspaceDraft | null,
+  cycle: CapaActionPlanReturnCycle | null,
+  context: CapaRequestContext,
+  now: Date,
+): CapaActionPlanReviewReturnResponseDraft | null | "no_active_cycle" {
+  const requested = request.action_plan_return_response;
+  if (requested === undefined) return previous?.action_plan_return_response ?? null;
+  if (requested === null) return null;
+  if (cycle === null) return "no_active_cycle";
+  const existing = previous?.action_plan_return_response;
+  if (
+    existing !== undefined &&
+    existing !== null &&
+    sameCycle(existing, cycle) &&
+    existing.response_narrative === requested.response_narrative
+  ) return existing;
+  const principal = context.authentication.principal;
+  if (principal.principal_type !== "human") {
+    throw new CapaActionPlanWorkspaceDraftIntegrityError("A return response requires a trusted human actor.");
+  }
+  return {
+    schema_version: "capa-action-plan-review-return-response-draft-1.0.0",
+    response_narrative: requested.response_narrative,
+    return_transition_audit_event_id: cycle.return_transition_audit_event_id,
+    source_case_version_id: cycle.source_case_version_id,
+    resulting_case_version_id: cycle.resulting_case_version_id,
+    responded_by: { actor_type: "human", actor_id: principal.user_id },
+    responded_at: iso(now),
+  };
+}
+
+function responseVisibleForCycle(
+  workspace: CapaActionPlanWorkspaceDraft | null,
+  cycle: CapaActionPlanReturnCycle | null,
+): CapaActionPlanWorkspaceDraft | null {
+  if (workspace === null) return null;
+  const response = workspace.action_plan_return_response;
+  if (response === undefined || response === null || (cycle !== null && sameCycle(response, cycle))) return workspace;
+  return { ...workspace, action_plan_return_response: null };
 }
 
 export function createCapaActionPlanWorkspaceDraftService(
@@ -167,13 +239,14 @@ export function createCapaActionPlanWorkspaceDraftService(
       if (current.capa_case.status !== STATE) return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };
       const authorization = await authorize(dependencies, READ_OPERATION, READ_PURPOSE, current);
       if (authorization.status === "denied") return { status: "authorization_denied", reason_code: authorization.reason_code, policy_version: authorization.policy_version };
+      const cycle = await activeReturnCycle(dependencies, command.capa_case_id);
       return {
         status: "loaded",
-        workspace: validatedWorkspace(
+        workspace: responseVisibleForCycle(validatedWorkspace(
           await dependencies.workspace_repository.findDraft(dependencies.request_context.tenant.organization_id, command.capa_case_id),
           dependencies.request_context.tenant.organization_id,
           command.capa_case_id,
-        ),
+        ), cycle),
       };
     },
     async save(command) {
@@ -184,12 +257,17 @@ export function createCapaActionPlanWorkspaceDraftService(
       if (current.capa_case.status !== STATE) return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };
       const authorization = await authorize(dependencies, EDIT_OPERATION, EDIT_PURPOSE, current);
       if (authorization.status === "denied") return { status: "authorization_denied", reason_code: authorization.reason_code, policy_version: authorization.policy_version };
-      validatedWorkspace(
+      const cycle = await activeReturnCycle(dependencies, command.capa_case_id);
+      const previous = validatedWorkspace(
         await dependencies.workspace_repository.findDraft(dependencies.request_context.tenant.organization_id, command.capa_case_id),
         dependencies.request_context.tenant.organization_id,
         command.capa_case_id,
       );
-      const draft = constructDraft(request.value, dependencies.request_context, current, dependencies.now());
+      const response = responseForCycle(request.value, previous, cycle, dependencies.request_context, dependencies.now());
+      if (response === "no_active_cycle") {
+        return { status: "validation_failed", reason_code: "INVALID_WORKSPACE_REQUEST_RETURN_RESPONSE", detail_reason_code: "NO_ACTIVE_ACTION_PLAN_RETURN_CYCLE" };
+      }
+      const draft = constructDraft(request.value, dependencies.request_context, current, dependencies.now(), response);
       const result = await dependencies.transaction_manager.runInTransaction(command.request_trace, async (transaction) => dependencies.workspace_repository.saveDraft(transaction, {
         draft,
         expected_draft_revision: request.value.expected_draft_revision,
@@ -198,7 +276,7 @@ export function createCapaActionPlanWorkspaceDraftService(
         expected_workflow_state: current.capa_case.status,
       }));
       if (result.status === "case_changed") return { status: "case_changed", reason_code: "WORKFLOW_MUTATION_DETECTED" };
-      return result.status === "concurrency_conflict" ? result : { status: "saved", workspace: validatedWorkspace(result.draft, dependencies.request_context.tenant.organization_id, command.capa_case_id)! };
+      return result.status === "concurrency_conflict" ? result : { status: "saved", workspace: responseVisibleForCycle(validatedWorkspace(result.draft, dependencies.request_context.tenant.organization_id, command.capa_case_id), cycle)! };
     },
   };
 }

@@ -1,5 +1,8 @@
 import type { CapaActionPlanContent } from "../domain/capa-action-plan";
 import type {
+  CapaActionPlanReviewReturnResponseDraft,
+} from "../domain/capa-action-plan-review-return-response";
+import type {
   CapaCaseId,
   CapaCaseVersionId,
   IsoDateTime,
@@ -25,6 +28,8 @@ export interface CapaActionPlanWorkspaceDraft {
   readonly record_version: number;
   readonly draft_revision: number;
   readonly action_plan: CapaActionPlanContent;
+  /** Null for first-entry S60 workspaces or before a return response is saved. */
+  readonly action_plan_return_response?: CapaActionPlanReviewReturnResponseDraft | null;
   readonly updated_by_user_id: UserId;
   readonly updated_at: IsoDateTime;
 }

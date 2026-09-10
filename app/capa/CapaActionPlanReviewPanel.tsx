@@ -17,6 +17,7 @@ import type {
   CapaActionPlanItem,
 } from "../../lib/capa/domain/capa-action-plan";
 import type { CapaActionPlanReviewDecision } from "../../lib/capa/domain/capa-action-plan-review-decision";
+import type { CapaActionPlanReviewHistoryCycle } from "./capa-existing-case-client";
 
 function display(value: string | null, fallback = "Not supplied") {
   return value === null || value.trim().length === 0 ? fallback : value;
@@ -128,6 +129,7 @@ export default function CapaActionPlanReviewPanel({
   currentVersionId,
   actionPlanSectionVersionId,
   actionPlan,
+  reviewHistory,
   onAuthoritativeRefresh,
 }: {
   readonly caseId: string;
@@ -136,6 +138,7 @@ export default function CapaActionPlanReviewPanel({
   readonly currentVersionId: string;
   readonly actionPlanSectionVersionId: string;
   readonly actionPlan: CapaActionPlanContent;
+  readonly reviewHistory?: readonly CapaActionPlanReviewHistoryCycle[];
   readonly onAuthoritativeRefresh: () => Promise<void>;
 }) {
   const [rationale, setRationale] = useState("");
@@ -248,6 +251,26 @@ export default function CapaActionPlanReviewPanel({
         <p className="mt-2 break-all font-mono">Case version: {currentVersionId}</p>
         <p className="mt-1 break-all font-mono">Action-plan section: {actionPlanSectionVersionId}</p>
       </div>
+
+      {reviewHistory !== undefined && reviewHistory.length > 0 ? <section aria-labelledby="action-plan-review-history-heading" className="mt-6 rounded-2xl border border-zinc-700 bg-zinc-950/45 p-5">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Controlled review history</p>
+        <h4 id="action-plan-review-history-heading" className="mt-2 text-xl font-semibold text-zinc-100">Previous Return / Response cycles</h4>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">Completed cycles are read-only. Each reviewer rationale and owner response below comes from authoritative controlled history.</p>
+        <div className="mt-5 space-y-4">
+          {reviewHistory.map((cycle, index) => <article key={cycle.returnContext.returnTransitionAuditEventId} className="rounded-xl border border-zinc-800 p-4">
+            <h5 className="font-semibold text-zinc-100">Return / Response cycle {index + 1}</h5>
+            <h6 className="mt-4 text-sm font-semibold text-zinc-300">Reviewer Return rationale</h6>
+            <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-amber-400/50 pl-3 text-sm leading-6 text-amber-100">{cycle.returnContext.rationale}</blockquote>
+            <h6 className="mt-4 text-sm font-semibold text-zinc-300">Owner response · immutable controlled history</h6>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-200">{cycle.ownerResponse.content.responseNarrative}</p>
+            <dl className="mt-4 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
+              <div><dt>Returned at</dt><dd className="mt-1 text-zinc-400">{cycle.returnContext.returnedAt}</dd></div>
+              <div><dt>Responded at</dt><dd className="mt-1 text-zinc-400">{cycle.ownerResponse.content.respondedAt}</dd></div>
+              <div className="sm:col-span-2"><dt>Resubmitted case version</dt><dd className="mt-1 break-all font-mono text-zinc-400">{cycle.resubmissionCaseVersionId}</dd></div>
+            </dl>
+          </article>)}
+        </div>
+      </section> : null}
 
       <div className="mt-6 space-y-4">
         {actionPlan.items.map((item) => <ActionPlanItemView key={item.item_id} item={item} />)}

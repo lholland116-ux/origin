@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { submitCapaActionPlan } from "../../lib/capa/application/submit-capa-action-plan";
 import { CAPA_ACTION_PLAN_SCHEMA_VERSION, CAPA_ACTION_PLAN_SECTION_TYPE } from "../../lib/capa/domain/capa-action-plan";
+import { CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION, CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SECTION_TYPE } from "../../lib/capa/domain/capa-action-plan-review-return-response";
 
 const ORG = "20000000-0000-4000-8000-000000000001";
 const USER = "10000000-0000-4000-8000-000000000001";
@@ -11,7 +12,10 @@ const OTHER_SECTION = "70000000-0000-4000-8000-000000000001";
 const ACTION_SECTION = "70000000-0000-4000-8000-000000000002";
 const ROOT_SECTION = "70000000-0000-4000-8000-000000000003";
 const LEDGER_SECTION = "70000000-0000-4000-8000-000000000004";
+const RETURN_RESPONSE_SECTION = "70000000-0000-4000-8000-000000000005";
+const RETURN_SOURCE = "40000000-0000-4000-8000-000000000003";
 const AUDIT = "80000000-0000-4000-8000-000000000001";
+const RETURN_AUDIT = "80000000-0000-4000-8000-000000000002";
 const NOW = "2026-09-09T12:00:00.000Z";
 
 const humanProvenance = { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null };
@@ -43,6 +47,9 @@ function capaCase(overrides: Record<string, unknown> = {}) {
 function workspace(overrides: Record<string, unknown> = {}) {
   return { schema_version: "capa-action-plan-workspace-draft-1.0.0", trust: "untrusted_human_draft", workflow_state: "S60", organization_id: ORG, capa_case_id: CASE, case_version_id: SOURCE, record_version: 4, draft_revision: 1, action_plan: actionPlan, updated_by_user_id: USER, updated_at: NOW, ...overrides };
 }
+function returnResponseDraft(overrides: Record<string, unknown> = {}) {
+  return { schema_version: "capa-action-plan-review-return-response-draft-1.0.0", response_narrative: "The returned action-plan comments were addressed.", return_transition_audit_event_id: RETURN_AUDIT, source_case_version_id: RETURN_SOURCE, resulting_case_version_id: SOURCE, responded_by: { actor_type: "human", actor_id: USER }, responded_at: NOW, ...overrides };
+}
 function planWithTarget(target_type: string, target_id: string) {
   return { ...actionPlan, items: [{ ...actionPlan.items[0], linked_targets: [{ target_type, target_id, rationale: "Addresses the authoritative target." }] }] };
 }
@@ -50,14 +57,16 @@ function command(overrides: Record<string, unknown> = {}) {
   return { authentication: { principal: { principal_type: "human", user_id: USER }, session_id: "90000000-0000-4000-8000-000000000001", authentication_method: "SUPABASE_SESSION", assurance_level: "SINGLE_FACTOR", authenticated_at: NOW, expires_at: "2026-09-10T12:00:00.000Z" }, tenant: { organization_id: ORG, access_grant_id: "grant", access_path: "ORGANIZATION", authorization_policy_version: "policy-1", resolved_at: NOW, role_assignments: [] }, capa_case_id: CASE, expected_record_version: 4, expected_current_version_id: SOURCE, request_trace: { request_id: "50000000-0000-4000-8000-000000000001", correlation_id: "60000000-0000-4000-8000-000000000001", idempotency_key: "submit-action-plan-1" }, body: { expected_record_version: 4, expected_current_version_id: SOURCE }, ...overrides } as any;
 }
 
-function harness(options: { plan?: unknown; workspaceOverrides?: Record<string, unknown>; caseOverrides?: Record<string, unknown>; sourceOverrides?: Record<string, unknown>; policy?: unknown; principalType?: string; claim?: unknown; enforceSingleConnection?: boolean; } = {}) {
+function harness(options: { plan?: unknown; workspaceOverrides?: Record<string, unknown>; caseOverrides?: Record<string, unknown>; sourceOverrides?: Record<string, unknown>; policy?: unknown; principalType?: string; claim?: unknown; enforceSingleConnection?: boolean; returnCycle?: unknown; failReturnResponseMaterialization?: boolean; } = {}) {
   const currentCase: any = capaCase(options.caseOverrides);
   const currentSource: any = sourceVersion(options.sourceOverrides);
+  const sourceSectionIds = (options.sourceOverrides?.section_version_ids as readonly string[] | undefined) ?? [];
   const sections = new Map<string, any>([
     [OTHER_SECTION, { organization_id: ORG, capa_case_id: CASE, section_version_id: OTHER_SECTION, section_type: "CAPA.INVESTIGATION_PLAN", version_number: 1, schema_version: "plan-1", content: {}, change_reason: "prior", effective_at: NOW, created_at: NOW, created_by: { actor_type: "human", actor_id: USER } }],
     [ROOT_SECTION, { organization_id: ORG, capa_case_id: CASE, section_version_id: ROOT_SECTION, section_type: "CAPA.ROOT_CAUSE_PACKAGE", version_number: 1, schema_version: "capa-root-cause-package-1.0.0", content: authoritativeRootCausePackage, change_reason: "prior", effective_at: NOW, created_at: NOW, created_by: { actor_type: "human", actor_id: USER } }],
     [LEDGER_SECTION, { organization_id: ORG, capa_case_id: CASE, section_version_id: LEDGER_SECTION, section_type: "CAPA.EVIDENCE_ASSUMPTION_LEDGER", version_number: 1, schema_version: "capa-evidence-assumption-ledger-1.0.0", content: authoritativeLedger, change_reason: "prior", effective_at: NOW, created_at: NOW, created_by: { actor_type: "human", actor_id: USER } }],
-  ]);
+    ...(sourceSectionIds.includes(RETURN_RESPONSE_SECTION) ? [[RETURN_RESPONSE_SECTION, { organization_id: ORG, capa_case_id: CASE, section_version_id: RETURN_RESPONSE_SECTION, section_type: CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SECTION_TYPE, version_number: 1, schema_version: CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION, content: { ...returnResponseDraft(), schema_version: CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION, resubmitted_case_version_id: NEXT }, change_reason: "prior", effective_at: NOW, created_at: NOW, created_by: { actor_type: "human", actor_id: USER } }]] : []),
+  ] as any);
   const state: { operation: any; audit: any; next: any } = { operation: null, audit: null, next: null };
   const inserts: any[] = [];
   let transactionCallbackActive = false;
@@ -69,7 +78,7 @@ function harness(options: { plan?: unknown; workspaceOverrides?: Record<string, 
     findCaseById: vi.fn(async () => { assertBaseRepositoryReadOutsideTransaction(); return { ...currentCase }; }),
     findCaseVersionById: vi.fn(async (_org: string, _case: string, id: string) => { assertBaseRepositoryReadOutsideTransaction(); return id === SOURCE ? currentSource : state.next; }),
     findSectionVersionById: vi.fn(async (_org: string, _case: string, id: string) => { assertBaseRepositoryReadOutsideTransaction(); return sections.get(id) ?? null; }),
-    insertSectionVersion: vi.fn(async (_transaction: unknown, section: any) => { sections.set(section.section_version_id, section); inserts.push(section); }),
+    insertSectionVersion: vi.fn(async (_transaction: unknown, section: any) => { if (options.failReturnResponseMaterialization && section.section_type === CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SECTION_TYPE) throw new Error("materialization failed"); sections.set(section.section_version_id, section); inserts.push(section); }),
     insertCaseVersion: vi.fn(async (_transaction: unknown, version: any) => { state.next = version; inserts.push(version); }),
     advanceCurrentVersion: vi.fn(async () => { const updated = { ...currentCase, current_version_id: NEXT, status: "S70", record_version: 5 }; Object.assign(currentCase, updated); return { status: "updated", capa_case: updated }; }),
   };
@@ -89,7 +98,8 @@ function harness(options: { plan?: unknown; workspaceOverrides?: Record<string, 
     workspace_repository: { findDraft: vi.fn(async () => workspace({ ...(options.workspaceOverrides ?? {}), ...(options.plan === undefined ? {} : { action_plan: options.plan }) })), findDraftForUpdate: vi.fn(async () => workspace({ ...(options.workspaceOverrides ?? {}), ...(options.plan === undefined ? {} : { action_plan: options.plan }) })) },
     workflow_idempotency_repository: workflow,
     authorization_policy: policy,
-    id_generator: { generateCaseVersionId: () => NEXT, generateSectionVersionId: () => ACTION_SECTION, generateAuditEventId: () => AUDIT },
+    return_cycle_resolver: { resolve: vi.fn(async () => options.returnCycle === undefined ? { status: "no_active_return_cycle" } : { status: "active", cycle: options.returnCycle }) },
+    id_generator: { generateCaseVersionId: () => NEXT, generateSectionVersionId: (() => { let count = 0; return () => ++count === 1 ? ACTION_SECTION : RETURN_RESPONSE_SECTION; })(), generateAuditEventId: () => AUDIT },
     clock: { now: () => new Date(NOW) },
     configuration: { workflow_version: "workflow-1", audit_schema_version: "audit-1", authorization_purpose: "CAPA_ACTION_PLAN_SUBMISSION" },
   };
@@ -116,6 +126,44 @@ describe("controlled human S60 action-plan submission", () => {
     expect(test.dependencies.workspace_repository.findDraft).not.toHaveBeenCalled();
     expect(test.inserts[0]).toMatchObject({ content: actionPlanRevision4 });
     expect(test.state.audit).toMatchObject({ metadata: { workspace_draft_revision: 4 } });
+  });
+
+  it("keeps first-entry S60 submission backward compatible without a return response", async () => {
+    await expect(submitCapaActionPlan(harness().dependencies, harness().request)).resolves.toMatchObject({ status: "submitted" });
+  });
+
+  it.each([
+    ["null", null],
+    ["blank", returnResponseDraft({ response_narrative: " " })],
+    ["malformed", { response_narrative: "missing server envelope" }],
+  ])("rejects a returned S60 submission with a %s response", async (_label, response) => {
+    const test = harness({ returnCycle: { return_transition_audit_event_id: RETURN_AUDIT, source_case_version_id: RETURN_SOURCE, resulting_case_version_id: SOURCE }, workspaceOverrides: { action_plan_return_response: response } });
+    await expect(submitCapaActionPlan(test.dependencies, test.request)).resolves.toMatchObject({ status: "validation_failed" });
+    expect(test.repository.advanceCurrentVersion).not.toHaveBeenCalled();
+  });
+
+  it("rejects a response bound to a stale or wrong return cycle", async () => {
+    const test = harness({ returnCycle: { return_transition_audit_event_id: RETURN_AUDIT, source_case_version_id: RETURN_SOURCE, resulting_case_version_id: SOURCE }, workspaceOverrides: { action_plan_return_response: returnResponseDraft({ return_transition_audit_event_id: AUDIT }) } });
+    await expect(submitCapaActionPlan(test.dependencies, test.request)).resolves.toEqual({ status: "validation_failed", reason_code: "INVALID_ACTION_PLAN_WORKSPACE", detail_reason_code: "ACTION_PLAN_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT" });
+    expect(test.inserts).toHaveLength(0);
+  });
+
+  it("materializes a valid response as immutable history without reviewer rationale", async () => {
+    const cycle = { return_transition_audit_event_id: RETURN_AUDIT, source_case_version_id: RETURN_SOURCE, resulting_case_version_id: SOURCE };
+    const test = harness({ returnCycle: cycle, sourceOverrides: { section_version_ids: [OTHER_SECTION, ROOT_SECTION, LEDGER_SECTION, RETURN_RESPONSE_SECTION] }, workspaceOverrides: { action_plan_return_response: returnResponseDraft(cycle) } });
+    const result = await submitCapaActionPlan(test.dependencies, test.request);
+    expect(result).toMatchObject({ status: "submitted", action_plan_review_return_response_section_version: { section_type: CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SECTION_TYPE, schema_version: CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION, content: { response_narrative: "The returned action-plan comments were addressed.", return_transition_audit_event_id: RETURN_AUDIT, source_case_version_id: RETURN_SOURCE, resulting_case_version_id: SOURCE } } });
+    const materialized = test.inserts.find((value) => value.section_type === CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SECTION_TYPE);
+    expect(materialized.content).not.toHaveProperty("rationale");
+    expect(test.state.audit.metadata).toMatchObject({ action_plan_review_return_response_section_version_id: RETURN_RESPONSE_SECTION });
+    expect(test.state.next.section_version_ids).toContain(RETURN_RESPONSE_SECTION);
+  });
+
+  it("does not transition when immutable response materialization fails", async () => {
+    const test = harness({ returnCycle: { return_transition_audit_event_id: RETURN_AUDIT, source_case_version_id: RETURN_SOURCE, resulting_case_version_id: SOURCE }, workspaceOverrides: { action_plan_return_response: returnResponseDraft() }, failReturnResponseMaterialization: true });
+    await expect(submitCapaActionPlan(test.dependencies, test.request)).rejects.toThrow("materialization failed");
+    expect(test.repository.advanceCurrentVersion).not.toHaveBeenCalled();
+    expect(test.state.audit).toBeNull();
   });
 
   it.each([

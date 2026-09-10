@@ -15,6 +15,15 @@ const CASE = "20000000-0000-4000-8000-000000000001";
 const VERSION = "30000000-0000-4000-8000-000000000001";
 const USER = "40000000-0000-4000-8000-000000000001";
 const AT = "2026-09-09T12:00:00.000Z";
+const RETURN_RESPONSE = {
+  schema_version: "capa-action-plan-review-return-response-draft-1.0.0",
+  response_narrative: "The returned action plan comments were addressed.",
+  return_transition_audit_event_id: "50000000-0000-4000-8000-000000000001",
+  source_case_version_id: VERSION,
+  resulting_case_version_id: "30000000-0000-4000-8000-000000000002",
+  responded_by: { actor_type: "human", actor_id: USER },
+  responded_at: AT,
+};
 
 function actionPlan() {
   return { items: [], effectiveness_checks: [] };
@@ -79,6 +88,16 @@ describe("S60 action-plan workspace contract and persistence", () => {
     }
     expect(validateCapaActionPlanWorkspaceDraftSaveRequest({ expected_draft_revision: null, action_plan: actionPlan(), organization_id: ORG })).toMatchObject({ status: "invalid", reason_code: "INVALID_WORKSPACE_REQUEST_FIELDS" });
     expect(validateCapaActionPlanWorkspaceDraftSaveRequest({ expected_draft_revision: null, action_plan: { items: {}, effectiveness_checks: [] } })).toEqual({ status: "invalid", reason_code: "INVALID_WORKSPACE_REQUEST_ACTION_PLAN", detail_reason_code: "INVALID_ACTION_PLAN_ITEMS" });
+    expect(validateCapaActionPlanWorkspaceDraftSaveRequest({ expected_draft_revision: null, action_plan: actionPlan(), action_plan_return_response: { response_narrative: "The return was addressed." } })).toMatchObject({ status: "valid" });
+    expect(validateCapaActionPlanWorkspaceDraftSaveRequest({ expected_draft_revision: null, action_plan: actionPlan(), action_plan_return_response: { response_narrative: " " } })).toMatchObject({ status: "invalid", reason_code: "INVALID_WORKSPACE_REQUEST_RETURN_RESPONSE" });
+  });
+
+  it("accepts a nullable server-bound return response without changing the action plan", () => {
+    const firstEntry = validateCapaActionPlanWorkspaceDraft(draft({ action_plan_return_response: null }));
+    expect(firstEntry).toMatchObject({ status: "valid", value: { action_plan: actionPlan(), action_plan_return_response: null } });
+    const returned = validateCapaActionPlanWorkspaceDraft(draft({ action_plan_return_response: RETURN_RESPONSE }));
+    expect(returned).toMatchObject({ status: "valid", value: { action_plan: actionPlan(), action_plan_return_response: RETURN_RESPONSE } });
+    expect(validateCapaActionPlanWorkspaceDraft(draft({ action_plan_return_response: [] }))).toMatchObject({ status: "invalid", reason_code: "INVALID_WORKSPACE_DRAFT_RETURN_RESPONSE" });
   });
 
   it("uses organization/case scoped revision CAS and preserves rollback", async () => {
@@ -111,6 +130,17 @@ describe("S60 action-plan workspace contract and persistence", () => {
     await source.runInTransaction({ request_id: "snapshot-1" as never, correlation_id: "snapshot-1" as never }, (tx) => source.saveActionPlanWorkspaceDraft(tx, { draft: draft() as never, expected_draft_revision: null }));
     const restored = databaseFromSnapshot(source.exportSnapshot());
     await expect(restored.findActionPlanWorkspaceDraft(ORG as never, CASE as never)).resolves.toMatchObject({ workflow_state: "S60", draft_revision: 1 });
+  });
+
+  it("round-trips the bound return response while preserving action-plan content and optimistic revisioning", async () => {
+    const db = database();
+    const actionPlanWithAction = actionPlan();
+    const responseDraft = draft({ action_plan: actionPlanWithAction, action_plan_return_response: RETURN_RESPONSE, draft_revision: 1 });
+    await db.runInTransaction({ request_id: "response-1" as never, correlation_id: "response-1" as never }, (tx) => db.saveActionPlanWorkspaceDraft(tx, { draft: responseDraft as never, expected_draft_revision: null }));
+    await expect(db.findActionPlanWorkspaceDraft(ORG as never, CASE as never)).resolves.toMatchObject({ draft_revision: 1, action_plan: actionPlanWithAction, action_plan_return_response: RETURN_RESPONSE });
+    await expect(db.runInTransaction({ request_id: "response-2" as never, correlation_id: "response-2" as never }, (tx) => db.saveActionPlanWorkspaceDraft(tx, { draft: draft({ action_plan: actionPlanWithAction, action_plan_return_response: RETURN_RESPONSE, draft_revision: 2 }) as never, expected_draft_revision: 1 }))).resolves.toMatchObject({ status: "saved" });
+    await expect(db.findActionPlanWorkspaceDraft(ORG as never, CASE as never)).resolves.toMatchObject({ draft_revision: 2, action_plan: actionPlanWithAction, action_plan_return_response: RETURN_RESPONSE });
+    await expect(db.runInTransaction({ request_id: "response-stale" as never, correlation_id: "response-stale" as never }, (tx) => db.saveActionPlanWorkspaceDraft(tx, { draft: draft({ action_plan: actionPlanWithAction, action_plan_return_response: RETURN_RESPONSE, draft_revision: 3 }) as never, expected_draft_revision: 1 }))).resolves.toEqual({ status: "concurrency_conflict" });
   });
 
   it("guarded saves distinguish a changed authoritative S60 context", async () => {

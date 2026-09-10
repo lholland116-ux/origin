@@ -214,6 +214,7 @@ import {
   createCapaInvestigationActiveWorkspaceDraftService,
 } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
+import { createCapaActionPlanReturnCycleResolver } from "./capa-action-plan-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import { createCapaActionPlanWorkspaceDraftService } from "./capa-action-plan-workspace-draft-service";
 import type { CapaActionPlanWorkspaceDraftRepository } from "../../database/repositories/capa-action-plan-workspace-draft-repository";
@@ -1003,6 +1004,10 @@ export function createCapaDevelopmentRuntime(
   const returnCycleResolver = createCapaRootCauseReturnCycleResolver({
     audit_repository: database,
   });
+  const actionPlanReturnCycleResolver = createCapaActionPlanReturnCycleResolver({
+    capa_repository: database,
+    review_decision_repository: database,
+  });
 
   const dependencies:
     CreateCapaDependencies = {
@@ -1155,6 +1160,7 @@ export function createCapaDevelopmentRuntime(
 
   const submitActionPlanDependencies: SubmitCapaActionPlanDependencies = {
     ...submitIntakeDependencies,
+    return_cycle_resolver: actionPlanReturnCycleResolver,
       workspace_repository: {
         findDraft: (organizationId, capaCaseId) => database.findActionPlanWorkspaceDraft(organizationId, capaCaseId),
         findDraftForUpdate: (transaction, organizationId, capaCaseId) => database.findActionPlanWorkspaceDraftForUpdate(transaction, organizationId, capaCaseId),
@@ -1473,6 +1479,7 @@ export function createCapaDevelopmentRuntime(
         workspace_repository: workspaceRepository,
         transaction_manager: database,
         authorization_policy: dependencies.authorization_policy,
+        return_cycle_resolver: actionPlanReturnCycleResolver,
         now,
       });
     },

@@ -385,6 +385,8 @@ const CONTROLLED_PLAN_ID = "30000000-0000-4000-8000-000000000010";
 const CONTROLLED_LEDGER_ID = "30000000-0000-4000-8000-000000000011";
 const CONTROLLED_PACKAGE_ID = "30000000-0000-4000-8000-000000000012";
 const CONTROLLED_RETURN_RESPONSE_ID = "30000000-0000-4000-8000-000000000013";
+const ACTION_PLAN_ID = "30000000-0000-4000-8000-000000000014";
+const ACTION_RETURN_RESPONSE_ID = "30000000-0000-4000-8000-000000000015";
 const USER_ID = "60000000-0000-4000-8000-000000000001";
 const human = { source_type: "human", source_reference: null, adopted_by_user_id: null, adopted_at: null };
 function controlledPlan() { return { section_version_id: CONTROLLED_PLAN_ID, section_type: "CAPA.INVESTIGATION_PLAN",
@@ -443,6 +445,46 @@ function validRootCauseReturnContext() {
     resulting_case_version_id: "60000000-0000-4000-8000-000000000004",
     source_record_version: 8,
     resulting_record_version: 9,
+  };
+}
+
+function controlledActionPlan() {
+  return {
+    section_version_id: ACTION_PLAN_ID,
+    section_type: "CAPA.ACTION_PLAN",
+    schema_version: "capa-action-plan-1.0.0",
+    content: { items: [], effectiveness_checks: [] },
+  };
+}
+
+function validActionPlanReturnContext() {
+  return {
+    return_transition_audit_event_id: "70000000-0000-4000-8000-000000000004",
+    returned_at: "2026-09-08T12:00:00.000Z",
+    returned_by_actor_id: "60000000-0000-4000-8000-000000000002",
+    rationale: "Revise the action plan before implementation.",
+    source_case_version_id: "60000000-0000-4000-8000-000000000005",
+    resulting_case_version_id: "60000000-0000-4000-8000-000000000006",
+    source_record_version: 8,
+    resulting_record_version: 9,
+  };
+}
+
+function controlledActionPlanReturnResponse() {
+  return {
+    section_version_id: ACTION_RETURN_RESPONSE_ID,
+    section_type: "CAPA.ACTION_PLAN_REVIEW_RETURN_RESPONSE",
+    schema_version: "capa-action-plan-review-return-response-1.0.0",
+    content: {
+      schema_version: "capa-action-plan-review-return-response-1.0.0",
+      response_narrative: "The action plan was revised against the returned rationale.",
+      return_transition_audit_event_id: validActionPlanReturnContext().return_transition_audit_event_id,
+      source_case_version_id: validActionPlanReturnContext().source_case_version_id,
+      resulting_case_version_id: validActionPlanReturnContext().resulting_case_version_id,
+      resubmitted_case_version_id: "60000000-0000-4000-8000-000000000007",
+      responded_by: { actor_type: "human", actor_id: USER_ID },
+      responded_at: "2026-09-08T13:24:08.315Z",
+    },
   };
 }
 
@@ -558,6 +600,73 @@ describe("CAPA existing-case controlled section parsing", () => {
         resultingRecordVersion: 9,
       },
     });
+  });
+  it("keeps first-entry S60 free of Return/Rework context and parses authoritative returned S60 context", () => {
+    const firstEntry = parse({
+      ...responseBody(),
+      capa: { ...responseBody().capa, status: "S60" },
+    });
+    expect(firstEntry).not.toHaveProperty("actionPlanReturnContext");
+
+    const returned = parse({
+      ...responseBody(),
+      capa: {
+        ...responseBody().capa,
+        status: "S60",
+        action_plan_return_context: validActionPlanReturnContext(),
+      },
+    });
+    expect(returned).toMatchObject({
+      actionPlanReturnContext: {
+        rationale: "Revise the action plan before implementation.",
+        returnTransitionAuditEventId: "70000000-0000-4000-8000-000000000004",
+      },
+    });
+  });
+  it("parses separate immutable Return/Response history cycles and rejects response rationale injection", () => {
+    const context = validActionPlanReturnContext();
+    const response = controlledActionPlanReturnResponse();
+    const historyOwnerContent = {
+      response_narrative: response.content.response_narrative,
+      responded_at: response.content.responded_at,
+      resubmitted_case_version_id: response.content.resubmitted_case_version_id,
+    };
+    const historyCycle = {
+      return_context: context,
+      owner_response: { section_version_id: response.section_version_id, content: historyOwnerContent },
+      resubmission_case_version_id: response.content.resubmitted_case_version_id,
+    };
+    const body = {
+      ...responseBody(),
+      capa: {
+        ...responseBody().capa,
+        status: "S70",
+        sections: [...responseBody().capa.sections, controlledActionPlan(), response],
+        action_plan_review_history: [historyCycle, {
+          ...historyCycle,
+          return_context: { ...context, rationale: "A second distinct return rationale." },
+        }],
+      },
+    };
+    expect(parse(body)).toMatchObject({
+      actionPlanReviewHistory: [
+        { returnContext: { rationale: context.rationale } },
+        { returnContext: { rationale: "A second distinct return rationale." } },
+      ],
+    });
+    expect(parse({
+      ...body,
+      capa: {
+        ...body.capa,
+        action_plan_review_history: [{
+          ...historyCycle,
+          owner_response: {
+            ...historyCycle.owner_response,
+            content: { ...historyOwnerContent, rationale: "not a response field" },
+          },
+        }],
+      },
+    })).toBeNull();
   });
   it.each([
     ["actor", { returned_by_actor_id: "not-a-uuid" }],

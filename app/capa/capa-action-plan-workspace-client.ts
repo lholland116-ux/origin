@@ -2,6 +2,11 @@ import {
   validateCapaActionPlan,
   type CapaActionPlanContent,
 } from "../../lib/capa/domain/capa-action-plan";
+import {
+  validateCapaActionPlanReviewReturnResponseDraft,
+  type CapaActionPlanReviewReturnResponseEditableContent,
+  type CapaActionPlanReviewReturnResponseDraft,
+} from "../../lib/capa/domain/capa-action-plan-review-return-response";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -21,7 +26,20 @@ export interface CapaActionPlanWorkspaceProjection {
   readonly case_version_id: string;
   readonly record_version: number;
   readonly action_plan: CapaActionPlanContent;
+  readonly action_plan_return_response?: CapaActionPlanWorkspaceReturnResponse | null;
   readonly updated_at: string;
+}
+
+export interface CapaActionPlanWorkspaceReturnResponse {
+  readonly editable: CapaActionPlanReviewReturnResponseEditableContent;
+  readonly metadata: {
+    readonly schema_version: CapaActionPlanReviewReturnResponseDraft["schema_version"];
+    readonly responded_by: CapaActionPlanReviewReturnResponseDraft["responded_by"];
+    readonly responded_at: CapaActionPlanReviewReturnResponseDraft["responded_at"];
+    readonly return_transition_audit_event_id: CapaActionPlanReviewReturnResponseDraft["return_transition_audit_event_id"];
+    readonly source_case_version_id: CapaActionPlanReviewReturnResponseDraft["source_case_version_id"];
+    readonly resulting_case_version_id: CapaActionPlanReviewReturnResponseDraft["resulting_case_version_id"];
+  };
 }
 
 export interface CapaActionPlanWorkspaceLoadSuccess {
@@ -45,6 +63,7 @@ export type CapaActionPlanWorkspaceSaveResult =
 export interface CapaActionPlanWorkspaceSaveInput {
   readonly expected_draft_revision: number | null;
   readonly action_plan: CapaActionPlanContent;
+  readonly action_plan_return_response?: CapaActionPlanReviewReturnResponseEditableContent | null;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -64,13 +83,34 @@ function correlation(value: unknown): string | null {
 }
 
 function projection(value: unknown): CapaActionPlanWorkspaceProjection | null {
-  if (!record(value) || !exact(value, ["draft_revision", "case_version_id", "record_version", "action_plan", "updated_at"]) ||
+  if (!record(value) || !(exact(value, ["draft_revision", "case_version_id", "record_version", "action_plan", "updated_at"]) || exact(value, ["draft_revision", "case_version_id", "record_version", "action_plan", "action_plan_return_response", "updated_at"])) ||
     !positiveSafeInteger(value.draft_revision) || typeof value.case_version_id !== "string" || !UUID.test(value.case_version_id) ||
     !positiveSafeInteger(value.record_version) || typeof value.updated_at !== "string" || !ISO_DATE_TIME.test(value.updated_at) || Number.isNaN(Date.parse(value.updated_at))) return null;
   const actionPlan = validateCapaActionPlan(value.action_plan);
-  return actionPlan.status === "valid"
-    ? Object.freeze({ draft_revision: value.draft_revision, case_version_id: value.case_version_id, record_version: value.record_version, action_plan: actionPlan.value, updated_at: value.updated_at })
-    : null;
+  if (actionPlan.status !== "valid") return null;
+  const response = value.action_plan_return_response === undefined || value.action_plan_return_response === null
+    ? null
+    : validateCapaActionPlanReviewReturnResponseDraft(value.action_plan_return_response);
+  if (response !== null && response.status !== "valid") return null;
+  const responseValue = response === null ? null : response.value;
+  return Object.freeze({
+    draft_revision: value.draft_revision,
+    case_version_id: value.case_version_id,
+    record_version: value.record_version,
+    action_plan: actionPlan.value,
+    action_plan_return_response: responseValue === null ? null : Object.freeze({
+      editable: Object.freeze({ response_narrative: responseValue.response_narrative }),
+      metadata: Object.freeze({
+        schema_version: responseValue.schema_version,
+        responded_by: responseValue.responded_by,
+        responded_at: responseValue.responded_at,
+        return_transition_audit_event_id: responseValue.return_transition_audit_event_id,
+        source_case_version_id: responseValue.source_case_version_id,
+        resulting_case_version_id: responseValue.resulting_case_version_id,
+      }),
+    }),
+    updated_at: value.updated_at,
+  });
 }
 
 function parseCorrelation(value: unknown): string | null {
@@ -114,6 +154,9 @@ export async function saveActionPlanWorkspace(caseId: string, input: CapaActionP
   const safeInput = {
     expected_draft_revision: input.expected_draft_revision,
     action_plan: input.action_plan,
+    ...(input.action_plan_return_response === undefined
+      ? {}
+      : { action_plan_return_response: input.action_plan_return_response === null ? null : { response_narrative: input.action_plan_return_response.response_narrative } }),
   };
   try {
     const response = await fetcher(`/api/capa/${encodeURIComponent(caseId)}/action-plan-workspace`, {

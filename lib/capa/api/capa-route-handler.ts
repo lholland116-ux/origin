@@ -60,11 +60,18 @@ import {
 
 import type {
   CapaCaseListCursor,
+  CapaRepository,
 } from "../../database/repositories/capa-repository";
 
 import {
   CAPA_ROOT_CAUSE_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
 } from "../domain/capa-root-cause-review-return-response";
+import {
+  CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+  CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+  validateCapaActionPlanReviewReturnResponseContent,
+} from "../domain/capa-action-plan-review-return-response";
+import type { CapaActionPlanReviewDecisionRepository } from "../../database/repositories/capa-action-plan-review-decision-repository";
 
 import type {
   AuditCursor,
@@ -167,6 +174,30 @@ interface CapaRootCauseReturnContextProjection {
   readonly resulting_case_version_id: string;
   readonly source_record_version: number;
   readonly resulting_record_version: number;
+}
+
+interface CapaActionPlanReturnContextProjection {
+  readonly return_transition_audit_event_id: string;
+  readonly returned_at: string;
+  readonly returned_by_actor_id: string;
+  readonly rationale: string;
+  readonly source_case_version_id: string;
+  readonly resulting_case_version_id: string;
+  readonly source_record_version: number;
+  readonly resulting_record_version: number;
+}
+
+interface CapaActionPlanReviewHistoryCycleProjection {
+  readonly return_context: CapaActionPlanReturnContextProjection;
+  readonly owner_response: {
+    readonly section_version_id: string;
+    readonly content: {
+      readonly response_narrative: string;
+      readonly responded_at: string;
+      readonly resubmitted_case_version_id: string;
+    };
+  };
+  readonly resubmission_case_version_id: string;
 }
 
 function isObjectRecord(
@@ -283,6 +314,157 @@ async function readRootCauseReturnContext(
   } while (cursor !== undefined);
 
   return validatedRootCauseReturnContext(latestTransition);
+}
+
+function actionPlanReturnCandidate(event: AuditEvent): boolean {
+  return event.event_type === "EVT-STATE-TRANSITION" &&
+    event.action === "DECIDE_CAPA_ACTION_PLAN_REVIEW" &&
+    event.outcome === "succeeded" &&
+    event.actor?.actor_type === "human" &&
+    hasNonEmptyString(event.actor.actor_id) &&
+    isObjectRecord(event.metadata) &&
+    event.metadata.from_state === "S70" &&
+    event.metadata.to_state === "S60" &&
+    event.metadata.transition_event === "Return for action planning";
+}
+
+function actionPlanReturnContext(
+  event: AuditEvent,
+  decision: Awaited<ReturnType<CapaActionPlanReviewDecisionRepository["findDecision"]>>,
+): CapaActionPlanReturnContextProjection | undefined {
+  if (!actionPlanReturnCandidate(event) || decision === null) return undefined;
+  const metadata = event.metadata;
+  const sourceCaseVersionId = event.change?.before_ref?.object_version_id;
+  const resultingCaseVersionId = event.change?.after_ref?.object_version_id;
+  const aggregateVersion = event.aggregate_version;
+  if (
+    !isValidAuditTimestamp(event.occurred_at) ||
+    !hasNonEmptyString(event.reason) ||
+    !isObjectRecord(metadata) ||
+    !hasNonEmptyString(sourceCaseVersionId) ||
+    !hasNonEmptyString(resultingCaseVersionId) ||
+    metadata.source_case_version_id !== sourceCaseVersionId ||
+    metadata.resulting_case_version_id !== resultingCaseVersionId ||
+    metadata.rationale !== event.reason ||
+    decision.organization_id !== event.organization_id ||
+    decision.capa_case_id !== event.aggregate_id ||
+    decision.source_case_version_id !== sourceCaseVersionId ||
+    decision.resulting_case_version_id !== resultingCaseVersionId ||
+    decision.decision !== "return" ||
+    decision.rationale !== event.reason ||
+    decision.transition_audit_event_id !== event.event_id ||
+    typeof aggregateVersion !== "number" ||
+    !Number.isSafeInteger(aggregateVersion) ||
+    aggregateVersion < 2
+  ) return undefined;
+  return {
+    return_transition_audit_event_id: event.event_id,
+    returned_at: decision.decided_at,
+    returned_by_actor_id: decision.reviewer_user_id,
+    rationale: decision.rationale,
+    source_case_version_id: sourceCaseVersionId,
+    resulting_case_version_id: resultingCaseVersionId,
+    source_record_version: aggregateVersion - 1,
+    resulting_record_version: aggregateVersion,
+  };
+}
+
+async function allActionPlanReviewEvents(
+  auditRepository: AuditRepository,
+  organizationId: OrganizationId,
+  capaCaseId: CapaCaseId,
+): Promise<readonly AuditEvent[]> {
+  const events: AuditEvent[] = [];
+  let cursor: AuditCursor | undefined;
+  do {
+    const page = await auditRepository.listEventsForAggregate({
+      organization_id: organizationId,
+      aggregate_type: "CAPA_CASE" as ControlledCode,
+      aggregate_id: capaCaseId,
+      limit: 100,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    events.push(...page.events);
+    cursor = page.next_cursor;
+  } while (cursor !== undefined);
+  return Object.freeze(events);
+}
+
+async function readActionPlanReturnPresentation(
+  auditRepository: AuditRepository,
+  reviewDecisionRepository: CapaActionPlanReviewDecisionRepository,
+  capaRepository: CapaRepository,
+  organizationId: OrganizationId,
+  capaCaseId: CapaCaseId,
+): Promise<{
+  readonly active_return_context?: CapaActionPlanReturnContextProjection;
+  readonly history: readonly CapaActionPlanReviewHistoryCycleProjection[];
+}> {
+  const events = await allActionPlanReviewEvents(auditRepository, organizationId, capaCaseId);
+  const returns: { readonly event: AuditEvent; readonly context: CapaActionPlanReturnContextProjection }[] = [];
+  for (const event of events.filter(actionPlanReturnCandidate)) {
+    const sourceCaseVersionId = event.change?.before_ref?.object_version_id;
+    if (!hasNonEmptyString(sourceCaseVersionId)) continue;
+    const decision = await reviewDecisionRepository.findDecision(organizationId, capaCaseId, sourceCaseVersionId as never);
+    const context = actionPlanReturnContext(event, decision);
+    if (context !== undefined) returns.push({ event, context });
+  }
+
+  const submissions = events.filter((event) =>
+    event.event_type === "EVT-STATE-TRANSITION" &&
+    event.action === "SUBMIT_CAPA_ACTION_PLAN" &&
+    event.outcome === "succeeded" &&
+    isObjectRecord(event.metadata) &&
+    event.metadata.from_state === "S60" &&
+    event.metadata.to_state === "S70",
+  );
+  const history: CapaActionPlanReviewHistoryCycleProjection[] = [];
+  for (const entry of returns) {
+    const submission = submissions.find((event) =>
+      event.metadata.source_case_version_id === entry.context.resulting_case_version_id,
+    );
+    if (submission === undefined) continue;
+    const responseSectionId = submission.metadata.action_plan_review_return_response_section_version_id;
+    const resubmissionCaseVersionId = submission.metadata.resulting_case_version_id;
+    if (!hasNonEmptyString(responseSectionId) || !hasNonEmptyString(resubmissionCaseVersionId)) continue;
+    const responseSection = await capaRepository.findSectionVersionById(organizationId, capaCaseId, responseSectionId as never);
+    if (
+      responseSection === null ||
+      responseSection.section_type !== CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SECTION_TYPE ||
+      responseSection.schema_version !== CAPA_ACTION_PLAN_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION
+    ) continue;
+    const response = validateCapaActionPlanReviewReturnResponseContent(responseSection.content);
+    if (
+      response.status !== "valid" ||
+      response.value.resubmitted_case_version_id !== resubmissionCaseVersionId ||
+      response.value.return_transition_audit_event_id !==
+        entry.context.return_transition_audit_event_id ||
+      response.value.source_case_version_id !==
+        entry.context.source_case_version_id ||
+      response.value.resulting_case_version_id !==
+        entry.context.resulting_case_version_id
+    ) continue;
+    history.push({
+      return_context: entry.context,
+      owner_response: {
+        section_version_id: responseSection.section_version_id,
+        content: {
+          response_narrative: response.value.response_narrative,
+          responded_at: response.value.responded_at,
+          resubmitted_case_version_id: response.value.resubmitted_case_version_id,
+        },
+      },
+      resubmission_case_version_id: resubmissionCaseVersionId,
+    });
+  }
+  const active = [...returns].reverse().find((entry) => !submissions.some((event) =>
+    event.metadata.source_case_version_id === entry.context.resulting_case_version_id &&
+    event.metadata.to_state === "S70",
+  ));
+  return {
+    ...(active === undefined ? {} : { active_return_context: active.context }),
+    history: Object.freeze(history),
+  };
 }
 
 function jsonResponse(
@@ -1417,6 +1599,21 @@ export async function handleCapaGet(
           )
         : undefined;
 
+    const actionPlanReturnPresentation =
+      capaCase.status === "S60" || capaCase.status === "S70"
+        ? await readActionPlanReturnPresentation(
+            runtime
+              .decide_action_plan_review_dependencies
+              .audit_repository,
+            runtime
+              .decide_action_plan_review_dependencies
+              .review_decision_repository,
+            runtime.database,
+            context.tenant.organization_id,
+            capaCase.capa_case_id,
+          )
+        : undefined;
+
     return jsonResponse(
       {
         capa: {
@@ -1431,6 +1628,19 @@ export async function handleCapaGet(
             : {
                 root_cause_return_context:
                   rootCauseReturnContext,
+              }),
+          ...(actionPlanReturnPresentation === undefined
+            ? {}
+            : {
+                ...(actionPlanReturnPresentation.active_return_context ===
+                undefined
+                  ? {}
+                  : {
+                      action_plan_return_context:
+                        actionPlanReturnPresentation.active_return_context,
+                    }),
+                action_plan_review_history:
+                  actionPlanReturnPresentation.history,
               }),
         },
         correlation_id:

@@ -16,6 +16,7 @@ import {
   saveActionPlanWorkspace,
   type CapaActionPlanWorkspaceProjection,
 } from "./capa-action-plan-workspace-client";
+import type { CapaActionPlanReturnContext } from "./capa-existing-case-client";
 import {
   createActionPlanSubmissionAttempt,
   submitActionPlanSubmissionAttempt,
@@ -37,6 +38,7 @@ interface CapaActionPlanWorkspaceProps {
   readonly recordVersion: number;
   readonly currentUserId: string;
   readonly targetOptions: readonly CapaActionPlanTargetOption[];
+  readonly returnContext?: CapaActionPlanReturnContext;
   readonly onAuthoritativeRefresh: () => Promise<void>;
 }
 
@@ -148,11 +150,17 @@ function fieldValue(value: string | null): string {
   return value ?? "";
 }
 
-function draftFromWorkspace(workspace: CapaActionPlanWorkspaceProjection | null): { readonly plan: CapaActionPlanContent; readonly revision: number | null } {
-  return workspace === null ? { plan: emptyPlan(), revision: null } : { plan: workspace.action_plan, revision: workspace.draft_revision };
+function draftFromWorkspace(workspace: CapaActionPlanWorkspaceProjection | null): { readonly plan: CapaActionPlanContent; readonly revision: number | null; readonly responseNarrative: string } {
+  return workspace === null
+    ? { plan: emptyPlan(), revision: null, responseNarrative: "" }
+    : {
+        plan: workspace.action_plan,
+        revision: workspace.draft_revision,
+        responseNarrative: workspace.action_plan_return_response?.editable.response_narrative ?? "",
+      };
 }
 
-export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVersionId, recordVersion, currentUserId, targetOptions, onAuthoritativeRefresh }: CapaActionPlanWorkspaceProps) {
+export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVersionId, recordVersion, currentUserId, targetOptions, returnContext, onAuthoritativeRefresh }: CapaActionPlanWorkspaceProps) {
   const [plan, setPlan] = useState<CapaActionPlanContent>(() => emptyPlan());
   const [draftRevision, setDraftRevision] = useState<number | null>(null);
   const [caseVersionId, setCaseVersionId] = useState<string | null>(currentVersionId);
@@ -164,6 +172,7 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
   const [submissionMessage, setSubmissionMessage] = useState<string | null>(null);
   const [submissionAttempt, setSubmissionAttempt] = useState<ActionPlanSubmissionAttempt | null>(null);
   const [customTarget, setCustomTarget] = useState<Record<string, { target_type: CapaActionLinkTargetType; target_id: string }>>({});
+  const [responseNarrative, setResponseNarrative] = useState("");
 
   const readiness = useMemo(() => evaluateCapaActionPlanReadiness(plan), [plan]);
 
@@ -172,7 +181,7 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
     const result = await loadActionPlanWorkspace(caseId);
     if (result.status === "failed") { setLoadStatus("failed"); setSaveStatus("failed"); setMessage(result.message); return; }
     const next = draftFromWorkspace(result.workspace);
-    setPlan(next.plan); setDraftRevision(next.revision); setCaseVersionId(result.workspace?.case_version_id ?? currentVersionId); setAuthoritativeRecordVersion(result.workspace?.record_version ?? recordVersion); setLoadStatus("ready"); setSaveStatus("saved");
+    setPlan(next.plan); setDraftRevision(next.revision); setResponseNarrative(next.responseNarrative); setCaseVersionId(result.workspace?.case_version_id ?? currentVersionId); setAuthoritativeRecordVersion(result.workspace?.record_version ?? recordVersion); setLoadStatus("ready"); setSaveStatus("saved");
   }
 
   useEffect(() => { void hydrate(); }, [caseId]);
@@ -237,14 +246,32 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
     const validation = validateCapaActionPlan(plan);
     if (validation.status !== "valid") { setSaveStatus("failed"); setMessage("The action plan is not structurally valid yet."); return; }
     setSaveStatus("saving"); setMessage(null);
-    const result = await saveActionPlanWorkspace(caseId, { expected_draft_revision: draftRevision, action_plan: validation.value });
-    if (result.status === "saved") { setPlan(result.workspace.action_plan); setDraftRevision(result.workspace.draft_revision); setSaveStatus("saved"); setMessage("Action Planning workspace saved."); return; }
+    const result = await saveActionPlanWorkspace(caseId, {
+      expected_draft_revision: draftRevision,
+      action_plan: validation.value,
+      ...(returnContext === undefined ? {} : {
+        action_plan_return_response: { response_narrative: responseNarrative },
+      }),
+    });
+    if (result.status === "saved") {
+      setPlan(result.workspace.action_plan);
+      setDraftRevision(result.workspace.draft_revision);
+      setResponseNarrative(result.workspace.action_plan_return_response?.editable.response_narrative ?? "");
+      setSaveStatus("saved");
+      setMessage("Action Planning workspace saved.");
+      return;
+    }
     setSaveStatus(result.code === "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT" || result.code === "WORKFLOW_MUTATION_DETECTED" ? "conflict" : "failed");
     setMessage(result.message);
   }
 
   async function submitForReview() {
     if (readiness.status !== "ready_for_review" || loadStatus !== "ready" || saveStatus !== "saved") return;
+    if (returnContext !== undefined && responseNarrative.trim().length === 0) {
+      setSubmissionStatus("failed");
+      setSubmissionMessage("An owner response is required before resubmission.");
+      return;
+    }
     const attempt = submissionAttempt ?? createActionPlanSubmissionAttempt({ caseId, recordVersion: authoritativeRecordVersion, currentVersionId: currentVersionId, idempotencyKey: crypto.randomUUID() });
     if (attempt === null) { setSubmissionStatus("failed"); setSubmissionMessage("The authoritative CAPA version could not be verified for submission."); return; }
     setSubmissionAttempt(attempt); setSubmissionStatus("submitting"); setSubmissionMessage(null);
@@ -272,6 +299,21 @@ export default function CapaActionPlanWorkspace({ caseId, caseNumber, currentVer
     {loadStatus === "failed" ? <button type="button" onClick={() => void hydrate()} className="mt-4 text-sm text-blue-200 underline">Retry workspace load</button> : null}
 
     {caseVersionId !== null ? <CapaActionPlanAdvisoryPanel caseId={caseId} caseVersionId={caseVersionId} recordVersion={authoritativeRecordVersion} onAdoptCandidate={adoptCandidate} onAdoptEffectivenessPlanning={adoptEffectivenessPlanning} /> : null}
+
+    {returnContext !== undefined ? <section aria-labelledby="action-plan-return-heading" className="mt-6 rounded-2xl border border-amber-400/30 bg-amber-500/[0.06] p-5">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-300">S70 · Return / Rework</p>
+      <h3 id="action-plan-return-heading" className="mt-2 text-xl font-semibold text-zinc-100">Action Plan returned for rework</h3>
+      <p className="mt-2 text-sm leading-6 text-zinc-400">The reviewer’s rationale is authoritative and read-only. Address it in the action plan and provide an owner response before resubmission.</p>
+      <blockquote aria-label="Reviewer Return rationale" className="mt-4 whitespace-pre-wrap rounded-xl border border-amber-300/20 bg-zinc-950/50 p-4 text-sm leading-6 text-amber-100">{returnContext.rationale}</blockquote>
+      <dl className="mt-4 grid gap-3 text-xs text-zinc-500 sm:grid-cols-3">
+        <div><dt>Returned at</dt><dd className="mt-1 text-zinc-400">{returnContext.returnedAt}</dd></div>
+        <div><dt>Returned from case version</dt><dd className="mt-1 break-all font-mono text-zinc-400">{returnContext.sourceCaseVersionId}</dd></div>
+        <div><dt>Returned S60 record version</dt><dd className="mt-1 text-zinc-400">{returnContext.resultingRecordVersion}</dd></div>
+      </dl>
+      <label htmlFor="action-plan-return-response" className="mt-5 block text-sm text-zinc-200">Owner response <span className="text-amber-300">(required before resubmission)</span></label>
+      <textarea id="action-plan-return-response" value={responseNarrative} maxLength={4000} disabled={editingDisabled} onChange={(event) => { setResponseNarrative(event.target.value); setSaveStatus("unsaved"); setMessage(null); setSubmissionMessage(null); }} className="mt-2 min-h-28 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-zinc-100" placeholder="Describe how the returned rationale was addressed." />
+      <p className="mt-2 text-xs text-zinc-500">This response is saved as the mutable S60 workspace draft and becomes immutable controlled history only when the server accepts the resubmission.</p>
+    </section> : null}
 
     <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
       <p className="text-sm font-semibold text-zinc-100">Readiness for Action Plan Review</p>
