@@ -46,8 +46,16 @@ import type {
 import type {
   CapaActionPlanWorkspaceDraftApiDependencies,
 } from "@/lib/capa/api/capa-action-plan-workspace-draft-route-handler";
+import type {
+  CapaImplementationWorkspaceApiDependencies,
+} from "@/lib/capa/api/capa-implementation-workspace-route-handler";
+import type {
+  CapaImplementationSubmissionApiDependencies,
+} from "@/lib/capa/api/capa-implementation-submission-route-handler";
 import type { CapaActionPlanAdvisoryApiDependencies } from "@/lib/capa/api/capa-action-plan-advisory-route-handler";
 import type { CapaActionPlanReviewAdvisoryApiDependencies } from "@/lib/capa/api/capa-action-plan-review-advisory-route-handler";
+import type { CapaImplementationEvidenceAdvisoryApiDependencies } from "@/lib/capa/api/capa-implementation-evidence-advisory-route-handler";
+import type { CapaImplementationEvidenceAdvisoryAdoptionApiDependencies } from "@/lib/capa/api/capa-implementation-evidence-advisory-adoption-route-handler";
 import type { CapaInvestigationActiveWorkspaceReconciliationApiDependencies } from "@/lib/capa/api/capa-investigation-active-workspace-reconciliation-route-handler";
 
 import {
@@ -365,6 +373,24 @@ export function createCapaActionPlanWorkspaceDraftApiDependencies():
   };
 }
 
+export function createCapaImplementationWorkspaceApiDependencies():
+  CapaImplementationWorkspaceApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return {
+    ...dependencies,
+    create_workspace_service(context) {
+      return dependencies
+        .get_runtime()
+        .create_implementation_workspace_service(context);
+    },
+  };
+}
+
+export function createCapaImplementationSubmissionApiDependencies():
+  CapaImplementationSubmissionApiDependencies {
+  return createCapaApiHandlerDependencies();
+}
+
 export function createCapaActionPlanAdvisoryApiDependencies(): CapaActionPlanAdvisoryApiDependencies {
   const dependencies = createCapaApiHandlerDependencies();
   return { ...dependencies, create_advisory_service(context) { return dependencies.get_runtime().create_action_plan_advisory_service(context); } };
@@ -373,6 +399,16 @@ export function createCapaActionPlanAdvisoryApiDependencies(): CapaActionPlanAdv
 export function createCapaActionPlanReviewAdvisoryApiDependencies(): CapaActionPlanReviewAdvisoryApiDependencies {
   const dependencies = createCapaApiHandlerDependencies();
   return { ...dependencies, create_advisory_service(context) { return dependencies.get_runtime().create_action_plan_review_advisory_service(context); } };
+}
+
+export function createCapaImplementationEvidenceAdvisoryApiDependencies(): CapaImplementationEvidenceAdvisoryApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return { ...dependencies, create_advisory_service(context) { return dependencies.get_runtime().create_implementation_evidence_advisory_service(context); } };
+}
+
+export function createCapaImplementationEvidenceAdvisoryAdoptionApiDependencies(): CapaImplementationEvidenceAdvisoryAdoptionApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return { ...dependencies, create_adoption_service(context) { return dependencies.get_runtime().create_implementation_evidence_advisory_adoption_service(context); } };
 }
 
 export function createCapaActionPlanReviewApiDependencies(): CapaApiHandlerDependencies {

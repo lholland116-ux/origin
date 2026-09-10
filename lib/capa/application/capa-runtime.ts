@@ -14,6 +14,7 @@ import type {
   SubmitCapaRootCausePackageDependencies,
 } from "./submit-capa-root-cause-package";
 import type { SubmitCapaActionPlanDependencies } from "./submit-capa-action-plan";
+import type { SubmitCapaImplementationDependencies } from "./submit-capa-implementation";
 
 import type {
   UpdateCapaInvestigationProgressDependencies,
@@ -102,6 +103,15 @@ import type {
 import type {
   CapaActionPlanWorkspaceDraftService,
 } from "./capa-action-plan-workspace-draft-service";
+import type {
+  CapaImplementationWorkspaceService,
+} from "./capa-implementation-workspace-service";
+import type {
+  CapaImplementationEvidenceAdvisoryService,
+} from "../ai/capa-implementation-evidence-advisory-service";
+import type {
+  CapaImplementationEvidenceAdvisoryAdoptionService,
+} from "../ai/capa-implementation-evidence-advisory-adoption-service";
 import type { ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import type { RequestTrace, CapaCaseId } from "../domain/capa-types";
 
@@ -230,6 +240,19 @@ export interface CapaRuntime {
     context: CapaRequestContext,
   ) => CapaActionPlanWorkspaceDraftService;
 
+  /** Creates a request-scoped durable S80 implementation workspace service. */
+  readonly create_implementation_workspace_service: (
+    context: CapaRequestContext,
+  ) => CapaImplementationWorkspaceService;
+
+  readonly create_implementation_evidence_advisory_service: (
+    context: CapaRequestContext,
+  ) => CapaImplementationEvidenceAdvisoryService;
+
+  readonly create_implementation_evidence_advisory_adoption_service: (
+    context: CapaRequestContext,
+  ) => CapaImplementationEvidenceAdvisoryAdoptionService;
+
   readonly create_investigation_active_workspace_reconciliation_service: (
     context: CapaRequestContext,
   ) => { reconcile(command: { readonly capa_case_id: CapaCaseId; readonly request_trace: RequestTrace }): Promise<ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult> };
@@ -277,6 +300,10 @@ export interface CapaRuntime {
   /** Human-controlled S60 to S70 action-plan submission dependencies. */
   readonly submit_action_plan_dependencies:
     SubmitCapaActionPlanDependencies;
+
+  /** Human-controlled S80 to S90 implementation-review submission dependencies. */
+  readonly submit_implementation_dependencies:
+    SubmitCapaImplementationDependencies;
 
   /** Human-controlled S50 root-cause gate dependencies. */
   readonly decide_root_cause_gate_dependencies:

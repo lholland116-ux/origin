@@ -38,6 +38,8 @@ export type CapaCaseId = BrandedId<"CapaCaseId">;
 export type CapaCaseVersionId = BrandedId<"CapaCaseVersionId">;
 export type CapaSectionVersionId =
   BrandedId<"CapaSectionVersionId">;
+export type CapaImplementationEvidenceId =
+  BrandedId<"CapaImplementationEvidenceId">;
 export type AuditEventId = BrandedId<"AuditEventId">;
 export type RequestId = BrandedId<"RequestId">;
 export type CorrelationId = BrandedId<"CorrelationId">;

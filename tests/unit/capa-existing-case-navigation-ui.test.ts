@@ -109,7 +109,7 @@ describe("CAPA existing-case workspace navigation", () => {
     expect(intake).not.toContain('createdCapa.status === "S70"\n            ? "The draft record and its audit event were committed atomically."');
   });
 
-  it("keeps S80 as the read-only Implementation Active fallback", () => {
+  it("mounts the human Implementation Active workspace for S80", () => {
     expect(intake).toMatch(
       /if \(status === "S80"\)\s*\{\s*return CAPA_STATE_DEFINITIONS\.S80\.name;\s*\}/,
     );
@@ -119,6 +119,7 @@ describe("CAPA existing-case workspace navigation", () => {
     expect(intake).toContain(
       "The action plan has been approved for implementation. Implementation evidence has not yet been submitted.",
     );
-    expect(intake).not.toContain("CapaImplementationWorkspace");
+    expect(intake).toContain("CapaImplementationWorkspace");
+    expect(intake).toContain('createdCapa.status === "S80" ? (');
   });
 });

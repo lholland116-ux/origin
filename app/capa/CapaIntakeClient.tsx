@@ -26,6 +26,7 @@ import CapaActionPlanWorkspace, {
   type CapaActionPlanTargetOption,
 } from "./CapaActionPlanWorkspace";
 import CapaActionPlanReviewPanel from "./CapaActionPlanReviewPanel";
+import CapaImplementationWorkspace from "./CapaImplementationWorkspace";
 
 import {
   createCapaScopeApprovalAttempt,
@@ -5318,6 +5319,26 @@ export default function CapaIntakeClient({
                   caseNumber: createdCapa.caseNumber,
                   status: createdCapa.status,
                   recordVersion: createdCapa.recordVersion,
+                  currentVersionId: createdCapa.currentVersionId,
+                  createdAt: createdCapa.createdAt,
+                  updatedAt: createdCapa.createdAt,
+                });
+                await loadCases("replace");
+              }}
+            />
+          ) : null}
+
+          {createdCapa.status === "S80" ? (
+            <CapaImplementationWorkspace
+              key={createdCapa.currentVersionId}
+              caseId={createdCapa.capaCaseId}
+              caseNumber={createdCapa.caseNumber}
+              onSubmitted={async () => {
+                await openExistingCase({
+                  capaCaseId: createdCapa.capaCaseId,
+                  caseNumber: createdCapa.caseNumber,
+                  status: "S90",
+                  recordVersion: createdCapa.recordVersion + 1,
                   currentVersionId: createdCapa.currentVersionId,
                   createdAt: createdCapa.createdAt,
                   updatedAt: createdCapa.createdAt,

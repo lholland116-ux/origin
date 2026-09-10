@@ -379,6 +379,20 @@ const DEFINITIONS = [
       "missing_deliverables",
       "review_questions",
     ],
+    activation_capabilities: [
+      {
+        eligible_states: ["S80"],
+        operation: "review_implementation_evidence",
+        allowed_tools: [
+          "TOOL-CASE-READ",
+          "TOOL-EVIDENCE-READ",
+          "TOOL-STRUCTURED-DRAFT",
+          "TOOL-FEEDBACK",
+        ],
+        output_schema_version:
+          "capa_implementation_evidence_advisory-1.0.0" as never,
+      },
+    ],
   }),
   definition({
     agent_id: "AG-EFFECT",

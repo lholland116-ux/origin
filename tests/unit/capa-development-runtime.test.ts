@@ -2207,6 +2207,12 @@ describe(
       expect(service).toEqual(expect.objectContaining({ load: expect.any(Function), save: expect.any(Function) }));
     });
 
+    it("wires the request-scoped S80 implementation workspace service to the development database", () => {
+      const runtime = createCapaDevelopmentRuntime({ now: () => NOW });
+      const service = runtime.create_implementation_workspace_service({} as never);
+      expect(service).toEqual(expect.objectContaining({ load: expect.any(Function), save: expect.any(Function) }));
+    });
+
     it("wires the human-controlled S50 root-cause gate", () => {
       const runtime = createCapaDevelopmentRuntime({ now: () => NOW });
       expect(runtime.decide_root_cause_gate_dependencies).toEqual(expect.objectContaining({

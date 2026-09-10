@@ -1145,6 +1145,12 @@ describe(
       expect(runtime.decide_action_plan_review_dependencies.review_decision_repository).not.toBe(runtime.database);
       expect(runtime.decide_action_plan_review_dependencies.configuration.authorization_purpose).toBe("CAPA_GATE_DECISION");
     });
+
+    it("wires the request-scoped S80 implementation workspace service to Supabase persistence", () => {
+      const runtime = createCapaProductionRuntime({ now: () => NOW, sql: SQL });
+      const service = runtime.create_implementation_workspace_service(requestContext());
+      expect(service).toEqual(expect.objectContaining({ load: expect.any(Function), save: expect.any(Function) }));
+    });
   },
 );
 

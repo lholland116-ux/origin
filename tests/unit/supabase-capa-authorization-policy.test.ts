@@ -769,6 +769,59 @@ describe("Supabase S60 action-plan workspace authorization mapping", () => {
   });
 });
 
+describe("Supabase S80 implementation workspace authorization mapping", () => {
+  it.each([
+    ["read_implementation_workspace_draft", "CAPA_IMPLEMENTATION_WORKSPACE_READ", "capa.case.view"],
+    ["edit_implementation_workspace_draft", "CAPA_IMPLEMENTATION_WORKSPACE_EDIT", "capa.case.edit"],
+  ] as const)("maps %s to the existing permission and S80 state", async (operation, purpose, permission) => {
+    const harness = createSqlHarness();
+    harness.enqueue([membershipRow()], [authorityRow({ permissions: [permission] })]);
+    await expect(createPolicy(harness).evaluate(policyRequest({
+      operation,
+      resource: {
+        organization_id: ORGANIZATION_A,
+        resource_type: controlled("CAPA_IMPLEMENTATION_WORKSPACE_DRAFT"),
+        workflow_state: "S80",
+      },
+      purpose: controlled(purpose),
+      }))).resolves.toMatchObject({ decision: "allow" });
+  });
+
+  it("keeps S80 edit permission distinct from view-only access", async () => {
+    const harness = createSqlHarness();
+    harness.enqueue([membershipRow()], [authorityRow({ permissions: ["capa.case.view"] })]);
+    await expect(createPolicy(harness).evaluate(policyRequest({
+      operation: "edit_implementation_workspace_draft",
+      resource: {
+        organization_id: ORGANIZATION_A,
+        resource_type: controlled("CAPA_IMPLEMENTATION_WORKSPACE_DRAFT"),
+        workflow_state: "S80",
+      },
+      purpose: controlled("CAPA_IMPLEMENTATION_WORKSPACE_EDIT"),
+    }))).resolves.toMatchObject({
+      decision: "deny",
+      reason_code: "REQUIRED_PERMISSION_NOT_GRANTED",
+    });
+  });
+
+  it("does not authorize S80 workspace operations in another workflow state", async () => {
+    const harness = createSqlHarness();
+    harness.enqueue([membershipRow()], [authorityRow()]);
+    await expect(createPolicy(harness).evaluate(policyRequest({
+      operation: "read_implementation_workspace_draft",
+      resource: {
+        organization_id: ORGANIZATION_A,
+        resource_type: controlled("CAPA_IMPLEMENTATION_WORKSPACE_DRAFT"),
+        workflow_state: "S60",
+      },
+      purpose: controlled("CAPA_IMPLEMENTATION_WORKSPACE_READ"),
+    }))).resolves.toMatchObject({
+      decision: "deny",
+      reason_code: "WORKFLOW_STATE_NOT_AUTHORIZED",
+    });
+  });
+});
+
 describe("G-03 investigation release authorization", () => {
   it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR"])(
     "allows %s with capa.case.submit",

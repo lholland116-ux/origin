@@ -49,12 +49,16 @@ export type CapaAuthorizationOperation =
   | "request_ai_root_cause_review_advisory"
   | "request_ai_action_plan_advisory"
   | "request_ai_action_plan_review_advisory"
+  | "request_ai_implementation_evidence_advisory"
+  | "adopt_ai_implementation_evidence_suggestion"
   | "adopt_ai_investigation_planning_proposal"
   | "adopt_ai_investigation_active_proposal"
   | "read_investigation_active_workspace_draft"
   | "edit_investigation_active_workspace_draft"
   | "read_action_plan_workspace_draft"
   | "edit_action_plan_workspace_draft"
+  | "read_implementation_workspace_draft"
+  | "edit_implementation_workspace_draft"
   | "review_ai_intake_advisory"
   | "approve_scope"
   | "accept_containment_risk"
@@ -89,12 +93,16 @@ export const HUMAN_ONLY_CAPA_OPERATIONS =
     "request_ai_root_cause_review_advisory",
     "request_ai_action_plan_advisory",
     "request_ai_action_plan_review_advisory",
+    "request_ai_implementation_evidence_advisory",
+    "adopt_ai_implementation_evidence_suggestion",
     "adopt_ai_investigation_planning_proposal",
     "adopt_ai_investigation_active_proposal",
     "read_investigation_active_workspace_draft",
     "edit_investigation_active_workspace_draft",
     "read_action_plan_workspace_draft",
     "edit_action_plan_workspace_draft",
+    "read_implementation_workspace_draft",
+    "edit_implementation_workspace_draft",
     "review_ai_intake_advisory",
     "approve_scope",
     "accept_containment_risk",

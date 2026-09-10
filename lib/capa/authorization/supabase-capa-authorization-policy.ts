@@ -83,6 +83,10 @@ const OPERATION_PERMISSION = {
     "capa.ai.intake.advise",
   request_ai_action_plan_review_advisory:
     "capa.ai.root_cause.review",
+  request_ai_implementation_evidence_advisory:
+    "capa.ai.intake.advise",
+  adopt_ai_implementation_evidence_suggestion:
+    "capa.ai.intake.advise",
   adopt_ai_investigation_planning_proposal:
     "capa.review.disposition",
   adopt_ai_investigation_active_proposal:
@@ -94,6 +98,10 @@ const OPERATION_PERMISSION = {
   read_action_plan_workspace_draft:
     "capa.case.view",
   edit_action_plan_workspace_draft:
+    "capa.case.edit",
+  read_implementation_workspace_draft:
+    "capa.case.view",
+  edit_implementation_workspace_draft:
     "capa.case.edit",
   review_ai_intake_advisory:
     "capa.ai.intake.review",
@@ -159,6 +167,10 @@ const OPERATION_PURPOSE = {
     "CAPA_AI_ACTION_PLAN_ADVISORY",
   request_ai_action_plan_review_advisory:
     "CAPA_AI_ACTION_PLAN_REVIEW_ADVISORY",
+  request_ai_implementation_evidence_advisory:
+    "CAPA_AI_IMPLEMENTATION_EVIDENCE_ADVISORY",
+  adopt_ai_implementation_evidence_suggestion:
+    "CAPA_AI_IMPLEMENTATION_EVIDENCE_ADVISORY_ADOPTION",
   adopt_ai_investigation_planning_proposal:
     "CAPA_AI_INVESTIGATION_PLANNING_ADOPTION",
   adopt_ai_investigation_active_proposal:
@@ -171,6 +183,10 @@ const OPERATION_PURPOSE = {
     "CAPA_ACTION_PLAN_WORKSPACE_READ",
   edit_action_plan_workspace_draft:
     "CAPA_ACTION_PLAN_WORKSPACE_EDIT",
+  read_implementation_workspace_draft:
+    "CAPA_IMPLEMENTATION_WORKSPACE_READ",
+  edit_implementation_workspace_draft:
+    "CAPA_IMPLEMENTATION_WORKSPACE_EDIT",
   review_ai_intake_advisory:
     "CAPA_AI_INTAKE_ADVISORY_REVIEW",
   approve_scope:
@@ -273,6 +289,16 @@ const REQUIRED_WORKFLOW_STATES:
         CAPA_STATE.ACTION_PLAN_REVIEW,
       ]),
 
+    request_ai_implementation_evidence_advisory:
+      new Set([
+        CAPA_STATE.IMPLEMENTATION_ACTIVE,
+      ]),
+
+    adopt_ai_implementation_evidence_suggestion:
+      new Set([
+        CAPA_STATE.IMPLEMENTATION_ACTIVE,
+      ]),
+
     adopt_ai_investigation_planning_proposal:
       new Set([
         CAPA_STATE.INVESTIGATION_PLANNING,
@@ -301,6 +327,16 @@ const REQUIRED_WORKFLOW_STATES:
     edit_action_plan_workspace_draft:
       new Set([
         CAPA_STATE.ACTION_PLANNING,
+      ]),
+
+    read_implementation_workspace_draft:
+      new Set([
+        CAPA_STATE.IMPLEMENTATION_ACTIVE,
+      ]),
+
+    edit_implementation_workspace_draft:
+      new Set([
+        CAPA_STATE.IMPLEMENTATION_ACTIVE,
       ]),
 
     review_ai_intake_advisory:

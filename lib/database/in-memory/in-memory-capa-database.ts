@@ -140,6 +140,17 @@ import type { CapaActionPlanAdvisoryReferenceManifest } from "../repositories/ca
 import type { CapaActionPlanReviewAdvisoryResponse } from "../../capa/ai/capa-action-plan-review-advisory-contract";
 import type { CapaActionPlanReviewAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-action-plan-review-advisory-model-generator";
 import type { CapaActionPlanReviewAdvisoryOutputRepository, CapaActionPlanReviewAdvisoryOutputSaveResult, CapaActionPlanReviewAdvisoryReferenceManifest } from "../repositories/capa-action-plan-review-advisory-output-repository";
+import type { CapaImplementationEvidenceAdvisoryResponse } from "../../capa/ai/capa-implementation-evidence-advisory-contract";
+import type { CapaImplementationEvidenceAdvisoryGenerationTraceCapture } from "../../capa/ai/capa-implementation-evidence-advisory-model-generator";
+import type { CapaImplementationEvidenceAdvisoryOutputRepository, CapaImplementationEvidenceAdvisoryOutputSaveResult, CapaImplementationEvidenceAdvisoryReferenceManifest, CapaImplementationEvidenceAdvisoryOutputRecord } from "../repositories/capa-implementation-evidence-advisory-output-repository";
+import {
+  CAPA_ACTION_PLAN_SCHEMA_VERSION,
+  CAPA_ACTION_PLAN_SECTION_TYPE,
+  validateCapaActionPlan,
+} from "../../capa/domain/capa-action-plan";
+import {
+  validateCapaImplementationDraftAgainstApprovedActionSet,
+} from "../../capa/implementation/capa-implementation-validator";
 import {
   validateCapaRootCauseReviewAdvisoryModelOutput,
 } from "../../capa/ai/capa-root-cause-review-advisory-validator";
@@ -183,6 +194,16 @@ import {
   type SaveCapaActionPlanWorkspaceDraftInput,
   type SaveCapaActionPlanWorkspaceDraftResult,
 } from "../repositories/capa-action-plan-workspace-draft-repository";
+import {
+  CAPA_IMPLEMENTATION_WORKSPACE_WORKFLOW_STATE,
+  normalizeCapaImplementationWorkspaceRecord,
+  normalizeCapaImplementationWorkspaceSaveInput,
+  sameCapaImplementationBaseline,
+  type CapaImplementationWorkspaceRepository,
+  type CapaImplementationWorkspaceRecord,
+  type SaveCapaImplementationWorkspaceInput,
+  type SaveCapaImplementationWorkspaceResult,
+} from "../repositories/capa-implementation-workspace-repository";
 import type { CapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-contract";
 import { validateCapaInvestigationActiveWorkspaceDraft } from "../../capa/application/capa-investigation-active-workspace-draft-validator";
 import type { CapaActionPlanWorkspaceDraft } from "../../capa/application/capa-action-plan-workspace-draft-contract";
@@ -330,6 +351,7 @@ interface InMemoryCapaActionPlanAdvisoryOutputRecord {
   readonly organization_id: OrganizationId; readonly capa_case_id: CapaCaseId; readonly case_version_id: CapaCaseVersionId; readonly record_version: number; readonly request_trace: RequestTrace; readonly response: CapaActionPlanAdvisoryResponse; readonly generation_trace: CapaActionPlanAdvisoryGenerationTraceCapture; readonly reference_manifest: CapaActionPlanAdvisoryReferenceManifest; readonly created_at: IsoDateTime;
 }
 interface InMemoryCapaActionPlanReviewAdvisoryOutputRecord { readonly organization_id: OrganizationId; readonly capa_case_id: CapaCaseId; readonly case_version_id: CapaCaseVersionId; readonly record_version: number; readonly request_trace: RequestTrace; readonly response: CapaActionPlanReviewAdvisoryResponse; readonly generation_trace: CapaActionPlanReviewAdvisoryGenerationTraceCapture; readonly reference_manifest: CapaActionPlanReviewAdvisoryReferenceManifest; readonly created_at: IsoDateTime; }
+interface InMemoryCapaImplementationEvidenceAdvisoryOutputRecord { readonly organization_id: OrganizationId; readonly capa_case_id: CapaCaseId; readonly case_version_id: CapaCaseVersionId; readonly record_version: number; readonly request_trace: RequestTrace; readonly response: CapaImplementationEvidenceAdvisoryResponse; readonly generation_trace: CapaImplementationEvidenceAdvisoryGenerationTraceCapture; readonly reference_manifest: CapaImplementationEvidenceAdvisoryReferenceManifest; readonly created_at: IsoDateTime; }
 
 type InMemoryCapaInvestigationPlanningAdoptionRecord =
   PersistedCapaInvestigationPlanningAdoption;
@@ -347,7 +369,8 @@ type InMemoryCapaAdvisoryOutputRecord =
   | InMemoryCapaInvestigationActiveAdvisoryOutputRecord
   | InMemoryCapaRootCauseReviewAdvisoryOutputRecord
   | InMemoryCapaActionPlanAdvisoryOutputRecord
-  | InMemoryCapaActionPlanReviewAdvisoryOutputRecord;
+  | InMemoryCapaActionPlanReviewAdvisoryOutputRecord
+  | InMemoryCapaImplementationEvidenceAdvisoryOutputRecord;
 
 interface InMemoryState {
   readonly revision: number;
@@ -423,6 +446,8 @@ interface InMemoryState {
     Map<string, CapaInvestigationActiveWorkspaceDraft>;
   readonly action_plan_workspace_drafts:
     Map<string, CapaActionPlanWorkspaceDraft>;
+  readonly implementation_workspace_records:
+    Map<string, CapaImplementationWorkspaceRecord>;
   readonly action_plan_review_decisions:
     Map<string, CapaActionPlanReviewDecisionRecord>;
 }
@@ -792,6 +817,8 @@ function cloneState(
       cloneMap(state.investigation_active_workspace_drafts),
     action_plan_workspace_drafts:
       cloneMap(state.action_plan_workspace_drafts),
+    implementation_workspace_records:
+      cloneMap(state.implementation_workspace_records),
     action_plan_review_decisions:
       cloneMap(state.action_plan_review_decisions),
   };
@@ -841,6 +868,8 @@ function emptyState():
       new Map(),
     action_plan_workspace_drafts:
       new Map(),
+    implementation_workspace_records:
+      new Map(),
     action_plan_review_decisions:
       new Map(),
   };
@@ -866,6 +895,7 @@ function stateFromSnapshot(
     investigation_active_adoptions: new Map(snapshot.investigation_active_adoptions.map(([key, value]) => [key, cloneValue(value)])),
     investigation_active_workspace_drafts: new Map(snapshot.investigation_active_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
     action_plan_workspace_drafts: new Map(snapshot.action_plan_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
+    implementation_workspace_records: new Map(snapshot.implementation_workspace_records.map(([key, value]) => [key, cloneValue(value)])),
     action_plan_review_decisions: new Map((snapshot.action_plan_review_decisions ?? []).map(([key, value]) => [key, cloneValue(value)])),
   };
 }
@@ -892,6 +922,7 @@ function snapshotFromState(state: InMemoryState): InMemoryCapaDatabaseSnapshot {
     investigation_active_adoptions: entries(state.investigation_active_adoptions),
     investigation_active_workspace_drafts: entries(state.investigation_active_workspace_drafts),
     action_plan_workspace_drafts: entries(state.action_plan_workspace_drafts),
+    implementation_workspace_records: entries(state.implementation_workspace_records),
     action_plan_review_decisions: entries(state.action_plan_review_decisions),
   };
 }
@@ -941,6 +972,8 @@ type InMemoryCapaActionPlanAdvisorySaveInput =
   Parameters<CapaActionPlanAdvisoryOutputRepository["save"]>[1];
 type InMemoryCapaActionPlanReviewAdvisorySaveInput =
   Parameters<CapaActionPlanReviewAdvisoryOutputRepository["save"]>[1];
+type InMemoryCapaImplementationEvidenceAdvisorySaveInput =
+  Parameters<CapaImplementationEvidenceAdvisoryOutputRepository["save"]>[1];
 
 type InMemoryCapaAdvisorySaveInput =
   | InMemoryCapaIntakeAdvisorySaveInput
@@ -949,7 +982,8 @@ type InMemoryCapaAdvisorySaveInput =
   | InMemoryCapaInvestigationActiveAdvisorySaveInput
   | InMemoryCapaRootCauseReviewAdvisorySaveInput
   | InMemoryCapaActionPlanAdvisorySaveInput
-  | InMemoryCapaActionPlanReviewAdvisorySaveInput;
+  | InMemoryCapaActionPlanReviewAdvisorySaveInput
+  | InMemoryCapaImplementationEvidenceAdvisorySaveInput;
 
 function isS20AdvisorySaveInput(
   input:
@@ -982,6 +1016,7 @@ function isS60AdvisorySaveInput(
   return input.context.workflow_state === "S60";
 }
 function isS70AdvisorySaveInput(input: InMemoryCapaAdvisorySaveInput): input is InMemoryCapaActionPlanReviewAdvisorySaveInput { return input.context.workflow_state === "S70"; }
+function isS80AdvisorySaveInput(input: InMemoryCapaAdvisorySaveInput): input is InMemoryCapaImplementationEvidenceAdvisorySaveInput { return input.context.workflow_state === "S80"; }
 
 function isS30AdvisoryOutputRecord(
   record: unknown,
@@ -1021,6 +1056,7 @@ function isS60AdvisoryOutputRecord(
   return isObjectRecord(record) && "reference_manifest" in record && "generation_trace" in record && isObjectRecord(record.response) && record.response.output_schema_version === "capa_action_plan_advisory-1.0.0";
 }
 function isS70AdvisoryOutputRecord(record: unknown): record is InMemoryCapaActionPlanReviewAdvisoryOutputRecord { return isObjectRecord(record) && "reference_manifest" in record && "generation_trace" in record && isObjectRecord(record.response) && record.response.output_schema_version === "capa_action_plan_review_advisory-1.0.0"; }
+function isS80AdvisoryOutputRecord(record: unknown): record is InMemoryCapaImplementationEvidenceAdvisoryOutputRecord { return isObjectRecord(record) && "reference_manifest" in record && "generation_trace" in record && isObjectRecord(record.response) && record.response.output_schema_version === "capa_implementation_evidence_advisory-1.0.0"; }
 
 function isNonEmptyString(
   value: unknown,
@@ -1576,6 +1612,76 @@ function independentlyResolveS40AdoptionSource(
   return { category: matches[0]!.category, bindings: bindings as never, manifest_schema: manifest.document.manifest_schema_version, manifest_algorithm: manifest.fingerprint_algorithm, manifest_sha: manifest.reference_manifest_sha256 };
 }
 
+function implementationCaseContextMatches(
+  state: InMemoryState,
+  input: SaveCapaImplementationWorkspaceInput,
+): boolean {
+  const capaCase = state.cases.get(
+    recordKey(input.organization_id, input.capa_case_id),
+  );
+  const caseVersion = capaCase === undefined
+    ? undefined
+    : state.case_versions.get(
+      recordKey(input.organization_id, capaCase.current_version_id),
+    );
+  return capaCase !== undefined &&
+    capaCase.current_version_id === input.case_version_id &&
+    capaCase.record_version === input.record_version &&
+    capaCase.status === CAPA_IMPLEMENTATION_WORKSPACE_WORKFLOW_STATE &&
+    caseVersion !== undefined &&
+    caseVersion.capa_case_id === input.capa_case_id &&
+    caseVersion.case_version_id === input.case_version_id &&
+    caseVersion.version_number === input.record_version &&
+    caseVersion.status === CAPA_IMPLEMENTATION_WORKSPACE_WORKFLOW_STATE;
+}
+
+function resolveApprovedImplementationActionReferences(
+  state: InMemoryState,
+  organizationId: OrganizationId,
+  capaCaseId: CapaCaseId,
+  baseline: CapaImplementationWorkspaceRecord["approved_s70_baseline"],
+  resultingCaseVersionId?: CapaCaseVersionId,
+): readonly string[] | null {
+  const decision = state.action_plan_review_decisions.get(
+    actionPlanReviewDecisionKey(
+      organizationId,
+      capaCaseId,
+      baseline.source_case_version_id,
+    ),
+  );
+  const sourceVersion = state.case_versions.get(
+    recordKey(organizationId, baseline.source_case_version_id),
+  );
+  const section = state.section_versions.get(
+    recordKey(organizationId, baseline.approved_action_plan_section_id),
+  );
+  if (
+    decision === undefined ||
+    decision.decision !== "approve" ||
+    decision.action_plan_section_version_id !==
+      baseline.approved_action_plan_section_id ||
+    decision.transition_audit_event_id !== baseline.approval_decision_reference ||
+    (resultingCaseVersionId !== undefined &&
+      decision.resulting_case_version_id !== resultingCaseVersionId) ||
+    sourceVersion === undefined ||
+    sourceVersion.capa_case_id !== capaCaseId ||
+    sourceVersion.status !== "S70" ||
+    !sourceVersion.section_version_ids.includes(
+      baseline.approved_action_plan_section_id,
+    ) ||
+    section === undefined ||
+    section.capa_case_id !== capaCaseId ||
+    section.section_type !== CAPA_ACTION_PLAN_SECTION_TYPE ||
+    section.schema_version !== CAPA_ACTION_PLAN_SCHEMA_VERSION
+  ) {
+    return null;
+  }
+  const actionPlan = validateCapaActionPlan(section.content);
+  return actionPlan.status === "valid"
+    ? actionPlan.value.items.map((item) => item.item_id)
+    : null;
+}
+
 export class InMemoryCapaDatabase
   implements
     TransactionManager,
@@ -1589,6 +1695,7 @@ export class InMemoryCapaDatabase
     CapaInvestigationPlanningAdoptionRepository,
     CapaInvestigationActiveAdoptionRepository,
     CapaInvestigationActiveWorkspaceDraftRepository,
+    CapaImplementationWorkspaceRepository,
     CapaActionPlanReviewDecisionRepository
 {
   private committed_state:
@@ -1774,8 +1881,13 @@ export class InMemoryCapaDatabase
 
   async save(
     transaction: TransactionContext,
+    input: InMemoryCapaImplementationEvidenceAdvisorySaveInput,
+  ): Promise<CapaImplementationEvidenceAdvisoryOutputSaveResult>;
+
+  async save(
+    transaction: TransactionContext,
     input: InMemoryCapaAdvisorySaveInput,
-  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult | CapaInvestigationPlanningAdvisoryOutputSaveResult | CapaInvestigationActiveAdvisoryOutputSaveResult | CapaRootCauseReviewAdvisoryOutputSaveResult | CapaActionPlanAdvisoryOutputSaveResult | CapaActionPlanReviewAdvisoryOutputSaveResult> {
+  ): Promise<CapaIntakeAdvisoryOutputSaveResult | CapaContainmentRiskAdvisoryOutputSaveResult | CapaInvestigationPlanningAdvisoryOutputSaveResult | CapaInvestigationActiveAdvisoryOutputSaveResult | CapaRootCauseReviewAdvisoryOutputSaveResult | CapaActionPlanAdvisoryOutputSaveResult | CapaActionPlanReviewAdvisoryOutputSaveResult | CapaImplementationEvidenceAdvisoryOutputSaveResult> {
     const state = this.transactionState(transaction);
 
     if (isS30AdvisorySaveInput(input)) {
@@ -1792,6 +1904,10 @@ export class InMemoryCapaDatabase
 
     if (isS70AdvisorySaveInput(input)) {
       return this.saveS70Advisory(transaction, state, input);
+    }
+
+    if (isS80AdvisorySaveInput(input)) {
+      return this.saveS80Advisory(transaction, state, input);
     }
 
     if (isS60AdvisorySaveInput(input)) {
@@ -2170,6 +2286,21 @@ export class InMemoryCapaDatabase
     state.advisory_outputs.set(outputKey, cloneValue(record)); state.advisory_runs.set(runKey, input.response.output_id); return "saved";
   }
 
+  private async saveS80Advisory(transaction: TransactionContext, state: InMemoryState, input: InMemoryCapaImplementationEvidenceAdvisorySaveInput): Promise<CapaImplementationEvidenceAdvisoryOutputSaveResult> {
+    if (transaction.request_trace.request_id !== input.request_id || transaction.request_trace.correlation_id !== input.correlation_id) throw new InMemoryCapaInvestigationActiveAdvisoryPersistenceError();
+    const capaCase = state.cases.get(recordKey(input.context.organization_id, input.context.capa_case_id));
+    if (capaCase === undefined || capaCase.current_version_id !== input.context.case_version_id || capaCase.record_version !== input.context.record_version || capaCase.status !== "S80") return "case_changed";
+    if (input.response.advisory_only !== true || input.response.workflow_mutated !== false || input.response.controlled_record_mutated !== false || input.response.approval_claimed !== false || input.response.workflow_transition !== null || input.response.human_acceptance_required !== true) throw new InMemoryIntegrityError("The S80 advisory authority boundary is invalid.");
+    const outputKey = recordKey(input.context.organization_id, input.response.output_id);
+    const runKey = recordKey(input.context.organization_id, input.response.run_id);
+    if (state.advisory_outputs.has(outputKey) || state.advisory_runs.has(runKey)) throw new InMemoryDuplicateRecordError("CAPA AI advisory output");
+    const manifestDocument = { manifest_schema_version: "capa-implementation-evidence-advisory-reference-manifest-1.0.0" as const, entries: input.reference_manifest.map((entry) => ({ ...entry })) };
+    const record: InMemoryCapaImplementationEvidenceAdvisoryOutputRecord = { organization_id: input.context.organization_id, capa_case_id: input.context.capa_case_id, case_version_id: input.context.case_version_id, record_version: input.context.record_version, request_trace: { request_id: input.request_id, correlation_id: input.correlation_id }, response: cloneValue(input.response), generation_trace: cloneValue(input.generation_trace), reference_manifest: { document: manifestDocument, fingerprint_algorithm: "sha256-canonical-json-v1", reference_manifest_sha256: fingerprintCanonicalJson(manifestDocument) }, created_at: transaction.started_at };
+    state.advisory_outputs.set(outputKey, cloneValue(record));
+    state.advisory_runs.set(runKey, input.response.output_id);
+    return "saved";
+  }
+
   async appendAdoption(
     transaction: TransactionContext,
     input: CapaInvestigationPlanningAdoptionPersistenceInput,
@@ -2394,13 +2525,19 @@ export class InMemoryCapaDatabase
   async findById(
     organizationId: string,
     outputId: string,
-  ): Promise<CapaInvestigationActiveAdvisoryOutputRecord | CapaRootCauseReviewAdvisoryOutputRecord | import("../repositories/capa-action-plan-advisory-output-repository").CapaActionPlanAdvisoryOutputRecord | import("../repositories/capa-action-plan-review-advisory-output-repository").CapaActionPlanReviewAdvisoryOutputRecord | null> {
+  ): Promise<CapaImplementationEvidenceAdvisoryOutputRecord | null>;
+
+  async findById(
+    organizationId: string,
+    outputId: string,
+  ): Promise<CapaInvestigationActiveAdvisoryOutputRecord | CapaRootCauseReviewAdvisoryOutputRecord | import("../repositories/capa-action-plan-advisory-output-repository").CapaActionPlanAdvisoryOutputRecord | import("../repositories/capa-action-plan-review-advisory-output-repository").CapaActionPlanReviewAdvisoryOutputRecord | CapaImplementationEvidenceAdvisoryOutputRecord | null> {
     const output = this.committed_state.advisory_outputs.get(
       recordKey(organizationId as OrganizationId, outputId),
     );
     if (isS50AdvisoryOutputRecord(output)) return cloneValue(output) as unknown as CapaRootCauseReviewAdvisoryOutputRecord;
     if (isS60AdvisoryOutputRecord(output)) return cloneValue(output) as unknown as import("../repositories/capa-action-plan-advisory-output-repository").CapaActionPlanAdvisoryOutputRecord;
     if (isS70AdvisoryOutputRecord(output)) return cloneValue(output) as unknown as import("../repositories/capa-action-plan-review-advisory-output-repository").CapaActionPlanReviewAdvisoryOutputRecord;
+    if (isS80AdvisoryOutputRecord(output)) return cloneValue(output) as unknown as CapaImplementationEvidenceAdvisoryOutputRecord;
     if (!isS40AdvisoryOutputRecord(output)) return null;
     return cloneValue(output) as unknown as CapaInvestigationActiveAdvisoryOutputRecord;
   }
@@ -2469,6 +2606,173 @@ export class InMemoryCapaDatabase
     if (!validCreate && !validUpdate) return { status: "concurrency_conflict" };
     state.action_plan_workspace_drafts.set(key, cloneValue(draft));
     return { status: "saved", draft: cloneValue(draft) };
+  }
+
+  async findWorkspace(
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+  ): Promise<CapaImplementationWorkspaceRecord | null> {
+    const workspace = this.committed_state.implementation_workspace_records.get(
+      recordKey(organizationId, capaCaseId),
+    );
+    return workspace === undefined ? null : cloneValue(workspace);
+  }
+
+  async findWorkspaceForUpdate(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+  ): Promise<CapaImplementationWorkspaceRecord | null> {
+    const state = this.transactionState(transaction);
+    const workspace = state.implementation_workspace_records.get(
+      recordKey(organizationId, capaCaseId),
+    );
+    return workspace === undefined ? null : cloneValue(workspace);
+  }
+
+  async initializeWorkspace(
+    transaction: TransactionContext,
+    input: SaveCapaImplementationWorkspaceInput,
+  ): Promise<SaveCapaImplementationWorkspaceResult> {
+    let normalized: SaveCapaImplementationWorkspaceInput;
+    try {
+      normalized = normalizeCapaImplementationWorkspaceSaveInput(input, true);
+    } catch {
+      throw new InMemoryIntegrityError(
+        "The S80 implementation workspace initialization input is invalid.",
+      );
+    }
+    if (normalized.expected_draft_revision !== null) {
+      throw new InMemoryIntegrityError(
+        "S80 implementation workspace initialization requires a null expected revision.",
+      );
+    }
+    return this.saveWorkspace(transaction, normalized);
+  }
+
+  async saveWorkspace(
+    transaction: TransactionContext,
+    input: SaveCapaImplementationWorkspaceInput,
+  ): Promise<SaveCapaImplementationWorkspaceResult> {
+    const state = this.transactionState(transaction);
+    let normalized: SaveCapaImplementationWorkspaceInput;
+    try {
+      normalized = normalizeCapaImplementationWorkspaceSaveInput(
+        input,
+        input.expected_draft_revision === null,
+      );
+    } catch {
+      throw new InMemoryIntegrityError(
+        "The S80 implementation workspace persistence input is invalid.",
+      );
+    }
+    const key = recordKey(normalized.organization_id, normalized.capa_case_id);
+    const existing = state.implementation_workspace_records.get(key);
+
+    if (normalized.expected_draft_revision === null) {
+      if (existing !== undefined) {
+        return { status: "concurrency_conflict" };
+      }
+      if (!implementationCaseContextMatches(state, normalized)) {
+        return { status: "case_changed" };
+      }
+      const baseline = normalized.approved_s70_baseline;
+      if (baseline === undefined) {
+        throw new InMemoryIntegrityError(
+          "The S80 implementation workspace baseline is required.",
+        );
+      }
+      const actionReferences = resolveApprovedImplementationActionReferences(
+        state,
+        normalized.organization_id,
+        normalized.capa_case_id,
+        baseline,
+        normalized.case_version_id,
+      );
+      if (actionReferences === null) {
+        return { status: "baseline_conflict" };
+      }
+      const contextual = validateCapaImplementationDraftAgainstApprovedActionSet(
+        normalized.draft,
+        actionReferences,
+      );
+      if (contextual.status !== "valid") {
+        throw new InMemoryIntegrityError(
+          "The S80 implementation workspace references a non-authoritative S70 action.",
+        );
+      }
+      const workspace = normalizeCapaImplementationWorkspaceRecord({
+        organization_id: normalized.organization_id,
+        capa_case_id: normalized.capa_case_id,
+        case_version_id: normalized.case_version_id,
+        record_version: normalized.record_version,
+        workflow_state: CAPA_IMPLEMENTATION_WORKSPACE_WORKFLOW_STATE,
+        approved_s70_baseline: baseline,
+        draft_revision: normalized.draft_revision,
+        draft: contextual.value,
+        created_by_user_id: normalized.actor_user_id,
+        created_at: transaction.started_at,
+        updated_by_user_id: normalized.actor_user_id,
+        updated_at: transaction.started_at,
+      });
+      state.implementation_workspace_records.set(key, cloneValue(workspace));
+      return { status: "saved", workspace: cloneValue(workspace) };
+    }
+    if (existing === undefined || normalized.expected_draft_revision === null ||
+      normalized.draft_revision !== normalized.expected_draft_revision + 1) {
+      return { status: "concurrency_conflict" };
+    }
+    if (
+      normalized.approved_s70_baseline !== undefined &&
+      !sameCapaImplementationBaseline(
+        normalized.approved_s70_baseline,
+        existing.approved_s70_baseline,
+      )
+    ) {
+      return { status: "baseline_conflict" };
+    }
+    if (
+      existing.draft_revision !== normalized.expected_draft_revision ||
+      existing.case_version_id !== normalized.case_version_id ||
+      existing.record_version !== normalized.record_version
+    ) {
+      return existing.case_version_id !== normalized.case_version_id ||
+        existing.record_version !== normalized.record_version
+        ? { status: "case_changed" }
+        : { status: "concurrency_conflict" };
+    }
+    if (!implementationCaseContextMatches(state, normalized)) {
+      return { status: "case_changed" };
+    }
+    const actionReferences = resolveApprovedImplementationActionReferences(
+      state,
+      existing.organization_id,
+      existing.capa_case_id,
+      existing.approved_s70_baseline,
+      normalized.case_version_id,
+    );
+    if (actionReferences === null) return { status: "baseline_conflict" };
+    const contextual = validateCapaImplementationDraftAgainstApprovedActionSet(
+      normalized.draft,
+      actionReferences,
+    );
+    if (contextual.status !== "valid") {
+      throw new InMemoryIntegrityError(
+        "The S80 implementation workspace references a non-authoritative S70 action.",
+      );
+    }
+    const workspace = normalizeCapaImplementationWorkspaceRecord({
+      ...existing,
+      case_version_id: normalized.case_version_id,
+      record_version: normalized.record_version,
+      workflow_state: CAPA_IMPLEMENTATION_WORKSPACE_WORKFLOW_STATE,
+      draft_revision: normalized.draft_revision,
+      draft: contextual.value,
+      updated_by_user_id: normalized.actor_user_id,
+      updated_at: transaction.started_at,
+    });
+    state.implementation_workspace_records.set(key, cloneValue(workspace));
+    return { status: "saved", workspace: cloneValue(workspace) };
   }
 
   async saveDecision(
@@ -3374,6 +3678,32 @@ export class InMemoryCapaDatabase
       const validated = validateCapaActionPlanWorkspaceDraft(draft);
       if (validated.status !== "valid" || key !== recordKey(draft.organization_id, draft.capa_case_id)) {
         throw new InMemoryIntegrityError("The S60 action-plan workspace draft state is invalid.");
+      }
+    }
+    for (const [key, workspace] of state.implementation_workspace_records) {
+      let normalized: CapaImplementationWorkspaceRecord;
+      try {
+        normalized = normalizeCapaImplementationWorkspaceRecord(workspace);
+      } catch {
+        throw new InMemoryIntegrityError("The S80 implementation workspace state is invalid.");
+      }
+      if (key !== recordKey(normalized.organization_id, normalized.capa_case_id)) {
+        throw new InMemoryIntegrityError("The S80 implementation workspace key is invalid.");
+      }
+      const actionReferences = resolveApprovedImplementationActionReferences(
+        state,
+        normalized.organization_id,
+        normalized.capa_case_id,
+        normalized.approved_s70_baseline,
+      );
+      const contextual = actionReferences === null
+        ? null
+        : validateCapaImplementationDraftAgainstApprovedActionSet(
+          normalized.draft,
+          actionReferences,
+        );
+      if (contextual === null || contextual.status !== "valid") {
+        throw new InMemoryIntegrityError("The S80 implementation workspace baseline or action references are invalid.");
       }
     }
     for (const [key, decision] of state.action_plan_review_decisions) {

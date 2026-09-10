@@ -14,6 +14,7 @@ import type {
   SubmitCapaRootCausePackageDependencies,
 } from "./submit-capa-root-cause-package";
 import type { SubmitCapaActionPlanDependencies } from "./submit-capa-action-plan";
+import type { SubmitCapaImplementationDependencies } from "./submit-capa-implementation";
 
 import type {
   UpdateCapaInvestigationProgressDependencies,
@@ -87,6 +88,7 @@ import {
 } from "./capa-root-cause-review-advisory-runtime-factory";
 import { createRequestScopedCapaActionPlanAdvisoryService } from "./capa-action-plan-advisory-runtime-factory";
 import { createRequestScopedCapaActionPlanReviewAdvisoryService } from "./capa-action-plan-review-advisory-runtime-factory";
+import { createRequestScopedCapaImplementationEvidenceAdvisoryAdoptionService, createRequestScopedCapaImplementationEvidenceAdvisoryService } from "./capa-implementation-evidence-advisory-runtime-factory";
 import {
   createRequestScopedCapaInvestigationActiveAdoptionService,
 } from "./capa-investigation-active-adoption-runtime-factory";
@@ -100,7 +102,11 @@ import { createOpenAICapaRootCauseReviewAdvisoryStructuredModelClient } from "..
 import type { CapaActionPlanAdvisoryStructuredModelClient } from "../ai/capa-action-plan-advisory-model-generator";
 import { createOpenAICapaActionPlanAdvisoryStructuredModelClient } from "../ai/openai-capa-action-plan-advisory-structured-model-client";
 import type { CapaActionPlanReviewAdvisoryStructuredModelClient } from "../ai/capa-action-plan-review-advisory-model-generator";
+import type { CapaImplementationEvidenceAdvisoryStructuredModelClient } from "../ai/capa-implementation-evidence-advisory-model-generator";
+import { GovernedCapaImplementationEvidenceAdvisoryKnowledgeProvider } from "../ai/capa-implementation-evidence-advisory-knowledge-provider";
+import type { CapaImplementationEvidenceAdvisoryKnowledgeProvider } from "../ai/capa-implementation-evidence-advisory-context";
 import { createOpenAICapaActionPlanReviewAdvisoryStructuredModelClient } from "../ai/openai-capa-action-plan-review-advisory-structured-model-client";
+import { createOpenAICapaImplementationEvidenceAdvisoryStructuredModelClient } from "../ai/openai-capa-implementation-evidence-advisory-structured-model-client";
 
 import type {
   CapaIntakeAdvisoryStructuredModelClient,
@@ -217,6 +223,7 @@ import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return
 import { createCapaActionPlanReturnCycleResolver } from "./capa-action-plan-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import { createCapaActionPlanWorkspaceDraftService } from "./capa-action-plan-workspace-draft-service";
+import { createCapaImplementationWorkspaceService } from "./capa-implementation-workspace-service";
 import type { CapaActionPlanWorkspaceDraftRepository } from "../../database/repositories/capa-action-plan-workspace-draft-repository";
 
 /**
@@ -271,6 +278,7 @@ export interface CapaDevelopmentRootCauseReviewAdvisoryConfiguration {
 }
 export interface CapaDevelopmentActionPlanAdvisoryConfiguration { readonly structured_model_client: CapaActionPlanAdvisoryStructuredModelClient; }
 export interface CapaDevelopmentActionPlanReviewAdvisoryConfiguration { readonly structured_model_client: CapaActionPlanReviewAdvisoryStructuredModelClient; }
+export interface CapaDevelopmentImplementationEvidenceAdvisoryConfiguration { readonly structured_model_client: CapaImplementationEvidenceAdvisoryStructuredModelClient; }
 
 export interface CapaDevelopmentPersistenceConfiguration {
   readonly state_store: CapaDevelopmentFileStateStore;
@@ -299,6 +307,7 @@ export interface CapaDevelopmentRuntimeOptions {
     CapaDevelopmentRootCauseReviewAdvisoryConfiguration;
   readonly action_plan_advisory?: CapaDevelopmentActionPlanAdvisoryConfiguration;
   readonly action_plan_review_advisory?: CapaDevelopmentActionPlanReviewAdvisoryConfiguration;
+  readonly implementation_evidence_advisory?: CapaDevelopmentImplementationEvidenceAdvisoryConfiguration;
 }
 
 export class CapaDevelopmentRuntimeDisabledError
@@ -475,6 +484,16 @@ function developmentAllowReasonCode(
         "DEVELOPMENT_AI_ACTION_PLAN_REVIEW_ADVISORY_ALLOWED",
       );
 
+    case "request_ai_implementation_evidence_advisory":
+      return controlled(
+        "DEVELOPMENT_AI_IMPLEMENTATION_EVIDENCE_ADVISORY_ALLOWED",
+      );
+
+    case "adopt_ai_implementation_evidence_suggestion":
+      return controlled(
+        "DEVELOPMENT_AI_IMPLEMENTATION_EVIDENCE_ADOPTION_ALLOWED",
+      );
+
     case "adopt_ai_investigation_planning_proposal":
       return controlled(
         "DEVELOPMENT_AI_INVESTIGATION_PLANNING_ADOPTION_ALLOWED",
@@ -503,6 +522,16 @@ function developmentAllowReasonCode(
     case "edit_action_plan_workspace_draft":
       return controlled(
         "DEVELOPMENT_AI_ACTION_PLAN_WORKSPACE_EDIT_ALLOWED",
+      );
+
+    case "read_implementation_workspace_draft":
+      return controlled(
+        "DEVELOPMENT_IMPLEMENTATION_WORKSPACE_READ_ALLOWED",
+      );
+
+    case "edit_implementation_workspace_draft":
+      return controlled(
+        "DEVELOPMENT_IMPLEMENTATION_WORKSPACE_EDIT_ALLOWED",
       );
 
     case "approve_root_cause":
@@ -601,12 +630,16 @@ function developmentAuthorizationPolicy(
           "request_ai_root_cause_review_advisory" ||
         request.operation ===
           "request_ai_action_plan_advisory" ||
-        request.operation ===
+          request.operation ===
           "request_ai_action_plan_review_advisory" ||
+        request.operation ===
+          "request_ai_implementation_evidence_advisory" ||
         request.operation ===
           "adopt_ai_investigation_planning_proposal" ||
         request.operation ===
           "adopt_ai_investigation_active_proposal" ||
+        request.operation ===
+          "adopt_ai_implementation_evidence_suggestion" ||
         request.operation ===
           "read_investigation_active_workspace_draft" ||
         request.operation ===
@@ -614,7 +647,11 @@ function developmentAuthorizationPolicy(
         request.operation ===
           "read_action_plan_workspace_draft" ||
         request.operation ===
-          "edit_action_plan_workspace_draft";
+          "edit_action_plan_workspace_draft" ||
+        request.operation ===
+          "read_implementation_workspace_draft" ||
+        request.operation ===
+          "edit_implementation_workspace_draft";
 
       const rootCauseGateBoundarySatisfied =
         !isRootCauseGateOperation ||
@@ -937,6 +974,16 @@ function developmentRootCauseReviewAdvisoryConfigurationFromEnvironment(): CapaD
   return { structured_model_client: createOpenAICapaRootCauseReviewAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model }) };
 }
 
+function developmentImplementationEvidenceAdvisoryConfigurationFromEnvironment(): CapaDevelopmentImplementationEvidenceAdvisoryConfiguration | undefined {
+  const enabled = process.env.CAPA_IMPLEMENTATION_EVIDENCE_ADVISORY_DEVELOPMENT_ENABLED;
+  if (enabled === undefined || enabled.trim().length === 0 || enabled === "false") return undefined;
+  if (enabled !== "true") throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  const model = process.env.CAPA_IMPLEMENTATION_EVIDENCE_ADVISORY_MODEL;
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (typeof model !== "string" || model.trim().length === 0 || typeof apiKey !== "string" || apiKey.trim().length === 0) throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+  return { structured_model_client: createOpenAICapaImplementationEvidenceAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model }) };
+}
+
 /**
  * Creates an isolated development runtime.
  *
@@ -983,6 +1030,7 @@ export function createCapaDevelopmentRuntime(
     options.root_cause_review_advisory;
   const actionPlanAdvisoryConfiguration = options.action_plan_advisory;
   const actionPlanReviewAdvisoryConfiguration = options.action_plan_review_advisory;
+  const implementationEvidenceAdvisoryConfiguration = options.implementation_evidence_advisory;
 
   const database =
     new InMemoryCapaDatabase({
@@ -1169,6 +1217,16 @@ export function createCapaDevelopmentRuntime(
     configuration: {
       ...submitIntakeDependencies.configuration,
       authorization_purpose: controlled("CAPA_ACTION_PLAN_SUBMISSION"),
+    },
+  };
+
+  const submitImplementationDependencies: SubmitCapaImplementationDependencies = {
+    ...submitIntakeDependencies,
+    workspace_repository: database,
+    review_decision_repository: database,
+    configuration: {
+      ...submitIntakeDependencies.configuration,
+      authorization_purpose: controlled("CAPA_WORKFLOW_TRANSITION"),
     },
   };
 
@@ -1451,6 +1509,16 @@ export function createCapaDevelopmentRuntime(
       return createRequestScopedCapaActionPlanReviewAdvisoryService({ request_context: context, capa_repository: database, authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: actionPlanReviewAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, now, generate_uuid: generateUuid });
     },
 
+    create_implementation_evidence_advisory_service(context) {
+      if (implementationEvidenceAdvisoryConfiguration === undefined) throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
+      const knowledge_provider: CapaImplementationEvidenceAdvisoryKnowledgeProvider | undefined = intakeAdvisoryConfiguration === undefined ? undefined : new GovernedCapaImplementationEvidenceAdvisoryKnowledgeProvider(knowledgeRetrievalService, intakeAdvisoryConfiguration.retrieval_configuration, now);
+      return createRequestScopedCapaImplementationEvidenceAdvisoryService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: database, review_decision_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, now }), authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: implementationEvidenceAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, knowledge_provider, now, generate_uuid: generateUuid });
+    },
+
+    create_implementation_evidence_advisory_adoption_service(context) {
+      return createRequestScopedCapaImplementationEvidenceAdvisoryAdoptionService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: database, review_decision_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, now }), authorization_policy: dependencies.authorization_policy, output_repository: database, transaction_manager: database, audit_repository: database, audit_schema_version: dependencies.configuration.audit_schema_version, now, generate_audit_event_id: () => generateUuid() as AuditEventId });
+    },
+
     create_investigation_active_adoption_service(context) {
       return createRequestScopedCapaInvestigationActiveAdoptionService({ request_context: context, transaction_manager: database, adoption_repository: database, audit_repository: database, source_resolver: new RepositoryCapaInvestigationActiveAdoptionSourceResolver(database), workspace_repository: database, authorization_policy: dependencies.authorization_policy, now, generate_uuid: generateUuid, audit_schema_version: dependencies.configuration.audit_schema_version });
     },
@@ -1483,6 +1551,20 @@ export function createCapaDevelopmentRuntime(
         now,
       });
     },
+
+    create_implementation_workspace_service(context) {
+      return createCapaImplementationWorkspaceService({
+        request_context: context,
+        capa_repository: database,
+        review_decision_repository: database,
+        workspace_repository: database,
+        transaction_manager: database,
+        authorization_policy: dependencies.authorization_policy,
+        now,
+      });
+    },
+
+    submit_implementation_dependencies: submitImplementationDependencies,
 
     create_investigation_active_workspace_reconciliation_service(context) {
       return createReconcileCapaInvestigationActiveWorkspaceAdoptionsService({ request_context: context, capa_repository: database, adoption_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, return_cycle_resolver: returnCycleResolver, now });
@@ -1574,6 +1656,8 @@ export function getCapaDevelopmentRuntime():
           developmentInvestigationActiveAdvisoryConfigurationFromEnvironment(),
         root_cause_review_advisory:
           developmentRootCauseReviewAdvisoryConfigurationFromEnvironment(),
+        implementation_evidence_advisory:
+          developmentImplementationEvidenceAdvisoryConfigurationFromEnvironment(),
         action_plan_advisory: (() => { const model = process.env.CAPA_ACTION_PLAN_ADVISORY_MODEL; if (model === undefined) return undefined; const apiKey = process.env.OPENAI_API_KEY; if (apiKey === undefined || apiKey.trim().length === 0) return undefined; return { structured_model_client: createOpenAICapaActionPlanAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model }) }; })(),
         action_plan_review_advisory: (() => { const model = process.env.CAPA_ACTION_PLAN_REVIEW_ADVISORY_MODEL; if (model === undefined) return undefined; const apiKey = process.env.OPENAI_API_KEY; if (apiKey === undefined || apiKey.trim().length === 0) return undefined; return { structured_model_client: createOpenAICapaActionPlanReviewAdvisoryStructuredModelClient(new OpenAI({ apiKey }), { model }) }; })(),
 

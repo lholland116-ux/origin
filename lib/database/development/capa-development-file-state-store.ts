@@ -35,6 +35,11 @@ function deterministicSnapshot(snapshot: CapaDevelopmentStateSnapshot): CapaDeve
     advisory_outputs: sortedEntries(snapshot.advisory_outputs),
     advisory_runs: sortedEntries(snapshot.advisory_runs),
     investigation_planning_adoptions: sortedEntries(snapshot.investigation_planning_adoptions),
+    investigation_active_adoptions: sortedEntries(snapshot.investigation_active_adoptions),
+    investigation_active_workspace_drafts: sortedEntries(snapshot.investigation_active_workspace_drafts),
+    action_plan_workspace_drafts: sortedEntries(snapshot.action_plan_workspace_drafts),
+    implementation_workspace_records: sortedEntries(snapshot.implementation_workspace_records),
+    action_plan_review_decisions: sortedEntries(snapshot.action_plan_review_decisions),
   };
 }
 
