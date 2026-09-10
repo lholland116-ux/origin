@@ -29,6 +29,22 @@ describe("S70 action-plan review panel", () => {
     expect(panel).toContain("if (attempt) void submit(attempt)");
   });
 
+  it("routes both pending decisions through the same step-up flow", () => {
+    const begin = panel.slice(
+      panel.indexOf("function begin"),
+      panel.indexOf("async function submit"),
+    );
+
+    expect(begin).toContain("if (attempt !== null || submitting) return;");
+    expect(panel).toContain('begin("approve")');
+    expect(panel).toContain('begin("return")');
+    expect(begin).toContain("setStepUpOpen(true)");
+    expect(begin).not.toContain("void submit(next)");
+    expect(panel).toContain('attempt?.decision === "return"');
+    expect(panel).toContain("Confirm return for action planning");
+    expect(panel).toContain("setStepUpOpen(false); setAttempt(null);");
+  });
+
   it("refreshes authoritative state after success and does not render S60 editing in S70", () => {
     expect(panel).toContain("onAuthoritativeRefresh");
     expect(panel).toContain("Implementation evidence has not yet been submitted.");

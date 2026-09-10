@@ -151,6 +151,11 @@ export default function CapaActionPlanReviewPanel({
   const [advisoryRequesting, setAdvisoryRequesting] = useState(false);
   const [advisoryError, setAdvisoryError] = useState<string | null>(null);
 
+  const stepUpTitle =
+    attempt?.decision === "return"
+      ? "Confirm return for action planning"
+      : "Confirm action-plan approval";
+
   async function generateAdvisory() {
     setAdvisoryRequesting(true);
     setAdvisoryError(null);
@@ -171,6 +176,8 @@ export default function CapaActionPlanReviewPanel({
   }
 
   function begin(decision: CapaActionPlanReviewDecision) {
+    if (attempt !== null || submitting) return;
+
     const next = createCapaActionPlanReviewAttempt({
       caseId,
       recordVersion,
@@ -194,7 +201,7 @@ export default function CapaActionPlanReviewPanel({
       setConfirmationChecked(false);
       setConfirmationOpen(true);
     } else {
-      void submit(next);
+      setStepUpOpen(true);
     }
   }
 
@@ -339,7 +346,7 @@ export default function CapaActionPlanReviewPanel({
         <label className="mt-5 flex gap-3 rounded-xl border border-zinc-700 p-4 text-sm"><input type="checkbox" checked={confirmationChecked} disabled={submitting} onChange={(event) => setConfirmationChecked(event.target.checked)} />I confirm this approval decision and rationale.</label>
         <div className="mt-6 flex justify-end gap-3"><button type="button" disabled={submitting} onClick={() => { setConfirmationOpen(false); setAttempt(null); }}>Cancel</button><button type="button" disabled={!confirmationChecked || submitting} onClick={() => { setConfirmationOpen(false); setStepUpOpen(true); }} className="min-h-11 rounded-xl bg-amber-600 px-5 font-semibold disabled:opacity-50">Continue to step-up</button></div>
       </section></div> : null}
-      {stepUpOpen ? <FreshTotpStepUp open={stepUpOpen} title="Confirm action-plan approval" description="Fresh step-up authentication is required for this controlled CAPA decision." onCancel={() => setStepUpOpen(false)} onVerified={() => { setStepUpOpen(false); if (attempt) void submit(attempt); }} /> : null}
+      {stepUpOpen ? <FreshTotpStepUp open={stepUpOpen} title={stepUpTitle} description="Fresh step-up authentication is required for this controlled CAPA decision." onCancel={() => { setStepUpOpen(false); setAttempt(null); }} onVerified={() => { setStepUpOpen(false); if (attempt) void submit(attempt); }} /> : null}
     </section>
   );
 }
