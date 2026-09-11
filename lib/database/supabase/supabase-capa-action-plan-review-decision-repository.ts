@@ -10,6 +10,7 @@ import {
   normalizeCapaActionPlanReviewDecision,
   type CapaActionPlanReviewDecisionRecord,
   type CapaActionPlanReviewDecisionRepository,
+  type CapaActionPlanReviewDecisionTransactionReadRepository,
   type SaveCapaActionPlanReviewDecisionResult,
 } from "../repositories/capa-action-plan-review-decision-repository";
 import type { TransactionContext } from "../transactions";
@@ -57,7 +58,9 @@ function requireRows(
 }
 
 export class SupabaseCapaActionPlanReviewDecisionRepository
-  implements CapaActionPlanReviewDecisionRepository {
+  implements
+    CapaActionPlanReviewDecisionRepository,
+    CapaActionPlanReviewDecisionTransactionReadRepository {
   constructor(private readonly sql: postgres.Sql) {}
 
   async saveDecision(
@@ -109,7 +112,7 @@ export class SupabaseCapaActionPlanReviewDecisionRepository
       return { status: "saved", decision: requireRows(rows) };
     }
 
-    const existing = await this.findDecisionInTransaction(
+    const existing = await this.findDecisionInTransactionSql(
       sql!,
       decision!.organization_id,
       decision!.capa_case_id,
@@ -140,7 +143,22 @@ export class SupabaseCapaActionPlanReviewDecisionRepository
     return rows[0] === undefined ? null : fromRow(rows[0]);
   }
 
-  private async findDecisionInTransaction(
+  async findDecisionInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sourceCaseVersionId: CapaCaseVersionId,
+  ): Promise<CapaActionPlanReviewDecisionRecord | null> {
+    const sql = requireSupabaseTransaction(transaction);
+    return this.findDecisionInTransactionSql(
+      sql,
+      organizationId,
+      capaCaseId,
+      sourceCaseVersionId,
+    );
+  }
+
+  private async findDecisionInTransactionSql(
     sql: postgres.TransactionSql,
     organizationId: OrganizationId,
     capaCaseId: CapaCaseId,

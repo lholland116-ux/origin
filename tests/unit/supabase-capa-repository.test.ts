@@ -775,6 +775,44 @@ describe("SupabaseCapaRepository reads", () => {
     );
   });
 
+  it("reads authoritative versions through the active transaction SQL", async () => {
+    const harness = createSqlHarness();
+    harness.enqueue(
+      [caseVersionRow()],
+      [{ section_version_id: SECTION_VERSION_ID }],
+      [sectionVersionRow()],
+    );
+
+    const repository = new SupabaseCapaRepository(harness.sql);
+
+    await inTransaction(harness, async (transaction) => {
+      await expect(
+        repository.findCaseVersionByIdInTransaction(
+          transaction,
+          ORGANIZATION_ID,
+          CASE_ID,
+          CASE_VERSION_ID,
+        ),
+      ).resolves.toMatchObject({
+        case_version_id: CASE_VERSION_ID,
+        section_version_ids: [SECTION_VERSION_ID],
+      });
+      await expect(
+        repository.findSectionVersionByIdInTransaction(
+          transaction,
+          ORGANIZATION_ID,
+          CASE_ID,
+          SECTION_VERSION_ID,
+        ),
+      ).resolves.toMatchObject({
+        section_version_id: SECTION_VERSION_ID,
+      });
+    });
+
+    expect(harness.sql).not.toHaveBeenCalled();
+    expect(harness.transaction_sql).toHaveBeenCalledTimes(3);
+  });
+
   it("returns null when a section version is absent", async () => {
     const harness = createSqlHarness();
     harness.enqueue([]);

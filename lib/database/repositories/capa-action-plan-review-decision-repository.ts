@@ -48,6 +48,15 @@ export interface CapaActionPlanReviewDecisionRepository {
   ): Promise<CapaActionPlanReviewDecisionRecord | null>;
 }
 
+export interface CapaActionPlanReviewDecisionTransactionReadRepository {
+  findDecisionInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sourceCaseVersionId: CapaCaseVersionId,
+  ): Promise<CapaActionPlanReviewDecisionRecord | null>;
+}
+
 export class CapaActionPlanReviewDecisionRepositoryError
   extends Error {
   constructor(

@@ -5,8 +5,8 @@ import { CAPA_IMPLEMENTATION_EVIDENCE_SCHEMA_VERSION } from "../../lib/capa/impl
 import { CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE, CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION } from "../../lib/capa/implementation/capa-implementation-review-baseline";
 import { submitCapaImplementation, type SubmitCapaImplementationDependencies } from "../../lib/capa/application/submit-capa-implementation";
 import type { CapaImplementationWorkspaceRecord } from "../../lib/database/repositories/capa-implementation-workspace-repository";
-import type { CapaActionPlanReviewDecisionRepository } from "../../lib/database/repositories/capa-action-plan-review-decision-repository";
-import type { CapaRepository } from "../../lib/database/repositories/capa-repository";
+import type { CapaActionPlanReviewDecisionRepository, CapaActionPlanReviewDecisionTransactionReadRepository } from "../../lib/database/repositories/capa-action-plan-review-decision-repository";
+import type { CapaRepository, CapaTransactionReadRepository } from "../../lib/database/repositories/capa-repository";
 import type { AuditRepository } from "../../lib/database/repositories/audit-repository";
 import type { CapaWorkflowIdempotencyRepository } from "../../lib/database/repositories/capa-workflow-idempotency-repository";
 import type { TransactionContext, TransactionManager } from "../../lib/database/transactions";
@@ -112,10 +112,13 @@ function harness() {
   let materializedSection: any = null;
   let auditEvent: any = null;
   let fail: "section" | "version" | "audit" | null = null;
+  let transactionActive = false;
+  let sharedPoolReadsDuringTransaction = 0;
   const workflow = new Map<string, any>();
   const transactionManager: TransactionManager = {
     async runInTransaction(_trace, work) {
       const before = { currentCase, nextVersion, materializedSection, auditEvent, workflow: new Map(workflow) };
+      transactionActive = true;
       try {
         return await work({ transaction_id: "80000000-0000-4000-8000-000000000001" as never, started_at: AT as never, request_trace: _trace });
       } catch (error) {
@@ -126,13 +129,29 @@ function harness() {
         workflow.clear();
         for (const [key, value] of before.workflow) workflow.set(key, value);
         throw error;
+      } finally {
+        transactionActive = false;
       }
     },
   };
-  const capaRepository: CapaRepository = {
+  const capaRepository: CapaRepository & CapaTransactionReadRepository = {
     findCaseById: vi.fn(async () => currentCase),
-    findCaseVersionById: vi.fn(async (_org, _case, id) => id === S70_VERSION ? sourceVersion : id === S80_VERSION ? currentVersion : nextVersion),
-    findSectionVersionById: vi.fn(async (_org, _case, id) => id === ACTION_SECTION ? actionSection : id === BASELINE_SECTION ? materializedSection : null),
+    findCaseVersionById: vi.fn(async (_org, _case, id) => {
+      if (transactionActive) {
+        sharedPoolReadsDuringTransaction += 1;
+        throw new Error("shared-pool case-version read attempted during transaction");
+      }
+      return id === S70_VERSION ? sourceVersion : id === S80_VERSION ? currentVersion : nextVersion;
+    }),
+    findCaseVersionByIdInTransaction: vi.fn(async (_tx, _org, _case, id) => id === S70_VERSION ? sourceVersion : id === S80_VERSION ? currentVersion : nextVersion),
+    findSectionVersionById: vi.fn(async (_org, _case, id) => {
+      if (transactionActive) {
+        sharedPoolReadsDuringTransaction += 1;
+        throw new Error("shared-pool section-version read attempted during transaction");
+      }
+      return id === ACTION_SECTION ? actionSection : id === BASELINE_SECTION ? materializedSection : null;
+    }),
+    findSectionVersionByIdInTransaction: vi.fn(async (_tx, _org, _case, id) => id === ACTION_SECTION ? actionSection : id === BASELINE_SECTION ? materializedSection : null),
     async insertSectionVersion(_tx: TransactionContext, value: any) { if (fail === "section") throw new Error("section failure"); materializedSection = value; },
     async insertCaseVersion(_tx: TransactionContext, value: any) { if (fail === "version") throw new Error("version failure"); nextVersion = value; },
     async advanceCurrentVersion(_tx: TransactionContext, input: any) {
@@ -140,9 +159,18 @@ function harness() {
       currentCase = { ...currentCase, current_version_id: input.next_current_version_id, status: input.next_status, record_version: currentCase.record_version + 1 };
       return { status: "updated", capa_case: currentCase };
     },
-  } as unknown as CapaRepository;
+  } as unknown as CapaRepository & CapaTransactionReadRepository;
   const workspaceRepository = { findWorkspaceForUpdate: vi.fn(async () => workspace) } as any;
-  const reviewRepository = { findDecision: vi.fn(async () => decision) } as unknown as CapaActionPlanReviewDecisionRepository;
+  const reviewRepository = {
+    findDecision: vi.fn(async () => {
+      if (transactionActive) {
+        sharedPoolReadsDuringTransaction += 1;
+        throw new Error("shared-pool review-decision read attempted during transaction");
+      }
+      return decision;
+    }),
+    findDecisionInTransaction: vi.fn(async () => decision),
+  } as unknown as CapaActionPlanReviewDecisionRepository & CapaActionPlanReviewDecisionTransactionReadRepository;
   const auditRepository: AuditRepository = {
     async appendEvent(_tx, value) { if (fail === "audit") throw new Error("audit failure"); auditEvent = value; return { status: "appended", event_id: value.event_id }; },
     async findEventById() { return auditEvent; },
@@ -171,10 +199,23 @@ function harness() {
     configuration: { workflow_version: "workflow-test", audit_schema_version: "audit-test", authorization_purpose: "CAPA_WORKFLOW_TRANSITION" as never },
   };
   const command = (key = "submission-1", revision = 3) => ({ authentication: { principal: { principal_type: "human", user_id: USER }, session_id: "90000000-0000-4000-8000-000000000001", authentication_method: "password", assurance_level: "aal1", authenticated_at: "2026-09-10T11:00:00.000Z", expires_at: "2026-09-10T13:00:00.000Z" } as any, tenant: { organization_id: ORG, access_grant_id: "91000000-0000-4000-8000-000000000001", access_path: "DEVELOPMENT_SINGLE_USER_TENANT", authorization_policy_version: "test-policy", resolved_at: AT, role_assignments: [] } as any, capa_case_id: CASE as never, request_trace: { request_id: "a0000000-0000-4000-8000-000000000001", correlation_id: "b0000000-0000-4000-8000-000000000001", idempotency_key: key }, body: { expected_draft_revision: revision } } as any);
-  return { dependencies, command, get currentCase() { return currentCase; }, get nextVersion() { return nextVersion; }, get materializedSection() { return materializedSection; }, get auditEvent() { return auditEvent; }, set fail(value: "section" | "version" | "audit" | null) { fail = value; }, workspace };
+  return { dependencies, command, get currentCase() { return currentCase; }, get nextVersion() { return nextVersion; }, get materializedSection() { return materializedSection; }, get auditEvent() { return auditEvent; }, set fail(value: "section" | "version" | "audit" | null) { fail = value; }, workspace, maximumConnections: 1, sharedPoolReadsDuringTransaction: () => sharedPoolReadsDuringTransaction, transactionReads: { caseVersion: (capaRepository.findCaseVersionByIdInTransaction as ReturnType<typeof vi.fn>), sectionVersion: (capaRepository.findSectionVersionByIdInTransaction as ReturnType<typeof vi.fn>), reviewDecision: (reviewRepository.findDecisionInTransaction as ReturnType<typeof vi.fn>) } };
 }
 
 describe("controlled S80 implementation submission", () => {
+  it("resolves the approved baseline on the active max-one-connection transaction", async () => {
+    const h = harness();
+
+    const result = await submitCapaImplementation(h.dependencies, h.command("max-one-connection"));
+
+    expect(result.status).toBe("submitted");
+    expect(h.maximumConnections).toBe(1);
+    expect(h.transactionReads.caseVersion).toHaveBeenCalledOnce();
+    expect(h.transactionReads.reviewDecision).toHaveBeenCalledOnce();
+    expect(h.transactionReads.sectionVersion).toHaveBeenCalledOnce();
+    expect(h.sharedPoolReadsDuringTransaction()).toBe(0);
+  });
+
   it("materializes the human-owned package, transitions to S90, and preserves lineage", async () => {
     const h = harness();
     const result = await submitCapaImplementation(h.dependencies, h.command());

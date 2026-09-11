@@ -68,6 +68,23 @@ describe("Supabase CAPA action-plan review decision repository", () => {
     await expect(new SupabaseCapaActionPlanReviewDecisionRepository(absent.sql).findDecision(ORG as never, CASE as never, SOURCE as never)).resolves.toBeNull();
   });
 
+  it("reads the review decision through the active transaction SQL", async () => {
+    const h = harness([decision()]);
+
+    await expect(
+      new SupabaseCapaActionPlanReviewDecisionRepository(h.sql)
+        .findDecisionInTransaction(
+          h.transaction,
+          ORG as never,
+          CASE as never,
+          SOURCE as never,
+        ),
+    ).resolves.toMatchObject(decision());
+
+    expect(h.calls[0]!.values).toEqual([ORG, CASE, SOURCE]);
+    expect(transactionSql).toHaveBeenCalledOnce();
+  });
+
   it("fails closed for malformed caller and returned rows", async () => {
     const caller = harness();
     await expect(new SupabaseCapaActionPlanReviewDecisionRepository(caller.sql).saveDecision(caller.transaction, decision({ decision: "defer" }))).rejects.toThrow(SupabaseCapaActionPlanReviewDecisionRepositoryError);

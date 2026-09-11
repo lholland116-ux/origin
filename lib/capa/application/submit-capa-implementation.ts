@@ -41,6 +41,7 @@ import type {
 } from "../../database/repositories/audit-repository";
 import type {
   CapaRepository,
+  CapaTransactionReadRepository,
 } from "../../database/repositories/capa-repository";
 import type {
   CapaWorkflowIdempotencyRecord,
@@ -53,6 +54,7 @@ import type {
 } from "../../database/repositories/capa-implementation-workspace-repository";
 import type {
   CapaActionPlanReviewDecisionRepository,
+  CapaActionPlanReviewDecisionTransactionReadRepository,
 } from "../../database/repositories/capa-action-plan-review-decision-repository";
 import type {
   TransactionContext,
@@ -127,10 +129,14 @@ export interface SubmitCapaImplementationConfiguration {
 
 export interface SubmitCapaImplementationDependencies {
   readonly transaction_manager: TransactionManager;
-  readonly capa_repository: CapaRepository;
+  readonly capa_repository:
+    CapaRepository &
+    CapaTransactionReadRepository;
   readonly audit_repository: AuditRepository;
   readonly workspace_repository: CapaImplementationWorkspaceRepository;
-  readonly review_decision_repository: CapaActionPlanReviewDecisionRepository;
+  readonly review_decision_repository:
+    CapaActionPlanReviewDecisionRepository &
+    CapaActionPlanReviewDecisionTransactionReadRepository;
   readonly workflow_idempotency_repository: CapaWorkflowIdempotencyRepository;
   readonly authorization_policy: CapaAuthorizationPolicy;
   readonly id_generator: CreateCapaIdGenerator;
@@ -289,15 +295,23 @@ async function currentCase(
 async function resolveApprovedBaseline(
   dependencies: SubmitCapaImplementationDependencies,
   current: CurrentCaseContext,
+  transaction?: TransactionContext,
 ): Promise<ResolvedBaseline | null> {
   const organizationId = current.capa_case.organization_id;
   const sourceCaseVersionId = current.case_version.parent_version_id;
   if (sourceCaseVersionId === undefined) return null;
-  const sourceVersion = await dependencies.capa_repository.findCaseVersionById(
-    organizationId,
-    current.capa_case.capa_case_id,
-    sourceCaseVersionId,
-  );
+  const sourceVersion = transaction === undefined
+    ? await dependencies.capa_repository.findCaseVersionById(
+        organizationId,
+        current.capa_case.capa_case_id,
+        sourceCaseVersionId,
+      )
+    : await dependencies.capa_repository.findCaseVersionByIdInTransaction(
+        transaction,
+        organizationId,
+        current.capa_case.capa_case_id,
+        sourceCaseVersionId,
+      );
   if (
     sourceVersion === null ||
     sourceVersion.organization_id !== organizationId ||
@@ -305,11 +319,18 @@ async function resolveApprovedBaseline(
     sourceVersion.status !== CAPA_STATE.ACTION_PLAN_REVIEW
   ) return null;
 
-  const decision = await dependencies.review_decision_repository.findDecision(
-    organizationId,
-    current.capa_case.capa_case_id,
-    sourceCaseVersionId,
-  );
+  const decision = transaction === undefined
+    ? await dependencies.review_decision_repository.findDecision(
+        organizationId,
+        current.capa_case.capa_case_id,
+        sourceCaseVersionId,
+      )
+    : await dependencies.review_decision_repository.findDecisionInTransaction(
+        transaction,
+        organizationId,
+        current.capa_case.capa_case_id,
+        sourceCaseVersionId,
+      );
   if (
     decision === null ||
     decision.organization_id !== organizationId ||
@@ -320,11 +341,18 @@ async function resolveApprovedBaseline(
     !sourceVersion.section_version_ids.includes(decision.action_plan_section_version_id)
   ) return null;
 
-  const section = await dependencies.capa_repository.findSectionVersionById(
-    organizationId,
-    current.capa_case.capa_case_id,
-    decision.action_plan_section_version_id,
-  );
+  const section = transaction === undefined
+    ? await dependencies.capa_repository.findSectionVersionById(
+        organizationId,
+        current.capa_case.capa_case_id,
+        decision.action_plan_section_version_id,
+      )
+    : await dependencies.capa_repository.findSectionVersionByIdInTransaction(
+        transaction,
+        organizationId,
+        current.capa_case.capa_case_id,
+        decision.action_plan_section_version_id,
+      );
   if (
     section === null ||
     section.organization_id !== organizationId ||
@@ -682,7 +710,11 @@ export async function submitCapaImplementation(
       if (workspace === null) return { kind: "validation" as const, reason_code: "IMPLEMENTATION_WORKSPACE_NOT_AVAILABLE" as const };
       if (workspace.draft_revision !== body.expected_draft_revision) return { kind: "workspace_conflict" as const };
       if (workspace.organization_id !== organizationId || workspace.capa_case_id !== command.capa_case_id || workspace.case_version_id !== current.case_version.case_version_id || workspace.record_version !== current.case_version.version_number || workspace.workflow_state !== SOURCE_STATE) return { kind: "workspace_conflict" as const };
-      const baseline = await resolveApprovedBaseline(dependencies, current);
+      const baseline = await resolveApprovedBaseline(
+        dependencies,
+        current,
+        transaction,
+      );
       if (baseline === null || !baselineEquals(workspace.approved_s70_baseline, baseline.reference)) return { kind: "validation" as const, reason_code: "IMPLEMENTATION_BASELINE_NOT_AUTHORITATIVE" as const };
       const contextual = validateCapaImplementationDraftAgainstApprovedActionSet(workspace.draft, baseline.action_plan.items.map((item) => item.item_id));
       if (contextual.status !== "valid") return { kind: "validation" as const, reason_code: "IMPLEMENTATION_BASELINE_NOT_AUTHORITATIVE" as const, detail_reason_code: contextual.reason_code };

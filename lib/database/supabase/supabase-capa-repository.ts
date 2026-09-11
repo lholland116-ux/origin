@@ -23,6 +23,7 @@ import type {
   CapaCaseListPage,
   CapaCaseListQuery,
   CapaRepository,
+  CapaTransactionReadRepository,
 } from "../repositories/capa-repository";
 
 import type {
@@ -392,7 +393,7 @@ function toSectionVersion(
 }
 
 export class SupabaseCapaRepository
-  implements CapaRepository
+  implements CapaRepository, CapaTransactionReadRepository
 {
   constructor(
     private readonly sql: postgres.Sql,
@@ -550,6 +551,70 @@ export class SupabaseCapaRepository
   ): Promise<CapaSectionVersion | null> {
     const rows =
       await this.sql<CapaSectionVersionRow[]>`
+        select *
+        from public.capa_section_versions
+        where organization_id = ${organizationId}
+          and capa_case_id = ${capaCaseId}
+          and section_version_id = ${sectionVersionId}
+        limit 1
+      `;
+
+    return rows[0] === undefined
+      ? null
+      : toSectionVersion(rows[0]);
+  }
+
+  async findCaseVersionByIdInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    caseVersionId: CapaCaseVersionId,
+  ): Promise<CapaCaseVersion | null> {
+    const sql = requireSupabaseTransaction(transaction);
+    const versionRows =
+      await sql<CapaCaseVersionRow[]>`
+        select *
+        from public.capa_case_versions
+        where organization_id = ${organizationId}
+          and capa_case_id = ${capaCaseId}
+          and case_version_id = ${caseVersionId}
+        limit 1
+      `;
+
+    const version = versionRows[0];
+
+    if (version === undefined) {
+      return null;
+    }
+
+    const sectionRows =
+      await sql<SectionReferenceRow[]>`
+        select section_version_id
+        from public.capa_case_version_sections
+        where organization_id = ${organizationId}
+          and capa_case_id = ${capaCaseId}
+          and case_version_id = ${caseVersionId}
+        order by display_order asc
+      `;
+
+    return toCaseVersion(
+      version,
+      sectionRows.map(
+        (row) =>
+          row.section_version_id as CapaSectionVersionId,
+      ),
+    );
+  }
+
+  async findSectionVersionByIdInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sectionVersionId: CapaSectionVersionId,
+  ): Promise<CapaSectionVersion | null> {
+    const sql = requireSupabaseTransaction(transaction);
+    const rows =
+      await sql<CapaSectionVersionRow[]>`
         select *
         from public.capa_section_versions
         where organization_id = ${organizationId}

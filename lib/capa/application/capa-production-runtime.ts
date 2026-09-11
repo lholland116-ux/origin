@@ -1107,6 +1107,7 @@ export function createCapaProductionRuntime(
 
   const submitImplementationDependencies: SubmitCapaImplementationDependencies = {
     ...submitIntakeDependencies,
+    capa_repository: capaRepository,
     workspace_repository: implementationWorkspaceRepository,
     review_decision_repository: actionPlanReviewDecisionRepository,
     configuration: {

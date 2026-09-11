@@ -24,6 +24,7 @@ import type {
   CapaCaseListPage,
   CapaCaseListQuery,
   CapaRepository,
+  CapaTransactionReadRepository,
 } from "../repositories/capa-repository";
 
 import type {
@@ -55,6 +56,7 @@ import {
   normalizeCapaActionPlanReviewDecision,
   type CapaActionPlanReviewDecisionRecord,
   type CapaActionPlanReviewDecisionRepository,
+  type CapaActionPlanReviewDecisionTransactionReadRepository,
   type SaveCapaActionPlanReviewDecisionResult,
 } from "../repositories/capa-action-plan-review-decision-repository";
 
@@ -1685,6 +1687,7 @@ function resolveApprovedImplementationActionReferences(
 export class InMemoryCapaDatabase
   implements
     TransactionManager,
+    CapaTransactionReadRepository,
     CapaRepository,
     AuditRepository,
     CapaCaseNumberAllocator,
@@ -1696,7 +1699,8 @@ export class InMemoryCapaDatabase
     CapaInvestigationActiveAdoptionRepository,
     CapaInvestigationActiveWorkspaceDraftRepository,
     CapaImplementationWorkspaceRepository,
-    CapaActionPlanReviewDecisionRepository
+    CapaActionPlanReviewDecisionRepository,
+    CapaActionPlanReviewDecisionTransactionReadRepository
 {
   private committed_state:
     InMemoryState;
@@ -2817,6 +2821,26 @@ export class InMemoryCapaDatabase
     return decision === undefined ? null : cloneCapaActionPlanReviewDecision(decision);
   }
 
+  async findDecisionInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sourceCaseVersionId: CapaCaseVersionId,
+  ): Promise<CapaActionPlanReviewDecisionRecord | null> {
+    const decision = this.transactionState(transaction)
+      .action_plan_review_decisions
+      .get(
+        actionPlanReviewDecisionKey(
+          organizationId,
+          capaCaseId,
+          sourceCaseVersionId,
+        ),
+      );
+    return decision === undefined
+      ? null
+      : cloneCapaActionPlanReviewDecision(decision);
+  }
+
   async listAdoptionsForOutput(
     organizationId: OrganizationId,
     outputId: string,
@@ -2970,6 +2994,33 @@ export class InMemoryCapaDatabase
     return cloneValue(value);
   }
 
+  async findCaseVersionByIdInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    caseVersionId: CapaCaseVersionId,
+  ): Promise<CapaCaseVersion | null> {
+    const value =
+      this.transactionState(transaction)
+        .case_versions
+        .get(
+          recordKey(
+            organizationId,
+            caseVersionId,
+          ),
+        );
+
+    if (
+      value === undefined ||
+      value.capa_case_id !==
+        capaCaseId
+    ) {
+      return null;
+    }
+
+    return cloneValue(value);
+  }
+
   async findSectionVersionById(
     organizationId:
       OrganizationId,
@@ -2982,6 +3033,33 @@ export class InMemoryCapaDatabase
   ): Promise<CapaSectionVersion | null> {
     const value =
       this.committed_state
+        .section_versions
+        .get(
+          recordKey(
+            organizationId,
+            sectionVersionId,
+          ),
+        );
+
+    if (
+      value === undefined ||
+      value.capa_case_id !==
+        capaCaseId
+    ) {
+      return null;
+    }
+
+    return cloneValue(value);
+  }
+
+  async findSectionVersionByIdInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sectionVersionId: CapaSectionVersionId,
+  ): Promise<CapaSectionVersion | null> {
+    const value =
+      this.transactionState(transaction)
         .section_versions
         .get(
           recordKey(

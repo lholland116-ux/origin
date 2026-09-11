@@ -138,6 +138,28 @@ export interface CapaCaseListPage {
     CapaCaseListCursor;
 }
 
+/**
+ * Transaction-scoped reads required by authoritative workflow decisions.
+ *
+ * Implementations must read through the supplied active transaction rather
+ * than their ordinary shared-pool client.
+ */
+export interface CapaTransactionReadRepository {
+  findCaseVersionByIdInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    caseVersionId: CapaCaseVersionId,
+  ): Promise<CapaCaseVersion | null>;
+
+  findSectionVersionByIdInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sectionVersionId: CapaSectionVersionId,
+  ): Promise<CapaSectionVersion | null>;
+}
+
 export interface CapaRepository {
   /**
    * Lists cases inside one authoritative organization boundary.
