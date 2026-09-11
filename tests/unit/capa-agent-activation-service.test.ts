@@ -77,7 +77,7 @@ describe(
 
         expect(service.registry_version)
           .toBe(
-            "capa-agent-registry-1.3.0",
+            "capa-agent-registry-1.4.0",
           );
         expect(Object.isFrozen(service))
           .toBe(true);
@@ -209,23 +209,15 @@ describe(
           reason_code: "AGENT_ELIGIBLE",
         });
 
-        for (const workflow_state of [
-          "S70",
-          "S90",
-          "S110",
-          "S120",
-          "S150",
-        ] as const) {
-          expect(
-            service.evaluate({
-              ...qualified,
-              workflow_state,
-            }),
-          ).toMatchObject({
-            reason_code:
-              "WORKFLOW_STATE_NOT_ELIGIBLE",
-          });
-        }
+        expect(
+          service.evaluate({
+            ...qualified,
+            workflow_state: "S80",
+          }),
+        ).toMatchObject({
+          reason_code:
+            "WORKFLOW_STATE_NOT_ELIGIBLE",
+        });
 
         expect(
           service.evaluate({
@@ -301,6 +293,41 @@ describe(
         },
       });
     });
+
+    it(
+      "activates the exact approved AG-IMPLEMENT S80 capability",
+      () => {
+        const result = createCapaAgentActivationService().evaluate({
+          agent_id: "AG-IMPLEMENT",
+          agent_version:
+            "ag-implement-1.0.0" as never,
+          workflow_state: "S80",
+          operation:
+            "review_implementation_evidence",
+          active_role_ids: [
+            "CAPA_OWNER" as RoleId,
+          ],
+          requested_tool_ids: [
+            "TOOL-CASE-READ",
+            "TOOL-EVIDENCE-READ",
+            "TOOL-STRUCTURED-DRAFT",
+            "TOOL-FEEDBACK",
+          ],
+          output_schema_version:
+            "capa_implementation_evidence_advisory-1.0.0" as never,
+        });
+
+        expect(result).toMatchObject({
+          eligible: true,
+          reason_code: "AGENT_ELIGIBLE",
+          definition: {
+            logical_agent_id: "AG-IMPLEMENT",
+            agent_version: "ag-implement-1.0.0",
+            status: "approved",
+          },
+        });
+      },
+    );
 
     it(
       "delegates every request to one supplied registry snapshot",

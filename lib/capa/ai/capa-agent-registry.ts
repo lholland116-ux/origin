@@ -353,7 +353,7 @@ const DEFINITIONS = [
     name:
       "Implementation Evidence Reviewer",
     version: "ag-implement-1.0.0",
-    status: "evaluation",
+    status: "approved",
     purpose:
       "Compare implementation claims and evidence with the approved action baseline and identify gaps or deviations.",
     states: ["S80", "S90"],
@@ -561,7 +561,7 @@ export interface CapaAgentRegistry {
 class InitialCapaAgentRegistry
   implements CapaAgentRegistry {
   readonly registry_version =
-    "capa-agent-registry-1.3.0";
+    "capa-agent-registry-1.4.0";
 
   private readonly byAgentId =
     new Map(
