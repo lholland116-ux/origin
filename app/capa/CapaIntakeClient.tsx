@@ -27,6 +27,7 @@ import CapaActionPlanWorkspace, {
 } from "./CapaActionPlanWorkspace";
 import CapaActionPlanReviewPanel from "./CapaActionPlanReviewPanel";
 import CapaImplementationWorkspace from "./CapaImplementationWorkspace";
+import CapaImplementationReviewPanel from "./CapaImplementationReviewPanel";
 
 import {
   createCapaScopeApprovalAttempt,
@@ -934,6 +935,10 @@ function statusName(
 
   if (status === "S80") {
     return CAPA_STATE_DEFINITIONS.S80.name;
+  }
+
+  if (status === "S90") {
+    return "Implementation Review";
   }
 
   return status;
@@ -4231,6 +4236,8 @@ export default function CapaIntakeClient({
                       ? CAPA_STATE_DEFINITIONS.S70.name
                     : createdCapa.status === "S80"
                       ? CAPA_STATE_DEFINITIONS.S80.name
+                    : createdCapa.status === "S90"
+                      ? "Implementation Review"
                     : "CAPA draft created"}
                 </p>
 
@@ -4253,6 +4260,8 @@ export default function CapaIntakeClient({
                         ? "The action plan has been submitted for human review. Approval has not yet occurred."
                       : createdCapa.status === "S80"
                         ? "The action plan has been approved for implementation. Implementation evidence has not yet been submitted."
+                      : createdCapa.status === "S90"
+                        ? "The submitted implementation package is awaiting human S90 review."
                       : "The draft record and its audit event were committed atomically."}
                 </p>
               </div>
@@ -5339,6 +5348,26 @@ export default function CapaIntakeClient({
                   caseNumber: createdCapa.caseNumber,
                   status: "S90",
                   recordVersion: createdCapa.recordVersion + 1,
+                  currentVersionId: createdCapa.currentVersionId,
+                  createdAt: createdCapa.createdAt,
+                  updatedAt: createdCapa.createdAt,
+                });
+                await loadCases("replace");
+              }}
+            />
+          ) : null}
+
+          {createdCapa.status === "S90" ? (
+            <CapaImplementationReviewPanel
+              key={createdCapa.currentVersionId}
+              caseId={createdCapa.capaCaseId}
+              caseNumber={createdCapa.caseNumber}
+              onAuthoritativeRefresh={async () => {
+                await openExistingCase({
+                  capaCaseId: createdCapa.capaCaseId,
+                  caseNumber: createdCapa.caseNumber,
+                  status: createdCapa.status,
+                  recordVersion: createdCapa.recordVersion,
                   currentVersionId: createdCapa.currentVersionId,
                   createdAt: createdCapa.createdAt,
                   updatedAt: createdCapa.createdAt,
