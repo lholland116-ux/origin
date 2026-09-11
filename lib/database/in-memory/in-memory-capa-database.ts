@@ -59,6 +59,13 @@ import {
   type CapaActionPlanReviewDecisionTransactionReadRepository,
   type SaveCapaActionPlanReviewDecisionResult,
 } from "../repositories/capa-action-plan-review-decision-repository";
+import {
+  CapaImplementationReviewDecisionRepositoryError,
+  cloneCapaImplementationReviewDecision,
+  normalizeCapaImplementationReviewDecision,
+  type CapaImplementationReviewDecisionRecord,
+  type SaveCapaImplementationReviewDecisionResult,
+} from "../repositories/capa-implementation-review-decision-repository";
 
 import type {
   TransactionContext,
@@ -452,6 +459,8 @@ interface InMemoryState {
     Map<string, CapaImplementationWorkspaceRecord>;
   readonly action_plan_review_decisions:
     Map<string, CapaActionPlanReviewDecisionRecord>;
+  readonly implementation_review_decisions:
+    Map<string, CapaImplementationReviewDecisionRecord>;
 }
 
 interface ActiveTransaction {
@@ -823,6 +832,8 @@ function cloneState(
       cloneMap(state.implementation_workspace_records),
     action_plan_review_decisions:
       cloneMap(state.action_plan_review_decisions),
+    implementation_review_decisions:
+      cloneMap(state.implementation_review_decisions),
   };
 }
 
@@ -874,6 +885,8 @@ function emptyState():
       new Map(),
     action_plan_review_decisions:
       new Map(),
+    implementation_review_decisions:
+      new Map(),
   };
 }
 
@@ -899,6 +912,7 @@ function stateFromSnapshot(
     action_plan_workspace_drafts: new Map(snapshot.action_plan_workspace_drafts.map(([key, value]) => [key, cloneValue(value)])),
     implementation_workspace_records: new Map(snapshot.implementation_workspace_records.map(([key, value]) => [key, cloneValue(value)])),
     action_plan_review_decisions: new Map((snapshot.action_plan_review_decisions ?? []).map(([key, value]) => [key, cloneValue(value)])),
+    implementation_review_decisions: new Map((snapshot.implementation_review_decisions ?? []).map(([key, value]) => [key, cloneValue(value)])),
   };
 }
 
@@ -926,6 +940,7 @@ function snapshotFromState(state: InMemoryState): InMemoryCapaDatabaseSnapshot {
     action_plan_workspace_drafts: entries(state.action_plan_workspace_drafts),
     implementation_workspace_records: entries(state.implementation_workspace_records),
     action_plan_review_decisions: entries(state.action_plan_review_decisions),
+    implementation_review_decisions: entries(state.implementation_review_decisions),
   };
 }
 
@@ -2841,6 +2856,82 @@ export class InMemoryCapaDatabase
       : cloneCapaActionPlanReviewDecision(decision);
   }
 
+  async saveImplementationReviewDecision(
+    transaction: TransactionContext,
+    value: CapaImplementationReviewDecisionRecord,
+  ): Promise<SaveCapaImplementationReviewDecisionResult> {
+    const state = this.transactionState(transaction);
+    let decision: CapaImplementationReviewDecisionRecord;
+    try {
+      decision = normalizeCapaImplementationReviewDecision(value);
+    } catch (error) {
+      if (error instanceof CapaImplementationReviewDecisionRepositoryError) {
+        throw error;
+      }
+      throw new CapaImplementationReviewDecisionRepositoryError(
+        "The CAPA implementation-review decision record is invalid.",
+      );
+    }
+    const key = actionPlanReviewDecisionKey(
+      decision.organization_id,
+      decision.capa_case_id,
+      decision.source_case_version_id,
+    );
+    const existing = state.implementation_review_decisions.get(key);
+    if (existing !== undefined) {
+      return {
+        status: "conflict",
+        reason_code: "DECISION_ALREADY_COMMITTED",
+        decision: cloneCapaImplementationReviewDecision(existing),
+      };
+    }
+    state.implementation_review_decisions.set(
+      key,
+      cloneCapaImplementationReviewDecision(decision),
+    );
+    return {
+      status: "saved",
+      decision: cloneCapaImplementationReviewDecision(decision),
+    };
+  }
+
+  async findImplementationReviewDecision(
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sourceCaseVersionId: CapaCaseVersionId,
+  ): Promise<CapaImplementationReviewDecisionRecord | null> {
+    const decision = this.committed_state.implementation_review_decisions.get(
+      actionPlanReviewDecisionKey(
+        organizationId,
+        capaCaseId,
+        sourceCaseVersionId,
+      ),
+    );
+    return decision === undefined
+      ? null
+      : cloneCapaImplementationReviewDecision(decision);
+  }
+
+  async findImplementationReviewDecisionInTransaction(
+    transaction: TransactionContext,
+    organizationId: OrganizationId,
+    capaCaseId: CapaCaseId,
+    sourceCaseVersionId: CapaCaseVersionId,
+  ): Promise<CapaImplementationReviewDecisionRecord | null> {
+    const decision = this.transactionState(transaction)
+      .implementation_review_decisions
+      .get(
+        actionPlanReviewDecisionKey(
+          organizationId,
+          capaCaseId,
+          sourceCaseVersionId,
+        ),
+      );
+    return decision === undefined
+      ? null
+      : cloneCapaImplementationReviewDecision(decision);
+  }
+
   async listAdoptionsForOutput(
     organizationId: OrganizationId,
     outputId: string,
@@ -3796,6 +3887,20 @@ export class InMemoryCapaDatabase
         ) throw new Error();
       } catch {
         throw new InMemoryIntegrityError("The S70 action-plan review decision state is invalid.");
+      }
+    }
+    for (const [key, decision] of state.implementation_review_decisions) {
+      try {
+        const normalized = normalizeCapaImplementationReviewDecision(decision);
+        if (
+          key !== actionPlanReviewDecisionKey(
+            normalized.organization_id,
+            normalized.capa_case_id,
+            normalized.source_case_version_id,
+          )
+        ) throw new Error();
+      } catch {
+        throw new InMemoryIntegrityError("The S90 implementation-review decision state is invalid.");
       }
     }
     for (

@@ -57,6 +57,7 @@ import type { CapaActionPlanReviewAdvisoryApiDependencies } from "@/lib/capa/api
 import type { CapaImplementationEvidenceAdvisoryApiDependencies } from "@/lib/capa/api/capa-implementation-evidence-advisory-route-handler";
 import type { CapaImplementationEvidenceAdvisoryAdoptionApiDependencies } from "@/lib/capa/api/capa-implementation-evidence-advisory-adoption-route-handler";
 import type { CapaInvestigationActiveWorkspaceReconciliationApiDependencies } from "@/lib/capa/api/capa-investigation-active-workspace-reconciliation-route-handler";
+import type { CapaImplementationReviewApiDependencies } from "@/lib/capa/api/capa-implementation-review-route-handler";
 
 import {
   selectCapaRuntime,
@@ -413,6 +414,19 @@ export function createCapaImplementationEvidenceAdvisoryAdoptionApiDependencies(
 
 export function createCapaActionPlanReviewApiDependencies(): CapaApiHandlerDependencies {
   return createCapaApiHandlerDependencies();
+}
+
+export function createCapaImplementationReviewApiDependencies(): CapaImplementationReviewApiDependencies {
+  const dependencies = createCapaApiHandlerDependencies();
+  return {
+    ...dependencies,
+    create_projection_service(context) {
+      return dependencies.get_runtime().create_implementation_review_projection_service(context);
+    },
+    get_decision_dependencies() {
+      return dependencies.get_runtime().decide_implementation_review_dependencies;
+    },
+  };
 }
 
 export function createCapaInvestigationActiveWorkspaceReconciliationApiDependencies(): CapaInvestigationActiveWorkspaceReconciliationApiDependencies {

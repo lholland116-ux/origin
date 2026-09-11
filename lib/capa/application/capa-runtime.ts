@@ -26,6 +26,9 @@ import type {
 import type {
   DecideCapaActionPlanReviewDependencies,
 } from "./decide-capa-action-plan-review";
+import type {
+  DecideCapaImplementationReviewDependencies,
+} from "./decide-capa-implementation-review";
 
 import type {
   CreateCapaDependencies,
@@ -82,6 +85,9 @@ import type {
 } from "../ai/capa-root-cause-review-advisory-service";
 import type { CapaActionPlanAdvisoryService } from "../ai/capa-action-plan-advisory-service";
 import type { CapaActionPlanReviewAdvisoryService } from "../ai/capa-action-plan-review-advisory-service";
+import type {
+  CapaImplementationReviewProjectionService,
+} from "./capa-implementation-review-projection-service";
 
 import type {
   CapaAiOutputReviewService,
@@ -312,6 +318,15 @@ export interface CapaRuntime {
   /** Human-controlled S70 action-plan review decision dependencies. */
   readonly decide_action_plan_review_dependencies:
     DecideCapaActionPlanReviewDependencies;
+
+  /** Human-controlled S90 implementation-review decision dependencies. */
+  readonly decide_implementation_review_dependencies:
+    DecideCapaImplementationReviewDependencies;
+
+  /** Creates a request-scoped authoritative S90 reviewer projection service. */
+  readonly create_implementation_review_projection_service: (
+    context: CapaRequestContext,
+  ) => CapaImplementationReviewProjectionService;
 
   /**
    * Controlled provider-neutral prompt assembly. This boundary does not

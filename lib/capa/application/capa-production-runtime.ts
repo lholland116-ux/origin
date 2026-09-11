@@ -26,6 +26,9 @@ import type {
 import type {
   DecideCapaActionPlanReviewDependencies,
 } from "./decide-capa-action-plan-review";
+import type {
+  DecideCapaImplementationReviewDependencies,
+} from "./decide-capa-implementation-review";
 
 import { randomUUID } from "node:crypto";
 
@@ -74,6 +77,7 @@ import { createRequestScopedCapaRootCauseReviewAdvisoryService } from "./capa-ro
 import { createRequestScopedCapaActionPlanAdvisoryService } from "./capa-action-plan-advisory-runtime-factory";
 import { createRequestScopedCapaActionPlanReviewAdvisoryService } from "./capa-action-plan-review-advisory-runtime-factory";
 import { createRequestScopedCapaImplementationEvidenceAdvisoryAdoptionService, createRequestScopedCapaImplementationEvidenceAdvisoryService } from "./capa-implementation-evidence-advisory-runtime-factory";
+import { createCapaImplementationReviewProjectionService } from "./capa-implementation-review-projection-service";
 import { createRequestScopedCapaInvestigationActiveAdoptionService } from "./capa-investigation-active-adoption-runtime-factory";
 import { RepositoryCapaInvestigationActiveAdoptionSourceResolver } from "./capa-investigation-active-adoption-source-resolver";
 
@@ -232,6 +236,7 @@ import { SupabaseCapaRootCauseReviewAdvisoryOutputRepository } from "../../datab
 import { SupabaseCapaActionPlanAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-action-plan-advisory-output-repository";
 import { SupabaseCapaActionPlanReviewAdvisoryOutputRepository } from "../../database/supabase/supabase-capa-action-plan-review-advisory-output-repository";
 import { SupabaseCapaActionPlanReviewDecisionRepository } from "../../database/supabase/supabase-capa-action-plan-review-decision-repository";
+import { SupabaseCapaImplementationReviewDecisionRepository } from "../../database/supabase/supabase-capa-implementation-review-decision-repository";
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createCapaActionPlanReturnCycleResolver } from "./capa-action-plan-return-cycle-resolver";
@@ -907,6 +912,8 @@ export function createCapaProductionRuntime(
     new SupabaseCapaActionPlanWorkspaceDraftRepository(sql);
   const actionPlanReviewDecisionRepository =
     new SupabaseCapaActionPlanReviewDecisionRepository(sql);
+  const implementationReviewDecisionRepository =
+    new SupabaseCapaImplementationReviewDecisionRepository(sql);
   const implementationWorkspaceRepository =
     new SupabaseCapaImplementationWorkspaceRepository(sql);
 
@@ -1133,6 +1140,21 @@ export function createCapaProductionRuntime(
     ...decideRootCauseGateDependencies,
     review_decision_repository:
       actionPlanReviewDecisionRepository,
+    configuration: {
+      workflow_version: workflowVersion,
+      audit_schema_version: auditSchemaVersion,
+      step_up_maximum_age_ms: stepUpMaximumAge,
+      required_step_up_assurance: requiredStepUpAssurance,
+      authorization_purpose: controlled("CAPA_GATE_DECISION"),
+    },
+  };
+
+  const decideImplementationReviewDependencies:
+    DecideCapaImplementationReviewDependencies = {
+    ...decideRootCauseGateDependencies,
+    capa_repository: capaRepository,
+    review_decision_repository:
+      implementationReviewDecisionRepository,
     configuration: {
       workflow_version: workflowVersion,
       audit_schema_version: auditSchemaVersion,
@@ -1647,6 +1669,20 @@ export function createCapaProductionRuntime(
       });
     },
 
+    create_implementation_review_projection_service(context) {
+      return createCapaImplementationReviewProjectionService({
+        request_context: context,
+        capa_repository: capaRepository,
+        action_plan_review_decision_repository: actionPlanReviewDecisionRepository,
+        implementation_review_decision_repository: implementationReviewDecisionRepository,
+        audit_repository: auditRepository,
+        authorization_policy: authorizationPolicy,
+        now,
+        step_up_maximum_age_ms: stepUpMaximumAge,
+        required_step_up_assurance: requiredStepUpAssurance,
+      });
+    },
+
     submit_implementation_dependencies: submitImplementationDependencies,
 
     create_investigation_active_workspace_reconciliation_service(context) {
@@ -1681,6 +1717,9 @@ export function createCapaProductionRuntime(
 
     decide_action_plan_review_dependencies:
       decideActionPlanReviewDependencies,
+
+    decide_implementation_review_dependencies:
+      decideImplementationReviewDependencies,
 
     prompt_assembly_service:
       promptAssemblyService,

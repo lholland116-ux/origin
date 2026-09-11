@@ -36,6 +36,7 @@ import { validateCapaInvestigationActiveWorkspaceDraft } from "../../capa/applic
 import type { CapaActionPlanWorkspaceDraft } from "../../capa/application/capa-action-plan-workspace-draft-contract";
 import { validateCapaActionPlanWorkspaceDraft } from "../../capa/application/capa-action-plan-workspace-draft-validator";
 import type { CapaActionPlanReviewDecisionRecord } from "../repositories/capa-action-plan-review-decision-repository";
+import type { CapaImplementationReviewDecisionRecord } from "../repositories/capa-implementation-review-decision-repository";
 import type { CapaImplementationWorkspaceRecord } from "../repositories/capa-implementation-workspace-repository";
 import { normalizeCapaImplementationWorkspaceRecord } from "../repositories/capa-implementation-workspace-repository";
 
@@ -136,6 +137,7 @@ export interface CapaDevelopmentStateSnapshot {
   readonly investigation_active_workspace_drafts: readonly CapaDevelopmentStateMapEntry<CapaInvestigationActiveWorkspaceDraft>[];
   readonly action_plan_workspace_drafts: readonly CapaDevelopmentStateMapEntry<CapaActionPlanWorkspaceDraft>[];
   readonly action_plan_review_decisions: readonly CapaDevelopmentStateMapEntry<CapaActionPlanReviewDecisionRecord>[];
+  readonly implementation_review_decisions?: readonly CapaDevelopmentStateMapEntry<CapaImplementationReviewDecisionRecord>[];
   readonly implementation_workspace_records: readonly CapaDevelopmentStateMapEntry<CapaImplementationWorkspaceRecord>[];
 }
 
@@ -162,6 +164,10 @@ const BASE_TOP_LEVEL_FIELDS = [
 const TOP_LEVEL_FIELDS = [
   ...BASE_TOP_LEVEL_FIELDS,
   "implementation_workspace_records",
+] as const;
+const IMPLEMENTATION_REVIEW_TOP_LEVEL_FIELDS = [
+  ...TOP_LEVEL_FIELDS,
+  "implementation_review_decisions",
 ] as const;
 const PRE_REVIEW_DECISION_TOP_LEVEL_FIELDS = BASE_TOP_LEVEL_FIELDS.filter((field) => field !== "action_plan_review_decisions");
 const LEGACY_TOP_LEVEL_FIELDS = PRE_REVIEW_DECISION_TOP_LEVEL_FIELDS.filter((field) => field !== "investigation_active_adoptions" && field !== "investigation_active_workspace_drafts" && field !== "action_plan_workspace_drafts");
@@ -191,9 +197,20 @@ function addImplementationWorkspaceField(fields: readonly string[]): readonly st
     : [...fields, "implementation_workspace_records"];
 }
 
+function addImplementationReviewDecisionField(fields: readonly string[]): readonly string[] {
+  return fields.includes("implementation_review_decisions")
+    ? fields
+    : [...fields, "implementation_review_decisions"];
+}
+
 const ACCEPTED_SNAPSHOT_TOP_LEVEL_FIELD_SETS: readonly (readonly string[])[] = [
   ...SNAPSHOT_TOP_LEVEL_FIELD_VARIANTS,
   ...SNAPSHOT_TOP_LEVEL_FIELD_VARIANTS.map(addImplementationWorkspaceField),
+  ...SNAPSHOT_TOP_LEVEL_FIELD_VARIANTS.map(addImplementationReviewDecisionField),
+  ...SNAPSHOT_TOP_LEVEL_FIELD_VARIANTS.map((fields) =>
+    addImplementationReviewDecisionField(addImplementationWorkspaceField(fields)),
+  ),
+  IMPLEMENTATION_REVIEW_TOP_LEVEL_FIELDS,
 ];
 
 function objectRecord(value: unknown): value is Record<string, unknown> {
@@ -273,6 +290,7 @@ export function validateCapaDevelopmentStateSnapshot(value: unknown): CapaDevelo
     investigation_active_workspace_drafts: workspaceDrafts,
     action_plan_workspace_drafts: actionPlanWorkspaceDrafts,
     action_plan_review_decisions: mapEntries<CapaActionPlanReviewDecisionRecord>(value.action_plan_review_decisions ?? [], "action_plan_review_decisions", "object"),
+    implementation_review_decisions: mapEntries<CapaImplementationReviewDecisionRecord>(value.implementation_review_decisions ?? [], "implementation_review_decisions", "object"),
     implementation_workspace_records: implementationWorkspaceRecords,
   } satisfies CapaDevelopmentStateSnapshot;
   return clone(snapshot);

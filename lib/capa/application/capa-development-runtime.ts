@@ -26,6 +26,9 @@ import type {
 import type {
   DecideCapaActionPlanReviewDependencies,
 } from "./decide-capa-action-plan-review";
+import type {
+  DecideCapaImplementationReviewDependencies,
+} from "./decide-capa-implementation-review";
 
 import {
   randomUUID,
@@ -224,6 +227,7 @@ import { createCapaActionPlanReturnCycleResolver } from "./capa-action-plan-retu
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import { createCapaActionPlanWorkspaceDraftService } from "./capa-action-plan-workspace-draft-service";
 import { createCapaImplementationWorkspaceService } from "./capa-implementation-workspace-service";
+import { createCapaImplementationReviewProjectionService } from "./capa-implementation-review-projection-service";
 import type { CapaActionPlanWorkspaceDraftRepository } from "../../database/repositories/capa-action-plan-workspace-draft-repository";
 
 /**
@@ -597,6 +601,9 @@ function developmentAuthorizationPolicy(
       const isActionPlanReviewGateOperation =
         request.operation === "approve_action_plan";
 
+      const isImplementationReviewGateOperation =
+        request.operation === "accept_implementation";
+
       const genericOperationIsSupported =
         request.operation ===
           "create_case" ||
@@ -679,6 +686,19 @@ function developmentAuthorizationPolicy(
             "NOT_CASE_OWNER"
         );
 
+      const implementationReviewGateBoundarySatisfied =
+        !isImplementationReviewGateOperation ||
+        (
+          developmentRoleId ===
+            "CAPA_APPROVER" &&
+          request.purpose ===
+            "CAPA_GATE_DECISION" &&
+          request.resource.workflow_state ===
+            "S90" &&
+          request.resource.relationship ===
+            "NOT_CASE_OWNER"
+        );
+
       const operationIsSupported =
         genericOperationIsSupported ||
         (
@@ -688,6 +708,10 @@ function developmentAuthorizationPolicy(
         (
           isActionPlanReviewGateOperation &&
           actionPlanReviewGateBoundarySatisfied
+        ) ||
+        (
+          isImplementationReviewGateOperation &&
+          implementationReviewGateBoundarySatisfied
         );
 
       if (
@@ -1257,6 +1281,44 @@ export function createCapaDevelopmentRuntime(
     },
   };
 
+  const implementationReviewDecisionRepository:
+    DecideCapaImplementationReviewDependencies["review_decision_repository"] = {
+    saveDecision: (transaction, decision) =>
+      database.saveImplementationReviewDecision(transaction, decision),
+    findDecision: (organizationId, capaCaseId, sourceCaseVersionId) =>
+      database.findImplementationReviewDecision(
+        organizationId,
+        capaCaseId,
+        sourceCaseVersionId,
+      ),
+    findDecisionInTransaction: (
+      transaction,
+      organizationId,
+      capaCaseId,
+      sourceCaseVersionId,
+    ) =>
+      database.findImplementationReviewDecisionInTransaction(
+        transaction,
+        organizationId,
+        capaCaseId,
+        sourceCaseVersionId,
+      ),
+  };
+
+  const decideImplementationReviewDependencies:
+    DecideCapaImplementationReviewDependencies = {
+    ...decideRootCauseGateDependencies,
+    capa_repository: database,
+    review_decision_repository: implementationReviewDecisionRepository,
+    configuration: {
+      workflow_version: dependencies.configuration.workflow_version,
+      audit_schema_version: dependencies.configuration.audit_schema_version,
+      step_up_maximum_age_ms: 15 * 60 * 1000,
+      required_step_up_assurance: controlled("MFA"),
+      authorization_purpose: controlled("CAPA_GATE_DECISION"),
+    },
+  };
+
   const updateInvestigationProgressDependencies:
     UpdateCapaInvestigationProgressDependencies = {
     ...submitIntakeDependencies,
@@ -1565,6 +1627,21 @@ export function createCapaDevelopmentRuntime(
       });
     },
 
+    create_implementation_review_projection_service(context) {
+      return createCapaImplementationReviewProjectionService({
+        request_context: context,
+        capa_repository: database,
+        action_plan_review_decision_repository: database,
+        implementation_review_decision_repository:
+          implementationReviewDecisionRepository,
+        audit_repository: database,
+        authorization_policy: dependencies.authorization_policy,
+        now,
+        step_up_maximum_age_ms: 15 * 60 * 1000,
+        required_step_up_assurance: controlled("MFA"),
+      });
+    },
+
     submit_implementation_dependencies: submitImplementationDependencies,
 
     create_investigation_active_workspace_reconciliation_service(context) {
@@ -1598,6 +1675,9 @@ export function createCapaDevelopmentRuntime(
 
     decide_action_plan_review_dependencies:
       decideActionPlanReviewDependencies,
+
+    decide_implementation_review_dependencies:
+      decideImplementationReviewDependencies,
     prompt_assembly_service:
       promptAssemblyService,
 
