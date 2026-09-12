@@ -201,6 +201,49 @@ function validateContextualDraft(
   }
 }
 
+async function rolloverExistingWorkspace(
+  sql: postgres.TransactionSql,
+  normalized: SaveCapaImplementationWorkspaceInput,
+  baseline: CapaImplementationApprovedS70BaselineReference,
+  existing: CapaImplementationWorkspaceRecord,
+): Promise<SaveCapaImplementationWorkspaceResult> {
+  const rollover = await sql<Row[]>`
+    update public.capa_implementation_workspace_drafts
+    set case_version_id = ${normalized.case_version_id},
+        record_version = ${normalized.record_version},
+        source_case_version_id = ${baseline.source_case_version_id},
+        approved_action_plan_section_id = ${baseline.approved_action_plan_section_id},
+        approval_decision_reference = ${baseline.approval_decision_reference},
+        draft_revision = ${normalized.draft_revision},
+        schema_version = ${normalized.draft.schema_version},
+        workspace_draft = ${sql.json(json(normalized.draft))},
+        updated_by_user_id = ${normalized.actor_user_id},
+        updated_at = statement_timestamp()
+    where organization_id = ${normalized.organization_id}
+      and capa_case_id = ${normalized.capa_case_id}
+      and case_version_id = ${existing.case_version_id}
+      and exists (
+        select 1
+        from public.capa_cases as capa_case
+        join public.capa_case_versions as current_version
+          on current_version.organization_id = capa_case.organization_id
+         and current_version.capa_case_id = capa_case.capa_case_id
+         and current_version.case_version_id = capa_case.current_version_id
+         and current_version.version_number = capa_case.record_version
+         and current_version.status = 'S80'
+        where capa_case.organization_id = ${normalized.organization_id}
+          and capa_case.capa_case_id = ${normalized.capa_case_id}
+          and capa_case.status = 'S80'
+          and capa_case.current_version_id = ${normalized.case_version_id}
+          and capa_case.record_version = ${normalized.record_version}
+      )
+    returning *`;
+  if (rollover.length === 1 && rollover[0] !== undefined) {
+    return { status: "saved", workspace: fromRow(rollover[0]) };
+  }
+  return { status: "concurrency_conflict" };
+}
+
 export class SupabaseCapaImplementationWorkspaceRepository
   implements CapaImplementationWorkspaceRepository {
   constructor(private readonly sql: postgres.Sql) {}
@@ -268,6 +311,18 @@ export class SupabaseCapaImplementationWorkspaceRepository
       );
       if (actionReferences === null) return { status: "baseline_conflict" };
       validateContextualDraft(normalized.draft, actionReferences);
+      const existing = await findInTransaction(
+        sql,
+        normalized.organization_id,
+        normalized.capa_case_id,
+        true,
+      );
+      if (existing !== null) {
+        if (existing.case_version_id === normalized.case_version_id) {
+          return { status: "concurrency_conflict" };
+        }
+        return rolloverExistingWorkspace(sql, normalized, baseline, existing);
+      }
       const rows = await sql<Row[]>`
         insert into public.capa_implementation_workspace_drafts (
           organization_id,
@@ -318,51 +373,17 @@ export class SupabaseCapaImplementationWorkspaceRepository
         return { status: "saved", workspace: fromRow(rows[0]) };
       }
       if (rows.length > 1) return fail("The S80 implementation workspace identity is not unique.");
-      const existing = await findInTransaction(
+      const competing = await findInTransaction(
         sql,
         normalized.organization_id,
         normalized.capa_case_id,
-        false,
+        true,
       );
-      if (existing !== null) {
-        if (existing.case_version_id === normalized.case_version_id) {
+      if (competing !== null) {
+        if (competing.case_version_id === normalized.case_version_id) {
           return { status: "concurrency_conflict" };
         }
-        const rollover = await sql<Row[]>`
-          update public.capa_implementation_workspace_drafts
-          set case_version_id = ${normalized.case_version_id},
-              record_version = ${normalized.record_version},
-              source_case_version_id = ${baseline.source_case_version_id},
-              approved_action_plan_section_id = ${baseline.approved_action_plan_section_id},
-              approval_decision_reference = ${baseline.approval_decision_reference},
-              draft_revision = ${normalized.draft_revision},
-              schema_version = ${normalized.draft.schema_version},
-              workspace_draft = ${sql.json(json(normalized.draft))},
-              updated_by_user_id = ${normalized.actor_user_id},
-              updated_at = statement_timestamp()
-          where organization_id = ${normalized.organization_id}
-            and capa_case_id = ${normalized.capa_case_id}
-            and case_version_id = ${existing.case_version_id}
-            and exists (
-              select 1
-              from public.capa_cases as capa_case
-              join public.capa_case_versions as current_version
-                on current_version.organization_id = capa_case.organization_id
-               and current_version.capa_case_id = capa_case.capa_case_id
-               and current_version.case_version_id = capa_case.current_version_id
-               and current_version.version_number = capa_case.record_version
-               and current_version.status = 'S80'
-              where capa_case.organization_id = ${normalized.organization_id}
-                and capa_case.capa_case_id = ${normalized.capa_case_id}
-                and capa_case.status = 'S80'
-                and capa_case.current_version_id = ${normalized.case_version_id}
-                and capa_case.record_version = ${normalized.record_version}
-            )
-          returning *`;
-        if (rollover.length === 1 && rollover[0] !== undefined) {
-          return { status: "saved", workspace: fromRow(rollover[0]) };
-        }
-        return { status: "concurrency_conflict" };
+        return rolloverExistingWorkspace(sql, normalized, baseline, competing);
       }
       return (await currentS80ContextMatches(sql, normalized))
         ? { status: "concurrency_conflict" }
