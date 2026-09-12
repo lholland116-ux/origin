@@ -30,10 +30,9 @@ import {
   setStoredChatThemeId,
 } from "@/lib/chat-theme-storage";
 import UpgradeModal from "@/components/UpgradeModal";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
+import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -2633,9 +2632,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               prose-li:[overflow-wrap:anywhere]
                             "
                           >
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {message.content || (isStreamingAssistant ? "Thinking..." : "")}
-                            </ReactMarkdown>
+                            <ChatMessageContent
+                              content={message.content || (isStreamingAssistant ? "Thinking..." : "")}
+                            />
                           </div>
 
                           {message.image_url && (
