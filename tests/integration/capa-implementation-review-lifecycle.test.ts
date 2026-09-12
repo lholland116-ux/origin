@@ -339,11 +339,20 @@ describe("integrated S90 implementation-review API/runtime qualification", () =>
         request_trace: { request_id: randomUUID(), correlation_id: randomUUID(), idempotency_key: "implementation-rework-submit-1" } as never,
         body: { expected_draft_revision: 1 },
       });
-      expect(submission).toMatchObject({ status: "submitted", capa_case: { status: "S90" }, source_case_version_id: expect.any(String), implementation_review_return_response_section_version: { section_type: "CAPA.IMPLEMENTATION_REVIEW_RETURN_RESPONSE" } });
+      expect(submission).toMatchObject({ status: "submitted", capa_case: { status: "S90" }, source_case_version_id: expect.any(String), implementation_review_baseline_section_version: { section_version_id: expect.any(String), version_number: 2, parent_version_id: BASELINE }, implementation_review_return_response_section_version: { section_type: "CAPA.IMPLEMENTATION_REVIEW_RETURN_RESPONSE", version_number: 1 } });
+      expect((submission as any).implementation_review_return_response_section_version.parent_version_id).toBeUndefined();
+      const firstBaseline = (submission as any).implementation_review_baseline_section_version.section_version_id as string;
+      const firstResponse = (submission as any).implementation_review_return_response_section_version.section_version_id as string;
+      const firstResultingVersion = await test.database.findCaseVersionById(
+        ORG,
+        CASE,
+        (submission as any).resulting_case_version_id,
+      );
+      expect(firstResultingVersion).toMatchObject({ section_version_ids: [ACTION, firstBaseline, firstResponse] });
+      expect(firstResultingVersion?.section_version_ids).not.toContain(BASELINE);
       const projection = await test.runtime.create_implementation_review_projection_service(context as never).load({ capa_case_id: CASE as never });
       expect(projection).toMatchObject({ status: "resolved", projection: { current_case_version_id: (submission as any).resulting_case_version_id, prior_review_history: [{ decision: "return", return_response: { content: { response_narrative: "The implementation evidence was reworked for the reviewer.", source_case_version_id: S90 } } }] } });
       const firstS90 = (submission as any).resulting_case_version_id as string;
-      const firstBaseline = (submission as any).implementation_review_baseline_section_version.section_version_id as string;
       const secondReturned = await handleCapaImplementationReviewPost(
         reviewRequest("return", "implementation-review-rework-2", 11, firstS90, firstS90, firstBaseline, "The second review cycle still requires objective evidence."),
         CASE,
@@ -384,8 +393,9 @@ describe("integrated S90 implementation-review API/runtime qualification", () =>
         body: { expected_draft_revision: 1 },
       };
       const secondSubmission = await submitCapaImplementation(test.runtime.submit_implementation_dependencies, secondSubmissionCommand);
-      expect(secondSubmission).toMatchObject({ status: "submitted", implementation_review_return_response_section_version: { version_number: 2, parent_version_id: (submission as any).implementation_review_return_response_section_version.section_version_id } });
-      await expect(submitCapaImplementation(test.runtime.submit_implementation_dependencies, secondSubmissionCommand)).resolves.toMatchObject({ status: "already_submitted", implementation_review_return_response_section_version: { version_number: 2 } });
+      expect(secondSubmission).toMatchObject({ status: "submitted", implementation_review_baseline_section_version: { version_number: 3, parent_version_id: firstBaseline }, implementation_review_return_response_section_version: { version_number: 2, parent_version_id: firstResponse } });
+      const secondReplay = await submitCapaImplementation(test.runtime.submit_implementation_dependencies, secondSubmissionCommand);
+      expect(secondReplay).toMatchObject({ status: "already_submitted", implementation_review_baseline_section_version: { version_number: 3, parent_version_id: firstBaseline }, implementation_review_return_response_section_version: { version_number: 2, parent_version_id: firstResponse } });
       const secondProjection = await test.runtime.create_implementation_review_projection_service(context as never).load({ capa_case_id: CASE as never });
       expect(secondProjection).toMatchObject({ status: "resolved" });
       expect((secondProjection as any).projection.prior_review_history.map((entry: any) => entry.return_response.content.response_narrative)).toEqual(expect.arrayContaining(["The implementation evidence was reworked for the reviewer.", "The second review cycle was addressed separately."]));

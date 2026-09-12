@@ -455,6 +455,7 @@ function baselineSection(
   draftRevision: number,
   draft: CapaImplementationWorkspaceDraft,
   baseline: CapaImplementationApprovedS70BaselineReference,
+  priorBaseline: CapaSectionVersion | null,
   userId: string,
   timestamp: IsoDateTime,
 ): CapaSectionVersion {
@@ -474,7 +475,10 @@ function baselineSection(
     section_version_id: sectionVersionId,
     capa_case_id: capaCaseId,
     section_type: controlled(CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE),
-    version_number: 1,
+    version_number: (priorBaseline?.version_number ?? 0) + 1,
+    ...(priorBaseline === null
+      ? {}
+      : { parent_version_id: priorBaseline.section_version_id }),
     schema_version: CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION,
     content: content as unknown as Readonly<Record<string, unknown>>,
     change_reason: TRANSITION_MEANING,
@@ -712,7 +716,8 @@ async function replay(
     submittedSection === null ||
     audit.metadata.implementation_review_baseline_section_version_id !== submittedSection.section_version_id ||
     submittedSection.schema_version !== CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION ||
-    submittedSection.version_number !== 1 ||
+    submittedSection.version_number !== (priorBaseline?.version_number ?? 0) + 1 ||
+    submittedSection.parent_version_id !== priorBaseline?.section_version_id ||
     submittedSection.created_by.actor_type !== "human" ||
     submittedSection.created_by.actor_id === undefined
   ) throw new SubmitCapaImplementationIntegrityError("The implementation submission baseline is missing.");
@@ -898,7 +903,7 @@ export async function submitCapaImplementation(
       const sectionId = dependencies.id_generator.generateSectionVersionId();
       const returnResponseSectionId = returnResponse.status === "valid" ? dependencies.id_generator.generateSectionVersionId() : null;
       const auditEventId = dependencies.id_generator.generateAuditEventId();
-      const section = baselineSection(organizationId, command.capa_case_id, sectionId, current.case_version.case_version_id, nextVersionId, auditEventId, workspace.draft_revision, contextual.value, baseline.reference, principal.user_id, timestamp);
+      const section = baselineSection(organizationId, command.capa_case_id, sectionId, current.case_version.case_version_id, nextVersionId, auditEventId, workspace.draft_revision, contextual.value, baseline.reference, priorSections.baseline, principal.user_id, timestamp);
       const responseContent = returnResponse.status === "valid" ? authoritativeReturnResponseContent(returnResponse.draft, nextVersionId, principal.user_id, timestamp) : null;
       const responseSection: CapaSectionVersion | null = responseContent === null ? null : { organization_id: organizationId, section_version_id: returnResponseSectionId!, capa_case_id: command.capa_case_id, section_type: controlled(CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE), version_number: (priorSections.return_response?.version_number ?? 0) + 1, ...(priorSections.return_response === null ? {} : { parent_version_id: priorSections.return_response.section_version_id }), schema_version: CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION, content: responseContent as unknown as Readonly<Record<string, unknown>>, change_reason: TRANSITION_MEANING, effective_at: timestamp, created_at: timestamp, created_by: { actor_type: "human", actor_id: principal.user_id } };
       const nextVersion: CapaCaseVersion = { organization_id: organizationId, case_version_id: nextVersionId, capa_case_id: command.capa_case_id, version_number: current.case_version.version_number + 1, parent_version_id: current.case_version.case_version_id, change_reason: TRANSITION_MEANING, status: TARGET_STATE, section_version_ids: replacedImplementationSectionIds(current.case_version, priorSections.baseline, sectionId, priorSections.return_response, responseSection?.section_version_id ?? null), effective_at: timestamp, created_at: timestamp, created_by: { actor_type: "human", actor_id: principal.user_id } };
