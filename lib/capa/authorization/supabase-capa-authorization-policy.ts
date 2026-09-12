@@ -425,6 +425,7 @@ const REQUIRED_WORKFLOW_STATES:
     "approve_root_cause",
     "return_root_cause_for_investigation",
     "approve_action_plan",
+    "accept_implementation",
     "approve_effectiveness",
     "close_case",
     "cancel_case",

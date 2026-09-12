@@ -112,7 +112,7 @@ function decisionResult(
 }
 
 describe("S90 implementation-review API route handlers", () => {
-  it("returns the authoritative projection through GET", async () => {
+  it("returns the authoritative S90 projection to a case owner with view access", async () => {
     const deps = dependencies();
     const response = await handleCapaImplementationReviewGet(
       new Request(`https://example.test/api/capa/${CASE}/implementation-review`),
@@ -124,6 +124,8 @@ describe("S90 implementation-review API route handlers", () => {
       projection,
       correlation_id: CORRELATION,
     });
+    expect(deps.resolve_context).toHaveBeenCalled();
+    expect(context.owner_user_id).toBe(USER);
     expect(deps.create_projection_service).toHaveBeenCalledWith(context);
   });
 

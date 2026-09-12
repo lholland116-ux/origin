@@ -525,6 +525,32 @@ describe("Capa implementation review projection", () => {
     expect(test.dependencies.authorization_policy.evaluate).toHaveBeenNthCalledWith(2, expect.objectContaining({ resource: expect.objectContaining({ relationship: "CASE_OWNER" }) }));
   });
 
+  it("uses normal case access for S90 reads and keeps decision authorization separate", async () => {
+    const test = harness();
+    await expect(test.service.load({ capa_case_id: CASE as never })).resolves.toMatchObject({ status: "resolved" });
+    expect(test.dependencies.authorization_policy.evaluate).toHaveBeenNthCalledWith(1, expect.objectContaining({ operation: "view_case", purpose: "CAPA_CASE_ACCESS" }));
+    expect(test.dependencies.authorization_policy.evaluate).toHaveBeenNthCalledWith(2, expect.objectContaining({ operation: "accept_implementation", purpose: "CAPA_GATE_DECISION" }));
+  });
+
+  it("allows a case owner to read S90 while denying reviewer decision authority", async () => {
+    const test = harness();
+    vi.mocked(test.dependencies.authorization_policy.evaluate).mockImplementation(async (request: any) => (request.operation === "view_case"
+      ? { decision: "allow", reason_code: "AUTHORIZED", policy_version: "policy-1", evaluated_at: NOW, relied_on_role_assignment_ids: [] }
+      : { decision: "deny", reason_code: "SEGREGATION_OF_DUTIES_DENIED", policy_version: "policy-1", evaluated_at: NOW, relied_on_role_assignment_ids: [] }) as any);
+    const result: any = await test.service.load({ capa_case_id: CASE as never });
+    expect(result).toMatchObject({
+      status: "resolved",
+      projection: {
+        reviewer: {
+          authorization: {
+            read: { status: "allowed", operation: "view_case" },
+            decision: { status: "denied", reason_code: "SEGREGATION_OF_DUTIES_DENIED", operation: "accept_implementation" },
+          },
+        },
+      },
+    });
+  });
+
   it("passes NOT_CASE_OWNER to both read and decision authorization evaluations", async () => {
     const test = harness();
     (test.dependencies as any).request_context = commandContext(ORG, OTHER_USER);
@@ -538,7 +564,7 @@ describe("Capa implementation review projection", () => {
     (test.dependencies as any).request_context = commandContext();
     (test.dependencies as any).request_context.authentication.reauthenticated_at = undefined;
     const result: any = await test.service.load({ capa_case_id: CASE as never });
-    expect(result).toMatchObject({ status: "resolved", projection: { reviewer: { authorization: { decision: { status: "step_up_required" } } } } });
+    expect(result).toMatchObject({ status: "resolved", projection: { reviewer: { authorization: { read: { status: "allowed", operation: "view_case" }, decision: { status: "step_up_required", operation: "accept_implementation" } } } } });
   });
 
   it("rejects a read authorization denial", async () => {

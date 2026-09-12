@@ -990,6 +990,71 @@ describe(
 describe(
   "SupabaseCapaAuthorizationPolicy workflow and segregation controls",
   () => {
+    it("relationship-gates both S90 implementation decisions without weakening normal reviewer checks", async () => {
+      const owner = await evaluateWithAuthority(
+        approvalRequest({
+          operation: "accept_implementation",
+          resource: {
+            organization_id: ORGANIZATION_A,
+            resource_type: controlled("CAPA_CASE"),
+            workflow_state: "S90" as CapaCaseStatus,
+            relationship: controlled("CASE_OWNER"),
+          },
+          purpose: controlled("CAPA_GATE_DECISION"),
+        }),
+        [membershipRow()],
+        [authorityRow({ permissions: ["capa.review.disposition"] })],
+      );
+      expect(owner.result).toMatchObject({ decision: "deny", reason_code: "SEGREGATION_OF_DUTIES_DENIED" });
+      expect(owner.harness.calls).toHaveLength(0);
+
+      const reviewer = await evaluateWithAuthority(
+        approvalRequest({
+          operation: "accept_implementation",
+          resource: {
+            organization_id: ORGANIZATION_A,
+            resource_type: controlled("CAPA_CASE"),
+            workflow_state: "S90" as CapaCaseStatus,
+            relationship: controlled("NOT_CASE_OWNER"),
+          },
+          purpose: controlled("CAPA_GATE_DECISION"),
+        }),
+        [membershipRow()],
+        [authorityRow({ role_assignment_id: APPROVER_ASSIGNMENT_ID, role_id: "CAPA_APPROVER", permissions: ["capa.review.disposition"] })],
+      );
+      expect(reviewer.result).toMatchObject({ decision: "allow" });
+
+      const insufficient = await evaluateWithAuthority(
+        approvalRequest({
+          operation: "accept_implementation",
+          resource: {
+            organization_id: ORGANIZATION_A,
+            resource_type: controlled("CAPA_CASE"),
+            workflow_state: "S90" as CapaCaseStatus,
+            relationship: controlled("NOT_CASE_OWNER"),
+          },
+          purpose: controlled("CAPA_GATE_DECISION"),
+        }),
+        [membershipRow()],
+        [authorityRow({ role_assignment_id: REVIEWER_ASSIGNMENT_ID, role_id: "CAPA_REVIEWER", permissions: ["capa.case.view"] })],
+      );
+      expect(insufficient.result).toMatchObject({ decision: "deny", reason_code: "REQUIRED_PERMISSION_NOT_GRANTED" });
+    });
+
+    it.each([
+      ["approve_root_cause", "S50"],
+      ["return_root_cause_for_investigation", "S50"],
+      ["approve_action_plan", "S70"],
+      ["approve_effectiveness", "S110"],
+      ["close_case", "S120"],
+      ["cancel_case", "S00"],
+      ["reopen_case", "S130"],
+      ["approve_reentry", "S150"],
+    ] as const)("retains SOD gating for existing approver operation %s", async (operation, workflowState) => {
+      const result = await createPolicy(createSqlHarness()).evaluate(approvalRequest({ operation, resource: { organization_id: ORGANIZATION_A, resource_type: controlled("CAPA_CASE"), workflow_state: workflowState as CapaCaseStatus, relationship: controlled("CASE_OWNER") } }));
+      expect(result).toMatchObject({ decision: "deny", reason_code: "SEGREGATION_OF_DUTIES_DENIED" });
+    });
+
     it(
       "requires workflow state for a state-bound operation",
       async () => {

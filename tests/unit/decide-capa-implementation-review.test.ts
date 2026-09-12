@@ -424,9 +424,9 @@ describe("decideCapaImplementationReview", () => {
     await expect(decideCapaImplementationReview(test.dependencies, request)).resolves.toMatchObject({ status: "authorization_denied", reason_code: "AUTHORIZED_HUMAN_REQUIRED" });
   });
 
-  it("uses accept_implementation for the human consequential policy check", async () => {
+  it.each(["accept", "return"] as const)("uses accept_implementation for the human consequential %s policy check", async (decision) => {
     const test = harness();
-    await decideCapaImplementationReview(test.dependencies, command());
+    await decideCapaImplementationReview(test.dependencies, command({ body: { ...command().body, decision } }));
     expect(test.dependencies.authorization_policy.evaluate).toHaveBeenCalledWith(expect.objectContaining({ operation: "accept_implementation" }));
   });
 
