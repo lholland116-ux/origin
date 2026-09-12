@@ -1678,8 +1678,6 @@ function resolveApprovedImplementationActionReferences(
     decision.action_plan_section_version_id !==
       baseline.approved_action_plan_section_id ||
     decision.transition_audit_event_id !== baseline.approval_decision_reference ||
-    (resultingCaseVersionId !== undefined &&
-      decision.resulting_case_version_id !== resultingCaseVersionId) ||
     sourceVersion === undefined ||
     sourceVersion.capa_case_id !== capaCaseId ||
     sourceVersion.status !== "S70" ||
@@ -2690,7 +2688,45 @@ export class InMemoryCapaDatabase
 
     if (normalized.expected_draft_revision === null) {
       if (existing !== undefined) {
-        return { status: "concurrency_conflict" };
+        if (
+          existing.case_version_id === normalized.case_version_id ||
+          !implementationCaseContextMatches(state, normalized)
+        ) return { status: "concurrency_conflict" };
+        const baseline = normalized.approved_s70_baseline;
+        if (baseline === undefined) {
+          throw new InMemoryIntegrityError(
+            "The S80 implementation workspace baseline is required.",
+          );
+        }
+        const actionReferences = resolveApprovedImplementationActionReferences(
+          state,
+          normalized.organization_id,
+          normalized.capa_case_id,
+          baseline,
+          normalized.case_version_id,
+        );
+        if (actionReferences === null) return { status: "baseline_conflict" };
+        const contextual = validateCapaImplementationDraftAgainstApprovedActionSet(
+          normalized.draft,
+          actionReferences,
+        );
+        if (contextual.status !== "valid") {
+          throw new InMemoryIntegrityError(
+            "The S80 implementation workspace references a non-authoritative S70 action.",
+          );
+        }
+        const workspace = normalizeCapaImplementationWorkspaceRecord({
+          ...existing,
+          case_version_id: normalized.case_version_id,
+          record_version: normalized.record_version,
+          approved_s70_baseline: baseline,
+          draft_revision: normalized.draft_revision,
+          draft: contextual.value,
+          updated_by_user_id: normalized.actor_user_id,
+          updated_at: transaction.started_at,
+        });
+        state.implementation_workspace_records.set(key, cloneValue(workspace));
+        return { status: "saved", workspace: cloneValue(workspace) };
       }
       if (!implementationCaseContextMatches(state, normalized)) {
         return { status: "case_changed" };

@@ -7,13 +7,25 @@ describe("S80 human implementation workspace UI", () => {
   const client = readFileSync(resolve("app/capa/capa-implementation-workspace-client.ts"), "utf8");
   const intake = readFileSync(resolve("app/capa/CapaIntakeClient.tsx"), "utf8");
 
-  it("mounts only from the authoritative S80 branch and keeps the approved action read-only", () => {
+  it("protects first-entry S80 from showing a return/rework section or requiring an owner response", () => {
     expect(intake).toContain('createdCapa.status === "S80"');
     expect(intake).toContain("<CapaImplementationWorkspace");
     expect(workspace).toContain("Read-only approved S70 authority");
     expect(workspace).toContain("Approved action");
-    expect(workspace).not.toContain("Return / Rework");
-    expect(workspace).not.toContain("S90 reviewer");
+    expect(workspace).toContain("projection.implementation_review_return_cycle !== null ? <section");
+    expect(workspace).toContain("projection.implementation_review_return_cycle === null ? {} :");
+    expect(workspace).toContain("if (projection.implementation_review_return_cycle !== null &&");
+    expect(workspace).toContain("implementation_review_return_response");
+  });
+
+  it("shows returned-S80 reviewer rationale read-only and separates the editable owner response", () => {
+    expect(workspace).toContain("S90 · Returned for owner rework");
+    expect(workspace).toContain("Immutable reviewer rationale");
+    expect(workspace).toContain("projection.implementation_review_return_cycle.rationale");
+    expect(workspace).toContain("Owner response to reviewer return");
+    expect(workspace).toContain("Required before resubmission");
+    expect(workspace).toContain("This response is stored separately from the reviewer rationale.");
+    expect(workspace).toContain("<textarea aria-required=\"true\"");
   });
 
   it("covers human status, narrative, multiple evidence, provenance, save and conflict UX", () => {

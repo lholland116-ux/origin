@@ -30,6 +30,11 @@ import {
   validateCapaImplementationReviewBaselineAgainstApprovedActionSet,
   validateCapaImplementationReviewBaselineContent,
 } from "../implementation/capa-implementation-review-baseline";
+import {
+  CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+  CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+  validateCapaImplementationReviewReturnResponseContent,
+} from "../implementation/capa-implementation-return-response-contract";
 import type { CapaRequestContext } from "../../security/supabase-capa-context";
 import { getActiveRoleAssignments } from "../../security/tenant-context";
 import type { AuditEvent } from "../../capa/domain/capa-types";
@@ -621,6 +626,98 @@ async function readReviewHistory(
         "The S90 review history contains an incomplete controlled record.",
       );
     }
+    let returnResponse: CapaImplementationReviewHistoryEntry["return_response"];
+    if (decisionValue === "return") {
+      const resubmissions = events.filter((candidate) =>
+        candidate.event_type === "EVT-STATE-TRANSITION" &&
+        candidate.action === "SUBMIT_CAPA_IMPLEMENTATION" &&
+        candidate.outcome === "succeeded" &&
+        candidate.actor.actor_type === "human" &&
+        candidate.metadata.from_state === "S80" &&
+        candidate.metadata.to_state === "S90" &&
+        candidate.metadata.source_case_version_id === resultingCaseVersionId,
+      );
+      if (resubmissions.length !== 1) {
+        throw new CapaImplementationReviewProjectionIntegrityError(
+          "The S90 return cycle has no unique successful owner resubmission.",
+        );
+      }
+      const resubmission = resubmissions[0]!;
+      const resubmittedVersionId = resubmission.metadata.resulting_case_version_id;
+      const responseSectionId = resubmission.metadata.implementation_review_return_response_section_version_id;
+      if (!isUuid(resubmittedVersionId) || !isUuid(responseSectionId)) {
+        throw new CapaImplementationReviewProjectionIntegrityError(
+          "The S90 return cycle resubmission is missing its immutable response binding.",
+        );
+      }
+      const resubmittedVersion = await dependencies.capa_repository.findCaseVersionById(
+        current.capa_case.organization_id,
+        current.capa_case.capa_case_id,
+        resubmittedVersionId as never,
+      );
+      const responseSection = await dependencies.capa_repository.findSectionVersionById(
+        current.capa_case.organization_id,
+        current.capa_case.capa_case_id,
+        responseSectionId as never,
+      );
+      const validatedResponse = responseSection === null
+        ? null
+        : validateCapaImplementationReviewReturnResponseContent(responseSection.content);
+      const resubmittedBaselineIds = resubmittedVersion === null
+        ? []
+        : resubmittedVersion.section_version_ids.filter((sectionId) =>
+            sectionId === resubmission.metadata.implementation_review_baseline_section_version_id,
+          );
+      const resubmittedBaseline = resubmittedBaselineIds.length !== 1
+        ? null
+        : await dependencies.capa_repository.findSectionVersionById(
+            current.capa_case.organization_id,
+            current.capa_case.capa_case_id,
+            resubmittedBaselineIds[0] as never,
+          );
+      const validatedResubmittedBaseline = resubmittedBaseline === null
+        ? null
+        : validateCapaImplementationReviewBaselineContent(resubmittedBaseline.content);
+      if (
+        resubmittedVersion === null ||
+        resubmittedVersion.organization_id !== current.capa_case.organization_id ||
+        resubmittedVersion.capa_case_id !== current.capa_case.capa_case_id ||
+        resubmittedVersion.status !== "S90" ||
+        resubmittedVersion.parent_version_id !== resultingVersion.case_version_id ||
+        !resubmittedVersion.section_version_ids.includes(responseSectionId as never) ||
+        resubmission.metadata.implementation_review_baseline_section_version_id === undefined ||
+        resubmittedBaseline === null ||
+        resubmittedBaseline.section_type !== CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE ||
+        resubmittedBaseline.schema_version !== CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION ||
+        validatedResubmittedBaseline?.status !== "valid" ||
+        validatedResubmittedBaseline.value.source_s80_case_version_id !== resultingVersion.case_version_id ||
+        validatedResubmittedBaseline.value.resulting_s90_case_version_id !== resubmittedVersion.case_version_id ||
+        validatedResubmittedBaseline.value.transition_audit_event_id !== resubmission.event_id ||
+        validatedResubmittedBaseline.value.submitted_by_user_id !== resubmission.actor.actor_id ||
+        validatedResubmittedBaseline.value.submitted_at !== resubmission.occurred_at ||
+        responseSection === null ||
+        responseSection.organization_id !== current.capa_case.organization_id ||
+        responseSection.capa_case_id !== current.capa_case.capa_case_id ||
+        responseSection.section_type !== CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE ||
+        responseSection.schema_version !== CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION ||
+        validatedResponse?.status !== "valid" ||
+        validatedResponse.value.return_transition_audit_event_id !== event.event_id ||
+        validatedResponse.value.source_case_version_id !== sourceCaseVersionId ||
+        validatedResponse.value.resulting_case_version_id !== resultingCaseVersionId ||
+        validatedResponse.value.resubmitted_case_version_id !== resubmittedVersion.case_version_id ||
+        resubmission.metadata.workspace_draft_revision === undefined ||
+        resubmission.actor.actor_id !== validatedResponse.value.responded_by.actor_id ||
+        resubmission.occurred_at !== validatedResponse.value.responded_at
+      ) {
+        throw new CapaImplementationReviewProjectionIntegrityError(
+          "The S90 return-cycle response is not authoritatively linked.",
+        );
+      }
+      returnResponse = freezeClone({
+        section_version_id: responseSection.section_version_id,
+        content: validatedResponse.value,
+      });
+    }
     history.push(freezeClone({
       source_case_version_id: decision.source_case_version_id,
       implementation_review_baseline_section_version_id:
@@ -631,6 +728,7 @@ async function readReviewHistory(
       decided_at: decision.decided_at,
       resulting_case_version_id: decision.resulting_case_version_id,
       transition_audit_event_id: decision.transition_audit_event_id,
+      ...(returnResponse === undefined ? {} : { return_response: returnResponse }),
     }));
   }
   return Object.freeze(history);

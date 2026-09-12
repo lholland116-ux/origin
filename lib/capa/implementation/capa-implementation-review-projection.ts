@@ -18,6 +18,9 @@ import type {
 import type {
   CapaImplementationReviewBaselineContent,
 } from "./capa-implementation-review-baseline";
+import type {
+  CapaImplementationReviewReturnResponseContent,
+} from "./capa-implementation-return-response-contract";
 import type { TenantRoleAssignment } from "../../security/tenant-context";
 
 export const CAPA_IMPLEMENTATION_REVIEW_PROJECTION_TRUST =
@@ -71,6 +74,10 @@ export interface CapaImplementationReviewHistoryEntry {
   readonly decided_at: IsoDateTime;
   readonly resulting_case_version_id: CapaCaseVersionId;
   readonly transition_audit_event_id: AuditEventId;
+  readonly return_response?: Readonly<{
+    readonly section_version_id: CapaSectionVersionId;
+    readonly content: CapaImplementationReviewReturnResponseContent;
+  }>;
 }
 
 export interface CapaImplementationReviewAuthorizationState {

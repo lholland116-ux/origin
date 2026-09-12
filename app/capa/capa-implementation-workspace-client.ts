@@ -23,6 +23,9 @@ import type {
   CapaImplementationProvenanceOriginKind,
   CapaImplementationProvenanceSourceSystemKind,
 } from "../../lib/capa/implementation/capa-implementation-provenance-contract";
+import type {
+  CapaImplementationReviewReturnResponseEditableContent,
+} from "../../lib/capa/implementation/capa-implementation-return-response-contract";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -50,6 +53,14 @@ export interface CapaImplementationWorkspaceProjection {
   };
   readonly approved_actions: readonly CapaImplementationApprovedActionProjection[];
   readonly draft: CapaImplementationWorkspaceDraft | null;
+  readonly implementation_review_return_cycle: {
+    readonly return_transition_audit_event_id: string;
+    readonly source_case_version_id: string;
+    readonly resulting_case_version_id: string;
+    readonly returned_by_user_id: string;
+    readonly returned_at: string;
+    readonly rationale: string;
+  } | null;
   readonly updated_at: string | null;
 }
 
@@ -74,6 +85,7 @@ export type CapaImplementationWorkspaceSaveResult =
 export interface CapaImplementationWorkspaceSaveInput {
   readonly expected_draft_revision: number | null;
   readonly action_progress: readonly CapaImplementationActionProgress[];
+  readonly implementation_review_return_response?: CapaImplementationReviewReturnResponseEditableContent | null;
 }
 
 export interface CapaImplementationSubmissionSuccess {
@@ -220,8 +232,21 @@ function parseApprovedAction(value: unknown): CapaImplementationApprovedActionPr
   });
 }
 
+function parseReturnCycle(value: unknown): CapaImplementationWorkspaceProjection["implementation_review_return_cycle"] | null | undefined {
+  if (value === null || value === undefined) return value;
+  if (!record(value) || !exact(value, ["return_transition_audit_event_id", "source_case_version_id", "resulting_case_version_id", "returned_by_user_id", "returned_at", "rationale"]) || !correlation(value.return_transition_audit_event_id) || !correlation(value.source_case_version_id) || !correlation(value.resulting_case_version_id) || !correlation(value.returned_by_user_id) || typeof value.returned_at !== "string" || !ISO_DATE_TIME.test(value.returned_at) || Number.isNaN(Date.parse(value.returned_at)) || !text(value.rationale)) return null;
+  return Object.freeze({ return_transition_audit_event_id: value.return_transition_audit_event_id, source_case_version_id: value.source_case_version_id, resulting_case_version_id: value.resulting_case_version_id, returned_by_user_id: value.returned_by_user_id, returned_at: value.returned_at, rationale: value.rationale });
+}
+
 function parseProjection(value: unknown): CapaImplementationWorkspaceProjection | null {
-  if (!record(value) || !exact(value, ["draft_revision", "case_version_id", "record_version", "approved_s70_baseline", "approved_actions", "draft", "updated_at"]) || (value.draft_revision !== null && !positiveInteger(value.draft_revision)) || !correlation(value.case_version_id) || !positiveInteger(value.record_version) || !record(value.approved_s70_baseline) || !exact(value.approved_s70_baseline, ["source_case_version_id", "approved_action_plan_section_id", "approval_decision_reference"]) || !correlation(value.approved_s70_baseline.source_case_version_id) || !correlation(value.approved_s70_baseline.approved_action_plan_section_id) || !correlation(value.approved_s70_baseline.approval_decision_reference) || !Array.isArray(value.approved_actions) || value.approved_actions.length === 0 || value.approved_actions.some((item) => parseApprovedAction(item) === null) || (value.updated_at !== null && (typeof value.updated_at !== "string" || !ISO_DATE_TIME.test(value.updated_at) || Number.isNaN(Date.parse(value.updated_at))))) return null;
+  if (!record(value)) return null;
+  const projectionFields = Object.hasOwn(value, "implementation_review_return_cycle")
+    ? ["draft_revision", "case_version_id", "record_version", "approved_s70_baseline", "approved_actions", "draft", "implementation_review_return_cycle", "updated_at"]
+    : ["draft_revision", "case_version_id", "record_version", "approved_s70_baseline", "approved_actions", "draft", "updated_at"];
+  if (!exact(value, projectionFields) || (value.draft_revision !== null && !positiveInteger(value.draft_revision)) || !correlation(value.case_version_id) || !positiveInteger(value.record_version) || !record(value.approved_s70_baseline) || !exact(value.approved_s70_baseline, ["source_case_version_id", "approved_action_plan_section_id", "approval_decision_reference"]) || !correlation(value.approved_s70_baseline.source_case_version_id) || !correlation(value.approved_s70_baseline.approved_action_plan_section_id) || !correlation(value.approved_s70_baseline.approval_decision_reference) || !Array.isArray(value.approved_actions) || value.approved_actions.length === 0 || value.approved_actions.some((item) => parseApprovedAction(item) === null) || (value.updated_at !== null && (typeof value.updated_at !== "string" || !ISO_DATE_TIME.test(value.updated_at) || Number.isNaN(Date.parse(value.updated_at))))) return null;
+  let returnCycle = parseReturnCycle(value.implementation_review_return_cycle);
+  if (returnCycle === undefined) returnCycle = null;
+  if (returnCycle === null && value.implementation_review_return_cycle !== null && value.implementation_review_return_cycle !== undefined) return null;
   const actions = value.approved_actions.map((item) => parseApprovedAction(item)!).map((item) => item.approved_action_reference);
   if (new Set(actions).size !== actions.length) return null;
   const parsedDraft = value.draft === null ? null : validateCapaImplementationWorkspaceDraft(value.draft);
@@ -238,6 +263,7 @@ function parseProjection(value: unknown): CapaImplementationWorkspaceProjection 
     approved_s70_baseline: Object.freeze(baseline),
     approved_actions: Object.freeze(value.approved_actions.map((item) => parseApprovedAction(item)!)),
     draft: parsedDraft === null ? null : parsedDraft.value,
+    implementation_review_return_cycle: returnCycle,
     updated_at: value.updated_at,
   });
 }
@@ -269,7 +295,14 @@ export async function loadCapaImplementationWorkspace(caseId: string, fetcher: t
 export async function saveCapaImplementationWorkspace(caseId: string, input: CapaImplementationWorkspaceSaveInput, fetcher: typeof fetch = fetch): Promise<CapaImplementationWorkspaceSaveResult> {
   const requestTrace = trace();
   try {
-    const response = await fetcher(`/api/capa/${encodeURIComponent(caseId)}/implementation-workspace`, { method: "PUT", cache: "no-store", headers: { "content-type": "application/json", "x-request-id": requestTrace.requestId, "x-correlation-id": requestTrace.correlationId }, body: JSON.stringify({ expected_draft_revision: input.expected_draft_revision, action_progress: input.action_progress }) });
+    const payload = {
+      expected_draft_revision: input.expected_draft_revision,
+      action_progress: input.action_progress,
+      ...(input.implementation_review_return_response === undefined ? {} : {
+        implementation_review_return_response: input.implementation_review_return_response,
+      }),
+    };
+    const response = await fetcher(`/api/capa/${encodeURIComponent(caseId)}/implementation-workspace`, { method: "PUT", cache: "no-store", headers: { "content-type": "application/json", "x-request-id": requestTrace.requestId, "x-correlation-id": requestTrace.correlationId }, body: JSON.stringify(payload) });
     const body: unknown = await response.json().catch(() => null);
     return response.ok ? parseCapaImplementationWorkspaceSave(body) : parseFailure(body, "The S80 implementation workspace could not be saved.");
   } catch {

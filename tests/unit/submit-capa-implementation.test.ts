@@ -4,6 +4,7 @@ import { CAPA_ACTION_PLAN_SCHEMA_VERSION, CAPA_ACTION_PLAN_SECTION_TYPE } from "
 import { CAPA_IMPLEMENTATION_EVIDENCE_SCHEMA_VERSION } from "../../lib/capa/implementation/capa-implementation-evidence-contract";
 import { CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE, CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION } from "../../lib/capa/implementation/capa-implementation-review-baseline";
 import { submitCapaImplementation, type SubmitCapaImplementationDependencies } from "../../lib/capa/application/submit-capa-implementation";
+import { createCapaImplementationReturnCycleResolver } from "../../lib/capa/application/capa-implementation-return-cycle-resolver";
 import type { CapaImplementationWorkspaceRecord } from "../../lib/database/repositories/capa-implementation-workspace-repository";
 import type { CapaActionPlanReviewDecisionRepository, CapaActionPlanReviewDecisionTransactionReadRepository } from "../../lib/database/repositories/capa-action-plan-review-decision-repository";
 import type { CapaRepository, CapaTransactionReadRepository } from "../../lib/database/repositories/capa-repository";
@@ -192,6 +193,12 @@ function harness() {
     audit_repository: auditRepository,
     workspace_repository: workspaceRepository,
     review_decision_repository: reviewRepository,
+    return_cycle_resolver: createCapaImplementationReturnCycleResolver({
+      capa_repository: capaRepository,
+      implementation_review_decision_repository: {
+        findDecision: reviewRepository.findDecision.bind(reviewRepository),
+      } as any,
+    }),
     workflow_idempotency_repository: idempotencyRepository,
     authorization_policy: authorizationPolicy,
     id_generator: { generateCaseVersionId: () => S90_VERSION as never, generateSectionVersionId: () => BASELINE_SECTION as never, generateAuditEventId: () => SUBMISSION_AUDIT as never, generateCapaCaseId: () => CASE as never },

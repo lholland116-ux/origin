@@ -22,9 +22,12 @@ vi.mock("../../lib/database/supabase/supabase-transactions", () => ({
 }));
 
 const ORG = "10000000-0000-4000-8000-000000000001";
+const OTHER_ORG = "10000000-0000-4000-8000-000000000002";
 const CASE = "20000000-0000-4000-8000-000000000001";
+const OTHER_CASE = "20000000-0000-4000-8000-000000000002";
 const SOURCE_VERSION = "30000000-0000-4000-8000-000000000001";
 const CURRENT_VERSION = "30000000-0000-4000-8000-000000000002";
+const OLD_VERSION = "30000000-0000-4000-8000-000000000003";
 const ACTION_SECTION = "40000000-0000-4000-8000-000000000001";
 const APPROVAL_AUDIT = "50000000-0000-4000-8000-000000000001";
 const USER = "60000000-0000-4000-8000-000000000001";
@@ -141,6 +144,14 @@ function row(revision = 1, workspaceDraft = draft()) {
   };
 }
 
+function oldRow(revision = 1, workspaceDraft = draft()) {
+  return {
+    ...row(revision, workspaceDraft),
+    case_version_id: OLD_VERSION,
+    record_version: 7,
+  };
+}
+
 function harness(...responses: unknown[]) {
   const queue = [...responses];
   const calls: { readonly text: string; readonly values: readonly unknown[] }[] = [];
@@ -178,7 +189,6 @@ describe("Supabase S80 implementation workspace repository", () => {
     expect(created.calls[0].text).toContain("capa_action_plan_review_decisions");
     expect(created.calls[0].text).toContain("capa_case_version_sections");
     expect(created.calls[0].text).not.toContain("source_version.section_version_ids");
-    expect(created.calls[0].text).toContain("resulting_case_version_id");
     expect(created.calls[1].text).toMatch(/insert into public\.capa_implementation_workspace_drafts[\s\S]*on conflict/);
     expect(created.calls[1].text).toContain("workspace_draft");
     expect(created.calls[1].text).not.toContain("created_at");
@@ -228,6 +238,74 @@ describe("Supabase S80 implementation workspace repository", () => {
       },
     }))).resolves.toEqual({ status: "baseline_conflict" });
     expect(attempted.calls).toHaveLength(1);
+  });
+
+  it("rolls an old S80 workspace forward only under an atomic authoritative S80 guard", async () => {
+    const rolled = draft({ implementation_review_return_response: response() });
+    const h = harness(
+      [{ content: ACTION_PLAN }],
+      [],
+      [oldRow()],
+      [row(1, rolled)],
+    );
+    const result = await new SupabaseCapaImplementationWorkspaceRepository(h.sql as never).saveWorkspace(
+      h.transaction,
+      saveInput({ draft: rolled }),
+    );
+    expect(result).toMatchObject({ status: "saved", workspace: { case_version_id: CURRENT_VERSION, record_version: 8, draft: rolled } });
+    expect(h.calls).toHaveLength(4);
+    expect(h.calls[3].text).toMatch(/update public\.capa_implementation_workspace_drafts[\s\S]*where organization_id = \?[\s\S]*and capa_case_id = \?[\s\S]*exists \([\s\S]*from public\.capa_cases as capa_case[\s\S]*join public\.capa_case_versions as current_version[\s\S]*current_version\.organization_id = capa_case\.organization_id[\s\S]*current_version\.capa_case_id = capa_case\.capa_case_id[\s\S]*current_version\.case_version_id = capa_case\.current_version_id[\s\S]*current_version\.version_number = capa_case\.record_version[\s\S]*current_version\.status = 'S80'[\s\S]*capa_case\.organization_id = \?[\s\S]*capa_case\.capa_case_id = \?[\s\S]*capa_case\.status = 'S80'[\s\S]*capa_case\.current_version_id = \?[\s\S]*capa_case\.record_version = \?/);
+    expect(h.calls[3].values).toEqual(expect.arrayContaining([ORG, CASE, CURRENT_VERSION, 8]));
+  });
+
+  it.each([
+    ["case leaves S80", {}],
+    ["current version changes", { case_version_id: "30000000-0000-4000-8000-000000000004" }],
+    ["record version changes", { record_version: 9 }],
+  ] as const)("does not roll over when the authoritative S80 context no longer matches: %s", async (_label, inputOverrides) => {
+    const h = harness(
+      [{ content: ACTION_PLAN }],
+      [],
+      [oldRow()],
+      [],
+    );
+    await expect(new SupabaseCapaImplementationWorkspaceRepository(h.sql as never).saveWorkspace(
+      h.transaction,
+      saveInput(inputOverrides),
+    )).resolves.toEqual({ status: "concurrency_conflict" });
+    expect(h.calls[3].text).toContain("exists (");
+  });
+
+  it.each([
+    ["wrong organization", { organization_id: OTHER_ORG }],
+    ["wrong case", { capa_case_id: OTHER_CASE }],
+  ] as const)("does not roll over across the tenant/case boundary: %s", async (_label, inputOverrides) => {
+    const h = harness(
+      [{ content: ACTION_PLAN }],
+      [],
+      [],
+      [],
+    );
+    await expect(new SupabaseCapaImplementationWorkspaceRepository(h.sql as never).saveWorkspace(
+      h.transaction,
+      saveInput(inputOverrides),
+    )).resolves.toEqual({ status: "case_changed" });
+    expect(h.calls).toHaveLength(4);
+    expect(h.calls.some((call) => call.text.includes("update public.capa_implementation_workspace_drafts"))).toBe(false);
+  });
+
+  it("maps a guarded competing rollover miss to concurrency without overwriting the workspace", async () => {
+    const h = harness(
+      [{ content: ACTION_PLAN }],
+      [],
+      [oldRow()],
+      [],
+    );
+    await expect(new SupabaseCapaImplementationWorkspaceRepository(h.sql as never).saveWorkspace(
+      h.transaction,
+      saveInput(),
+    )).resolves.toEqual({ status: "concurrency_conflict" });
+    expect(h.calls[3].text).toContain("exists (");
   });
 
   it("N: rejects malformed domain content before SQL", async () => {

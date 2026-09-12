@@ -5,6 +5,7 @@ import {
   handleCapaImplementationReviewPost,
   type CapaImplementationReviewApiDependencies,
 } from "../../lib/capa/api/capa-implementation-review-route-handler";
+import { submitCapaImplementation } from "../../lib/capa/application/submit-capa-implementation";
 import { createCapaDevelopmentRuntime } from "../../lib/capa/application/capa-development-runtime";
 import { resolveDevelopmentCapaRequestContext } from "../../lib/security/supabase-capa-context";
 
@@ -301,6 +302,105 @@ describe("integrated S90 implementation-review API/runtime qualification", () =>
         },
       });
       expect(test.runtime.create_implementation_review_projection_service).toEqual(expect.any(Function));
+      expect(test.runtime.submit_implementation_dependencies.return_cycle_resolver).toBeDefined();
+    } finally {
+      test.restore();
+    }
+  });
+
+  it("completes S90 return to S80 response binding and back to S90 with immutable history", async () => {
+    const test = await harness();
+    try {
+      const returned = await handleCapaImplementationReviewPost(
+        reviewRequest("return", "implementation-review-rework-1"),
+        CASE,
+        test.dependencies,
+      );
+      expect(returned.status).toBe(200);
+      const factsValue = await test.dependencies.get_session_facts();
+      const context = await test.dependencies.resolve_context(factsValue as never, new Date(NOW));
+      const workspaceService = test.runtime.create_implementation_workspace_service(context as never);
+      const loaded: any = await workspaceService.load({ capa_case_id: CASE as never });
+      expect(loaded).toMatchObject({ status: "loaded", workspace: { implementation_review_return_cycle: { source_case_version_id: S90, resulting_case_version_id: expect.any(String), rationale: "Return the implementation for additional work." }, draft: null } });
+      const saved: any = await workspaceService.save({
+        capa_case_id: CASE as never,
+        body: {
+          expected_draft_revision: null,
+          action_progress: baseline().action_progress,
+          implementation_review_return_response: { response_narrative: "The implementation evidence was reworked for the reviewer." },
+        },
+        request_trace: { request_id: randomUUID(), correlation_id: randomUUID() } as never,
+      });
+      expect(saved).toMatchObject({ status: "saved", workspace: { draft_revision: 1, draft: { implementation_review_return_response: { source_case_version_id: S90, response_narrative: "The implementation evidence was reworked for the reviewer." } } } });
+      const submission = await submitCapaImplementation(test.runtime.submit_implementation_dependencies, {
+        authentication: (context as any).authentication,
+        tenant: (context as any).tenant,
+        capa_case_id: CASE as never,
+        request_trace: { request_id: randomUUID(), correlation_id: randomUUID(), idempotency_key: "implementation-rework-submit-1" } as never,
+        body: { expected_draft_revision: 1 },
+      });
+      expect(submission).toMatchObject({ status: "submitted", capa_case: { status: "S90" }, source_case_version_id: expect.any(String), implementation_review_return_response_section_version: { section_type: "CAPA.IMPLEMENTATION_REVIEW_RETURN_RESPONSE" } });
+      const projection = await test.runtime.create_implementation_review_projection_service(context as never).load({ capa_case_id: CASE as never });
+      expect(projection).toMatchObject({ status: "resolved", projection: { current_case_version_id: (submission as any).resulting_case_version_id, prior_review_history: [{ decision: "return", return_response: { content: { response_narrative: "The implementation evidence was reworked for the reviewer.", source_case_version_id: S90 } } }] } });
+      const firstS90 = (submission as any).resulting_case_version_id as string;
+      const firstBaseline = (submission as any).implementation_review_baseline_section_version.section_version_id as string;
+      const secondReturned = await handleCapaImplementationReviewPost(
+        reviewRequest("return", "implementation-review-rework-2", 11, firstS90, firstS90, firstBaseline, "The second review cycle still requires objective evidence."),
+        CASE,
+        test.dependencies,
+      );
+      expect(secondReturned.status).toBe(200);
+      const secondLoaded: any = await workspaceService.load({ capa_case_id: CASE as never });
+      expect(secondLoaded).toMatchObject({ status: "loaded", workspace: { implementation_review_return_cycle: { source_case_version_id: firstS90, rationale: "The second review cycle still requires objective evidence." }, draft: null } });
+      const secondSaved: any = await workspaceService.save({
+        capa_case_id: CASE as never,
+        body: {
+          expected_draft_revision: null,
+          action_progress: baseline().action_progress,
+          implementation_review_return_response: { response_narrative: "The second review cycle was addressed separately." },
+        },
+        request_trace: { request_id: randomUUID(), correlation_id: randomUUID() } as never,
+      });
+      expect(secondSaved).toMatchObject({ status: "saved", workspace: { draft_revision: 1 } });
+      const secondSubmissionCommand = {
+        authentication: (context as any).authentication,
+        tenant: (context as any).tenant,
+        capa_case_id: CASE as never,
+        request_trace: { request_id: randomUUID(), correlation_id: randomUUID(), idempotency_key: "implementation-rework-submit-2" } as never,
+        body: { expected_draft_revision: 1 },
+      };
+      const secondSubmission = await submitCapaImplementation(test.runtime.submit_implementation_dependencies, secondSubmissionCommand);
+      expect(secondSubmission).toMatchObject({ status: "submitted", implementation_review_return_response_section_version: { version_number: 2, parent_version_id: (submission as any).implementation_review_return_response_section_version.section_version_id } });
+      await expect(submitCapaImplementation(test.runtime.submit_implementation_dependencies, secondSubmissionCommand)).resolves.toMatchObject({ status: "already_submitted", implementation_review_return_response_section_version: { version_number: 2 } });
+      const secondProjection = await test.runtime.create_implementation_review_projection_service(context as never).load({ capa_case_id: CASE as never });
+      expect(secondProjection).toMatchObject({ status: "resolved" });
+      expect((secondProjection as any).projection.prior_review_history.map((entry: any) => entry.return_response.content.response_narrative)).toEqual(expect.arrayContaining(["The implementation evidence was reworked for the reviewer.", "The second review cycle was addressed separately."]));
+    } finally {
+      test.restore();
+    }
+  });
+
+  it("blocks S80 resubmission when the active return cycle has no owner response", async () => {
+    const test = await harness();
+    try {
+      const returned = await handleCapaImplementationReviewPost(reviewRequest("return", "implementation-review-missing-response"), CASE, test.dependencies);
+      expect(returned.status).toBe(200);
+      const factsValue = await test.dependencies.get_session_facts();
+      const context = await test.dependencies.resolve_context(factsValue as never, new Date(NOW));
+      const workspaceService = test.runtime.create_implementation_workspace_service(context as never);
+      await expect(workspaceService.save({
+        capa_case_id: CASE as never,
+        body: { expected_draft_revision: null, action_progress: baseline().action_progress },
+        request_trace: { request_id: randomUUID(), correlation_id: randomUUID() } as never,
+      })).resolves.toMatchObject({ status: "saved" });
+      const result = await submitCapaImplementation(test.runtime.submit_implementation_dependencies, {
+        authentication: (context as any).authentication,
+        tenant: (context as any).tenant,
+        capa_case_id: CASE as never,
+        request_trace: { request_id: randomUUID(), correlation_id: randomUUID(), idempotency_key: "implementation-missing-response-submit" } as never,
+        body: { expected_draft_revision: 1 },
+      });
+      expect(result).toEqual({ status: "validation_failed", reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_REQUIRED" });
     } finally {
       test.restore();
     }

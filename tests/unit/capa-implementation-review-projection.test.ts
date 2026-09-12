@@ -25,8 +25,10 @@ const OTHER_USER = "20000000-0000-4000-8000-000000000002";
 const ACTION = "50000000-0000-4000-8000-000000000001";
 const BASELINE = "50000000-0000-4000-8000-000000000002";
 const PRIOR_BASELINE = "50000000-0000-4000-8000-000000000003";
+const RETURN_RESPONSE = "50000000-0000-4000-8000-000000000004";
 const APPROVAL_AUDIT = "60000000-0000-4000-8000-000000000001";
 const PRIOR_AUDIT = "60000000-0000-4000-8000-000000000002";
+const SUBMISSION_AUDIT = "60000000-0000-4000-8000-000000000003";
 const EVIDENCE = "70000000-0000-4000-8000-000000000001";
 const NOW = "2026-09-11T12:00:00.000Z";
 
@@ -221,6 +223,26 @@ function harness(options: {
     versions.set(S90, { ...versions.get(S90), version_number: 11, parent_version_id: S80B });
     capaCase.record_version = 11;
     sections.set(PRIOR_BASELINE, { ...sections.get(BASELINE), section_version_id: PRIOR_BASELINE, content: baselineContent({ source_s80_case_version_id: S80, resulting_s90_case_version_id: S90A, transition_audit_event_id: PRIOR_AUDIT }) });
+    sections.set(BASELINE, { ...sections.get(BASELINE), content: baselineContent({ source_s80_case_version_id: S80B, resulting_s90_case_version_id: S90, transition_audit_event_id: SUBMISSION_AUDIT }) });
+    sections.set(RETURN_RESPONSE, {
+      organization_id: ORG,
+      capa_case_id: CASE,
+      section_version_id: RETURN_RESPONSE,
+      section_type: "CAPA.IMPLEMENTATION_REVIEW_RETURN_RESPONSE",
+      version_number: 1,
+      schema_version: "capa-implementation-review-return-response-1.0.0",
+      content: {
+        schema_version: "capa-implementation-review-return-response-1.0.0",
+        response_narrative: "The owner addressed the reviewer return.",
+        return_transition_audit_event_id: PRIOR_AUDIT,
+        source_case_version_id: S90A,
+        resulting_case_version_id: S80B,
+        resubmitted_case_version_id: S90,
+        responded_by: { actor_type: "human", actor_id: USER },
+        responded_at: NOW,
+      },
+    });
+    versions.set(S90, { ...versions.get(S90), section_version_ids: [ACTION, BASELINE, RETURN_RESPONSE] });
     implementationDecisions.set(S90A, {
       organization_id: ORG,
       capa_case_id: CASE,
@@ -265,6 +287,34 @@ function harness(options: {
         review_decision: "return",
       },
     });
+    events.set(SUBMISSION_AUDIT, {
+      organization_id: ORG,
+      event_id: SUBMISSION_AUDIT,
+      event_type: "EVT-STATE-TRANSITION",
+      schema_version: "audit-1",
+      aggregate_type: "CAPA_CASE",
+      aggregate_id: CASE,
+      aggregate_version: 11,
+      actor: { actor_type: "human", actor_id: USER },
+      occurred_at: NOW,
+      request_id: "80000000-0000-4000-0000-000000000005",
+      correlation_id: "80000000-0000-4000-8000-000000000006",
+      idempotency_key: "implementation-submit-2",
+      action: "SUBMIT_CAPA_IMPLEMENTATION",
+      target: { object_type: "CAPA_CASE", object_id: CASE, object_version_id: S90 },
+      outcome: "succeeded",
+      change: { before_ref: { object_type: "CAPA_CASE", object_id: CASE, object_version_id: S80B }, after_ref: { object_type: "CAPA_CASE", object_id: CASE, object_version_id: S90 } },
+      configuration_versions: {},
+      metadata: {
+        from_state: "S80",
+        to_state: "S90",
+        source_case_version_id: S80B,
+        resulting_case_version_id: S90,
+        implementation_review_baseline_section_version_id: BASELINE,
+        implementation_review_return_response_section_version_id: RETURN_RESPONSE,
+        workspace_draft_revision: 4,
+      },
+    });
   }
   const repository: any = {
     findCaseById: vi.fn(async (organizationId: string) => organizationId === ORG ? capaCase : null),
@@ -273,7 +323,7 @@ function harness(options: {
   };
   const auditRepository: any = {
     findEventById: vi.fn(async (organizationId: string, eventId: string) => organizationId === ORG ? events.get(eventId) ?? null : null),
-    listEventsForAggregate: vi.fn(async () => ({ events: options.history && options.secondCycle ? [events.get(PRIOR_AUDIT)] : [], next_cursor: undefined })),
+    listEventsForAggregate: vi.fn(async () => ({ events: options.history && options.secondCycle ? [events.get(PRIOR_AUDIT), events.get(SUBMISSION_AUDIT)] : [], next_cursor: undefined })),
   };
   const policy = {
     evaluate: vi.fn(async () => options.policy ?? {

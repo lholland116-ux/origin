@@ -28,9 +28,17 @@ import {
   CAPA_IMPLEMENTATION_WORKSPACE_DRAFT_SCHEMA_VERSION,
 } from "../implementation/capa-implementation-contract";
 import {
+  CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION,
+  CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE,
+  validateCapaImplementationReviewBaselineContent,
+} from "../implementation/capa-implementation-review-baseline";
+import {
   validateCapaImplementationDraftAgainstApprovedActionSet,
   validateCapaImplementationWorkspaceDraft,
 } from "../implementation/capa-implementation-validator";
+import type {
+  CapaImplementationReviewReturnResponseDraft,
+} from "../implementation/capa-implementation-return-response-contract";
 import {
   validateCapaImplementationWorkspaceSaveRequest,
   type CapaImplementationWorkspaceSaveRequest,
@@ -56,6 +64,10 @@ import type {
 import type {
   CapaRequestContext,
 } from "../../security/supabase-capa-context";
+import type {
+  CapaImplementationReturnCycle,
+  CapaImplementationReturnCycleResolver,
+} from "./capa-implementation-return-cycle-resolver";
 
 const STATE = "S80" as const;
 const READ_OPERATION = "read_implementation_workspace_draft" as const;
@@ -82,6 +94,7 @@ export interface CapaImplementationWorkspaceProjection {
   readonly approved_s70_baseline: CapaImplementationApprovedS70BaselineReference;
   readonly approved_actions: readonly CapaImplementationApprovedActionProjection[];
   readonly draft: CapaImplementationWorkspaceDraft | null;
+  readonly implementation_review_return_cycle: CapaImplementationReturnCycle | null;
   readonly updated_at: IsoDateTime | null;
 }
 
@@ -143,6 +156,7 @@ export interface CapaImplementationWorkspaceServiceDependencies {
   readonly workspace_repository: CapaImplementationWorkspaceRepository;
   readonly transaction_manager: TransactionManager;
   readonly authorization_policy: CapaAuthorizationPolicy;
+  readonly return_cycle_resolver: CapaImplementationReturnCycleResolver;
   readonly now: () => Date;
 }
 
@@ -264,7 +278,36 @@ async function resolveApprovedBaseline(
   current: CurrentCaseContext,
 ): Promise<ResolvedImplementationBaseline | null> {
   const organizationId = dependencies.request_context.tenant.organization_id;
-  const sourceCaseVersionId = current.case_version.parent_version_id;
+  let sourceCaseVersionId = current.case_version.parent_version_id;
+  let approvedActionPlanSectionId: CapaCaseVersion["section_version_ids"][number] | undefined;
+  let approvalDecisionReference: string | undefined;
+  const parent = sourceCaseVersionId === undefined
+    ? null
+    : await dependencies.capa_repository.findCaseVersionById(
+        organizationId,
+        current.capa_case.capa_case_id,
+        sourceCaseVersionId,
+      );
+  if (parent?.status !== "S70") {
+    const baselineSections = await Promise.all(current.case_version.section_version_ids.map((id) =>
+      dependencies.capa_repository.findSectionVersionById(
+        organizationId,
+        current.capa_case.capa_case_id,
+        id,
+      ),
+    ));
+    const implementationBaselines = baselineSections.filter((section) =>
+      section?.section_type === CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE,
+    );
+    if (implementationBaselines.length !== 1) return null;
+    const baselineSection = implementationBaselines[0]!;
+    if (baselineSection.schema_version !== CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION) return null;
+    const baseline = validateCapaImplementationReviewBaselineContent(baselineSection.content);
+    if (baseline.status !== "valid") return null;
+    sourceCaseVersionId = baseline.value.approved_s70_baseline.source_case_version_id;
+    approvedActionPlanSectionId = baseline.value.approved_s70_baseline.approved_action_plan_section_id;
+    approvalDecisionReference = baseline.value.approved_s70_baseline.approval_decision_reference;
+  }
   if (sourceCaseVersionId === undefined) return null;
 
   const sourceVersion = await dependencies.capa_repository.findCaseVersionById(
@@ -293,7 +336,8 @@ async function resolveApprovedBaseline(
     decision.capa_case_id !== current.capa_case.capa_case_id ||
     decision.source_case_version_id !== sourceCaseVersionId ||
     decision.decision !== "approve" ||
-    decision.resulting_case_version_id !== current.case_version.case_version_id ||
+    (approvedActionPlanSectionId !== undefined && decision.action_plan_section_version_id !== approvedActionPlanSectionId) ||
+    (approvalDecisionReference !== undefined && decision.transition_audit_event_id !== approvalDecisionReference) ||
     !sourceVersion.section_version_ids.includes(
       decision.action_plan_section_version_id,
     )
@@ -316,6 +360,17 @@ async function resolveApprovedBaseline(
   ) {
     return null;
   }
+  const approvedImplementationEntry = await dependencies.capa_repository.findCaseVersionById(
+    organizationId,
+    current.capa_case.capa_case_id,
+    decision.resulting_case_version_id,
+  );
+  if (
+    approvedImplementationEntry === null ||
+    approvedImplementationEntry.status !== "S80" ||
+    approvedImplementationEntry.parent_version_id !== sourceVersion.case_version_id ||
+    !current.case_version.section_version_ids.includes(decision.action_plan_section_version_id)
+  ) return null;
   const actionPlan = validateCapaActionPlan(section.content);
   if (actionPlan.status !== "valid") return null;
 
@@ -357,13 +412,12 @@ function projectWorkspace(
   current: CurrentCaseContext,
   baseline: ResolvedImplementationBaseline,
   record: CapaImplementationWorkspaceRecord | null,
+  returnCycle: CapaImplementationReturnCycle | null,
 ): CapaImplementationWorkspaceProjection {
   if (record !== null) {
     if (
       record.organization_id !== current.capa_case.organization_id ||
       record.capa_case_id !== current.capa_case.capa_case_id ||
-      record.case_version_id !== current.case_version.case_version_id ||
-      record.record_version !== current.case_version.version_number ||
       record.workflow_state !== STATE ||
       record.approved_s70_baseline.source_case_version_id !==
         baseline.reference.source_case_version_id ||
@@ -377,24 +431,91 @@ function projectWorkspace(
       );
     }
   }
+  const currentRecord = record !== null &&
+    record.case_version_id === current.case_version.case_version_id &&
+    record.record_version === current.case_version.version_number
+    ? record
+    : null;
+  if (currentRecord?.draft.implementation_review_return_response !== null &&
+      currentRecord?.draft.implementation_review_return_response !== undefined &&
+      (returnCycle === null ||
+        currentRecord.draft.implementation_review_return_response.return_transition_audit_event_id !==
+          returnCycle.return_transition_audit_event_id ||
+        currentRecord.draft.implementation_review_return_response.source_case_version_id !==
+          returnCycle.source_case_version_id ||
+        currentRecord.draft.implementation_review_return_response.resulting_case_version_id !==
+          returnCycle.resulting_case_version_id)) {
+    throw new CapaImplementationWorkspaceIntegrityError(
+      "The durable S80 return response is bound to a different return cycle.",
+    );
+  }
   return Object.freeze({
-    draft_revision: record?.draft_revision ?? null,
+    draft_revision: currentRecord?.draft_revision ?? null,
     case_version_id: current.case_version.case_version_id,
     record_version: current.case_version.version_number,
     approved_s70_baseline: baseline.reference,
     approved_actions: baseline.approved_actions,
-    draft: record?.draft ?? null,
-    updated_at: record?.updated_at ?? null,
+    draft: currentRecord?.draft ?? null,
+    implementation_review_return_cycle: returnCycle,
+    updated_at: currentRecord?.updated_at ?? null,
   });
+}
+
+async function activeReturnCycle(
+  dependencies: CapaImplementationWorkspaceServiceDependencies,
+  capaCaseId: CapaCaseId,
+): Promise<CapaImplementationReturnCycle | null> {
+  const result = await dependencies.return_cycle_resolver.resolve({
+    organization_id: dependencies.request_context.tenant.organization_id,
+    capa_case_id: capaCaseId,
+  });
+  if (result.status === "invalid") {
+    throw new CapaImplementationWorkspaceIntegrityError(
+      "The authoritative S90 return cycle is inconsistent.",
+    );
+  }
+  return result.status === "active" ? result.cycle : null;
 }
 
 function requestDraft(
   request: CapaImplementationWorkspaceSaveRequest,
   previous: CapaImplementationWorkspaceRecord | null,
+  cycle: CapaImplementationReturnCycle | null,
 ): CapaImplementationWorkspaceDraft {
-  const returnResponse = request.implementation_review_return_response === undefined
-    ? previous?.draft.implementation_review_return_response ?? null
-    : request.implementation_review_return_response;
+  const priorResponse = previous?.draft.implementation_review_return_response ?? null;
+  let returnResponse: CapaImplementationReviewReturnResponseDraft | null = priorResponse;
+  if (request.implementation_review_return_response !== undefined) {
+    if (request.implementation_review_return_response === null) {
+      returnResponse = null;
+    } else {
+      if (cycle === null) {
+        throw new CapaImplementationWorkspaceIntegrityError(
+          "An implementation-review return response was supplied without an active return cycle.",
+        );
+      }
+      returnResponse = {
+        schema_version: "capa-implementation-review-return-response-draft-1.0.0",
+        return_transition_audit_event_id: cycle.return_transition_audit_event_id,
+        source_case_version_id: cycle.source_case_version_id,
+        resulting_case_version_id: cycle.resulting_case_version_id,
+        response_narrative: request.implementation_review_return_response.response_narrative,
+      };
+    }
+  }
+  if (returnResponse !== null && cycle !== null && (
+    returnResponse.return_transition_audit_event_id !== cycle.return_transition_audit_event_id ||
+    returnResponse.source_case_version_id !== cycle.source_case_version_id ||
+    returnResponse.resulting_case_version_id !== cycle.resulting_case_version_id
+  )) {
+    throw new CapaImplementationWorkspaceIntegrityError(
+      "The implementation-review return response is bound to a different return cycle.",
+    );
+  }
+  if (returnResponse !== null && cycle === null) {
+    throw new CapaImplementationWorkspaceIntegrityError(
+      "The implementation-review return response has no active return cycle.",
+    );
+  }
   const draft = validateCapaImplementationWorkspaceDraft({
     schema_version: CAPA_IMPLEMENTATION_WORKSPACE_DRAFT_SCHEMA_VERSION,
     action_progress: request.action_progress,
@@ -437,6 +558,7 @@ function mapRepositoryResult(
   result: SaveCapaImplementationWorkspaceResult,
   current: CurrentCaseContext,
   baseline: ResolvedImplementationBaseline,
+  returnCycle: CapaImplementationReturnCycle | null,
 ): CapaImplementationWorkspaceServiceResult {
   switch (result.status) {
     case "concurrency_conflict":
@@ -448,7 +570,7 @@ function mapRepositoryResult(
     case "saved":
       return {
         status: "saved",
-        workspace: projectWorkspace(current, baseline, result.workspace),
+        workspace: projectWorkspace(current, baseline, result.workspace, returnCycle),
       };
   }
 }
@@ -481,13 +603,14 @@ export function createCapaImplementationWorkspaceService(
           reason_code: "APPROVED_S70_BASELINE_NOT_AVAILABLE",
         };
       }
+      const returnCycle = await activeReturnCycle(dependencies, command.capa_case_id);
       const record = await dependencies.workspace_repository.findWorkspace(
         dependencies.request_context.tenant.organization_id,
         command.capa_case_id,
       );
       return {
         status: "loaded",
-        workspace: projectWorkspace(current, baseline, record),
+        workspace: projectWorkspace(current, baseline, record, returnCycle),
       };
     },
 
@@ -522,11 +645,17 @@ export function createCapaImplementationWorkspaceService(
           reason_code: "APPROVED_S70_BASELINE_NOT_AVAILABLE",
         };
       }
+      const returnCycle = await activeReturnCycle(dependencies, command.capa_case_id);
       const previous = await dependencies.workspace_repository.findWorkspace(
         dependencies.request_context.tenant.organization_id,
         command.capa_case_id,
       );
-      const draft = requestDraft(request.value, previous);
+      const currentPrevious = previous !== null &&
+        previous.case_version_id === current.case_version.case_version_id &&
+        previous.record_version === current.case_version.version_number
+        ? previous
+        : null;
+      const draft = requestDraft(request.value, currentPrevious, returnCycle);
       const contextual = validateCapaImplementationDraftAgainstApprovedActionSet(
         draft,
         baseline.action_plan.items.map((item) => item.item_id),
@@ -578,7 +707,7 @@ export function createCapaImplementationWorkspaceService(
         }
         throw error;
       }
-      return mapRepositoryResult(result, current, baseline);
+      return mapRepositoryResult(result, current, baseline, returnCycle);
     },
   };
 }

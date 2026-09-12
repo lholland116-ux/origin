@@ -240,6 +240,7 @@ import { SupabaseCapaImplementationReviewDecisionRepository } from "../../databa
 import { createCapaInvestigationActiveWorkspaceDraftService } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createCapaActionPlanReturnCycleResolver } from "./capa-action-plan-return-cycle-resolver";
+import { createCapaImplementationReturnCycleResolver } from "./capa-implementation-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import { SupabaseCapaActionPlanWorkspaceDraftRepository } from "../../database/supabase/supabase-capa-action-plan-workspace-draft-repository";
 import { SupabaseCapaImplementationWorkspaceRepository } from "../../database/supabase/supabase-capa-implementation-workspace-repository";
@@ -928,6 +929,10 @@ export function createCapaProductionRuntime(
     capa_repository: capaRepository,
     review_decision_repository: actionPlanReviewDecisionRepository,
   });
+  const implementationReturnCycleResolver = createCapaImplementationReturnCycleResolver({
+    capa_repository: capaRepository,
+    implementation_review_decision_repository: implementationReviewDecisionRepository,
+  });
 
   const creationIdempotencyRepository =
     new SupabaseCapaCreationIdempotencyRepository();
@@ -1117,6 +1122,7 @@ export function createCapaProductionRuntime(
     capa_repository: capaRepository,
     workspace_repository: implementationWorkspaceRepository,
     review_decision_repository: actionPlanReviewDecisionRepository,
+    return_cycle_resolver: implementationReturnCycleResolver,
     configuration: {
       ...submitIntakeDependencies.configuration,
       authorization_purpose: controlled("CAPA_WORKFLOW_TRANSITION"),
@@ -1622,11 +1628,11 @@ export function createCapaProductionRuntime(
     create_implementation_evidence_advisory_service(context) {
       if (implementationEvidenceAdvisoryConfiguration === undefined || implementationEvidenceAdvisoryModelClient === undefined) throw new CapaProductionRuntimeConfigurationError("The CAPA implementation-evidence advisory runtime is not configured.");
       const knowledge_provider: CapaImplementationEvidenceAdvisoryKnowledgeProvider | undefined = intakeAdvisoryConfiguration === undefined ? undefined : new GovernedCapaImplementationEvidenceAdvisoryKnowledgeProvider(knowledgeRetrievalService, intakeAdvisoryConfiguration.retrieval_configuration, now);
-      return createRequestScopedCapaImplementationEvidenceAdvisoryService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: capaRepository, review_decision_repository: actionPlanReviewDecisionRepository, workspace_repository: implementationWorkspaceRepository, transaction_manager: transactionManager, authorization_policy: authorizationPolicy, now }), authorization_policy: authorizationPolicy, agent_activation_service: agentActivationService, structured_model_client: implementationEvidenceAdvisoryModelClient, output_repository: implementationEvidenceAdvisoryOutputRepository, transaction_manager: transactionManager, knowledge_provider, now, generate_uuid: generateUuid });
+      return createRequestScopedCapaImplementationEvidenceAdvisoryService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: capaRepository, review_decision_repository: actionPlanReviewDecisionRepository, workspace_repository: implementationWorkspaceRepository, transaction_manager: transactionManager, authorization_policy: authorizationPolicy, return_cycle_resolver: implementationReturnCycleResolver, now }), authorization_policy: authorizationPolicy, agent_activation_service: agentActivationService, structured_model_client: implementationEvidenceAdvisoryModelClient, output_repository: implementationEvidenceAdvisoryOutputRepository, transaction_manager: transactionManager, knowledge_provider, now, generate_uuid: generateUuid });
     },
 
     create_implementation_evidence_advisory_adoption_service(context) {
-      return createRequestScopedCapaImplementationEvidenceAdvisoryAdoptionService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: capaRepository, review_decision_repository: actionPlanReviewDecisionRepository, workspace_repository: implementationWorkspaceRepository, transaction_manager: transactionManager, authorization_policy: authorizationPolicy, now }), authorization_policy: authorizationPolicy, output_repository: implementationEvidenceAdvisoryOutputRepository, transaction_manager: transactionManager, audit_repository: auditRepository, audit_schema_version: auditSchemaVersion, now, generate_audit_event_id: () => generateUuid() as AuditEventId });
+      return createRequestScopedCapaImplementationEvidenceAdvisoryAdoptionService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: capaRepository, review_decision_repository: actionPlanReviewDecisionRepository, workspace_repository: implementationWorkspaceRepository, transaction_manager: transactionManager, authorization_policy: authorizationPolicy, return_cycle_resolver: implementationReturnCycleResolver, now }), authorization_policy: authorizationPolicy, output_repository: implementationEvidenceAdvisoryOutputRepository, transaction_manager: transactionManager, audit_repository: auditRepository, audit_schema_version: auditSchemaVersion, now, generate_audit_event_id: () => generateUuid() as AuditEventId });
     },
 
     create_investigation_active_adoption_service(context) {
@@ -1665,6 +1671,7 @@ export function createCapaProductionRuntime(
         workspace_repository: implementationWorkspaceRepository,
         transaction_manager: transactionManager,
         authorization_policy: authorizationPolicy,
+        return_cycle_resolver: implementationReturnCycleResolver,
         now,
       });
     },

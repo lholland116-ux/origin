@@ -23,6 +23,9 @@ import type {
   CapaImplementationEvidenceSource,
 } from "../../lib/capa/implementation/capa-implementation-provenance-contract";
 import {
+  CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_DRAFT_SCHEMA_VERSION,
+} from "../../lib/capa/implementation/capa-implementation-return-response-contract";
+import {
   createEmptyCapaImplementationEvidence,
   createInitialCapaImplementationWorkspaceDraft,
   emptyCapaImplementationEvidenceSource,
@@ -185,7 +188,15 @@ export default function CapaImplementationWorkspace({ caseId, caseNumber, onSubm
     }
     setSaveStatus("saving");
     setMessage(null);
-    const result = await saveCapaImplementationWorkspace(caseId, { expected_draft_revision: projection.draft_revision, action_progress: draft.action_progress });
+    const result = await saveCapaImplementationWorkspace(caseId, {
+      expected_draft_revision: projection.draft_revision,
+      action_progress: draft.action_progress,
+      ...(projection.implementation_review_return_cycle === null ? {} : {
+        implementation_review_return_response: draft.implementation_review_return_response === null
+          ? null
+          : { response_narrative: draft.implementation_review_return_response.response_narrative },
+      }),
+    });
     if (result.status === "failed") {
       setSaveStatus(result.code === "WORKSPACE_DRAFT_CONCURRENCY_CONFLICT" || result.code === "WORKFLOW_MUTATION_DETECTED" ? "conflict" : "failed");
       setMessage(result.message);
@@ -199,6 +210,12 @@ export default function CapaImplementationWorkspace({ caseId, caseNumber, onSubm
 
   async function submitForReview() {
     if (projection === null || draft === null || projection.draft_revision === null || saveStatus !== "saved" || submissionStatus === "submitting") return;
+    if (projection.implementation_review_return_cycle !== null &&
+        (draft.implementation_review_return_response === null ||
+          draft.implementation_review_return_response.response_narrative.trim().length === 0)) {
+      setMessage("An owner response to the S90 reviewer return is required before resubmission.");
+      return;
+    }
     setSubmissionStatus("submitting");
     setMessage(null);
     const result = await submitCapaImplementationForReview(caseId, projection.draft_revision);
@@ -217,6 +234,21 @@ export default function CapaImplementationWorkspace({ caseId, caseNumber, onSubm
     setNarrative(reference, value);
   }
 
+  function setReturnResponse(value: string) {
+    if (draft === null || projection === null || projection.implementation_review_return_cycle === null) return;
+    const cycle = projection.implementation_review_return_cycle;
+    changeDraft({
+      ...draft,
+      implementation_review_return_response: value.length === 0 ? null : {
+          schema_version: CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_DRAFT_SCHEMA_VERSION,
+          return_transition_audit_event_id: cycle.return_transition_audit_event_id as never,
+          source_case_version_id: cycle.source_case_version_id as never,
+          resulting_case_version_id: cycle.resulting_case_version_id as never,
+          response_narrative: value,
+        },
+    });
+  }
+
   if (loadStatus === "loading") return <section className="mt-8 rounded-3xl border border-zinc-800 bg-zinc-900/85 p-6" aria-live="polite">Loading the S80 implementation workspace…</section>;
   if (loadStatus === "failed" || projection === null || draft === null) return <section className="mt-8 rounded-3xl border border-red-400/25 bg-red-500/10 p-6" role="alert"><h2 className="text-xl font-semibold text-red-100">S80 workspace unavailable</h2><p className="mt-2 text-sm text-red-200">{message ?? "The implementation workspace could not be loaded."}</p><button type="button" onClick={() => void hydrate()} className="mt-4 min-h-11 rounded-xl border border-red-300/40 px-4 py-2 text-sm text-red-100">Reload workspace</button></section>;
 
@@ -227,6 +259,15 @@ export default function CapaImplementationWorkspace({ caseId, caseNumber, onSubm
       <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-300">Work on the approved actions for {caseNumber}. The approved S70 action plan below is controlled authority and read-only. This workspace records what a human reports as implemented and the evidence they provide.</p>
       <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-400/10 p-4 text-sm text-amber-100"><strong>Control boundary:</strong> Owner-reported complete is not Quality acceptance. Save the human-owned implementation package, then submit it for separate S90 Implementation Review.</div>
     </div>
+
+    {projection.implementation_review_return_cycle !== null ? <section className="rounded-3xl border border-amber-300/30 bg-amber-400/[0.06] p-5 sm:p-7" aria-labelledby="implementation-review-return-heading">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-300">S90 · Returned for owner rework</p>
+      <h3 id="implementation-review-return-heading" className="mt-2 text-xl font-semibold text-zinc-100">Implementation Review return</h3>
+      <p className="mt-2 text-sm text-zinc-400">The reviewer rationale below is immutable. Add a separate human owner response explaining how the implementation package addresses it.</p>
+      <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2"><ReadOnly label="Reviewer" value={projection.implementation_review_return_cycle.returned_by_user_id} /><ReadOnly label="Returned at" value={projection.implementation_review_return_cycle.returned_at} /><ReadOnly label="S90 source version" value={projection.implementation_review_return_cycle.source_case_version_id} /><ReadOnly label="S80 rework version" value={projection.implementation_review_return_cycle.resulting_case_version_id} /><ReadOnly label="Return cycle" value={projection.implementation_review_return_cycle.return_transition_audit_event_id} /></dl>
+      <div className="mt-4 rounded-2xl border border-amber-200/20 bg-zinc-950/30 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-amber-200">Immutable reviewer rationale</p><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-200">{projection.implementation_review_return_cycle.rationale}</p></div>
+      <label className="mt-4 block text-sm text-zinc-200"><span className="font-medium">Owner response to reviewer return</span><textarea aria-required="true" value={draft.implementation_review_return_response?.response_narrative ?? ""} onChange={(event) => setReturnResponse(event.target.value)} maxLength={4_000} className="mt-2 min-h-28 w-full rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-zinc-100" placeholder="Explain the rework completed in response to the reviewer rationale." /><span className="mt-1 block text-xs text-amber-200">Required before resubmission. This response is stored separately from the reviewer rationale.</span></label>
+    </section> : null}
 
     <div className="space-y-6">{projection.approved_actions.map((action, index) => {
       const progress = draft.action_progress.find((item) => item.approved_action_reference === action.approved_action_reference) ?? { approved_action_reference: action.approved_action_reference, owner_reported_status: "not_started" as const, implementation_narrative: null, blocked_reason: null, evidence: [] };

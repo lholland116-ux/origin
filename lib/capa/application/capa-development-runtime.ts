@@ -224,6 +224,7 @@ import {
 } from "./capa-investigation-active-workspace-draft-service";
 import { createCapaRootCauseReturnCycleResolver } from "./capa-root-cause-return-cycle-resolver";
 import { createCapaActionPlanReturnCycleResolver } from "./capa-action-plan-return-cycle-resolver";
+import { createCapaImplementationReturnCycleResolver } from "./capa-implementation-return-cycle-resolver";
 import { createReconcileCapaInvestigationActiveWorkspaceAdoptionsService } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import { createCapaActionPlanWorkspaceDraftService } from "./capa-action-plan-workspace-draft-service";
 import { createCapaImplementationWorkspaceService } from "./capa-implementation-workspace-service";
@@ -1244,11 +1245,20 @@ export function createCapaDevelopmentRuntime(
     },
   };
 
+  const implementationReturnCycleResolver = createCapaImplementationReturnCycleResolver({
+    capa_repository: database,
+    implementation_review_decision_repository: {
+      saveDecision: database.saveImplementationReviewDecision.bind(database),
+      findDecision: database.findImplementationReviewDecision.bind(database),
+    },
+  });
+
   const submitImplementationDependencies: SubmitCapaImplementationDependencies = {
     ...submitIntakeDependencies,
     capa_repository: database,
     workspace_repository: database,
     review_decision_repository: database,
+    return_cycle_resolver: implementationReturnCycleResolver,
     configuration: {
       ...submitIntakeDependencies.configuration,
       authorization_purpose: controlled("CAPA_WORKFLOW_TRANSITION"),
@@ -1575,11 +1585,11 @@ export function createCapaDevelopmentRuntime(
     create_implementation_evidence_advisory_service(context) {
       if (implementationEvidenceAdvisoryConfiguration === undefined) throw new CapaDevelopmentRuntimeAdvisoryConfigurationError();
       const knowledge_provider: CapaImplementationEvidenceAdvisoryKnowledgeProvider | undefined = intakeAdvisoryConfiguration === undefined ? undefined : new GovernedCapaImplementationEvidenceAdvisoryKnowledgeProvider(knowledgeRetrievalService, intakeAdvisoryConfiguration.retrieval_configuration, now);
-      return createRequestScopedCapaImplementationEvidenceAdvisoryService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: database, review_decision_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, now }), authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: implementationEvidenceAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, knowledge_provider, now, generate_uuid: generateUuid });
+      return createRequestScopedCapaImplementationEvidenceAdvisoryService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: database, review_decision_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, return_cycle_resolver: implementationReturnCycleResolver, now }), authorization_policy: dependencies.authorization_policy, agent_activation_service: agentActivationService, structured_model_client: implementationEvidenceAdvisoryConfiguration.structured_model_client, output_repository: database, transaction_manager: database, knowledge_provider, now, generate_uuid: generateUuid });
     },
 
     create_implementation_evidence_advisory_adoption_service(context) {
-      return createRequestScopedCapaImplementationEvidenceAdvisoryAdoptionService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: database, review_decision_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, now }), authorization_policy: dependencies.authorization_policy, output_repository: database, transaction_manager: database, audit_repository: database, audit_schema_version: dependencies.configuration.audit_schema_version, now, generate_audit_event_id: () => generateUuid() as AuditEventId });
+      return createRequestScopedCapaImplementationEvidenceAdvisoryAdoptionService({ request_context: context, workspace_service: createCapaImplementationWorkspaceService({ request_context: context, capa_repository: database, review_decision_repository: database, workspace_repository: database, transaction_manager: database, authorization_policy: dependencies.authorization_policy, return_cycle_resolver: implementationReturnCycleResolver, now }), authorization_policy: dependencies.authorization_policy, output_repository: database, transaction_manager: database, audit_repository: database, audit_schema_version: dependencies.configuration.audit_schema_version, now, generate_audit_event_id: () => generateUuid() as AuditEventId });
     },
 
     create_investigation_active_adoption_service(context) {
@@ -1623,6 +1633,7 @@ export function createCapaDevelopmentRuntime(
         workspace_repository: database,
         transaction_manager: database,
         authorization_policy: dependencies.authorization_policy,
+        return_cycle_resolver: implementationReturnCycleResolver,
         now,
       });
     },

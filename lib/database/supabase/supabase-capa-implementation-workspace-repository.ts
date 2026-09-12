@@ -176,7 +176,6 @@ async function authoritativeActionReferences(
           and decision.source_case_version_id = ${baseline.source_case_version_id}
           and decision.action_plan_section_version_id = ${baseline.approved_action_plan_section_id}
           and decision.transition_audit_event_id = ${baseline.approval_decision_reference}
-          and decision.resulting_case_version_id = ${resultingCaseVersionId}
           and decision.decision = 'approve'
       )
     limit 2`;
@@ -325,7 +324,46 @@ export class SupabaseCapaImplementationWorkspaceRepository
         normalized.capa_case_id,
         false,
       );
-      if (existing !== null) return { status: "concurrency_conflict" };
+      if (existing !== null) {
+        if (existing.case_version_id === normalized.case_version_id) {
+          return { status: "concurrency_conflict" };
+        }
+        const rollover = await sql<Row[]>`
+          update public.capa_implementation_workspace_drafts
+          set case_version_id = ${normalized.case_version_id},
+              record_version = ${normalized.record_version},
+              source_case_version_id = ${baseline.source_case_version_id},
+              approved_action_plan_section_id = ${baseline.approved_action_plan_section_id},
+              approval_decision_reference = ${baseline.approval_decision_reference},
+              draft_revision = ${normalized.draft_revision},
+              schema_version = ${normalized.draft.schema_version},
+              workspace_draft = ${sql.json(json(normalized.draft))},
+              updated_by_user_id = ${normalized.actor_user_id},
+              updated_at = statement_timestamp()
+          where organization_id = ${normalized.organization_id}
+            and capa_case_id = ${normalized.capa_case_id}
+            and case_version_id = ${existing.case_version_id}
+            and exists (
+              select 1
+              from public.capa_cases as capa_case
+              join public.capa_case_versions as current_version
+                on current_version.organization_id = capa_case.organization_id
+               and current_version.capa_case_id = capa_case.capa_case_id
+               and current_version.case_version_id = capa_case.current_version_id
+               and current_version.version_number = capa_case.record_version
+               and current_version.status = 'S80'
+              where capa_case.organization_id = ${normalized.organization_id}
+                and capa_case.capa_case_id = ${normalized.capa_case_id}
+                and capa_case.status = 'S80'
+                and capa_case.current_version_id = ${normalized.case_version_id}
+                and capa_case.record_version = ${normalized.record_version}
+            )
+          returning *`;
+        if (rollover.length === 1 && rollover[0] !== undefined) {
+          return { status: "saved", workspace: fromRow(rollover[0]) };
+        }
+        return { status: "concurrency_conflict" };
+      }
       return (await currentS80ContextMatches(sql, normalized))
         ? { status: "concurrency_conflict" }
         : { status: "case_changed" };

@@ -85,6 +85,7 @@ function projection(
     approved_s70_baseline: workspace.approved_s70_baseline,
     approved_actions: workspace.approved_actions,
     draft: workspace.draft,
+    implementation_review_return_cycle: workspace.implementation_review_return_cycle,
     updated_at: workspace.updated_at,
   };
 }

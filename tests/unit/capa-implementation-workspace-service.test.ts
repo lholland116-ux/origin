@@ -21,6 +21,9 @@ import {
 import {
   createCapaImplementationWorkspaceService,
 } from "../../lib/capa/application/capa-implementation-workspace-service";
+import {
+  createCapaImplementationReturnCycleResolver,
+} from "../../lib/capa/application/capa-implementation-return-cycle-resolver";
 import type {
   CapaImplementationWorkspaceRecord,
   CapaImplementationWorkspaceRepository,
@@ -200,7 +203,9 @@ function body(overrides: Record<string, unknown> = {}) {
       blocked_reason: null,
       evidence: [evidence],
     }],
-    implementation_review_return_response: response,
+    implementation_review_return_response: {
+      response_narrative: response.response_narrative,
+    },
     ...overrides,
   };
 }
@@ -222,7 +227,7 @@ function createRecord(input: SaveCapaImplementationWorkspaceInput): CapaImplemen
   });
 }
 
-function harness() {
+function harness(options: { readonly useRealReturnCycleResolver?: boolean } = {}) {
   let persisted: CapaImplementationWorkspaceRecord | null = null;
   let forcedResult: SaveCapaImplementationWorkspaceResult | null = null;
   let forcedError: Error | null = null;
@@ -276,6 +281,26 @@ function harness() {
       relied_on_role_assignment_ids: [],
     })),
   };
+  const returnCycleResolver = options.useRealReturnCycleResolver
+    ? createCapaImplementationReturnCycleResolver({
+      capa_repository: capaRepository,
+      implementation_review_decision_repository: {
+        findDecision: reviewDecisionRepository.findDecision.bind(reviewDecisionRepository),
+      } as any,
+    })
+    : {
+      resolve: vi.fn(async () => ({
+        status: "active" as const,
+        cycle: {
+          return_transition_audit_event_id: RETURN_AUDIT as never,
+          source_case_version_id: SOURCE_VERSION as never,
+          resulting_case_version_id: CURRENT_VERSION as never,
+          returned_by_user_id: USER as never,
+          returned_at: AT as never,
+          rationale: "Reviewer return rationale.",
+        },
+      })),
+    };
   const service = createCapaImplementationWorkspaceService({
     request_context: requestContext,
     capa_repository: capaRepository,
@@ -283,6 +308,7 @@ function harness() {
     workspace_repository: repository,
     transaction_manager: transactionManager,
     authorization_policy: authorizationPolicy,
+    return_cycle_resolver: returnCycleResolver,
     now: () => new Date(AT),
   });
   return {
@@ -299,7 +325,7 @@ function harness() {
 
 describe("S80 implementation workspace application service", () => {
   it("resolves the approved S70 baseline and projects a safe first-entry load", async () => {
-    const h = harness();
+    const h = harness({ useRealReturnCycleResolver: true });
     const result = await h.service.load({ capa_case_id: CASE as never });
     expect(result).toMatchObject({
       status: "loaded",
@@ -307,17 +333,27 @@ describe("S80 implementation workspace application service", () => {
         draft_revision: null,
         draft: null,
         approved_s70_baseline: BASELINE,
-        approved_actions: [{
+          approved_actions: [{
           approved_action_reference: "ACTION-1",
           description: ACTION_PLAN.items[0].description,
           due_date: ACTION_PLAN.items[0].due_date,
           deliverable: ACTION_PLAN.items[0].deliverable,
           implementation_expectation: ACTION_PLAN.items[0].implementation_evidence,
-        }],
+          }],
+        implementation_review_return_cycle: null,
       },
     });
     expect(result).not.toHaveProperty("workspace.created_by_user_id");
     expect(result).not.toHaveProperty("workspace.organization_id");
+
+    const { implementation_review_return_response: _omitted, ...firstEntryBody } = body();
+    const saved = await h.service.save({
+      capa_case_id: CASE as never,
+      body: firstEntryBody,
+      request_trace: {} as never,
+    });
+    expect(saved).toMatchObject({ status: "saved", workspace: { implementation_review_return_cycle: null } });
+    expect(saved).not.toMatchObject({ reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_REQUIRED" });
   });
 
   it("saves only mutable request state and returns evidence/provenance/return response safely", async () => {

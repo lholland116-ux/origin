@@ -82,6 +82,18 @@ import {
   validateCapaImplementationReviewBaselineAgainstApprovedActionSet,
   type CapaImplementationReviewBaselineContent,
 } from "../implementation/capa-implementation-review-baseline";
+import {
+  CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+  CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE,
+  validateCapaImplementationReviewReturnResponseContent,
+  validateCapaImplementationReviewReturnResponseDraft,
+  type CapaImplementationReviewReturnResponseContent,
+  type CapaImplementationReviewReturnResponseDraft,
+} from "../implementation/capa-implementation-return-response-contract";
+import type {
+  CapaImplementationReturnCycle,
+  CapaImplementationReturnCycleResolver,
+} from "./capa-implementation-return-cycle-resolver";
 
 const SOURCE_STATE = CAPA_STATE.IMPLEMENTATION_ACTIVE;
 const TARGET_STATE = CAPA_STATE.IMPLEMENTATION_REVIEW;
@@ -118,6 +130,7 @@ interface CompletedSubmission {
   readonly resulting_case_version_id: CapaCaseVersionId;
   readonly record_version: number;
   readonly implementation_review_baseline_section_version: CapaSectionVersion;
+  readonly implementation_review_return_response_section_version?: CapaSectionVersion;
   readonly transition_audit_event_id: AuditEventId;
 }
 
@@ -137,6 +150,7 @@ export interface SubmitCapaImplementationDependencies {
   readonly review_decision_repository:
     CapaActionPlanReviewDecisionRepository &
     CapaActionPlanReviewDecisionTransactionReadRepository;
+  readonly return_cycle_resolver: CapaImplementationReturnCycleResolver;
   readonly workflow_idempotency_repository: CapaWorkflowIdempotencyRepository;
   readonly authorization_policy: CapaAuthorizationPolicy;
   readonly id_generator: CreateCapaIdGenerator;
@@ -159,7 +173,10 @@ export type SubmitCapaImplementationResult =
       readonly reason_code:
         | "INVALID_IMPLEMENTATION_SUBMISSION_BODY"
         | "IMPLEMENTATION_WORKSPACE_NOT_AVAILABLE"
-        | "IMPLEMENTATION_BASELINE_NOT_AUTHORITATIVE";
+        | "IMPLEMENTATION_BASELINE_NOT_AUTHORITATIVE"
+        | "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_REQUIRED"
+        | "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_INVALID"
+        | "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT";
       readonly detail_reason_code?: string;
     }
   | {
@@ -296,9 +313,10 @@ async function resolveApprovedBaseline(
   dependencies: SubmitCapaImplementationDependencies,
   current: CurrentCaseContext,
   transaction?: TransactionContext,
+  baselineHint?: CapaImplementationApprovedS70BaselineReference,
 ): Promise<ResolvedBaseline | null> {
   const organizationId = current.capa_case.organization_id;
-  const sourceCaseVersionId = current.case_version.parent_version_id;
+  const sourceCaseVersionId = baselineHint?.source_case_version_id ?? current.case_version.parent_version_id;
   if (sourceCaseVersionId === undefined) return null;
   const sourceVersion = transaction === undefined
     ? await dependencies.capa_repository.findCaseVersionById(
@@ -337,7 +355,10 @@ async function resolveApprovedBaseline(
     decision.capa_case_id !== current.capa_case.capa_case_id ||
     decision.source_case_version_id !== sourceCaseVersionId ||
     decision.decision !== "approve" ||
-    decision.resulting_case_version_id !== current.case_version.case_version_id ||
+    (baselineHint !== undefined && (
+      decision.action_plan_section_version_id !== baselineHint.approved_action_plan_section_id ||
+      decision.transition_audit_event_id !== baselineHint.approval_decision_reference
+    )) ||
     !sourceVersion.section_version_ids.includes(decision.action_plan_section_version_id)
   ) return null;
 
@@ -362,6 +383,28 @@ async function resolveApprovedBaseline(
   ) return null;
   const actionPlan = validateCapaActionPlan(section.content);
   if (actionPlan.status !== "valid") return null;
+  const approvedImplementationEntry =
+    decision.resulting_case_version_id === current.case_version.case_version_id &&
+    (baselineHint === undefined || baselineHint.source_case_version_id === current.case_version.parent_version_id)
+    ? current.case_version
+    : transaction === undefined
+      ? await dependencies.capa_repository.findCaseVersionById(
+          organizationId,
+          current.capa_case.capa_case_id,
+          decision.resulting_case_version_id,
+        )
+      : await dependencies.capa_repository.findCaseVersionByIdInTransaction(
+          transaction,
+          organizationId,
+          current.capa_case.capa_case_id,
+          decision.resulting_case_version_id,
+        );
+  if (
+    approvedImplementationEntry === null ||
+    approvedImplementationEntry.status !== CAPA_STATE.IMPLEMENTATION_ACTIVE ||
+    approvedImplementationEntry.parent_version_id !== sourceVersion.case_version_id ||
+    !current.case_version.section_version_ids.includes(decision.action_plan_section_version_id)
+  ) return null;
   return {
     reference: Object.freeze({
       source_case_version_id: sourceCaseVersionId,
@@ -390,6 +433,8 @@ function requestFingerprint(
       expected_draft_revision: expectedDraftRevision,
       approved_s70_baseline: baseline,
       submitted_action_progress: draft.action_progress,
+      implementation_review_return_response:
+        draft.implementation_review_return_response,
       configuration: {
         workflow_version: dependencies.configuration.workflow_version,
         implementation_review_baseline_schema_version:
@@ -439,6 +484,89 @@ function baselineSection(
   };
 }
 
+interface PriorImplementationSections {
+  readonly baseline: CapaSectionVersion | null;
+  readonly return_response: CapaSectionVersion | null;
+}
+
+async function priorImplementationSections(
+  dependencies: SubmitCapaImplementationDependencies,
+  transaction: TransactionContext,
+  current: CurrentCaseContext,
+): Promise<PriorImplementationSections> {
+  const sections = await Promise.all(current.case_version.section_version_ids.map((id) =>
+    dependencies.capa_repository.findSectionVersionByIdInTransaction(
+      transaction,
+      current.capa_case.organization_id,
+      current.capa_case.capa_case_id,
+      id,
+    ),
+  ));
+  if (sections.some((section) => section === null)) {
+    throw new SubmitCapaImplementationIntegrityError("The S80 snapshot references a missing section.");
+  }
+  const baselineSections = (sections as CapaSectionVersion[]).filter((section) => section.section_type === CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE);
+  const responseSections = (sections as CapaSectionVersion[]).filter((section) => section.section_type === CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE);
+  if (baselineSections.length > 1 || responseSections.length > 1) {
+    throw new SubmitCapaImplementationIntegrityError("The S80 snapshot has ambiguous implementation-review sections.");
+  }
+  if (responseSections[0] !== undefined && (responseSections[0].schema_version !== CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION || validateCapaImplementationReviewReturnResponseContent(responseSections[0].content).status !== "valid")) {
+    throw new SubmitCapaImplementationIntegrityError("The prior implementation-review return response is malformed.");
+  }
+  return { baseline: baselineSections[0] ?? null, return_response: responseSections[0] ?? null };
+}
+
+function replacedImplementationSectionIds(
+  sourceVersion: CapaCaseVersion,
+  priorBaseline: CapaSectionVersion | null,
+  nextBaseline: CapaSectionVersionId,
+  priorReturnResponse: CapaSectionVersion | null,
+  nextReturnResponse: CapaSectionVersionId | null,
+): readonly CapaSectionVersionId[] {
+  const replacements = new Map<CapaSectionVersionId, CapaSectionVersionId>();
+  if (priorBaseline !== null) replacements.set(priorBaseline.section_version_id, nextBaseline);
+  if (priorReturnResponse !== null && nextReturnResponse !== null) replacements.set(priorReturnResponse.section_version_id, nextReturnResponse);
+  const ids = sourceVersion.section_version_ids.map((id) => replacements.get(id) ?? id);
+  if (priorBaseline === null) ids.push(nextBaseline);
+  if (priorReturnResponse === null && nextReturnResponse !== null) ids.push(nextReturnResponse);
+  if (new Set(ids).size !== ids.length) throw new SubmitCapaImplementationIntegrityError("The resulting implementation section identity set is invalid.");
+  return Object.freeze(ids);
+}
+
+function sameReturnCycle(response: CapaImplementationReviewReturnResponseDraft, cycle: CapaImplementationReturnCycle): boolean {
+  return response.return_transition_audit_event_id === cycle.return_transition_audit_event_id && response.source_case_version_id === cycle.source_case_version_id && response.resulting_case_version_id === cycle.resulting_case_version_id;
+}
+
+function resolveReturnResponse(
+  cycle: CapaImplementationReturnCycle | null,
+  draft: CapaImplementationWorkspaceDraft,
+): { readonly status: "not_required"; readonly draft: null } | { readonly status: "valid"; readonly draft: CapaImplementationReviewReturnResponseDraft; readonly cycle: CapaImplementationReturnCycle } | { readonly status: "validation_failed"; readonly reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_REQUIRED" | "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_INVALID" | "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT" } {
+  if (cycle === null) return draft.implementation_review_return_response === null ? { status: "not_required", draft: null } : { status: "validation_failed", reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT" };
+  if (draft.implementation_review_return_response === null) return { status: "validation_failed", reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_REQUIRED" };
+  const response = validateCapaImplementationReviewReturnResponseDraft(draft.implementation_review_return_response);
+  if (response.status === "invalid") return { status: "validation_failed", reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_INVALID" };
+  if (!sameReturnCycle(response.value, cycle)) return { status: "validation_failed", reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_CYCLE_CONFLICT" };
+  return { status: "valid", draft: response.value, cycle };
+}
+
+function authoritativeReturnResponseContent(
+  response: CapaImplementationReviewReturnResponseDraft,
+  resubmittedCaseVersionId: CapaCaseVersionId,
+  actorId: string,
+  timestamp: IsoDateTime,
+): CapaImplementationReviewReturnResponseContent {
+  return Object.freeze({
+    schema_version: CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION,
+    response_narrative: response.response_narrative,
+    return_transition_audit_event_id: response.return_transition_audit_event_id,
+    source_case_version_id: response.source_case_version_id,
+    resulting_case_version_id: response.resulting_case_version_id,
+    resubmitted_case_version_id: resubmittedCaseVersionId,
+    responded_by: Object.freeze({ actor_type: "human" as const, actor_id: actorId as CapaImplementationReviewReturnResponseContent["responded_by"]["actor_id"] }),
+    responded_at: timestamp,
+  });
+}
+
 function completion(
   status: "submitted" | "already_submitted",
   capaCase: CapaCase,
@@ -446,6 +574,7 @@ function completion(
   resultingVersion: CapaCaseVersion,
   section: CapaSectionVersion,
   auditEventId: AuditEventId,
+  returnResponseSection?: CapaSectionVersion,
 ): SubmitCapaImplementationResult {
   return {
     status,
@@ -454,6 +583,9 @@ function completion(
     resulting_case_version_id: resultingVersion.case_version_id,
     record_version: resultingVersion.version_number,
     implementation_review_baseline_section_version: section,
+    ...(returnResponseSection === undefined
+      ? {}
+      : { implementation_review_return_response_section_version: returnResponseSection }),
     transition_audit_event_id: auditEventId,
   };
 }
@@ -541,6 +673,19 @@ async function replay(
       id,
     ),
   ));
+  const priorSections = await Promise.all(sourceVersion.section_version_ids.map((id) =>
+    dependencies.capa_repository.findSectionVersionById(
+      idempotencyRecord.organization_id,
+      idempotencyRecord.capa_case_id,
+      id,
+    ),
+  ));
+  const priorBaseline = priorSections.find((section) => section?.section_type === CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE) ?? null;
+  const priorReturnResponse = priorSections.find((section) => section?.section_type === CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE) ?? null;
+  const returnResponseId = typeof audit?.metadata.implementation_review_return_response_section_version_id === "string"
+    ? audit.metadata.implementation_review_return_response_section_version_id as CapaSectionVersionId
+    : null;
+  const expectedSectionIds = replacedImplementationSectionIds(sourceVersion, priorBaseline, audit.metadata.implementation_review_baseline_section_version_id as CapaSectionVersionId, priorReturnResponse, returnResponseId);
   if (
     sections.some((section) =>
       section === null ||
@@ -549,10 +694,7 @@ async function replay(
     ) ||
     new Set(resultingVersion.section_version_ids).size !==
       resultingVersion.section_version_ids.length ||
-    resultingVersion.section_version_ids.length !==
-      sourceVersion.section_version_ids.length + 1 ||
-    resultingVersion.section_version_ids.slice(0, sourceVersion.section_version_ids.length)
-      .some((id, index) => id !== sourceVersion.section_version_ids[index])
+    JSON.stringify(resultingVersion.section_version_ids) !== JSON.stringify(expectedSectionIds)
   ) {
     throw new SubmitCapaImplementationIntegrityError(
       "The implementation submission case-version lineage is inconsistent.",
@@ -604,6 +746,24 @@ async function replay(
   if (content.value.source_s80_case_version_id !== sourceVersion.case_version_id || content.value.resulting_s90_case_version_id !== resultingVersion.case_version_id) {
     throw new SubmitCapaImplementationIntegrityError("The implementation submission baseline replay is misbound.");
   }
+  const responseSections = sections.filter((section): section is CapaSectionVersion => section?.section_type === CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE);
+  let responseSection: CapaSectionVersion | undefined;
+  let replayResponse: CapaImplementationReviewReturnResponseDraft | null = null;
+  if (returnResponseId === null) {
+    if (responseSections.length !== 0) throw new SubmitCapaImplementationIntegrityError("The implementation submission replay has an unexpected return response.");
+  } else {
+    responseSection = responseSections.find((section) => section.section_version_id === returnResponseId);
+    if (responseSections.length !== 1 || responseSection === undefined || responseSection.schema_version !== CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION) throw new SubmitCapaImplementationIntegrityError("The implementation submission replay return response is missing.");
+    const validatedResponse = validateCapaImplementationReviewReturnResponseContent(responseSection.content);
+    if (validatedResponse.status !== "valid" || validatedResponse.value.resubmitted_case_version_id !== resultingVersion.case_version_id) throw new SubmitCapaImplementationIntegrityError("The implementation submission replay return response is invalid.");
+    replayResponse = {
+      schema_version: "capa-implementation-review-return-response-draft-1.0.0",
+      return_transition_audit_event_id: validatedResponse.value.return_transition_audit_event_id,
+      source_case_version_id: validatedResponse.value.source_case_version_id,
+      resulting_case_version_id: validatedResponse.value.resulting_case_version_id,
+      response_narrative: validatedResponse.value.response_narrative,
+    };
+  }
   const sourceContext: CurrentCaseContext = {
     capa_case: {
       ...capaCase,
@@ -613,14 +773,19 @@ async function replay(
     },
     case_version: sourceVersion,
   };
-  const authoritativeBaseline = await resolveApprovedBaseline(dependencies, sourceContext);
+  const authoritativeBaseline = await resolveApprovedBaseline(
+    dependencies,
+    sourceContext,
+    undefined,
+    content.value.approved_s70_baseline,
+  );
   if (authoritativeBaseline === null || !baselineEquals(content.value.approved_s70_baseline, authoritativeBaseline.reference)) {
     throw new SubmitCapaImplementationIntegrityError("The implementation submission replay baseline is no longer authoritative.");
   }
   const replayDraft: CapaImplementationWorkspaceDraft = {
     schema_version: "capa-implementation-workspace-draft-1.0.0",
     action_progress: content.value.action_progress,
-    implementation_review_return_response: null,
+    implementation_review_return_response: replayResponse,
   };
   if (requestFingerprint(dependencies, command, sourceVersion.case_version_id, authoritativeBaseline.reference, replayDraft, body.expected_draft_revision) !== idempotencyRecord.request_fingerprint) {
     throw new IdempotencyReplayConflictError();
@@ -631,7 +796,7 @@ async function replay(
     status: resultingVersion.status,
     record_version: resultingVersion.version_number,
   };
-  return completion("already_submitted", historicalCase, sourceVersion, resultingVersion, submittedSection, audit.event_id);
+  return completion("already_submitted", historicalCase, sourceVersion, resultingVersion, submittedSection, audit.event_id, responseSection);
 }
 
 export async function submitCapaImplementation(
@@ -692,6 +857,9 @@ export async function submitCapaImplementation(
   const current = await currentCase(dependencies, organizationId, command.capa_case_id);
   if (current === null) return { status: "not_found_or_not_authorized" };
   if (current.capa_case.status !== SOURCE_STATE || current.case_version.status !== SOURCE_STATE || !isAllowedCapaTransition(SOURCE_STATE, TARGET_STATE)) return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };
+  const cycleResolution = await dependencies.return_cycle_resolver.resolve({ organization_id: organizationId, capa_case_id: command.capa_case_id });
+  if (cycleResolution.status === "invalid") throw new SubmitCapaImplementationIntegrityError("The implementation return-cycle provenance is invalid.");
+  const activeCycle = cycleResolution.status === "active" ? cycleResolution.cycle : null;
   const policy = await dependencies.authorization_policy.evaluate({
     authentication: command.authentication,
     tenant: command.tenant,
@@ -714,17 +882,26 @@ export async function submitCapaImplementation(
         dependencies,
         current,
         transaction,
+        workspace.approved_s70_baseline,
       );
       if (baseline === null || !baselineEquals(workspace.approved_s70_baseline, baseline.reference)) return { kind: "validation" as const, reason_code: "IMPLEMENTATION_BASELINE_NOT_AUTHORITATIVE" as const };
       const contextual = validateCapaImplementationDraftAgainstApprovedActionSet(workspace.draft, baseline.action_plan.items.map((item) => item.item_id));
       if (contextual.status !== "valid") return { kind: "validation" as const, reason_code: "IMPLEMENTATION_BASELINE_NOT_AUTHORITATIVE" as const, detail_reason_code: contextual.reason_code };
+      const returnResponse = resolveReturnResponse(activeCycle, contextual.value);
+      if (returnResponse.status === "validation_failed") return { kind: "validation" as const, reason_code: returnResponse.reason_code };
       const readiness = evaluateCapaImplementationSubmissionReadiness(contextual.value, baseline.action_plan.items.map((item) => item.item_id));
       if (readiness.status !== "ready_for_s90_review") return { kind: "blocked" as const, blocker_codes: readiness.blocker_codes };
+      const priorSections = activeCycle === null
+        ? { baseline: null, return_response: null }
+        : await priorImplementationSections(dependencies, transaction, current);
       const nextVersionId = dependencies.id_generator.generateCaseVersionId();
       const sectionId = dependencies.id_generator.generateSectionVersionId();
+      const returnResponseSectionId = returnResponse.status === "valid" ? dependencies.id_generator.generateSectionVersionId() : null;
       const auditEventId = dependencies.id_generator.generateAuditEventId();
       const section = baselineSection(organizationId, command.capa_case_id, sectionId, current.case_version.case_version_id, nextVersionId, auditEventId, workspace.draft_revision, contextual.value, baseline.reference, principal.user_id, timestamp);
-      const nextVersion: CapaCaseVersion = { organization_id: organizationId, case_version_id: nextVersionId, capa_case_id: command.capa_case_id, version_number: current.case_version.version_number + 1, parent_version_id: current.case_version.case_version_id, change_reason: TRANSITION_MEANING, status: TARGET_STATE, section_version_ids: Object.freeze([...current.case_version.section_version_ids, sectionId]), effective_at: timestamp, created_at: timestamp, created_by: { actor_type: "human", actor_id: principal.user_id } };
+      const responseContent = returnResponse.status === "valid" ? authoritativeReturnResponseContent(returnResponse.draft, nextVersionId, principal.user_id, timestamp) : null;
+      const responseSection: CapaSectionVersion | null = responseContent === null ? null : { organization_id: organizationId, section_version_id: returnResponseSectionId!, capa_case_id: command.capa_case_id, section_type: controlled(CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SECTION_TYPE), version_number: (priorSections.return_response?.version_number ?? 0) + 1, ...(priorSections.return_response === null ? {} : { parent_version_id: priorSections.return_response.section_version_id }), schema_version: CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION, content: responseContent as unknown as Readonly<Record<string, unknown>>, change_reason: TRANSITION_MEANING, effective_at: timestamp, created_at: timestamp, created_by: { actor_type: "human", actor_id: principal.user_id } };
+      const nextVersion: CapaCaseVersion = { organization_id: organizationId, case_version_id: nextVersionId, capa_case_id: command.capa_case_id, version_number: current.case_version.version_number + 1, parent_version_id: current.case_version.case_version_id, change_reason: TRANSITION_MEANING, status: TARGET_STATE, section_version_ids: replacedImplementationSectionIds(current.case_version, priorSections.baseline, sectionId, priorSections.return_response, responseSection?.section_version_id ?? null), effective_at: timestamp, created_at: timestamp, created_by: { actor_type: "human", actor_id: principal.user_id } };
       const fingerprint = requestFingerprint(dependencies, command, current.case_version.case_version_id, baseline.reference, contextual.value, workspace.draft_revision);
       const claim = await dependencies.workflow_idempotency_repository.claimWorkflowOperation(transaction, { organization_id: organizationId, idempotency_key: idempotencyKey, operation_code: controlled(OPERATION_CODE), request_fingerprint: fingerprint, capa_case_id: command.capa_case_id, source_case_version_id: current.case_version.case_version_id, resulting_case_version_id: nextVersionId, audit_event_id: auditEventId });
       if (claim.status === "conflict") return { kind: "idempotency_conflict" as const };
@@ -732,13 +909,14 @@ export async function submitCapaImplementation(
       if (current.capa_case.status !== SOURCE_STATE) throw new SubmissionWorkflowError();
       if (current.capa_case.record_version !== current.case_version.version_number || current.capa_case.current_version_id !== current.case_version.case_version_id) throw new SubmissionConcurrencyError("RECORD_VERSION_CONFLICT");
       await dependencies.capa_repository.insertSectionVersion(transaction, section);
+      if (responseSection !== null) await dependencies.capa_repository.insertSectionVersion(transaction, responseSection);
       await dependencies.capa_repository.insertCaseVersion(transaction, nextVersion);
       const advanced = await dependencies.capa_repository.advanceCurrentVersion(transaction, { organization_id: organizationId, capa_case_id: command.capa_case_id, expected_record_version: current.capa_case.record_version, expected_current_version_id: current.case_version.case_version_id, next_current_version_id: nextVersionId, next_status: TARGET_STATE, updated_at: timestamp, updated_by: { actor_type: "human", actor_id: principal.user_id } });
       if (advanced.status === "conflict") throw new SubmissionConcurrencyError(advanced.reason_code);
-      const audit: AuditEvent = { organization_id: organizationId, event_id: auditEventId, event_type: controlled("EVT-STATE-TRANSITION"), schema_version: dependencies.configuration.audit_schema_version, aggregate_type: controlled("CAPA_CASE"), aggregate_id: command.capa_case_id, aggregate_version: advanced.capa_case.record_version, actor: { actor_type: "human", actor_id: principal.user_id }, occurred_at: timestamp, request_id: command.request_trace.request_id, correlation_id: command.request_trace.correlation_id, idempotency_key: idempotencyKey, action: controlled(OPERATION_CODE), target: { object_type: controlled("CAPA_CASE"), object_id: command.capa_case_id, object_version_id: nextVersionId }, outcome: "succeeded", change: { before_ref: { object_type: controlled("CAPA_CASE"), object_id: command.capa_case_id, object_version_id: current.case_version.case_version_id }, after_ref: { object_type: controlled("CAPA_CASE"), object_id: command.capa_case_id, object_version_id: nextVersionId } }, configuration_versions: { workflow: dependencies.configuration.workflow_version, implementation_review_baseline_schema: CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION, authorization_policy: policy.policy_version, audit_schema: dependencies.configuration.audit_schema_version }, metadata: { transition_event: TRANSITION_MEANING, from_state: SOURCE_STATE, to_state: TARGET_STATE, source_case_version_id: current.case_version.case_version_id, resulting_case_version_id: nextVersionId, implementation_review_baseline_section_version_id: sectionId, approved_s70_baseline: baseline.reference, workspace_draft_revision: workspace.draft_revision, required_permission: "capa.case.submit", relied_on_role_assignment_ids: policy.relied_on_role_assignment_ids } };
+      const audit: AuditEvent = { organization_id: organizationId, event_id: auditEventId, event_type: controlled("EVT-STATE-TRANSITION"), schema_version: dependencies.configuration.audit_schema_version, aggregate_type: controlled("CAPA_CASE"), aggregate_id: command.capa_case_id, aggregate_version: advanced.capa_case.record_version, actor: { actor_type: "human", actor_id: principal.user_id }, occurred_at: timestamp, request_id: command.request_trace.request_id, correlation_id: command.request_trace.correlation_id, idempotency_key: idempotencyKey, action: controlled(OPERATION_CODE), target: { object_type: controlled("CAPA_CASE"), object_id: command.capa_case_id, object_version_id: nextVersionId }, outcome: "succeeded", change: { before_ref: { object_type: controlled("CAPA_CASE"), object_id: command.capa_case_id, object_version_id: current.case_version.case_version_id }, after_ref: { object_type: controlled("CAPA_CASE"), object_id: command.capa_case_id, object_version_id: nextVersionId } }, configuration_versions: { workflow: dependencies.configuration.workflow_version, implementation_review_baseline_schema: CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION, implementation_review_return_response_schema: CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_SCHEMA_VERSION, authorization_policy: policy.policy_version, audit_schema: dependencies.configuration.audit_schema_version }, metadata: { transition_event: TRANSITION_MEANING, from_state: SOURCE_STATE, to_state: TARGET_STATE, source_case_version_id: current.case_version.case_version_id, resulting_case_version_id: nextVersionId, implementation_review_baseline_section_version_id: sectionId, ...(responseSection === null ? {} : { implementation_review_return_response_section_version_id: responseSection.section_version_id }), approved_s70_baseline: baseline.reference, workspace_draft_revision: workspace.draft_revision, required_permission: "capa.case.submit", relied_on_role_assignment_ids: policy.relied_on_role_assignment_ids } };
       const appended = await dependencies.audit_repository.appendEvent(transaction, audit);
       if (appended.status !== "appended" || appended.event_id !== auditEventId) throw new AuditEventAppendConflictError();
-      return { kind: "submitted" as const, capa_case: advanced.capa_case, source_version: current.case_version, resulting_version: nextVersion, section, audit_event_id: auditEventId };
+      return { kind: "submitted" as const, capa_case: advanced.capa_case, source_version: current.case_version, resulting_version: nextVersion, section, responseSection, audit_event_id: auditEventId };
     });
     if (result.kind === "validation") return { status: "validation_failed", reason_code: result.reason_code, ...(result.detail_reason_code === undefined ? {} : { detail_reason_code: result.detail_reason_code }) };
     if (result.kind === "workspace_conflict") return { status: "concurrency_conflict", reason_code: "WORKSPACE_DRAFT_REVISION_CONFLICT" };
@@ -752,7 +930,7 @@ export async function submitCapaImplementation(
         throw error;
       }
     }
-    return completion("submitted", result.capa_case, result.source_version, result.resulting_version, result.section, result.audit_event_id);
+    return completion("submitted", result.capa_case, result.source_version, result.resulting_version, result.section, result.audit_event_id, result.responseSection ?? undefined);
   } catch (error) {
     if (error instanceof SubmissionConcurrencyError) return { status: "concurrency_conflict", reason_code: error.reason_code };
     if (error instanceof SubmissionWorkflowError) return { status: "workflow_conflict", reason_code: "WORKFLOW_STATE_NOT_ALLOWED" };

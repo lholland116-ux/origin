@@ -131,14 +131,18 @@ describe("S90 implementation-review browser client", () => {
     await expect(loadCapaImplementationReview(CASE, async () => new Response(JSON.stringify({ error: { code: "CAPA_IMPLEMENTATION_REVIEW_CASE_NOT_FOUND", message: "not found" } }), { status: 404 }))).resolves.toMatchObject({ status: "failed", code: "CAPA_IMPLEMENTATION_REVIEW_CASE_NOT_FOUND" });
   });
 
-  it("mounts the S90 reviewer UI without an owner-response or AI decision path", () => {
+  it("mounts an S90 reviewer UI with immutable owner-response history and reviewer-only authoring", () => {
     const panel = readFileSync(resolve("app/capa/CapaImplementationReviewPanel.tsx"), "utf8");
     const intake = readFileSync(resolve("app/capa/CapaIntakeClient.tsx"), "utf8");
-    for (const text of ["S90 · Implementation Review", "Accept implementation", "Return for implementation", "Approved S70 authority", "Submitted S80 package", "Submitted evidence and provenance", "Prior immutable S90 review history", "Reviewer authorization state", "Owner-reported", "not accepted, approved, or verified", "rationale", "CAPA_STEP_UP_REQUIRED", "CAPA_ACCESS_DENIED", "CAPA_CONCURRENCY_CONFLICT", "CAPA_WORKFLOW_CONFLICT", "CAPA_IDEMPOTENCY_CONFLICT", "await onAuthoritativeRefresh();"]) expect(panel).toContain(text);
+    for (const text of ["S90 · Implementation Review", "Accept implementation", "Return for implementation", "Approved S70 authority", "Submitted S80 package", "Submitted evidence and provenance", "Prior immutable S90 review history", "Immutable owner response", "Reviewer authorization state", "Owner-reported", "not accepted, approved, or verified", "Reviewer rationale", "CAPA_STEP_UP_REQUIRED", "CAPA_ACCESS_DENIED", "CAPA_CONCURRENCY_CONFLICT", "CAPA_WORKFLOW_CONFLICT", "CAPA_IDEMPOTENCY_CONFLICT", "await onAuthoritativeRefresh();"]) expect(panel).toContain(text);
     expect(panel).toContain("sourceCaseVersionId: projection.current_case_version_id");
     expect(panel).not.toContain("sourceCaseVersionId: projection.submitted_implementation.source_s80_case_version_id");
     expect(intake).toContain('createdCapa.status === "S90"');
-    expect(panel).not.toContain("owner response");
+    expect(panel).toContain("<label className=\"mt-6 block text-sm text-zinc-200\">Reviewer rationale<textarea");
+    expect(panel).not.toContain("Owner response to reviewer return");
+    expect(panel).not.toMatch(/(?:<textarea|<input)[^>]*(?:owner response|response to reviewer)/i);
+    expect(panel).not.toContain("generateCapaImplementationReview");
+    expect(panel).not.toContain("submitOwnerResponse");
     expect(panel).not.toContain("automatic decision");
   });
 });

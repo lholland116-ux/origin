@@ -18,6 +18,7 @@ const CASE = "20000000-0000-4000-8000-000000000001";
 const OTHER_CASE = "20000000-0000-4000-8000-000000000002";
 const SOURCE_VERSION = "30000000-0000-4000-8000-000000000001";
 const CURRENT_VERSION = "30000000-0000-4000-8000-000000000002";
+const RETURNED_VERSION = "30000000-0000-4000-8000-000000000003";
 const ACTION_SECTION = "40000000-0000-4000-8000-000000000001";
 const APPROVAL_AUDIT = "50000000-0000-4000-8000-000000000001";
 const USER = "60000000-0000-4000-8000-000000000001";
@@ -281,6 +282,47 @@ describe("S80 implementation workspace persistence", () => {
         }],
         implementation_review_return_response: response,
       },
+    });
+  });
+
+  it("rolls an existing workspace forward only while the authoritative case remains S80", async () => {
+    const db = await seedApprovedS80Database();
+    await db.runInTransaction(requestTrace("create"), (transaction) =>
+      db.initializeWorkspace(transaction, saveInput()),
+    );
+    await db.runInTransaction(requestTrace("return"), async (transaction) => {
+      await db.insertCaseVersion(transaction, {
+        organization_id: ORG,
+        capa_case_id: CASE,
+        case_version_id: RETURNED_VERSION,
+        version_number: 9,
+        parent_version_id: CURRENT_VERSION,
+        change_reason: "Returned S90 implementation review cycle",
+        status: "S80",
+        effective_at: AT,
+        created_at: AT,
+        created_by: { actor_type: "human", actor_id: USER },
+        section_version_ids: [ACTION_SECTION],
+      } as never);
+      await expect(db.advanceCurrentVersion(transaction, {
+        organization_id: ORG,
+        capa_case_id: CASE,
+        expected_record_version: 8,
+        expected_current_version_id: CURRENT_VERSION,
+        next_current_version_id: RETURNED_VERSION,
+        next_status: "S80",
+        updated_at: AT,
+        updated_by: { actor_type: "human", actor_id: USER },
+      } as never)).resolves.toMatchObject({ status: "updated" });
+    });
+    await expect(db.runInTransaction(requestTrace("rollover"), (transaction) =>
+      db.saveWorkspace(transaction, saveInput({
+        case_version_id: RETURNED_VERSION,
+        record_version: 9,
+      })),
+    )).resolves.toMatchObject({
+      status: "saved",
+      workspace: { case_version_id: RETURNED_VERSION, record_version: 9 },
     });
   });
 
