@@ -351,7 +351,21 @@ describe("integrated S90 implementation-review API/runtime qualification", () =>
       );
       expect(secondReturned.status).toBe(200);
       const secondLoaded: any = await workspaceService.load({ capa_case_id: CASE as never });
-      expect(secondLoaded).toMatchObject({ status: "loaded", workspace: { implementation_review_return_cycle: { source_case_version_id: firstS90, rationale: "The second review cycle still requires objective evidence." }, draft: null } });
+      expect(secondLoaded).toMatchObject({
+        status: "loaded",
+        workspace: {
+          implementation_review_return_cycle: {
+            source_case_version_id: firstS90,
+            rationale: "The second review cycle still requires objective evidence.",
+          },
+          draft_revision: null,
+          updated_at: null,
+          draft: {
+            action_progress: baseline().action_progress,
+            implementation_review_return_response: null,
+          },
+        },
+      });
       const secondSaved: any = await workspaceService.save({
         capa_case_id: CASE as never,
         body: {

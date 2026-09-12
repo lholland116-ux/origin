@@ -16,10 +16,18 @@ import {
   CAPA_IMPLEMENTATION_EVIDENCE_SCHEMA_VERSION,
 } from "../../lib/capa/implementation/capa-implementation-evidence-contract";
 import {
+  CAPA_IMPLEMENTATION_WORKSPACE_DRAFT_SCHEMA_VERSION,
+} from "../../lib/capa/implementation/capa-implementation-contract";
+import {
   CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_DRAFT_SCHEMA_VERSION,
 } from "../../lib/capa/implementation/capa-implementation-return-response-contract";
 import {
+  CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION,
+  CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE,
+} from "../../lib/capa/implementation/capa-implementation-review-baseline";
+import {
   createCapaImplementationWorkspaceService,
+  CapaImplementationWorkspaceIntegrityError,
 } from "../../lib/capa/application/capa-implementation-workspace-service";
 import {
   createCapaImplementationReturnCycleResolver,
@@ -60,6 +68,12 @@ const APPROVAL_AUDIT = "50000000-0000-4000-8000-000000000001";
 const USER = "60000000-0000-4000-8000-000000000001";
 const EVIDENCE = "70000000-0000-4000-8000-000000000001";
 const RETURN_AUDIT = "80000000-0000-4000-8000-000000000001";
+const OTHER_ORG = "10000000-0000-4000-8000-000000000002";
+const RETURN_SOURCE_S90 = "30000000-0000-4000-8000-000000000004";
+const RETURNED_S80 = "30000000-0000-4000-8000-000000000005";
+const CURRENT_RETURN_S90 = "30000000-0000-4000-8000-000000000006";
+const CURRENT_RETURN_S80 = "30000000-0000-4000-8000-000000000007";
+const RETURN_AUDIT_2 = "80000000-0000-4000-8000-000000000002";
 const AT = "2026-09-10T12:00:00.000Z";
 
 const ACTION_PLAN = {
@@ -146,6 +160,24 @@ const currentVersion = {
   section_version_ids: [ACTION_SECTION],
 };
 
+const returnedBaselineSection = {
+  organization_id: ORG,
+  capa_case_id: CASE,
+  section_version_id: "40000000-0000-4000-8000-000000000002",
+  section_type: CAPA_IMPLEMENTATION_REVIEW_BASELINE_SECTION_TYPE,
+  schema_version: CAPA_IMPLEMENTATION_REVIEW_BASELINE_SCHEMA_VERSION,
+  content: {
+    approved_s70_baseline: BASELINE,
+    source_s80_case_version_id: RETURNED_S80,
+    source_s80_workspace_revision: 4,
+    resulting_s90_case_version_id: CURRENT_RETURN_S90,
+    transition_audit_event_id: RETURN_AUDIT_2,
+    submitted_by_user_id: USER,
+    submitted_at: AT,
+    action_progress: body().action_progress,
+  },
+};
+
 const section = {
   organization_id: ORG,
   capa_case_id: CASE,
@@ -227,8 +259,37 @@ function createRecord(input: SaveCapaImplementationWorkspaceInput): CapaImplemen
   });
 }
 
-function harness(options: { readonly useRealReturnCycleResolver?: boolean } = {}) {
-  let persisted: CapaImplementationWorkspaceRecord | null = null;
+function predecessorRecord(overrides: Record<string, unknown> = {}) {
+  return createRecord({
+    organization_id: ORG as never,
+    capa_case_id: CASE as never,
+    case_version_id: RETURNED_S80 as never,
+    record_version: 10,
+    draft: {
+      schema_version: CAPA_IMPLEMENTATION_WORKSPACE_DRAFT_SCHEMA_VERSION,
+      action_progress: body().action_progress,
+      implementation_review_return_response: {
+        schema_version: CAPA_IMPLEMENTATION_REVIEW_RETURN_RESPONSE_DRAFT_SCHEMA_VERSION,
+        return_transition_audit_event_id: RETURN_AUDIT,
+        source_case_version_id: RETURN_SOURCE_S90,
+        resulting_case_version_id: RETURNED_S80,
+        response_narrative: "Cycle one owner response must remain immutable history.",
+      },
+    } as never,
+    draft_revision: 4,
+    expected_draft_revision: null,
+    actor_user_id: USER as never,
+    approved_s70_baseline: BASELINE as never,
+    ...overrides,
+  });
+}
+
+function harness(options: {
+  readonly useRealReturnCycleResolver?: boolean;
+  readonly returned?: boolean;
+  readonly initialPersisted?: CapaImplementationWorkspaceRecord | null;
+} = {}) {
+  let persisted: CapaImplementationWorkspaceRecord | null = options.initialPersisted ?? null;
   let forcedResult: SaveCapaImplementationWorkspaceResult | null = null;
   let forcedError: Error | null = null;
   let lastInput: SaveCapaImplementationWorkspaceInput | null = null;
@@ -255,12 +316,27 @@ function harness(options: { readonly useRealReturnCycleResolver?: boolean } = {}
     initializeWorkspace,
     saveWorkspace,
   };
+  const caseState = options.returned
+    ? { ...currentCase, current_version_id: CURRENT_RETURN_S80, record_version: 12 }
+    : currentCase;
+  const caseVersions = new Map<string, any>([
+    [SOURCE_VERSION, sourceVersion],
+    [CURRENT_VERSION, currentVersion],
+    [RETURN_SOURCE_S90, { organization_id: ORG, capa_case_id: CASE, case_version_id: RETURN_SOURCE_S90, version_number: 9, status: "S90", parent_version_id: CURRENT_VERSION, section_version_ids: [ACTION_SECTION] }],
+    [RETURNED_S80, { organization_id: ORG, capa_case_id: CASE, case_version_id: RETURNED_S80, version_number: 10, status: "S80", parent_version_id: RETURN_SOURCE_S90, section_version_ids: [ACTION_SECTION, returnedBaselineSection.section_version_id] }],
+    [CURRENT_RETURN_S90, { organization_id: ORG, capa_case_id: CASE, case_version_id: CURRENT_RETURN_S90, version_number: 11, status: "S90", parent_version_id: RETURNED_S80, section_version_ids: [ACTION_SECTION, returnedBaselineSection.section_version_id] }],
+    [CURRENT_RETURN_S80, { organization_id: ORG, capa_case_id: CASE, case_version_id: CURRENT_RETURN_S80, version_number: 12, status: "S80", parent_version_id: CURRENT_RETURN_S90, section_version_ids: [ACTION_SECTION, returnedBaselineSection.section_version_id] }],
+  ]);
+  const sections = new Map<string, any>([
+    [ACTION_SECTION, section],
+    [returnedBaselineSection.section_version_id, returnedBaselineSection],
+  ]);
   const capaRepository = {
     findCaseById: vi.fn(async (_organizationId, capaCaseId) =>
-      capaCaseId === CASE ? currentCase : null),
+      capaCaseId === CASE ? caseState : null),
     findCaseVersionById: vi.fn(async (_organizationId, _capaCaseId, caseVersionId) =>
-      caseVersionId === SOURCE_VERSION ? sourceVersion : currentVersion),
-    findSectionVersionById: vi.fn(async () => section),
+      caseVersions.get(caseVersionId) ?? null),
+    findSectionVersionById: vi.fn(async (_organizationId, _capaCaseId, sectionId) => sections.get(sectionId) ?? null),
   } as unknown as CapaRepository;
   const reviewDecisionRepository = {
     findDecision: vi.fn(async () => decision),
@@ -293,8 +369,8 @@ function harness(options: { readonly useRealReturnCycleResolver?: boolean } = {}
         status: "active" as const,
         cycle: {
           return_transition_audit_event_id: RETURN_AUDIT as never,
-          source_case_version_id: SOURCE_VERSION as never,
-          resulting_case_version_id: CURRENT_VERSION as never,
+          source_case_version_id: (options.returned ? CURRENT_RETURN_S90 : SOURCE_VERSION) as never,
+          resulting_case_version_id: (options.returned ? CURRENT_RETURN_S80 : CURRENT_VERSION) as never,
           returned_by_user_id: USER as never,
           returned_at: AT as never,
           rationale: "Reviewer return rationale.",
@@ -315,6 +391,8 @@ function harness(options: { readonly useRealReturnCycleResolver?: boolean } = {}
     service,
     repository,
     capaRepository,
+    caseVersions,
+    caseState,
     transactionManager,
     get persisted() { return persisted; },
     set forcedResult(value: SaveCapaImplementationWorkspaceResult | null) { forcedResult = value; },
@@ -354,6 +432,87 @@ describe("S80 implementation workspace application service", () => {
     });
     expect(saved).toMatchObject({ status: "saved", workspace: { implementation_review_return_cycle: null } });
     expect(saved).not.toMatchObject({ reason_code: "IMPLEMENTATION_REVIEW_RETURN_RESPONSE_REQUIRED" });
+  });
+
+  it("seeds returned S80 from the exact predecessor workspace without writing or carrying the old response", async () => {
+    const h = harness({ returned: true, initialPersisted: predecessorRecord() });
+    const loaded: any = await h.service.load({ capa_case_id: CASE as never });
+    expect(loaded).toMatchObject({
+      status: "loaded",
+      workspace: {
+        draft_revision: null,
+        updated_at: null,
+        implementation_review_return_cycle: {
+          source_case_version_id: CURRENT_RETURN_S90,
+          resulting_case_version_id: CURRENT_RETURN_S80,
+        },
+        draft: {
+          action_progress: [{
+            owner_reported_status: "in_progress",
+            implementation_narrative: "Implementation is underway.",
+            evidence: [{ source: { artifact_reference: "artifact://TR-001" } }],
+          }],
+          implementation_review_return_response: null,
+        },
+      },
+    });
+    expect(h.repository.initializeWorkspace).not.toHaveBeenCalled();
+    expect(h.repository.saveWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the returned S80 predecessor, tenant, version, or baseline does not match the exact lineage", async () => {
+    const cases = [
+      predecessorRecord({ case_version_id: CURRENT_VERSION as never, record_version: 8 }),
+      predecessorRecord({ organization_id: OTHER_ORG as never }),
+      predecessorRecord({ record_version: 9 }),
+      predecessorRecord({ approved_s70_baseline: { ...BASELINE, approval_decision_reference: "90000000-0000-4000-8000-000000000001" } as never }),
+      {
+        ...predecessorRecord(),
+        draft: {
+          schema_version: CAPA_IMPLEMENTATION_WORKSPACE_DRAFT_SCHEMA_VERSION,
+          action_progress: [{ ...body().action_progress[0], approved_action_reference: "ACTION-OTHER" }],
+          implementation_review_return_response: null,
+        },
+      } as unknown as CapaImplementationWorkspaceRecord,
+    ];
+    for (const record of cases) {
+      const h = harness({ returned: true, initialPersisted: record });
+      await expect(h.service.load({ capa_case_id: CASE as never })).rejects.toThrow(CapaImplementationWorkspaceIntegrityError);
+      expect(h.repository.initializeWorkspace).not.toHaveBeenCalled();
+      expect(h.repository.saveWorkspace).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rolls the exact returned-S80 seed forward on the first save and reloads the durable current draft", async () => {
+    const h = harness({ returned: true, initialPersisted: predecessorRecord() });
+    const saved: any = await h.service.save({
+      capa_case_id: CASE as never,
+      body: {
+        expected_draft_revision: null,
+        action_progress: body().action_progress,
+        implementation_review_return_response: { response_narrative: "Cycle two owner response." },
+      },
+      request_trace: {} as never,
+    });
+    expect(saved).toMatchObject({
+      status: "saved",
+      workspace: {
+        case_version_id: CURRENT_RETURN_S80,
+        record_version: 12,
+        draft_revision: 1,
+        draft: {
+          implementation_review_return_response: {
+            source_case_version_id: CURRENT_RETURN_S90,
+            resulting_case_version_id: CURRENT_RETURN_S80,
+            response_narrative: "Cycle two owner response.",
+          },
+        },
+      },
+    });
+    expect(h.repository.initializeWorkspace).toHaveBeenCalledOnce();
+    expect(h.lastInput?.expected_draft_revision).toBeNull();
+    const reloaded: any = await h.service.load({ capa_case_id: CASE as never });
+    expect(reloaded).toMatchObject({ status: "loaded", workspace: { draft_revision: 1, updated_at: AT, draft: { implementation_review_return_response: { response_narrative: "Cycle two owner response." } } } });
   });
 
   it("saves only mutable request state and returns evidence/provenance/return response safely", async () => {
