@@ -316,24 +316,36 @@ describe("Supabase S80 implementation workspace repository", () => {
     expect(malformed.calls).toHaveLength(0);
   });
 
-  it("validates the unapplied additive migration source and its storage constraints", () => {
-    const migration = readFileSync(
+  it("validates the original and additive migration sources and storage constraints", () => {
+    const originalMigration = readFileSync(
       "supabase/migrations/20260910100000_create_capa_implementation_workspace_drafts.sql",
       "utf8",
     );
-    expect(migration).toContain("create table public.capa_implementation_workspace_drafts");
-    expect(migration).toContain("primary key (organization_id, capa_case_id)");
-    expect(migration).toContain("jsonb_typeof(workspace_draft) = 'object'");
-    expect(migration).toContain("draft_revision >= 1");
-    expect(migration).toContain("source_case_version_id");
-    expect(migration).toContain("approved_action_plan_section_id");
-    expect(migration).toContain("approval_decision_reference");
-    expect(migration).toContain("workspace_draft");
-    expect(migration).toContain("capa_case_version_sections");
-    expect(migration).toContain("approved baseline is immutable");
-    expect(migration).toContain("capa_s80_implementation_workspace_baseline_guard");
-    expect(migration).toContain("decision.decision = 'approve'");
-    expect(migration).not.toMatch(/alter table public\.capa_action_plan_workspace_drafts|drop table|supabase db push/i);
+    const rolloverMigration = readFileSync(
+      "supabase/migrations/20260912133000_fix_capa_implementation_workspace_return_rollover_guard.sql",
+      "utf8",
+    );
+    expect(originalMigration).toContain("create table public.capa_implementation_workspace_drafts");
+    expect(originalMigration).toContain("primary key (organization_id, capa_case_id)");
+    expect(originalMigration).toContain("jsonb_typeof(workspace_draft) = 'object'");
+    expect(originalMigration).toContain("draft_revision >= 1");
+    expect(originalMigration).toContain("source_case_version_id");
+    expect(originalMigration).toContain("approved_action_plan_section_id");
+    expect(originalMigration).toContain("approval_decision_reference");
+    expect(originalMigration).toContain("workspace_draft");
+    expect(originalMigration).toContain("capa_case_version_sections");
+    expect(originalMigration).toContain("approved baseline is immutable");
+    expect(originalMigration).toContain("capa_s80_implementation_workspace_baseline_guard");
+    expect(originalMigration).toContain("decision.resulting_case_version_id = new.case_version_id");
+    expect(originalMigration).not.toContain("old.case_version_id <> new.case_version_id");
+    expect(originalMigration).not.toContain("Original S80 implementation workspace must bind the approved S70 decision result.");
+    expect(originalMigration).not.toContain("review_decision.decision = 'return'");
+    expect(rolloverMigration).toContain("create or replace function private.capa_s80_implementation_workspace_baseline_guard");
+    expect(rolloverMigration).toContain("old.case_version_id <> new.case_version_id");
+    expect(rolloverMigration).toContain("capa_implementation_review_decisions");
+    expect(rolloverMigration).toContain("review_decision.decision = 'return'");
+    expect(rolloverMigration).toContain("capa_case_version_sections");
+    expect(rolloverMigration).not.toMatch(/create table|drop table|supabase db push/i);
     expect(RETURN_SCHEMA).toBe(
       "capa-implementation-review-return-response-draft-1.0.0",
     );
