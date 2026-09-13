@@ -413,6 +413,8 @@ function ConversationRow({
 }
 
 const MAX_INPUT_LENGTH = 2000;
+const COMPOSER_TEXTAREA_MIN_HEIGHT = 52;
+const COMPOSER_TEXTAREA_MAX_HEIGHT = 180;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
@@ -834,14 +836,15 @@ function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
 function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
   if (role === "user") {
     return cx(
-      "max-w-full rounded-2xl px-3 py-2.5 break-words [overflow-wrap:anywhere]",
+      "max-w-full rounded-2xl border border-white/15 px-3 py-2.5 break-words [overflow-wrap:anywhere]",
       theme.userBubble,
       theme.userText
     );
   }
 
   return cx(
-    "min-w-0 max-w-full break-words [overflow-wrap:anywhere]",
+    "min-w-0 max-w-full rounded-xl border p-3 break-words [overflow-wrap:anywhere]",
+    theme.panelBorder,
     theme.assistantText
   );
 }
@@ -1154,6 +1157,7 @@ export default function ChatClient({
   
   const endRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeDocumentPollRef = useRef(0);
   const recognitionRef = useRef<AppSpeechRecognition | null>(null);
   const speechSessionBaseRef = useRef<string>("");
@@ -1168,6 +1172,21 @@ export default function ChatClient({
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
+
+  useLayoutEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "0px";
+    const nextHeight = Math.min(
+      Math.max(textarea.scrollHeight, COMPOSER_TEXTAREA_MIN_HEIGHT),
+      COMPOSER_TEXTAREA_MAX_HEIGHT
+    );
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY =
+      textarea.scrollHeight > COMPOSER_TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
+  }, [input]);
 
   const getProfileTrigger = useCallback(
     () => (mobileMenuOpen ? mobileProfileTriggerRef.current : desktopProfileTriggerRef.current),
@@ -3243,6 +3262,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     className="relative w-full"
                   >
                     <textarea
+                      ref={composerTextareaRef}
                       value={input}
                       onChange={(event) => {
                         setInput(event.target.value);
@@ -3271,14 +3291,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       rows={isTypingFocused ? 4 : 2}
                       maxLength={MAX_INPUT_LENGTH}
                       disabled={composerDisabled}
+                      style={{ height: COMPOSER_TEXTAREA_MIN_HEIGHT }}
                       className={cx(
                         "w-full min-w-0 max-w-full resize-none rounded-2xl border-0 bg-transparent px-4 py-3.5 outline-none transition-all duration-200",
-                        "min-h-[76px] sm:min-h-[52px]",
-                        "max-h-[220px]",
-                        "overflow-y-auto",
+                        "min-h-[52px] max-h-[180px] overflow-y-hidden",
                         "leading-6",
-                        "focus:min-h-[104px]",
-                        "sm:focus:min-h-[52px]",
                         activeTheme.inputText,
                         "placeholder:text-white/40"
                       )}
