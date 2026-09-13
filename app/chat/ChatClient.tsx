@@ -695,7 +695,7 @@ function normalizeWidget(input: unknown): MessageWidget | null {
   };
 }
 
-function normalizeInitialMessages(messages: Message[]): Message[] {
+export function normalizeInitialMessages(messages: Message[]): Message[] {
   return messages.map((message) => ({
     ...message,
     sources: Array.isArray(message.sources) ? message.sources : [],
@@ -711,6 +711,35 @@ function normalizeInitialMessages(messages: Message[]): Message[] {
       ? cloneDocuments(message.documents)
       : [],
   }));
+}
+
+export function createOptimisticUserMessage(
+  id: string,
+  content: string,
+  images: MessageImage[] = [],
+  documents: UploadedDocument[] = []
+): Message {
+  return {
+    id,
+    role: "user",
+    content,
+    created_at: new Date().toISOString(),
+    ...(images.length > 0 ? { images } : {}),
+    documents: cloneDocuments(documents),
+  };
+}
+
+export function createOptimisticAssistantMessage(id: string): Message {
+  return {
+    id,
+    role: "assistant",
+    content: "",
+    created_at: new Date().toISOString(),
+    sources: [],
+    sourceCount: 0,
+    widget: null,
+    documents: [],
+  };
 }
 
 export function normalizeMessageImages(input: unknown): MessageImage[] {
@@ -2822,24 +2851,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     const optimisticImages = buildOptimisticImageAttachments(pendingImageSnapshot);
     const optimisticUserId = createId();
-    const userMessage: Message = {
-      id: optimisticUserId,
-      role: "user",
-      content: userVisibleContent,
-      ...(hasImages ? { images: optimisticImages } : {}),
-      documents: sentDocuments,
-    };
+    const userMessage = createOptimisticUserMessage(
+      optimisticUserId,
+      userVisibleContent,
+      hasImages ? optimisticImages : [],
+      sentDocuments
+    );
 
     const assistantId = createId();
-    const assistantPlaceholder: Message = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      sources: [],
-      sourceCount: 0,
-      widget: null,
-      documents: [],
-    };
+    const assistantPlaceholder = createOptimisticAssistantMessage(assistantId);
 
     const payloadImages = buildStoredImagePayload(pendingImageSnapshot);
     const payloadDocumentIds = [...readyDocumentIds];
@@ -2959,9 +2979,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         return;
       }
 
-      updateAssistantMessage(assistantId, () => ({
-        id: assistantId,
-        role: "assistant",
+      updateAssistantMessage(assistantId, (msg) => ({
+        ...msg,
         content:
           error instanceof Error ? error.message : "Something went wrong. Please try again.",
         sources: [],
