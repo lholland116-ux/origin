@@ -452,7 +452,7 @@ const TOOLTIP_TEXT = {
 
 const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 min-w-0 overflow-x-hidden";
 const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl min-w-0";
-const USER_BUBBLE_CLASS = "w-full max-w-2xl min-w-0";
+const USER_BUBBLE_CLASS = "ml-auto w-fit max-w-[90%] min-w-0 sm:max-w-[70%]";
 
 function cx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -829,11 +829,17 @@ function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
 }
 
 function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
+  if (role === "user") {
+    return cx(
+      "max-w-full rounded-2xl px-3 py-2.5 break-words [overflow-wrap:anywhere]",
+      theme.userBubble,
+      theme.userText
+    );
+  }
+
   return cx(
-    "max-w-full rounded-2xl border p-4 break-words [overflow-wrap:anywhere] shadow-[0_10px_30px_rgba(0,0,0,0.22)]",
-    role === "user" ? theme.userBubble : theme.assistantBubble,
-    role === "user" ? theme.userText : theme.assistantText,
-    theme.panelBorder
+    "min-w-0 max-w-full break-words [overflow-wrap:anywhere]",
+    theme.assistantText
   );
 }
 
@@ -2986,13 +2992,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       loading && message.role === "assistant" && message.id === messages[messages.length - 1]?.id;
 
                     const bubbleWidthClass =
-                      message.role === "user" ? USER_BUBBLE_CLASS : ASSISTANT_BUBBLE_CLASS;
+                      message.role === "user"
+                        ? USER_BUBBLE_CLASS
+                        : cx(ASSISTANT_BUBBLE_CLASS, "mx-auto");
 
                     return (
                       <div key={message.id} className="space-y-2">
-                        <div className={`${bubbleWidthClass} mx-auto ${getBubbleClass(activeTheme, message.role)}`}>
-                          <div className="mb-3 flex items-center justify-between gap-3">
-                            <div className="text-xs font-medium opacity-70">
+                        <div className={cx(bubbleWidthClass, getBubbleClass(activeTheme, message.role))}>
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="text-[11px] font-medium opacity-60">
                               {message.role === "user" ? "You" : "Assistant"}
                             </div>
 
@@ -3001,10 +3009,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 type="button"
                                 onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
                                 className={cx(
-                                  "rounded-lg px-2 py-1 text-xs",
+                                  "rounded-md px-1.5 py-1 text-[11px] transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
                                   message.role === "user"
-                                    ? "border border-white/10 bg-white/10 text-white transition hover:bg-white/20"
-                                    : getSecondaryButtonClass(activeTheme)
+                                    ? "text-white/70 hover:bg-black/10 hover:text-white"
+                                    : "text-white/50 hover:bg-white/5 hover:text-white/80"
                                 )}
                                 aria-label="Copy message"
                               >
@@ -3052,7 +3060,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               <img
                                 src={message.image_url}
                                 alt={message.image_name || "Uploaded image"}
-                                className="max-h-56 rounded-xl border border-white/10 object-contain"
+                                className="max-h-56 max-w-full rounded-xl border border-white/10 object-contain"
                               />
                             </div>
                           )}
@@ -3085,17 +3093,17 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                           {isStreamingAssistant ? <span className="ml-1 inline-block animate-pulse">▍</span> : null}
                           {message.role === "assistant" && message.content.trim() && !isStreamingAssistant ? (
-                            <div className="mt-4 flex items-center gap-2 border-t border-white/10 pt-3">
-                              <span className="text-xs opacity-60">Was this helpful?</span>
+                            <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+                              <span className="mr-1 text-[11px] opacity-50">Was this helpful?</span>
 
                               <button
                                 type="button"
                                 onClick={() => handleMessageFeedback(message.id, "up")}
                                 className={cx(
-                                  "rounded-full border px-2.5 py-1 text-xs transition",
+                                  "h-7 w-7 rounded-full border border-transparent text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
                                   message.feedback === "up"
                                     ? "border-green-400/50 bg-green-500/15 text-green-200"
-                                    : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                                    : "text-white/60 hover:bg-white/5 hover:text-white"
                                 )}
                                 aria-label="Mark assistant response as helpful"
                               >
@@ -3106,10 +3114,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 type="button"
                                 onClick={() => handleMessageFeedback(message.id, "down")}
                                 className={cx(
-                                  "rounded-full border px-2.5 py-1 text-xs transition",
+                                  "h-7 w-7 rounded-full border border-transparent text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
                                   message.feedback === "down"
                                     ? "border-red-400/50 bg-red-500/15 text-red-200"
-                                    : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                                    : "text-white/60 hover:bg-white/5 hover:text-white"
                                 )}
                                 aria-label="Mark assistant response as not helpful"
                               >
