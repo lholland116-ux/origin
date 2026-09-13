@@ -207,7 +207,7 @@ const TOOLTIP_TEXT = {
   theme: "Choose chat colors",
 } as const;
 
-const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-3 sm:px-4 min-w-0 overflow-x-hidden";
+const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 min-w-0 overflow-x-hidden";
 const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl min-w-0";
 const USER_BUBBLE_CLASS = "w-full max-w-2xl min-w-0";
 
@@ -2370,7 +2370,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         )}
 
         <div className="flex h-full overflow-hidden">
-          <aside className={cx("hidden h-full w-80 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
+          <aside className={cx("hidden h-full w-64 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
             <div className={cx("sticky top-0 border-b p-4 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               <div className="truncate text-sm font-semibold">{userEmail}</div>
 
@@ -2407,8 +2407,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
           <section className="flex h-full min-w-0 flex-1 flex-col overflow-x-hidden bg-transparent">
             <div className={cx("sticky top-0 z-20 border-b backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
-              <div className={`${CONTENT_RAIL_CLASS} py-2`}>
-                <div className="flex items-start justify-between gap-4">
+              <div className={`${CONTENT_RAIL_CLASS} py-1.5`}>
+                <div className="flex flex-wrap items-center justify-between gap-2 md:flex-nowrap">
                   <div className="flex min-w-0 items-start gap-3">
                     <button
                       type="button"
@@ -2425,14 +2425,36 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     </div>
                   </div>
 
-                  <div className="hidden items-start gap-2 md:flex">
-                    <div className={cx("pt-1 text-right text-xs", activeTheme.mutedText)}>{modeLabel}</div>
+                  <div className="flex w-full min-w-0 flex-wrap items-center gap-2 md:w-auto md:flex-nowrap md:justify-end">
+                    <Tooltip content={TOOLTIP_TEXT.standard}>
+                      <button
+                        type="button"
+                        onClick={() => handleModeChange(false)}
+                        disabled={loading}
+                        className={getModeButtonClass(activeTheme, !useWebSearch)}
+                      >
+                        Standard
+                      </button>
+                    </Tooltip>
+
+                    <Tooltip content={TOOLTIP_TEXT.webSearch}>
+                      <button
+                        type="button"
+                        onClick={() => handleModeChange(true)}
+                        disabled={loading}
+                        className={getModeButtonClass(activeTheme, useWebSearch)}
+                      >
+                        Web Search
+                      </button>
+                    </Tooltip>
+
+                    <span className={cx("text-xs", activeTheme.mutedText)}>{modeLabel}</span>
 
                     <Tooltip content={TOOLTIP_TEXT.theme}>
                       <button
                         type="button"
                         onClick={() => setThemePickerOpen((prev) => !prev)}
-                        className={cx("inline-flex h-9 w-9 items-center justify-center", getSecondaryButtonClass(activeTheme))}
+                        className={cx("hidden h-9 w-9 items-center justify-center md:inline-flex", getSecondaryButtonClass(activeTheme))}
                         aria-label="Open theme picker"
                       >
                         <Palette className="h-4 w-4" />
@@ -2442,60 +2464,34 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <Tooltip content={TOOLTIP_TEXT.help}>
                       <Link
                         href="/help"
-                        className={cx("inline-flex h-9 w-9 items-center justify-center", getSecondaryButtonClass(activeTheme))}
+                        className={cx("hidden h-9 w-9 items-center justify-center md:inline-flex", getSecondaryButtonClass(activeTheme))}
+                        aria-label="Open help"
+                      >
+                        <HelpCircle className="h-4 w-4" />
+                      </Link>
+                    </Tooltip>
+
+                    <Tooltip content={TOOLTIP_TEXT.theme}>
+                      <button
+                        type="button"
+                        onClick={() => setThemePickerOpen((prev) => !prev)}
+                        className={cx("inline-flex items-center gap-2 md:hidden", getSecondaryButtonClass(activeTheme))}
+                      >
+                        <Palette className="h-4 w-4" />
+                        Theme
+                      </button>
+                    </Tooltip>
+
+                    <Tooltip content={TOOLTIP_TEXT.help}>
+                      <Link
+                        href="/help"
+                        className={cx("inline-flex h-9 w-9 items-center justify-center md:hidden", getSecondaryButtonClass(activeTheme))}
                         aria-label="Open help"
                       >
                         <HelpCircle className="h-4 w-4" />
                       </Link>
                     </Tooltip>
                   </div>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Tooltip content={TOOLTIP_TEXT.standard}>
-                    <button
-                      type="button"
-                      onClick={() => handleModeChange(false)}
-                      disabled={loading}
-                      className={getModeButtonClass(activeTheme, !useWebSearch)}
-                    >
-                      Standard
-                    </button>
-                  </Tooltip>
-
-                  <Tooltip content={TOOLTIP_TEXT.webSearch}>
-                    <button
-                      type="button"
-                      onClick={() => handleModeChange(true)}
-                      disabled={loading}
-                      className={getModeButtonClass(activeTheme, useWebSearch)}
-                    >
-                      Web Search
-                    </button>
-                  </Tooltip>
-
-                  <Tooltip content={TOOLTIP_TEXT.theme}>
-                    <button
-                      type="button"
-                      onClick={() => setThemePickerOpen((prev) => !prev)}
-                      className={cx("inline-flex items-center gap-2 md:hidden", getSecondaryButtonClass(activeTheme))}
-                    >
-                      <Palette className="h-4 w-4" />
-                      Theme
-                    </button>
-                  </Tooltip>
-
-                  <span className={cx("text-xs md:hidden", activeTheme.mutedText)}>{modeLabel}</span>
-
-                  <Tooltip content={TOOLTIP_TEXT.help}>
-                    <Link
-                      href="/help"
-                      className={cx("inline-flex h-9 w-9 items-center justify-center md:hidden", getSecondaryButtonClass(activeTheme))}
-                      aria-label="Open help"
-                    >
-                      <HelpCircle className="h-4 w-4" />
-                    </Link>
-                  </Tooltip>
                 </div>
 
                 {themePickerOpen && (
@@ -2509,8 +2505,31 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
                 )}
 
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+              <div className={`${CONTENT_RAIL_CLASS} py-6 sm:py-8`}>
+                {uiError && (
+                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
+                    {uiError}
+                  </div>
+                )}
+
+                {documentError && (
+                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
+                    {documentError}
+                  </div>
+                )}
+
+                {speechError && (
+                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
+                    {speechError}
+                  </div>
+                )}
+
                 {messages.length === 0 && (
-                  <div className="mt-3">
+                  <div className="mb-6">
                     <div className={cx("mb-2 text-[11px] uppercase tracking-wide", activeTheme.mutedText)}>
                       Conversation starters
                     </div>
@@ -2543,30 +2562,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-              <div className={`${CONTENT_RAIL_CLASS} py-5`}>
-                {uiError && (
-                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
-                    {uiError}
-                  </div>
-                )}
-
-                {documentError && (
-                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
-                    {documentError}
-                  </div>
-                )}
-
-                {speechError && (
-                  <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto mb-4 rounded-xl border border-red-900 bg-red-950/30 p-3 text-sm text-red-300`}>
-                    {speechError}
-                  </div>
-                )}
-
-                <div className="space-y-4">
+                <div className="space-y-5 sm:space-y-6">
                   {messages.map((message) => {
                     const sources = Array.isArray(message.sources) ? dedupeSources(message.sources) : [];
                     const sourceCount =
