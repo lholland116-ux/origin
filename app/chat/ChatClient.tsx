@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import NextImage from "next/image";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -124,6 +125,19 @@ type UploadedDocument = {
 
 type MessageFeedbackRating = "up" | "down";
 
+export type PendingImage = {
+  id: string;
+  name: string;
+  path: string;
+  previewUrl: string;
+};
+
+export type MessageImage = {
+  image_path: string;
+  image_name: string;
+  image_url?: string;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -135,6 +149,7 @@ type Message = {
   image_path?: string | null;
   image_name?: string | null;
   image_url?: string | null;
+  images?: MessageImage[];
   documents?: UploadedDocument[];
 };
 
@@ -418,6 +433,8 @@ const COMPOSER_TEXTAREA_MAX_HEIGHT = 180;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
+const FREE_MAX_PENDING_IMAGES = 1;
+const PRO_MAX_PENDING_IMAGES = 3;
 const DOCUMENT_POLL_INTERVAL_MS = 2000;
 const DOCUMENT_POLL_MAX_ATTEMPTS = 10;
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 30_000;
@@ -437,6 +454,104 @@ const CONVERSATION_STARTERS = [
   "Summarize this image or document for me",
   "Explain something step by step",
 ] as const;
+
+export function getMaxPendingImages(plan: string | null | undefined): number {
+  return plan === "pro" ? PRO_MAX_PENDING_IMAGES : FREE_MAX_PENDING_IMAGES;
+}
+
+export function getPendingImageLimitMessage(plan: string | null | undefined): string {
+  return plan === "pro"
+    ? "You can attach up to 3 images per message."
+    : "Free plans allow one image per message.";
+}
+
+export function validateImageBatch(
+  files: Array<Pick<File, "type" | "size">>
+): string | null {
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) {
+      return "Please choose a valid image file.";
+    }
+
+    if (file.size > MAX_IMAGE_FILE_BYTES) {
+      return "Image file is too large.";
+    }
+  }
+
+  return null;
+}
+
+export function canAddPendingImages(
+  currentCount: number,
+  incomingCount: number,
+  plan: string | null | undefined
+): boolean {
+  return currentCount + incomingCount <= getMaxPendingImages(plan);
+}
+
+export function buildStoredImagePayload(images: PendingImage[]) {
+  return images.map((image) => ({
+    imagePath: image.path,
+    imageName: image.name,
+  }));
+}
+
+export function buildOptimisticImageAttachments(images: PendingImage[]): MessageImage[] {
+  return images.map((image) => ({
+    image_path: image.path,
+    image_name: image.name,
+    image_url: image.previewUrl,
+  }));
+}
+
+export function removePendingImage(images: PendingImage[], id: string): PendingImage[] {
+  return images.filter((image) => image.id !== id);
+}
+
+export function removeSubmittedPendingImages(
+  images: PendingImage[],
+  submittedIds: string[]
+): PendingImage[] {
+  const submittedIdSet = new Set(submittedIds);
+  return images.filter((image) => !submittedIdSet.has(image.id));
+}
+
+export function restorePendingImageSnapshot(
+  current: PendingImage[],
+  snapshot: PendingImage[]
+): PendingImage[] {
+  const currentIds = new Set(current.map((image) => image.id));
+  return [...snapshot.filter((image) => !currentIds.has(image.id)), ...current];
+}
+
+export function rollbackOptimisticMessages<T extends { id: string }>(
+  messages: T[],
+  optimisticIds: string[]
+): T[] {
+  const optimisticIdSet = new Set(optimisticIds);
+  return messages.filter((message) => !optimisticIdSet.has(message.id));
+}
+
+export type PendingImageCleanupReason = "discard" | "upload-failure" | "request-failure" | "accepted";
+
+export function getPendingImageCleanupPaths(
+  images: PendingImage[],
+  reason: PendingImageCleanupReason
+): string[] {
+  if (reason === "request-failure" || reason === "accepted") {
+    return [];
+  }
+
+  return images.map((image) => image.path).filter(Boolean);
+}
+
+export function canSubmitWithPendingImages(
+  input: string,
+  pendingImageCount: number,
+  readyDocumentCount: number
+): boolean {
+  return Boolean(input.trim() || pendingImageCount > 0 || readyDocumentCount > 0);
+}
 
 const TOOLTIP_TEXT = {
   help: "Open help and frequently asked questions",
@@ -1101,10 +1216,8 @@ export default function ChatClient({
   const [isTypingFocused, setIsTypingFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
-  const [imageName, setImageName] = useState("");
-  const [imagePath, setImagePath] = useState<string | null>(null);
-  const [uploadingImage, setUploadingImage] = useState(false);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [uploadingImages, setUploadingImages] = useState(false);
   const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>([]);
   const [conversationDocuments, setConversationDocuments] = useState<UploadedDocument[]>([]);
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
@@ -1130,6 +1243,7 @@ export default function ChatClient({
   const [upgradeModalMessage, setUpgradeModalMessage] = useState(
     "This feature is available on the Pro plan."
   );
+  const planRef = useRef<Plan>("free");
 
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -1172,6 +1286,10 @@ export default function ChatClient({
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
+
+  useEffect(() => {
+    planRef.current = plan;
+  }, [plan]);
 
   useLayoutEffect(() => {
     const textarea = composerTextareaRef.current;
@@ -1319,20 +1437,32 @@ export default function ChatClient({
   const modeLabel = useMemo(() => {
     if (useWebSearch) return "Using web search";
     if (isListening) return "Voice input active";
-    if (imageBase64) return "Image attached";
+    if (pendingImages.length > 0) {
+      return pendingImages.length === 1
+        ? "Image attached"
+        : `${pendingImages.length} images attached`;
+    }
     if (composerDocuments.length > 0) return "Documents attached";
     return "Standard assistant";
-  }, [useWebSearch, isListening, imageBase64, composerDocuments.length]);
+  }, [useWebSearch, isListening, pendingImages.length, composerDocuments.length]);
 
   const isLimitReached = Boolean(usage && usage.limit > 0 && usage.remaining <= 0);
+  const pendingImageLimitExceeded =
+    pendingImages.length > getMaxPendingImages(plan);
+
+  useEffect(() => {
+    if (pendingImageLimitExceeded) {
+      setUiError(getPendingImageLimitMessage(plan));
+    }
+  }, [pendingImageLimitExceeded, plan]);
 
   const composerDisabled =
-    loading || uploadingImage || isUploadingDocuments || isLimitReached;
+    loading || uploadingImages || isUploadingDocuments || isLimitReached;
 
   const micDisabled =
     !speechSupported ||
     loading ||
-    uploadingImage ||
+    uploadingImages ||
     isUploadingDocuments ||
     isLimitReached ||
     hasPendingDocuments;
@@ -1593,7 +1723,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   useEffect(() => {
   if (
     !isListening ||
-    (!loading && !isUploadingDocuments && !uploadingImage)
+    (!loading && !isUploadingDocuments && !uploadingImages)
   ) {
     return;
   }
@@ -1612,7 +1742,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   isListening,
   isUploadingDocuments,
   loading,
-  uploadingImage,
+  uploadingImages,
 ]);
 
   useEffect(() => {
@@ -1664,13 +1794,52 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     setStoredChatThemeId(themeId);
   }
 
-  function clearImage(): void {
-    setImageBase64(null);
-    setImageName("");
-    setImagePath(null);
+  async function removePendingImageObjects(
+    images: PendingImage[],
+    reason: PendingImageCleanupReason
+  ): Promise<void> {
+    const paths = getPendingImageCleanupPaths(images, reason);
+    if (paths.length === 0) return;
 
+    const { error } = await supabase.storage.from("chat-images").remove(paths);
+    if (error) {
+      console.error("Pending image cleanup error:", error);
+    }
+  }
+
+  function resetImageInput(): void {
     if (imageInputRef.current) {
       imageInputRef.current.value = "";
+    }
+  }
+
+  function discardPendingImages(): void {
+    const discardedImages = pendingImages;
+    setPendingImages([]);
+    resetImageInput();
+
+    if (discardedImages.length > 0) {
+      void removePendingImageObjects(discardedImages, "discard");
+    }
+  }
+
+  function clearSubmittedPendingImages(imageIds: string[]): void {
+    setPendingImages((current) => removeSubmittedPendingImages(current, imageIds));
+    resetImageInput();
+  }
+
+  function restorePendingImages(snapshot: PendingImage[]): void {
+    setPendingImages((current) => restorePendingImageSnapshot(current, snapshot));
+    resetImageInput();
+  }
+
+  function removePendingImageById(id: string): void {
+    const image = pendingImages.find((pendingImage) => pendingImage.id === id);
+    setPendingImages((current) => removePendingImage(current, id));
+    resetImageInput();
+
+    if (image) {
+      void removePendingImageObjects([image], "discard");
     }
   }
 
@@ -1767,7 +1936,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   function handleOpenImagePicker(): void {
-    if (loading || uploadingImage || isUploadingDocuments || isLimitReached || useWebSearch) {
+    if (loading || uploadingImages || isUploadingDocuments || isLimitReached || useWebSearch) {
+      return;
+    }
+
+    if (!canAddPendingImages(pendingImages.length, 1, plan)) {
+      setUiError(getPendingImageLimitMessage(plan));
       return;
     }
 
@@ -1777,7 +1951,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleStartListening(): Promise<void> {
   if (
     loading ||
-    uploadingImage ||
+    uploadingImages ||
     isUploadingDocuments ||
     isLimitReached ||
     hasPendingDocuments
@@ -2112,6 +2286,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleSignOut() {
     try {
       setUiError("");
+      discardPendingImages();
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       router.push("/login");
@@ -2143,7 +2318,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     setSidebarLoading(true);
     clearTransientErrors();
-    clearImage();
+    discardPendingImages();
     clearComposerDocuments();
     setInput("");
 
@@ -2182,7 +2357,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     setSidebarLoading(true);
     clearTransientErrors();
-    clearImage();
+    discardPendingImages();
     clearComposerDocuments();
     clearConversationDocuments();
     setInput("");
@@ -2295,29 +2470,64 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
 
     if (useWebSearch) {
       setUiError("Image upload is only available in Standard mode.");
-      clearImage();
       return;
     }
 
-    setUploadingImage(true);
+    const currentPlan = planRef.current;
+    if (!canAddPendingImages(pendingImages.length, files.length, currentPlan)) {
+      setUiError(getPendingImageLimitMessage(currentPlan));
+      return;
+    }
+
+    const validationError = validateImageBatch(files);
+    if (validationError) {
+      setUiError(validationError);
+      return;
+    }
+
+    setUploadingImages(true);
     setUiError("");
     setSpeechError(null);
 
+    const uploadedBatch: PendingImage[] = [];
+
     try {
-      const uploaded = await uploadImageToStorage(file);
-      setImageBase64(uploaded.dataUrl);
-      setImageName(uploaded.name);
-      setImagePath(uploaded.path);
+      for (const file of files) {
+        const uploaded = await uploadImageToStorage(file);
+        uploadedBatch.push({
+          id: createId(),
+          name: uploaded.name,
+          path: uploaded.path,
+          previewUrl: uploaded.dataUrl,
+        });
+      }
+
+      const latestPlan = planRef.current;
+      if (!canAddPendingImages(pendingImages.length, uploadedBatch.length, latestPlan)) {
+        throw new Error(getPendingImageLimitMessage(latestPlan));
+      }
+
+      setPendingImages((current) => [...current, ...uploadedBatch]);
     } catch (error) {
-      clearImage();
-      setUiError(error instanceof Error ? error.message : "Failed to process image.");
+      if (uploadedBatch.length > 0) {
+        await removePendingImageObjects(uploadedBatch, "upload-failure");
+      }
+
+      const message = error instanceof Error ? error.message : "";
+      const limitMessage = getPendingImageLimitMessage(planRef.current);
+      setUiError(
+        message === limitMessage || message === "Free plans allow one image per message."
+          ? message
+          : "Could not upload all selected images."
+      );
     } finally {
-      setUploadingImage(false);
+      setUploadingImages(false);
     }
   }
 
@@ -2325,10 +2535,16 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     event.preventDefault();
 
     const trimmed = input.trim();
-    const hasImage = Boolean(imageBase64);
+    const pendingImageSnapshot = pendingImages.map((image) => ({ ...image }));
+    const hasImages = pendingImageSnapshot.length > 0;
     const hasReadyDocuments = readyDocumentIds.length > 0;
 
-    if (loading || uploadingImage || isUploadingDocuments) return;
+    if (loading || uploadingImages || isUploadingDocuments) return;
+
+    if (hasImages && !canAddPendingImages(0, pendingImageSnapshot.length, plan)) {
+      setUiError(getPendingImageLimitMessage(plan));
+      return;
+    }
 
     if (isLimitReached) {
       if (plan !== "pro") {
@@ -2352,7 +2568,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (useWebSearch && (hasImage || composerDocuments.length > 0)) {
+    if (useWebSearch && (hasImages || composerDocuments.length > 0)) {
       setUiError("Web Search mode does not support file upload.");
       return;
     }
@@ -2362,7 +2578,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (!trimmed && !hasImage) {
+    if (!trimmed && !hasImages) {
       if (hasReadyDocuments) {
         setInput("Please summarize the attached document(s).");
       } else {
@@ -2380,7 +2596,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       trimmed || (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
 
     const attachmentNotes = [
-      hasImage ? `[Image attached${imageName ? `: ${imageName}` : ""}]` : "",
+      hasImages
+        ? `[${pendingImageSnapshot.length === 1 ? "Image" : "Images"} attached: ${pendingImageSnapshot
+            .map((image) => image.name)
+            .join(", ")}]`
+        : "",
       hasReadyDocuments
         ? `[Documents attached: ${readyComposerDocuments.map((doc) => doc.file_name).join(", ")}]`
         : "",
@@ -2391,13 +2611,13 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     const userVisibleContent = [effectiveMessage, attachmentNotes].filter(Boolean).join("\n\n");
     const sentDocuments = cloneDocuments(readyComposerDocuments);
 
+    const optimisticImages = buildOptimisticImageAttachments(pendingImageSnapshot);
+    const optimisticUserId = createId();
     const userMessage: Message = {
-      id: createId(),
+      id: optimisticUserId,
       role: "user",
       content: userVisibleContent,
-      image_path: imagePath,
-      image_name: imageName,
-      image_url: imageBase64,
+      ...(hasImages ? { images: optimisticImages } : {}),
       documents: sentDocuments,
     };
 
@@ -2412,14 +2632,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       documents: [],
     };
 
-    const payloadImage = imageBase64;
-    const payloadImagePath = imagePath;
-    const payloadImageName = imageName;
+    const payloadImages = buildStoredImagePayload(pendingImageSnapshot);
     const payloadDocumentIds = [...readyDocumentIds];
 
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
-    clearImage();
     clearComposerDocuments();
     setLoading(true);
 
@@ -2428,6 +2645,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     abortRef.current = controller;
 
     const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat";
+    let responseAccepted = false;
 
     try {
       const res = await fetch(endpoint, {
@@ -2437,10 +2655,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         body: JSON.stringify({
           conversationId,
           message: effectiveMessage,
-          imageBase64: payloadImage,
-          imagePath: payloadImagePath,
-          imageName: payloadImageName,
           documentIds: payloadDocumentIds,
+          ...(useWebSearch || !hasImages ? {} : { images: payloadImages }),
         }),
       });
 
@@ -2459,6 +2675,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
         const text = await res.text();
         throw new Error(text || "Request failed.");
+      }
+
+      responseAccepted = true;
+      if (hasImages) {
+        clearSubmittedPendingImages(pendingImageSnapshot.map((image) => image.id));
       }
 
       if (useWebSearch) {
@@ -2508,10 +2729,19 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       trackGaEvent("chat_message_sent", {
         plan,
         mode: useWebSearch ? "web_search" : "standard",
-        has_image: hasImage,
+        has_image: hasImages,
         has_documents: hasReadyDocuments,
       });
     } catch (error) {
+      if (!responseAccepted) {
+        restorePendingImages(pendingImageSnapshot);
+        setMessages((prev) => rollbackOptimisticMessages(prev, [optimisticUserId, assistantId]));
+        setUiError(
+          error instanceof Error ? error.message : "Something went wrong. Please try again."
+        );
+        return;
+      }
+
       if (error instanceof DOMException && error.name === "AbortError") {
         updateAssistantMessage(assistantId, (msg) => ({
           ...msg,
@@ -2552,7 +2782,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         return;
       }
     
-      clearImage();
+      discardPendingImages();
       clearComposerDocuments();
     }
 
@@ -3077,7 +3307,25 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                             />
                           </div>
 
-                          {message.image_url && (
+                          {message.images && message.images.length > 0 ? (
+                            <div
+                              className={cx(
+                                "mt-3 grid max-w-full gap-2",
+                                message.images.length > 1 ? "grid-cols-2" : "grid-cols-1"
+                              )}
+                            >
+                              {message.images.map((image, index) =>
+                                image.image_url ? (
+                                  <img
+                                    key={`${message.id}-image-${index}`}
+                                    src={image.image_url}
+                                    alt={image.image_name || "Uploaded image"}
+                                    className="max-h-56 max-w-full rounded-xl border border-white/10 object-contain"
+                                  />
+                                ) : null
+                              )}
+                            </div>
+                          ) : message.image_url ? (
                             <div className="mt-3">
                               <img
                                 src={message.image_url}
@@ -3085,7 +3333,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 className="max-h-56 max-w-full rounded-xl border border-white/10 object-contain"
                               />
                             </div>
-                          )}
+                          ) : null}
 
                           {messageDocuments.length > 0 && (
                             <div className="mt-3 flex flex-wrap gap-2">
@@ -3166,8 +3414,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs ${activeTheme.mutedText}`}>
                       {useWebSearch
                         ? "Using web search..."
-                        : uploadingImage
-                          ? "Processing image..."
+                        : uploadingImages
+                          ? "Processing images..."
                           : isUploadingDocuments || hasPendingDocuments
                             ? "Processing documents..."
                             : "Thinking..."}
@@ -3185,6 +3433,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   ref={imageInputRef}
                   type="file"
                   accept="image/*"
+                  multiple={plan === "pro"}
                   onChange={handleImageChange}
                   disabled={composerDisabled || useWebSearch}
                   className="hidden"
@@ -3223,26 +3472,52 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
                 )}
 
-                {!useWebSearch && imageBase64 && (
+                {!useWebSearch && pendingImages.length > 0 && (
                   <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-white/80">
-                        {imageName || "Image attached"}
-                      </div>
+                    <div className="grid max-w-full grid-cols-1 gap-2 sm:grid-cols-3">
+                      {pendingImages.map((image) => (
+                        <div
+                          key={image.id}
+                          className="min-w-0 rounded-xl border border-white/10 p-1.5"
+                        >
+                          <div className="flex min-w-0 items-center justify-between gap-2">
+                            <span
+                              className="min-w-0 truncate text-xs text-white/80"
+                              title={image.name}
+                            >
+                              {image.name}
+                            </span>
 
-                      {!loading && (
-                        <button type="button" onClick={clearImage} className={getSecondaryButtonClass(activeTheme)}>
-                          Remove
-                        </button>
-                      )}
-                    </div>
+                            {!loading && (
+                              <button
+                                type="button"
+                                onClick={() => removePendingImageById(image.id)}
+                                className={cx(
+                                  "shrink-0 rounded-md px-1.5 py-1 text-[11px] text-white/60 transition hover:bg-white/10 hover:text-white",
+                                  "focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+                                )}
+                                aria-label={`Remove image ${image.name}`}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
 
-                    <div className="mt-2">
-                      <img
-                        src={imageBase64}
-                        alt="Selected upload preview"
-                        className="max-h-24 max-w-full rounded-xl border border-white/10 object-contain"
-                      />
+                          <NextImage
+                            src={image.previewUrl}
+                            alt={`Selected upload preview: ${image.name}`}
+                            width={256}
+                            height={96}
+                            unoptimized
+                            className={cx(
+                              "mt-1 max-w-full rounded-lg border border-white/10",
+                              pendingImages.length === 1
+                                ? "max-h-24 object-contain"
+                                : "h-24 w-full object-cover"
+                            )}
+                          />
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -3278,8 +3553,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           ? isListening
                             ? "Listening… tap mic to stop."
                             : "Ask something with web search..."
-                          : imageBase64
-                            ? "Add context for the image, or send without text..."
+                          : pendingImages.length > 0
+                            ? pendingImages.length === 1
+                              ? "Add context for the image, or send without text..."
+                              : "Add context for the images, or send without text..."
                             : composerDocuments.length > 0
                               ? hasPendingDocuments
                                 ? "Please wait while documents finish processing..."
@@ -3383,9 +3660,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         <Tooltip content={TOOLTIP_TEXT.send}>
                           <button
                             type="submit"
-                            disabled={
+                              disabled={
                               composerDisabled ||
-                              (!input.trim() && !imageBase64 && readyDocumentIds.length === 0)
+                              pendingImageLimitExceeded ||
+                              !canSubmitWithPendingImages(
+                                input,
+                                pendingImages.length,
+                                readyDocumentIds.length
+                              )
                             }
                             className={cx(
                               "flex h-11 min-w-11 items-center justify-center rounded-xl px-3 text-white transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
