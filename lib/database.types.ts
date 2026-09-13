@@ -873,6 +873,41 @@ export type Database = {
           },
         ]
       }
+      message_images: {
+        Row: {
+          created_at: string
+          id: string
+          image_name: string
+          message_id: string
+          ordinal: number
+          storage_path: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          image_name: string
+          message_id: string
+          ordinal: number
+          storage_path: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          image_name?: string
+          message_id?: string
+          ordinal?: number
+          storage_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_images_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages: {
         Row: {
           content: string
