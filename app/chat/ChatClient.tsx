@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
@@ -820,8 +820,12 @@ function getSecondaryButtonClass(theme: ChatTheme): string {
 
 function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
   return isActive
-    ? cx("rounded-xl px-3 py-2 text-sm transition", theme.buttonPrimary)
-    : getSecondaryButtonClass(theme);
+    ? cx("rounded-lg px-2.5 py-1.5 text-xs transition", theme.buttonPrimary)
+    : cx(
+        "rounded-lg border px-2.5 py-1.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50",
+        theme.panelBorder,
+        "text-white/90 hover:bg-white/10"
+      );
 }
 
 function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
@@ -1106,6 +1110,8 @@ export default function ChatClient({
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [selectedThemeId, setSelectedThemeId] = useState(DEFAULT_CHAT_THEME_ID);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [profileMenuPosition, setProfileMenuPosition] = useState({ top: 0, left: 0 });
   const [plan, setPlan] = useState<Plan>("free");
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [upgradeModalTitle, setUpgradeModalTitle] = useState("Upgrade to Pro");
@@ -1148,8 +1154,119 @@ export default function ChatClient({
   const nativeListeningStateListenerRef =
     useRef<PluginListenerHandle | null>(null);
   const nativeSpeechAvailableRef = useRef(false);
+  const desktopProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const mobileProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
+
+  const getProfileTrigger = useCallback(
+    () => (mobileMenuOpen ? mobileProfileTriggerRef.current : desktopProfileTriggerRef.current),
+    [mobileMenuOpen]
+  );
+
+  const closeProfileMenu = useCallback(
+    (restoreFocus = true) => {
+      setProfileMenuOpen(false);
+      setThemePickerOpen(false);
+
+      if (restoreFocus) {
+        window.requestAnimationFrame(() => getProfileTrigger()?.focus());
+      }
+    },
+    [getProfileTrigger]
+  );
+
+  const updateProfileMenuPosition = useCallback(() => {
+    const trigger = getProfileTrigger();
+    const menu = profileMenuRef.current;
+
+    if (!trigger || !menu) return;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const viewportLeft = window.visualViewport?.offsetLeft ?? 0;
+    const viewportTop = window.visualViewport?.offsetTop ?? 0;
+    const viewportPadding = 12;
+    const menuGap = 8;
+
+    const minLeft = viewportLeft + viewportPadding;
+    const maxLeft = viewportLeft + viewportWidth - menuRect.width - viewportPadding;
+    const left = Math.min(
+      Math.max(triggerRect.right - menuRect.width, minLeft),
+      Math.max(minLeft, maxLeft)
+    );
+
+    const spaceBelow = viewportTop + viewportHeight - triggerRect.bottom;
+    const placeBelow =
+      spaceBelow >= menuRect.height + menuGap + viewportPadding ||
+      triggerRect.top < menuRect.height + menuGap + viewportPadding;
+    const preferredTop = placeBelow
+      ? triggerRect.bottom + menuGap
+      : triggerRect.top - menuRect.height - menuGap;
+    const minTop = viewportTop + viewportPadding;
+    const maxTop = viewportTop + viewportHeight - menuRect.height - viewportPadding;
+    const top = Math.min(Math.max(preferredTop, minTop), Math.max(minTop, maxTop));
+
+    setProfileMenuPosition({ top, left });
+  }, [getProfileTrigger]);
+
+  useLayoutEffect(() => {
+    if (!profileMenuOpen) return;
+    updateProfileMenuPosition();
+  }, [profileMenuOpen, themePickerOpen, updateProfileMenuPosition]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+
+    const handleViewportResize = () => {
+      window.requestAnimationFrame(updateProfileMenuPosition);
+    };
+
+    window.addEventListener("resize", handleViewportResize);
+    window.visualViewport?.addEventListener("resize", handleViewportResize);
+
+    return () => {
+      window.removeEventListener("resize", handleViewportResize);
+      window.visualViewport?.removeEventListener("resize", handleViewportResize);
+    };
+  }, [profileMenuOpen, updateProfileMenuPosition]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+
+      if (
+        profileMenuRef.current?.contains(target) ||
+        desktopProfileTriggerRef.current?.contains(target) ||
+        mobileProfileTriggerRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      closeProfileMenu();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeProfileMenu();
+      }
+    };
+
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+    document.addEventListener("keydown", handleEscape, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+      document.removeEventListener("keydown", handleEscape, true);
+    };
+  }, [closeProfileMenu, profileMenuOpen]);
 
   const readyComposerDocuments = useMemo(
     () => composerDocuments.filter((doc) => doc.extraction_status === "ready"),
@@ -2442,77 +2559,141 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   function renderSidebarUtilityActions(isMobile = false) {
-    const utilityRowClass = isMobile
-      ? cx("w-full text-left", getSecondaryButtonClass(activeTheme))
-      : cx(
-          "w-full rounded-lg px-3 py-1.5 text-left text-sm transition",
+    return (
+      <button
+        ref={isMobile ? mobileProfileTriggerRef : desktopProfileTriggerRef}
+        type="button"
+        onClick={() => {
+          if (profileMenuOpen) {
+            closeProfileMenu();
+            return;
+          }
+
+          setThemePickerOpen(false);
+          setProfileMenuOpen(true);
+        }}
+        className={cx(
+          "flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition",
           activeTheme.mutedText,
           "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/20"
-        );
+        )}
+        aria-label="Open profile and settings"
+        aria-haspopup="dialog"
+        aria-expanded={profileMenuOpen}
+        aria-controls="chat-profile-settings"
+      >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-white">
+          {userEmail.trim().charAt(0).toUpperCase() || "A"}
+        </span>
+        <span className="min-w-0 flex-1 truncate">{userEmail}</span>
+        <span className="shrink-0 text-[11px] text-white/50">
+          {plan === "pro" ? "Pro" : "Free"}
+        </span>
+        <ChevronDown className={cx("h-4 w-4 shrink-0 transition-transform", profileMenuOpen && "rotate-180")} />
+      </button>
+    );
+  }
+
+  function renderProfileSettingsMenu() {
+    if (!profileMenuOpen) return null;
 
     return (
-      <>
-        <Tooltip content={TOOLTIP_TEXT.account}>
+      <div
+        ref={profileMenuRef}
+        id="chat-profile-settings"
+        role="dialog"
+        aria-label="Profile and settings"
+        className={cx(
+          "fixed z-[60] w-[min(22rem,calc(100vw-1.5rem))] max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-2xl border p-3 shadow-2xl shadow-black/40",
+          activeTheme.panelBg,
+          activeTheme.panelBorder
+        )}
+        style={{ top: profileMenuPosition.top, left: profileMenuPosition.left }}
+      >
+        <div className="flex min-w-0 items-center gap-2 px-1 pb-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">
+            {userEmail.trim().charAt(0).toUpperCase() || "A"}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-white">{userEmail}</div>
+            <div className={cx("mt-0.5 text-xs", activeTheme.mutedText)}>
+              {plan === "pro" ? "Pro Plan" : "Free Plan"}
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-white/10 pt-2">
+          <button
+            type="button"
+            onClick={() => setThemePickerOpen((prev) => !prev)}
+            className={cx(
+              "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition",
+              activeTheme.mutedText,
+              "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/20"
+            )}
+            aria-expanded={themePickerOpen}
+            aria-controls="chat-theme-picker"
+          >
+            <span className="flex items-center gap-2">
+              <Palette className="h-4 w-4" />
+              Theme
+            </span>
+            {themePickerOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+
+          {themePickerOpen && (
+            <div id="chat-theme-picker" className="mt-2">
+              <ChatThemePicker
+                theme={activeTheme}
+                selectedThemeId={selectedThemeId}
+                onChange={handleThemeChange}
+                onClose={() => setThemePickerOpen(false)}
+              />
+            </div>
+          )}
+
           <button
             type="button"
             onClick={() => {
-              if (isMobile) setMobileMenuOpen(false);
+              closeProfileMenu(false);
+              if (mobileMenuOpen) setMobileMenuOpen(false);
               router.push("/account");
             }}
-            className={utilityRowClass}
+            className={cx(
+              "mt-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition",
+              activeTheme.mutedText,
+              "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/20"
+            )}
           >
             Account
           </button>
-        </Tooltip>
 
-        {plan !== "pro" && (
-          <Tooltip content="Upgrade to Pro">
+          {plan !== "pro" && (
             <button
               type="button"
               onClick={() => {
-                if (isMobile) setMobileMenuOpen(false);
+                closeProfileMenu(false);
+                if (mobileMenuOpen) setMobileMenuOpen(false);
                 router.push(BRAND.routes.pricing);
               }}
-              className={
-                isMobile
-                  ? cx("w-full px-3 py-2 text-left text-sm", activeTheme.buttonPrimary)
-                  : cx(
-                      "w-full rounded-lg px-3 py-1.5 text-left text-sm transition",
-                      "text-blue-300 hover:bg-blue-500/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
-                    )
-              }
+              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-blue-300 transition hover:bg-blue-500/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
             >
               Upgrade to Pro
             </button>
-          </Tooltip>
-        )}
+          )}
 
-        <Tooltip content={TOOLTIP_TEXT.help}>
-          <Link
-            href="/help"
-            onClick={() => {
-              if (isMobile) setMobileMenuOpen(false);
-            }}
-            className={utilityRowClass}
-          >
-            Help
-          </Link>
-        </Tooltip>
-
-        <Tooltip content={TOOLTIP_TEXT.signOut}>
           <button
             type="button"
-            onClick={handleSignOut}
-            className={
-              isMobile
-                ? cx("w-full text-left", getSecondaryButtonClass(activeTheme))
-                : "w-full rounded-lg px-3 py-1.5 text-left text-sm text-red-300/80 transition hover:bg-red-950/30 hover:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400/30"
-            }
+            onClick={() => {
+              closeProfileMenu(false);
+              void handleSignOut();
+            }}
+            className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-red-300/80 transition hover:bg-red-950/30 hover:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400/30"
           >
             Sign Out
           </button>
-        </Tooltip>
-      </>
+        </div>
+      </div>
     );
   }
 
@@ -2569,7 +2750,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               type="button"
               aria-label="Close menu overlay"
               className="absolute inset-0 bg-black/60"
-              onClick={() => setMobileMenuOpen(false)}
+              onClick={() => {
+                closeProfileMenu(false);
+                setMobileMenuOpen(false);
+              }}
             />
 
             <div className={cx("relative z-10 flex h-full w-80 max-w-[85vw] flex-col border-r", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
@@ -2603,7 +2787,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     {renderStatusMessages()}
                   </div>
 
-                  <button type="button" onClick={() => setMobileMenuOpen(false)} className={getSecondaryButtonClass(activeTheme)}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProfileMenu(false);
+                      setMobileMenuOpen(false);
+                    }}
+                    className={getSecondaryButtonClass(activeTheme)}
+                  >
                     Close
                   </button>
                 </div>
@@ -2621,6 +2812,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             </div>
           </div>
         )}
+
+        {renderProfileSettingsMenu()}
 
         <div className="flex h-full overflow-hidden">
           <aside className={cx("hidden h-full w-64 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
@@ -2672,24 +2865,26 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           <section className="flex h-full min-w-0 flex-1 flex-col overflow-x-hidden bg-transparent">
             <div className={cx("sticky top-0 z-20 border-b backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               <div className={`${CONTENT_RAIL_CLASS} py-1.5`}>
-                <div className="flex flex-wrap items-center justify-between gap-2 md:flex-nowrap">
-                  <div className="flex min-w-0 items-start gap-3">
+                <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 md:flex-nowrap">
+                  <div className="flex min-w-0 items-center gap-3">
                     <button
                       type="button"
                       onClick={() => setMobileMenuOpen(true)}
-                      className={cx("mt-0.5 px-2 py-1 text-sm md:hidden", getSecondaryButtonClass(activeTheme))}
+                      className={cx("px-2 py-1 text-sm md:hidden", getSecondaryButtonClass(activeTheme))}
                       aria-label="Open menu"
                     >
                       ☰
                     </button>
 
-                    <div className="min-w-0">
-                      <p className={cx("text-[11px]", activeTheme.mutedText)}>{BRAND.name}</p>
-                      <h1 className={cx("text-lg font-semibold", activeTheme.titleText)}>AI Assistant</h1>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <p className={cx("truncate text-sm font-semibold", activeTheme.titleText)}>{BRAND.name}</p>
+                      {modeLabel !== "Standard assistant" && (
+                        <span className={cx("truncate text-xs", activeTheme.mutedText)}>{modeLabel}</span>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex w-full min-w-0 flex-wrap items-center gap-2 md:w-auto md:flex-nowrap md:justify-end">
+                  <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 md:w-auto md:flex-nowrap md:justify-end">
                     <Tooltip content={TOOLTIP_TEXT.standard}>
                       <button
                         type="button"
@@ -2712,44 +2907,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       </button>
                     </Tooltip>
 
-                    <span className={cx("text-xs", activeTheme.mutedText)}>{modeLabel}</span>
-
-                    <Tooltip content={TOOLTIP_TEXT.theme}>
-                      <button
-                        type="button"
-                        onClick={() => setThemePickerOpen((prev) => !prev)}
-                        className={cx("hidden h-9 w-9 items-center justify-center md:inline-flex", getSecondaryButtonClass(activeTheme))}
-                        aria-label="Open theme picker"
-                      >
-                        <Palette className="h-4 w-4" />
-                      </button>
-                    </Tooltip>
-
                     <Tooltip content={TOOLTIP_TEXT.help}>
                       <Link
                         href="/help"
-                        className={cx("hidden h-9 w-9 items-center justify-center md:inline-flex", getSecondaryButtonClass(activeTheme))}
-                        aria-label="Open help"
-                      >
-                        <HelpCircle className="h-4 w-4" />
-                      </Link>
-                    </Tooltip>
-
-                    <Tooltip content={TOOLTIP_TEXT.theme}>
-                      <button
-                        type="button"
-                        onClick={() => setThemePickerOpen((prev) => !prev)}
-                        className={cx("inline-flex items-center gap-2 md:hidden", getSecondaryButtonClass(activeTheme))}
-                      >
-                        <Palette className="h-4 w-4" />
-                        Theme
-                      </button>
-                    </Tooltip>
-
-                    <Tooltip content={TOOLTIP_TEXT.help}>
-                      <Link
-                        href="/help"
-                        className={cx("inline-flex h-9 w-9 items-center justify-center md:hidden", getSecondaryButtonClass(activeTheme))}
+                        className={cx("inline-flex h-8 w-8 items-center justify-center", getSecondaryButtonClass(activeTheme))}
                         aria-label="Open help"
                       >
                         <HelpCircle className="h-4 w-4" />
@@ -2757,18 +2918,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     </Tooltip>
                   </div>
                 </div>
-
-                {themePickerOpen && (
-                  <div className="mt-4">
-                    <ChatThemePicker
-                      theme={activeTheme}
-                      selectedThemeId={selectedThemeId}
-                      onChange={handleThemeChange}
-                      onClose={() => setThemePickerOpen(false)}
-                    />
-                  </div>
-                )}
-
               </div>
             </div>
 
