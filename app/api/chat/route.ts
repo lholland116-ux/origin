@@ -3,6 +3,14 @@ import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 import { buildDocumentContext } from "@/lib/documents/prepare-context";
+import {
+  assertStoredImageCount,
+  buildImageInputContent,
+  ChatImageValidationError,
+  normalizeChatImageInput,
+  type NormalizedChatImageInput,
+  type StoredImageReference,
+} from "@/lib/chat/chat-image-attachments";
 
 export const runtime = "nodejs";
 
@@ -16,6 +24,7 @@ const MIN_IMAGE_BASE64_LENGTH = 1_000;
 const MIN_ACCEPTABLE_REPLY_LENGTH = 10;
 const MAX_IMAGE_PATH_LENGTH = 500;
 const MAX_IMAGE_NAME_LENGTH = 255;
+const MODEL_IMAGE_URL_TTL_SECONDS = 5 * 60;
 const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 
@@ -97,6 +106,7 @@ type ChatRequestBody = {
   imageBase64?: string;
   imagePath?: string;
   imageName?: string;
+  images?: unknown;
   documentIds?: string[];
 };
 
@@ -190,6 +200,7 @@ function normalizePlan(plan: ProfileRow["plan"]): Plan {
 function buildStoredUserContent(params: {
   message: string;
   hasImage: boolean;
+  imageCount?: number;
   documents: StoredDocument[];
 }): string {
   const parts: string[] = [];
@@ -201,7 +212,7 @@ function buildStoredUserContent(params: {
   const attachmentNotes: string[] = [];
 
   if (params.hasImage) {
-    attachmentNotes.push("[Image attached]");
+    attachmentNotes.push(params.imageCount && params.imageCount > 1 ? "[Images attached]" : "[Image attached]");
   }
 
   if (params.documents.length > 0) {
@@ -246,11 +257,13 @@ function buildSystemInstructions(hasDocumentContext: boolean): string {
 function buildLatestUserContent(params: {
   latestMessage: string;
   imageBase64: string;
+  imageUrls: string[];
   documentContext: string;
 }) {
-  const { latestMessage, imageBase64, documentContext } = params;
+  const { latestMessage, imageBase64, imageUrls, documentContext } = params;
+  const modelImageUrls = imageBase64 ? [imageBase64] : imageUrls;
 
-  const effectiveText = imageBase64
+  const effectiveText = modelImageUrls.length > 0
     ? buildImageAnalysisInstruction(latestMessage)
     : latestMessage;
 
@@ -258,18 +271,8 @@ function buildLatestUserContent(params: {
     ? `${documentContext}\n\nUser question:\n${effectiveText}`
     : effectiveText;
 
-  if (imageBase64) {
-    return [
-      {
-        type: "input_text" as const,
-        text: userText,
-      },
-      {
-        type: "input_image" as const,
-        image_url: imageBase64,
-        detail: "auto" as const,
-      },
-    ];
+  if (modelImageUrls.length > 0) {
+    return buildImageInputContent(userText, modelImageUrls);
   }
 
   return userText;
@@ -279,9 +282,10 @@ function buildResponsesInput(params: {
   history: DbMessage[];
   latestMessage: string;
   imageBase64: string;
+  imageUrls: string[];
   documentContext: string;
 }) {
-  const { history, latestMessage, imageBase64, documentContext } = params;
+  const { history, latestMessage, imageBase64, imageUrls, documentContext } = params;
 
   const priorMessages = history.slice(0, -1).map((msg) => ({
     role: msg.role,
@@ -293,6 +297,7 @@ function buildResponsesInput(params: {
     content: buildLatestUserContent({
       latestMessage,
       imageBase64,
+      imageUrls,
       documentContext,
     }),
   };
@@ -350,6 +355,65 @@ async function getUserPlan(params: {
   }
 
   return normalizePlan(profile.plan);
+}
+
+async function getAuthoritativeUserPlan(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+}): Promise<Plan | null> {
+  const { supabase, userId } = params;
+
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("plan")
+    .eq("id", userId)
+    .maybeSingle<ProfileRow>();
+
+  if (error || !profile || (profile.plan !== "free" && profile.plan !== "pro")) {
+    console.error("Authoritative profile lookup error:", error);
+    return null;
+  }
+
+  return profile.plan;
+}
+
+async function resolveStoredImageUrls(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  images: StoredImageReference[];
+}): Promise<
+  | { ok: true; urls: string[] }
+  | { ok: false; status: 404 | 503 }
+> {
+  const { supabase, images } = params;
+
+  const resolved = await Promise.all(
+    images.map(async (image) => {
+      const { data, error } = await supabase.storage
+        .from("chat-images")
+        .createSignedUrl(image.imagePath, MODEL_IMAGE_URL_TTL_SECONDS);
+
+      if (error || !data?.signedUrl) {
+        console.error("Stored image URL resolution error:", error);
+        return {
+          ok: false as const,
+          status: error?.statusCode === "404" ? (404 as const) : (503 as const),
+        };
+      }
+
+      return { ok: true as const, url: data.signedUrl };
+    })
+  );
+
+  const failure = resolved.find((item) => !item.ok);
+
+  if (failure && !failure.ok) {
+    return failure;
+  }
+
+  return {
+    ok: true,
+    urls: resolved.flatMap((item) => (item.ok ? [item.url] : [])),
+  };
 }
 
 async function loadPersistableDocuments(params: {
@@ -434,6 +498,40 @@ async function persistAssistantMessage(params: {
   }
 }
 
+async function persistUserMessageWithImages(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  conversationId: string;
+  content: string;
+  documents: StoredDocument[];
+  images: StoredImageReference[];
+}) {
+  const { supabase, conversationId, content, documents, images } = params;
+
+  return supabase.rpc("create_chat_message_with_images", {
+    p_conversation_id: conversationId,
+    p_content: content,
+    p_documents: documents,
+    p_images: images.map((image) => ({
+      storage_path: image.imagePath,
+      image_name: image.imageName,
+    })),
+  });
+}
+
+function imageRpcErrorCode(error: { code?: string; message?: string }): string {
+  const message = error.message ?? "";
+  const knownCodes = [
+    "CONVERSATION_NOT_FOUND",
+    "DUPLICATE_IMAGE",
+    "IMAGE_LIMIT_EXCEEDED",
+    "INVALID_IMAGE",
+    "PLAN_UNAVAILABLE",
+    "UNAUTHORIZED",
+  ];
+
+  return knownCodes.find((code) => message.includes(code)) ?? "";
+}
+
 async function touchConversation(params: {
   supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
   conversationId: string;
@@ -490,11 +588,49 @@ export async function POST(req: Request) {
     const imageName = normalizeString(body.imageName);
     const documentIds = normalizeDocumentIds(body.documentIds);
 
+    let normalizedImageInput: NormalizedChatImageInput;
+
+    try {
+      normalizedImageInput = normalizeChatImageInput({
+        images: body.images,
+        imageBase64,
+        imagePath,
+        imageName,
+        userId: user.id,
+      });
+    } catch (error) {
+      if (error instanceof ChatImageValidationError) {
+        return jsonResponse({ error: error.message, code: error.code }, 400);
+      }
+
+      return jsonResponse({ error: "Invalid image attachments.", code: "INVALID_IMAGES" }, 400);
+    }
+
+    const storedImages =
+      normalizedImageInput.source === "stored" ? normalizedImageInput.images : [];
+    const hasStoredImages = storedImages.length > 0;
+
+    if (regenerate && hasStoredImages) {
+      return jsonResponse(
+        {
+          error: "Stored image attachments are not supported during regeneration.",
+          code: "REGENERATE_IMAGES_NOT_SUPPORTED",
+        },
+        400
+      );
+    }
+
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);
     }
 
-    if (!regenerate && !message && !imageBase64 && documentIds.length === 0) {
+    if (
+      !regenerate &&
+      !message &&
+      !imageBase64 &&
+      !hasStoredImages &&
+      documentIds.length === 0
+    ) {
       return jsonResponse(
         {
           error:
@@ -553,7 +689,57 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Conversation not found." }, 404);
     }
 
-    const plan = await getUserPlan({ supabase, userId: user.id });
+    let plan: Plan;
+    let storedImageUrls: string[] = [];
+
+    if (hasStoredImages) {
+      const authoritativePlan = await getAuthoritativeUserPlan({
+        supabase,
+        userId: user.id,
+      });
+
+      if (!authoritativePlan) {
+        return jsonResponse(
+          { error: "Unable to verify image attachment eligibility.", code: "PLAN_UNAVAILABLE" },
+          503
+        );
+      }
+
+      plan = authoritativePlan;
+
+      try {
+        assertStoredImageCount(storedImages, plan);
+      } catch (error) {
+        if (error instanceof ChatImageValidationError && error.code === "IMAGE_LIMIT_EXCEEDED") {
+          return jsonResponse(
+            { error: "Image attachment limit exceeded.", code: "IMAGE_LIMIT_EXCEEDED" },
+            403
+          );
+        }
+
+        return jsonResponse({ error: "Invalid image attachments.", code: "INVALID_IMAGES" }, 400);
+      }
+
+      const resolvedImages = await resolveStoredImageUrls({
+        supabase,
+        images: storedImages,
+      });
+
+      if (!resolvedImages.ok) {
+        return jsonResponse(
+          {
+            error: "One or more image attachments are unavailable.",
+            code: "IMAGE_UNAVAILABLE",
+          },
+          resolvedImages.status
+        );
+      }
+
+      storedImageUrls = resolvedImages.urls;
+    } else {
+      plan = await getUserPlan({ supabase, userId: user.id });
+    }
+
     const dailyLimit = getPlanLimit(plan);
 
     const today = new Date().toISOString().slice(0, 10);
@@ -649,22 +835,75 @@ export async function POST(req: Request) {
     } else {
       const storedUserContent = buildStoredUserContent({
         message,
-        hasImage: Boolean(imageBase64),
+        hasImage: Boolean(imageBase64) || hasStoredImages,
+        imageCount: hasStoredImages ? storedImages.length : undefined,
         documents: persistedDocuments,
       });
 
-      const { error: insertUserError } = await supabase.from("messages").insert({
-        conversation_id: conversationId,
-        user_id: user.id,
-        role: "user",
-        content: storedUserContent,
-        image_path: imagePath || null,
-        image_name: imageName || null,
-        documents: persistedDocuments,
-      });
+      const userMessageResult = hasStoredImages
+        ? await persistUserMessageWithImages({
+            supabase,
+            conversationId,
+            content: storedUserContent,
+            documents: persistedDocuments,
+            images: storedImages,
+          })
+        : await supabase.from("messages").insert({
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: "user",
+            content: storedUserContent,
+            image_path: imagePath || null,
+            image_name: imageName || null,
+            documents: persistedDocuments,
+          });
+
+      const insertUserError = userMessageResult.error;
 
       if (insertUserError) {
         console.error("User message insert error:", insertUserError);
+
+        if (hasStoredImages) {
+          const rpcCode = imageRpcErrorCode(insertUserError);
+
+          if (rpcCode === "UNAUTHORIZED") {
+            return jsonResponse({ error: "Unauthorized.", code: rpcCode }, 401);
+          }
+
+          if (rpcCode === "CONVERSATION_NOT_FOUND") {
+            return jsonResponse({ error: "Conversation not found.", code: rpcCode }, 404);
+          }
+
+          if (rpcCode === "PLAN_UNAVAILABLE") {
+            return jsonResponse(
+              { error: "Unable to verify image attachment eligibility.", code: rpcCode },
+              503
+            );
+          }
+
+          if (rpcCode === "IMAGE_LIMIT_EXCEEDED") {
+            return jsonResponse(
+              { error: "Image attachment limit exceeded.", code: rpcCode },
+              403
+            );
+          }
+
+          if (rpcCode === "DUPLICATE_IMAGE" || rpcCode === "INVALID_IMAGE") {
+            return jsonResponse(
+              { error: "Invalid image attachments.", code: rpcCode },
+              400
+            );
+          }
+
+          return jsonResponse(
+            {
+              error: "Failed to save image attachments.",
+              code: "IMAGE_PERSISTENCE_UNAVAILABLE",
+            },
+            503
+          );
+        }
+
         return jsonResponse({ error: "Failed to save user message." }, 500);
       }
     }
@@ -698,6 +937,7 @@ export async function POST(req: Request) {
       history: recentHistory,
       latestMessage: latestUserMessage,
       imageBase64,
+      imageUrls: storedImageUrls,
       documentContext,
     }) as never;
 
@@ -742,7 +982,7 @@ export async function POST(req: Request) {
           const streamedReply = fullReply.trim();
           let finalReply = streamedReply;
 
-          if (imageBase64 && isWeakReply(finalReply)) {
+          if ((imageBase64 || storedImageUrls.length > 0) && isWeakReply(finalReply)) {
             try {
               const retry = await createRetryResponse({
                 input,

@@ -1029,6 +1029,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_chat_message_with_images: {
+        Args: {
+          p_content: string
+          p_conversation_id: string
+          p_documents: Json
+          p_images: Json
+        }
+        Returns: string
+      }
       refund_daily_usage: {
         Args: { p_date: string; p_user_id: string }
         Returns: number
