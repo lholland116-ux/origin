@@ -8,10 +8,12 @@ import {
   ChevronDown,
   ChevronUp,
   Clock3,
+  Globe2,
   HelpCircle,
   ImageIcon,
   Mic,
   MicOff,
+  MessageCircle,
   MoreHorizontal,
   Palette,
   Plus,
@@ -142,6 +144,7 @@ type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  created_at?: string | null;
   feedback?: MessageFeedbackRating | null;
   sources?: SourceItem[];
   sourceCount?: number;
@@ -1005,6 +1008,33 @@ function formatConversationDate(value: string): string {
   return date.toLocaleString();
 }
 
+export function formatMessageTime(createdAt?: string | null): string | null {
+  if (!createdAt) return null;
+
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+export function getMessageDisplayLabel(role: "user" | "assistant"): string {
+  return role === "user" ? "You" : "LVTChat";
+}
+
+function getUserInitials(email: string): string {
+  const localPart = email.trim().split("@")[0] ?? "";
+  const nameParts = localPart.split(/[._-]+/).filter(Boolean);
+
+  if (nameParts.length >= 2) {
+    return `${nameParts[0][0]}${nameParts[1][0]}`.toUpperCase();
+  }
+
+  return localPart.slice(0, 2).toUpperCase() || "A";
+}
+
 function getMessageCopyValue(message: Message): string {
   return message.content?.trim() || "";
 }
@@ -1019,11 +1049,14 @@ function getSecondaryButtonClass(theme: ChatTheme): string {
 
 function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
   return isActive
-    ? cx("rounded-lg px-2.5 py-1.5 text-xs transition", theme.buttonPrimary)
+    ? cx(
+        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
+        "border-blue-500/70 bg-blue-600 text-white hover:bg-blue-500"
+      )
     : cx(
-        "rounded-lg border px-2.5 py-1.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
         theme.panelBorder,
-        "text-white/90 hover:bg-white/10"
+        "bg-transparent text-white/80 hover:bg-white/10 hover:text-white"
       );
 }
 
@@ -1402,9 +1435,21 @@ export default function ChatClient({
   const nativeSpeechAvailableRef = useRef(false);
   const desktopProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
   const mobileProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const headerProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
+  const messageTimestamps = useMemo(
+    () =>
+      new Map(
+        messages.map((message) => [
+          message.id,
+          formatMessageTime(message.created_at),
+        ])
+      ),
+    [messages]
+  );
 
   useEffect(() => {
     planRef.current = plan;
@@ -1422,7 +1467,11 @@ export default function ChatClient({
   }, [input]);
 
   const getProfileTrigger = useCallback(
-    () => (mobileMenuOpen ? mobileProfileTriggerRef.current : desktopProfileTriggerRef.current),
+    () =>
+      profileMenuTriggerRef.current ??
+      (mobileMenuOpen
+        ? mobileProfileTriggerRef.current
+        : desktopProfileTriggerRef.current),
     [mobileMenuOpen]
   );
 
@@ -1436,6 +1485,21 @@ export default function ChatClient({
       }
     },
     [getProfileTrigger]
+  );
+
+  const toggleProfileMenu = useCallback(
+    (trigger: HTMLButtonElement) => {
+      profileMenuTriggerRef.current = trigger;
+
+      if (profileMenuOpen) {
+        closeProfileMenu();
+        return;
+      }
+
+      setThemePickerOpen(false);
+      setProfileMenuOpen(true);
+    },
+    [closeProfileMenu, profileMenuOpen]
   );
 
   const updateProfileMenuPosition = useCallback(() => {
@@ -1505,7 +1569,8 @@ export default function ChatClient({
       if (
         profileMenuRef.current?.contains(target) ||
         desktopProfileTriggerRef.current?.contains(target) ||
-        mobileProfileTriggerRef.current?.contains(target)
+        mobileProfileTriggerRef.current?.contains(target) ||
+        headerProfileTriggerRef.current?.contains(target)
       ) {
         return;
       }
@@ -2945,18 +3010,40 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     );
   }
 
+  function renderSidebarBrand() {
+    return (
+      <div className="flex min-w-0 items-center gap-2.5" aria-label={BRAND.name}>
+        <span
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-400/10 text-blue-300 ring-1 ring-inset ring-blue-300/20"
+          aria-hidden="true"
+        >
+          <MessageCircle className="h-[18px] w-[18px]" />
+        </span>
+        <span className={cx("truncate text-2xl font-semibold tracking-tight", activeTheme.titleText)}>
+          <span className="text-white">LVT</span>
+          <span className="text-blue-300">Chat</span>
+        </span>
+      </div>
+    );
+  }
+
   function renderNewChatAction() {
     return (
-      <Tooltip content={TOOLTIP_TEXT.newChat}>
-        <button
-          type="button"
-          onClick={handleNewChat}
-          disabled={loading || sidebarLoading}
-          className={cx("w-full px-3 py-2 text-sm", activeTheme.buttonPrimary)}
-        >
-          New Chat
-        </button>
-      </Tooltip>
+      <div className="w-full">
+        <Tooltip content={TOOLTIP_TEXT.newChat}>
+          <button
+            type="button"
+            onClick={handleNewChat}
+            disabled={loading || sidebarLoading}
+            className={cx("min-h-12 w-full rounded-xl px-4 py-2.5 text-sm font-medium", activeTheme.buttonPrimary)}
+          >
+            <span className="flex items-center justify-center gap-2">
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              New Chat
+            </span>
+          </button>
+        </Tooltip>
+      </div>
     );
   }
 
@@ -2965,15 +3052,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       <button
         ref={isMobile ? mobileProfileTriggerRef : desktopProfileTriggerRef}
         type="button"
-        onClick={() => {
-          if (profileMenuOpen) {
-            closeProfileMenu();
-            return;
-          }
-
-          setThemePickerOpen(false);
-          setProfileMenuOpen(true);
-        }}
+        onClick={(event) => toggleProfileMenu(event.currentTarget)}
         className={cx(
           "flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition",
           activeTheme.mutedText,
@@ -2985,7 +3064,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         aria-controls="chat-profile-settings"
       >
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-white">
-          {userEmail.trim().charAt(0).toUpperCase() || "A"}
+          {getUserInitials(userEmail)}
         </span>
         <span className="min-w-0 flex-1 truncate">{userEmail}</span>
         <span className="shrink-0 text-[11px] text-white/50">
@@ -3014,7 +3093,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       >
         <div className="flex min-w-0 items-center gap-2 px-1 pb-3">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">
-            {userEmail.trim().charAt(0).toUpperCase() || "A"}
+            {getUserInitials(userEmail)}
           </span>
           <div className="min-w-0">
             <div className="truncate text-sm font-medium text-white">{userEmail}</div>
@@ -3162,8 +3241,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               <div className={cx("sticky top-0 border-b p-4 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className={cx("text-xs", activeTheme.mutedText)}>{BRAND.name}</p>
-                    <div className="truncate text-sm font-semibold">{userEmail}</div>
+                    {renderSidebarBrand()}
+                    <div className="mt-2 truncate text-sm font-semibold">{userEmail}</div>
 
                     {usage && (
                       <div className={cx("mt-2 text-xs", activeTheme.mutedText)}>
@@ -3220,9 +3299,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         <div className="flex h-full overflow-hidden">
           <aside className={cx("hidden h-full w-64 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
             <div className={cx("sticky top-0 border-b p-3 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
-              <div className={cx("text-xs font-semibold tracking-wide", activeTheme.mutedText)}>{BRAND.name}</div>
+              {renderSidebarBrand()}
 
-              <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
+              <div className="mt-3 flex min-w-0 items-center justify-between gap-2">
                 <div className="min-w-0 truncate text-sm font-semibold">{userEmail}</div>
 
                 <div className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-medium text-white/80">
@@ -3266,58 +3345,80 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
           <section className="flex h-full min-w-0 flex-1 flex-col overflow-x-hidden bg-transparent">
             <div className={cx("sticky top-0 z-20 border-b backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
-              <div className={`${CONTENT_RAIL_CLASS} py-1.5`}>
-                <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 md:flex-nowrap">
-                  <div className="flex min-w-0 items-center gap-3">
+              <div className="w-full px-4 py-2 sm:px-6">
+                <div className="flex min-h-11 flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={() => setMobileMenuOpen(true)}
-                      className={cx("px-2 py-1 text-sm md:hidden", getSecondaryButtonClass(activeTheme))}
+                      className={cx("h-9 w-9 shrink-0 p-0 text-sm md:hidden", getSecondaryButtonClass(activeTheme))}
                       aria-label="Open menu"
                     >
                       ☰
                     </button>
 
-                    <div className="flex min-w-0 items-center gap-2">
-                      <p className={cx("truncate text-sm font-semibold", activeTheme.titleText)}>{BRAND.name}</p>
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <Tooltip content={TOOLTIP_TEXT.standard}>
+                        <button
+                          type="button"
+                          onClick={() => handleModeChange(false)}
+                          disabled={loading}
+                          className={getModeButtonClass(activeTheme, !useWebSearch)}
+                        >
+                          Standard
+                        </button>
+                      </Tooltip>
+
+                      <Tooltip content={TOOLTIP_TEXT.webSearch}>
+                        <button
+                          type="button"
+                          onClick={() => handleModeChange(true)}
+                          disabled={loading}
+                          className={getModeButtonClass(activeTheme, useWebSearch)}
+                        >
+                          <Globe2 className="h-4 w-4" aria-hidden="true" />
+                          Web Search
+                        </button>
+                      </Tooltip>
+
                       {modeLabel !== "Standard assistant" && (
-                        <span className={cx("truncate text-xs", activeTheme.mutedText)}>{modeLabel}</span>
+                        <span className={cx("max-w-[12rem] truncate text-xs", activeTheme.mutedText)}>{modeLabel}</span>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 md:w-auto md:flex-nowrap md:justify-end">
-                    <Tooltip content={TOOLTIP_TEXT.standard}>
-                      <button
-                        type="button"
-                        onClick={() => handleModeChange(false)}
-                        disabled={loading}
-                        className={getModeButtonClass(activeTheme, !useWebSearch)}
-                      >
-                        Standard
-                      </button>
-                    </Tooltip>
-
-                    <Tooltip content={TOOLTIP_TEXT.webSearch}>
-                      <button
-                        type="button"
-                        onClick={() => handleModeChange(true)}
-                        disabled={loading}
-                        className={getModeButtonClass(activeTheme, useWebSearch)}
-                      >
-                        Web Search
-                      </button>
-                    </Tooltip>
-
+                  <div className="flex shrink-0 items-center gap-3">
                     <Tooltip content={TOOLTIP_TEXT.help}>
                       <Link
                         href="/help"
-                        className={cx("inline-flex h-8 w-8 items-center justify-center", getSecondaryButtonClass(activeTheme))}
-                        aria-label="Open help"
+                        className={cx(
+                          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-cyan-300/60",
+                          activeTheme.panelBorder,
+                          "text-white/80 hover:bg-white/10 hover:text-white"
+                        )}
+                        aria-label="Help"
                       >
                         <HelpCircle className="h-4 w-4" />
                       </Link>
                     </Tooltip>
+
+                    <button
+                      ref={headerProfileTriggerRef}
+                      type="button"
+                      onClick={(event) => toggleProfileMenu(event.currentTarget)}
+                      className={cx(
+                        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-white/5 text-[11px] font-semibold text-white transition focus:outline-none focus:ring-2 focus:ring-cyan-300/60",
+                        activeTheme.panelBorder,
+                        "hover:bg-white/10"
+                      )}
+                      aria-label="Open profile and settings"
+                      aria-haspopup="dialog"
+                      aria-expanded={profileMenuOpen}
+                      aria-controls="chat-profile-settings"
+                      title="Open profile and settings"
+                    >
+                      {getUserInitials(userEmail)}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -3386,6 +3487,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     const messageDocuments = Array.isArray(message.documents) ? message.documents : [];
                     const messageImages = normalizeMessageImages(message.images);
                     const messageImageSource = getMessageImageSource(message);
+                    const messageTime = messageTimestamps.get(message.id);
                     const isStreamingAssistant =
                       loading && message.role === "assistant" && message.id === messages[messages.length - 1]?.id;
 
@@ -3398,8 +3500,18 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       <div key={message.id} className="space-y-2">
                         <div className={cx(bubbleWidthClass, getBubbleClass(activeTheme, message.role))}>
                           <div className="mb-2 flex items-center justify-between gap-2">
-                            <div className="text-[11px] font-medium opacity-60">
-                              {message.role === "user" ? "You" : "Assistant"}
+                            <div className="flex min-w-0 items-center gap-1.5 text-[11px]">
+                              <span className="font-semibold opacity-90">
+                                {getMessageDisplayLabel(message.role)}
+                              </span>
+                              {messageTime ? (
+                                <time
+                                  dateTime={message.created_at ?? undefined}
+                                  className="truncate opacity-60"
+                                >
+                                  {messageTime}
+                                </time>
+                              ) : null}
                             </div>
 
                             <Tooltip content={TOOLTIP_TEXT.copy}>
