@@ -150,6 +150,7 @@ type Message = {
   image_name?: string | null;
   image_url?: string | null;
   images?: MessageImage[];
+  has_child_images?: boolean;
   documents?: UploadedDocument[];
 };
 
@@ -455,6 +456,27 @@ const CONVERSATION_STARTERS = [
   "Explain something step by step",
 ] as const;
 
+export function calculateComposerTextareaSize(
+  inputValue: string,
+  scrollHeight: number
+): { height: number; overflowY: "hidden" | "auto" } {
+  if (inputValue.length === 0) {
+    return {
+      height: COMPOSER_TEXTAREA_MIN_HEIGHT,
+      overflowY: "hidden",
+    };
+  }
+
+  return {
+    height: Math.min(
+      Math.max(scrollHeight, COMPOSER_TEXTAREA_MIN_HEIGHT),
+      COMPOSER_TEXTAREA_MAX_HEIGHT
+    ),
+    overflowY:
+      scrollHeight > COMPOSER_TEXTAREA_MAX_HEIGHT ? "auto" : "hidden",
+  };
+}
+
 export function getMaxPendingImages(plan: string | null | undefined): number {
   return plan === "pro" ? PRO_MAX_PENDING_IMAGES : FREE_MAX_PENDING_IMAGES;
 }
@@ -681,10 +703,67 @@ function normalizeInitialMessages(messages: Message[]): Message[] {
           ? message.sources.length
           : 0,
     widget: normalizeWidget(message.widget),
+    images: normalizeMessageImages(message.images),
     documents: Array.isArray(message.documents)
       ? cloneDocuments(message.documents)
       : [],
   }));
+}
+
+export function normalizeMessageImages(input: unknown): MessageImage[] {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object"
+    )
+    .map((item) => {
+      const imagePath =
+        typeof item.image_path === "string" ? item.image_path.trim() : "";
+      const imageName =
+        typeof item.image_name === "string" ? item.image_name.trim() : "";
+      const imageUrl =
+        typeof item.image_url === "string" && item.image_url.trim()
+          ? item.image_url
+          : undefined;
+
+      return {
+        image_path: imagePath,
+        image_name: imageName,
+        ...(imageUrl ? { image_url: imageUrl } : {}),
+      };
+    })
+    .filter((image) => image.image_path.length > 0 && image.image_name.length > 0);
+}
+
+export function hasCanonicalChildImages(message: {
+  images?: unknown;
+  has_child_images?: boolean;
+}): boolean {
+  return (
+    message.has_child_images === true ||
+    (Array.isArray(message.images) && message.images.length > 0)
+  );
+}
+
+export function getMessageImageSource(message: {
+  images?: unknown;
+  has_child_images?: boolean;
+  image_url?: string | null;
+}): "children" | "legacy" | "none" {
+  if (hasCanonicalChildImages(message)) return "children";
+  if (typeof message.image_url === "string" && message.image_url.trim()) {
+    return "legacy";
+  }
+  return "none";
+}
+
+export function shouldApplyMessageLoad(
+  requestGeneration: number,
+  currentGeneration: number
+): boolean {
+  return requestGeneration === currentGeneration;
 }
 
 function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
@@ -1213,7 +1292,6 @@ export default function ChatClient({
     normalizeInitialMessages(initialMessages)
   );
   const [input, setInput] = useState("");
-  const [isTypingFocused, setIsTypingFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -1246,19 +1324,59 @@ export default function ChatClient({
   const planRef = useRef<Plan>("free");
 
   const abortRef = useRef<AbortController | null>(null);
+  const messageLoadGenerationRef = useRef(0);
   useEffect(() => {
     let cancelled = false;
+    const requestGeneration = ++messageLoadGenerationRef.current;
+    const controller = new AbortController();
 
     async function hydrateInitialMessageImages(): Promise<void> {
       try {
-        const hydratedMessages =
-          await hydrateMessagesWithImageUrls(initialMessages);
+        const response = await fetch(
+          `/api/messages?conversationId=${encodeURIComponent(initialConversationId)}`,
+          { cache: "no-store", signal: controller.signal }
+        );
 
-        if (!cancelled) {
+        if (!response.ok) {
+          throw new Error("Failed to load messages.");
+        }
+
+        const data = await response.json();
+        const rawMessages = Array.isArray(data?.messages)
+          ? data.messages
+          : initialMessages;
+        const hydratedMessages = await hydrateMessagesWithImageUrls(rawMessages);
+
+        if (
+          !cancelled &&
+          shouldApplyMessageLoad(
+            requestGeneration,
+            messageLoadGenerationRef.current
+          )
+        ) {
           setMessages(hydratedMessages);
         }
       } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
         console.error("Failed to load initial message images:", error);
+
+        try {
+          const fallbackMessages = await hydrateMessagesWithImageUrls(initialMessages);
+          if (
+            !cancelled &&
+            shouldApplyMessageLoad(
+              requestGeneration,
+              messageLoadGenerationRef.current
+            )
+          ) {
+            setMessages(fallbackMessages);
+          }
+        } catch (fallbackError) {
+          console.error("Failed to hydrate initial message images:", fallbackError);
+        }
       }
     }
 
@@ -1266,8 +1384,9 @@ export default function ChatClient({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [initialMessages]);
+  }, [initialConversationId, initialMessages]);
   
   const endRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -1296,14 +1415,10 @@ export default function ChatClient({
     if (!textarea) return;
 
     textarea.style.height = "0px";
-    const nextHeight = Math.min(
-      Math.max(textarea.scrollHeight, COMPOSER_TEXTAREA_MIN_HEIGHT),
-      COMPOSER_TEXTAREA_MAX_HEIGHT
-    );
+    const nextSize = calculateComposerTextareaSize(input, textarea.scrollHeight);
 
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY =
-      textarea.scrollHeight > COMPOSER_TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
+    textarea.style.height = `${nextSize.height}px`;
+    textarea.style.overflowY = nextSize.overflowY;
   }, [input]);
 
   const getProfileTrigger = useCallback(
@@ -2108,6 +2223,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         const sources = Array.isArray(message.sources)
           ? dedupeSources(message.sources)
           : [];
+        const images = normalizeMessageImages(message.images);
+        const hasChildImages = hasCanonicalChildImages(message);
 
         const normalizedMessage: Message = {
           ...message,
@@ -2124,9 +2241,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             typeof message.image_url === "string" && message.image_url.trim()
               ? message.image_url
               : null,
+          images,
+          has_child_images: hasChildImages,
         };
 
-        if (!normalizedMessage.image_path) {
+        if (hasChildImages || !normalizedMessage.image_path) {
           return normalizedMessage;
         }
 
@@ -2316,6 +2435,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function loadConversation(nextConversationId: string) {
     if (loading || nextConversationId === conversationId) return;
 
+    const requestGeneration = ++messageLoadGenerationRef.current;
     setSidebarLoading(true);
     clearTransientErrors();
     discardPendingImages();
@@ -2337,13 +2457,36 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       const nextMessages = await hydrateMessagesWithImageUrls(rawMessages);
 
+      if (
+        !shouldApplyMessageLoad(
+          requestGeneration,
+          messageLoadGenerationRef.current
+        )
+      ) {
+        return;
+      }
+
       setConversationId(nextConversationId);
       setMessages(nextMessages);
       await fetchDocuments(nextConversationId);
     } catch (error) {
-      setUiError(error instanceof Error ? error.message : "Failed to load conversation.");
+      if (
+        shouldApplyMessageLoad(
+          requestGeneration,
+          messageLoadGenerationRef.current
+        )
+      ) {
+        setUiError(error instanceof Error ? error.message : "Failed to load conversation.");
+      }
     } finally {
-      setSidebarLoading(false);
+      if (
+        shouldApplyMessageLoad(
+          requestGeneration,
+          messageLoadGenerationRef.current
+        )
+      ) {
+        setSidebarLoading(false);
+      }
     }
   }
 
@@ -2355,6 +2498,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleNewChat() {
     if (loading) return;
 
+    messageLoadGenerationRef.current += 1;
     setSidebarLoading(true);
     clearTransientErrors();
     discardPendingImages();
@@ -3240,6 +3384,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     const sourceCount =
                       typeof message.sourceCount === "number" ? message.sourceCount : sources.length;
                     const messageDocuments = Array.isArray(message.documents) ? message.documents : [];
+                    const messageImages = normalizeMessageImages(message.images);
+                    const messageImageSource = getMessageImageSource(message);
                     const isStreamingAssistant =
                       loading && message.role === "assistant" && message.id === messages[messages.length - 1]?.id;
 
@@ -3307,14 +3453,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                             />
                           </div>
 
-                          {message.images && message.images.length > 0 ? (
+                          {messageImageSource === "children" && messageImages.length > 0 ? (
                             <div
                               className={cx(
                                 "mt-3 grid max-w-full gap-2",
-                                message.images.length > 1 ? "grid-cols-2" : "grid-cols-1"
+                                messageImages.length > 1 ? "grid-cols-2" : "grid-cols-1"
                               )}
                             >
-                              {message.images.map((image, index) =>
+                              {messageImages.map((image, index) =>
                                 image.image_url ? (
                                   <img
                                     key={`${message.id}-image-${index}`}
@@ -3325,7 +3471,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 ) : null
                               )}
                             </div>
-                          ) : message.image_url ? (
+                          ) : messageImageSource === "children" ? null : message.image_url ? (
                             <div className="mt-3">
                               <img
                                 src={message.image_url}
@@ -3546,8 +3692,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         if (documentError) setDocumentError("");
                         if (speechError) setSpeechError(null);
                       }}
-                      onFocus={() => setIsTypingFocused(true)}
-                      onBlur={() => setIsTypingFocused(false)}
                       placeholder={
                         useWebSearch
                           ? isListening
@@ -3565,7 +3709,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 ? "Listening… tap mic to stop."
                                 : "Ask something..."
                       }
-                      rows={isTypingFocused ? 4 : 2}
+                      rows={1}
                       maxLength={MAX_INPUT_LENGTH}
                       disabled={composerDisabled}
                       style={{ height: COMPOSER_TEXTAREA_MIN_HEIGHT }}

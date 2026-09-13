@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const MAX_CONVERSATION_ID_LENGTH = 200;
+const SIGNED_IMAGE_URL_LIFETIME_SECONDS = 60 * 60;
 
 type StoredDocumentStatus =
   | "uploading"
@@ -45,6 +46,25 @@ type MessageRow = {
   source_count: number | null;
   widget: unknown;
 };
+
+type MessageImageRow = {
+  id: string;
+  message_id: string;
+  storage_path: string;
+  image_name: string;
+  ordinal: number;
+  created_at: string;
+};
+
+type MessageImageResponse = {
+  image_path: string;
+  image_name: string;
+  image_url: string;
+};
+
+type ServerSupabaseClient = Awaited<
+  ReturnType<typeof createServerSupabaseClient>
+>;
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
@@ -172,6 +192,114 @@ function normalizeWidget(input: unknown): StoredWidget {
   };
 }
 
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return Boolean(input) && typeof input === "object";
+}
+
+function isValidMessageImagePath(storagePath: string, userId: string): boolean {
+  const pathSegments = storagePath.split("/");
+
+  return (
+    storagePath.length > 0 &&
+    storagePath.length <= 500 &&
+    storagePath.startsWith(`${userId}/`) &&
+    !storagePath.startsWith("/") &&
+    !storagePath.includes("..") &&
+    !storagePath.includes("\\") &&
+    pathSegments.every((segment) => segment.length > 0) &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(storagePath)
+  );
+}
+
+function normalizeMessageImageRow(input: unknown): MessageImageRow | null {
+  if (!isRecord(input)) return null;
+
+  const id = typeof input.id === "string" ? input.id.trim() : "";
+  const messageId =
+    typeof input.message_id === "string" ? input.message_id.trim() : "";
+  const storagePath =
+    typeof input.storage_path === "string" ? input.storage_path.trim() : "";
+  const imageName =
+    typeof input.image_name === "string" ? input.image_name.trim() : "";
+  const ordinal = input.ordinal;
+  const createdAt =
+    typeof input.created_at === "string" ? input.created_at : "";
+
+  if (
+    !id ||
+    !messageId ||
+    !storagePath ||
+    !imageName ||
+    imageName.length > 255 ||
+    typeof ordinal !== "number" ||
+    !Number.isInteger(ordinal) ||
+    ordinal < 1 ||
+    !createdAt
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    message_id: messageId,
+    storage_path: storagePath,
+    image_name: imageName,
+    ordinal,
+    created_at: createdAt,
+  };
+}
+
+function rawMessageImageMessageId(input: unknown): string | null {
+  if (!isRecord(input) || typeof input.message_id !== "string") {
+    return null;
+  }
+
+  const messageId = input.message_id.trim();
+  return messageId || null;
+}
+
+async function signMessageImage(
+  supabase: ServerSupabaseClient,
+  row: MessageImageRow,
+  userId: string
+): Promise<MessageImageResponse | null> {
+  if (!isValidMessageImagePath(row.storage_path, userId)) {
+    console.error("GET /api/messages invalid child image path", {
+      imageId: row.id,
+      messageId: row.message_id,
+    });
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase.storage
+      .from("chat-images")
+      .createSignedUrl(row.storage_path, SIGNED_IMAGE_URL_LIFETIME_SECONDS);
+
+    if (error || !data?.signedUrl) {
+      console.error("GET /api/messages child image signing failed", {
+        imageId: row.id,
+        messageId: row.message_id,
+        reason: error?.message || "Signed URL was missing.",
+      });
+      return null;
+    }
+
+    return {
+      image_path: row.storage_path,
+      image_name: row.image_name,
+      image_url: data.signedUrl,
+    };
+  } catch (error) {
+    console.error("GET /api/messages child image signing error", {
+      imageId: row.id,
+      messageId: row.message_id,
+      reason: error instanceof Error ? error.message : "Unknown signing error.",
+    });
+    return null;
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const supabase = await createServerSupabaseClient();
@@ -222,7 +350,83 @@ export async function GET(req: NextRequest) {
       return jsonError("Failed to load messages.", 500);
     }
 
-    const normalizedMessages = ((data ?? []) as MessageRow[]).map((message) => {
+    const parentMessages = (data ?? []) as MessageRow[];
+    const parentMessageIds = parentMessages.map((message) => message.id);
+    const parentMessageIdSet = new Set(parentMessageIds);
+    const childRowsByMessageId = new Map<string, MessageImageRow[]>();
+    const childMessageIds = new Set<string>();
+
+    if (parentMessageIds.length > 0) {
+      const {
+        data: childData,
+        error: childError,
+      } = await supabase
+        .from("message_images")
+        .select(
+          `
+            id,
+            message_id,
+            storage_path,
+            image_name,
+            ordinal,
+            created_at
+          `
+        )
+        .in("message_id", parentMessageIds)
+        .order("ordinal", { ascending: true });
+
+      if (childError) {
+        console.error("GET /api/messages child image query failed", {
+          conversationId,
+          messageCount: parentMessageIds.length,
+          reason: childError.message,
+        });
+      } else {
+        for (const rawRow of (childData ?? []) as unknown[]) {
+          const rawMessageId = rawMessageImageMessageId(rawRow);
+          if (rawMessageId && parentMessageIdSet.has(rawMessageId)) {
+            childMessageIds.add(rawMessageId);
+          }
+
+          const row = normalizeMessageImageRow(rawRow);
+          if (!row || !parentMessageIdSet.has(row.message_id)) {
+            continue;
+          }
+
+          const rows = childRowsByMessageId.get(row.message_id) ?? [];
+          rows.push(row);
+          childRowsByMessageId.set(row.message_id, rows);
+        }
+      }
+    }
+
+    const signedImagesByMessageId = new Map<string, MessageImageResponse[]>();
+
+    await Promise.all(
+      Array.from(childRowsByMessageId.entries()).map(
+        async ([messageId, rows]) => {
+          rows.sort(
+            (left, right) =>
+              left.ordinal - right.ordinal ||
+              left.created_at.localeCompare(right.created_at) ||
+              left.id.localeCompare(right.id)
+          );
+
+          const signedImages = await Promise.all(
+            rows.map((row) => signMessageImage(supabase, row, user.id))
+          );
+
+          signedImagesByMessageId.set(
+            messageId,
+            signedImages.filter(
+              (image): image is MessageImageResponse => image !== null
+            )
+          );
+        }
+      )
+    );
+
+    const normalizedMessages = parentMessages.map((message) => {
       const sources = normalizeSources(message.sources);
 
       return {
@@ -231,6 +435,8 @@ export async function GET(req: NextRequest) {
         sources,
         sourceCount: normalizeSourceCount(message.source_count, sources),
         widget: normalizeWidget(message.widget),
+        images: signedImagesByMessageId.get(message.id) ?? [],
+        has_child_images: childMessageIds.has(message.id),
       };
     });
 
