@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Mic,
   MicOff,
+  MoreHorizontal,
   Palette,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -147,6 +148,16 @@ type ChatClientProps = {
   initialConversations: ConversationItem[];
 };
 
+type ConversationRowProps = {
+  conversation: ConversationItem;
+  theme: ChatTheme;
+  isActive: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+};
+
 type ChatWebResponse = {
   reply?: string;
   sources?: SourceItem[];
@@ -165,6 +176,238 @@ type DocumentsResponse = {
   documents?: UploadedDocument[];
   error?: string;
 };
+
+function ConversationRow({
+  conversation,
+  theme,
+  isActive,
+  disabled,
+  onSelect,
+  onRename,
+  onDelete,
+}: ConversationRowProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const firstMenuItemRef = useRef<HTMLButtonElement | null>(null);
+  const conversationTitle = conversation.title?.trim() || "New Chat";
+  const menuId = `conversation-menu-${conversation.id}`;
+
+  function closeMenu(restoreFocus = false): void {
+    setMenuOpen(false);
+    setMenuPosition(null);
+
+    if (restoreFocus) {
+      menuButtonRef.current?.focus();
+    }
+  }
+
+  function getMenuPosition(): { top: number; left: number } | null {
+    const button = menuButtonRef.current;
+    if (!button) return null;
+
+    const buttonRect = button.getBoundingClientRect();
+    const menuWidth = 160;
+    const estimatedMenuHeight = 96;
+    const viewportPadding = 8;
+    const gap = 4;
+    const maxLeft = Math.max(
+      viewportPadding,
+      window.innerWidth - menuWidth - viewportPadding
+    );
+    const left = Math.min(
+      Math.max(viewportPadding, buttonRect.right - menuWidth),
+      maxLeft
+    );
+    const hasRoomBelow =
+      window.innerHeight - buttonRect.bottom >=
+      estimatedMenuHeight + viewportPadding;
+    const top = hasRoomBelow
+      ? buttonRect.bottom + gap
+      : Math.max(
+          viewportPadding,
+          buttonRect.top - estimatedMenuHeight - gap
+        );
+
+    return { top, left };
+  }
+
+  function toggleMenu(): void {
+    if (menuOpen) {
+      closeMenu(true);
+      return;
+    }
+
+    setMenuPosition(getMenuPosition());
+    setMenuOpen(true);
+  }
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const updateMenuPosition = () => {
+      const button = menuButtonRef.current;
+      if (!button) return;
+
+      const buttonRect = button.getBoundingClientRect();
+      const menuWidth = 160;
+      const menuHeight = menuRef.current?.offsetHeight ?? 96;
+      const viewportPadding = 8;
+      const gap = 4;
+      const maxLeft = Math.max(
+        viewportPadding,
+        window.innerWidth - menuWidth - viewportPadding
+      );
+      const left = Math.min(
+        Math.max(viewportPadding, buttonRect.right - menuWidth),
+        maxLeft
+      );
+      const hasRoomBelow =
+        window.innerHeight - buttonRect.bottom >=
+        menuHeight + viewportPadding;
+      const top = hasRoomBelow
+        ? buttonRect.bottom + gap
+        : Math.max(viewportPadding, buttonRect.top - menuHeight - gap);
+
+      setMenuPosition((current) =>
+        current?.top === top && current.left === left ? current : { top, left }
+      );
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && rowRef.current?.contains(event.target)) {
+        return;
+      }
+
+      closeMenu();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      event.preventDefault();
+      closeMenu(true);
+    };
+
+    const historyScrollContainer =
+      rowRef.current?.closest<HTMLElement>("[data-sidebar-history]");
+    const handleHistoryScroll = () => {
+      closeMenu();
+    };
+
+    const animationFrameId = window.requestAnimationFrame(() => {
+      updateMenuPosition();
+      firstMenuItemRef.current?.focus();
+    });
+
+    window.addEventListener("resize", updateMenuPosition);
+    historyScrollContainer?.addEventListener("scroll", handleHistoryScroll, {
+      passive: true,
+    });
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+      window.removeEventListener("resize", updateMenuPosition);
+      historyScrollContainer?.removeEventListener("scroll", handleHistoryScroll);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
+
+  return (
+    <div
+      ref={rowRef}
+      className={cx(
+        "relative flex min-w-0 items-center gap-1 rounded-lg px-2 py-2 transition",
+        isActive
+          ? "bg-white/[0.08] text-white"
+          : "text-white/80 hover:bg-white/[0.05]"
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => {
+          closeMenu();
+          onSelect();
+        }}
+        disabled={disabled}
+        className="min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <div className="truncate text-sm font-medium">{conversationTitle}</div>
+        <div className={cx("mt-0.5 truncate text-xs", theme.mutedText)}>
+          {formatConversationDate(conversation.updated_at)}
+        </div>
+      </button>
+
+      <Tooltip content={`More actions for ${conversationTitle}`}>
+        <button
+          ref={menuButtonRef}
+          type="button"
+          onClick={toggleMenu}
+          disabled={disabled}
+          className={cx(
+            "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition",
+            "text-white/50 hover:bg-white/10 hover:text-white",
+            "focus:outline-none focus:ring-2 focus:ring-white/30",
+            "disabled:cursor-not-allowed disabled:opacity-50"
+          )}
+          aria-label={`More actions for ${conversationTitle}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? menuId : undefined}
+        >
+          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </Tooltip>
+
+      {menuOpen && menuPosition && (
+        <div
+          ref={menuRef}
+          id={menuId}
+          role="menu"
+          aria-label={`Actions for ${conversationTitle}`}
+          className={cx(
+            "fixed z-[60] w-40 rounded-lg border p-1 shadow-xl",
+            theme.panelBg,
+            theme.panelBorder
+          )}
+          style={{ top: menuPosition.top, left: menuPosition.left }}
+        >
+          <button
+            ref={firstMenuItemRef}
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closeMenu();
+              onRename();
+            }}
+            disabled={disabled}
+            className="block w-full rounded-md px-3 py-2 text-left text-sm text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Rename
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closeMenu();
+              onDelete();
+            }}
+            disabled={disabled}
+            className="block w-full rounded-md px-3 py-2 text-left text-sm text-red-300 transition hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const MAX_INPUT_LENGTH = 2000;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
@@ -2183,20 +2426,32 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     );
   }
 
-  function renderSidebarActions(isMobile = false) {
+  function renderNewChatAction() {
     return (
-      <div className="mt-3 flex flex-col gap-2">
-        <Tooltip content={TOOLTIP_TEXT.newChat}>
-          <button
-            type="button"
-            onClick={handleNewChat}
-            disabled={loading || sidebarLoading}
-            className={cx("px-4 py-2 text-sm", activeTheme.buttonPrimary)}
-          >
-            New Chat
-          </button>
-        </Tooltip>
+      <Tooltip content={TOOLTIP_TEXT.newChat}>
+        <button
+          type="button"
+          onClick={handleNewChat}
+          disabled={loading || sidebarLoading}
+          className={cx("w-full px-3 py-2 text-sm", activeTheme.buttonPrimary)}
+        >
+          New Chat
+        </button>
+      </Tooltip>
+    );
+  }
 
+  function renderSidebarUtilityActions(isMobile = false) {
+    const utilityRowClass = isMobile
+      ? cx("w-full text-left", getSecondaryButtonClass(activeTheme))
+      : cx(
+          "w-full rounded-lg px-3 py-1.5 text-left text-sm transition",
+          activeTheme.mutedText,
+          "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/20"
+        );
+
+    return (
+      <>
         <Tooltip content={TOOLTIP_TEXT.account}>
           <button
             type="button"
@@ -2204,26 +2459,33 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               if (isMobile) setMobileMenuOpen(false);
               router.push("/account");
             }}
-            className={getSecondaryButtonClass(activeTheme)}
+            className={utilityRowClass}
           >
             Account
           </button>
         </Tooltip>
 
-       {plan !== "pro" && (
-         <Tooltip content="Upgrade to Pro">
-           <button
-             type="button"
-             onClick={() => {
-               if (isMobile) setMobileMenuOpen(false);
-               router.push(BRAND.routes.pricing);
-             }}
-             className={cx("px-4 py-2 text-sm", activeTheme.buttonPrimary)}
-           >
-             Upgrade to Pro
-           </button>
-         </Tooltip>
-       )}
+        {plan !== "pro" && (
+          <Tooltip content="Upgrade to Pro">
+            <button
+              type="button"
+              onClick={() => {
+                if (isMobile) setMobileMenuOpen(false);
+                router.push(BRAND.routes.pricing);
+              }}
+              className={
+                isMobile
+                  ? cx("w-full px-3 py-2 text-left text-sm", activeTheme.buttonPrimary)
+                  : cx(
+                      "w-full rounded-lg px-3 py-1.5 text-left text-sm transition",
+                      "text-blue-300 hover:bg-blue-500/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+                    )
+              }
+            >
+              Upgrade to Pro
+            </button>
+          </Tooltip>
+        )}
 
         <Tooltip content={TOOLTIP_TEXT.help}>
           <Link
@@ -2231,70 +2493,61 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             onClick={() => {
               if (isMobile) setMobileMenuOpen(false);
             }}
-            className={cx(getSecondaryButtonClass(activeTheme), "text-center")}
+            className={utilityRowClass}
           >
             Help
           </Link>
         </Tooltip>
 
         <Tooltip content={TOOLTIP_TEXT.signOut}>
-          <button type="button" onClick={handleSignOut} className={getSecondaryButtonClass(activeTheme)}>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className={
+              isMobile
+                ? cx("w-full text-left", getSecondaryButtonClass(activeTheme))
+                : "w-full rounded-lg px-3 py-1.5 text-left text-sm text-red-300/80 transition hover:bg-red-950/30 hover:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400/30"
+            }
+          >
             Sign Out
           </button>
         </Tooltip>
+      </>
+    );
+  }
+
+  function renderSidebarActions(isMobile = false) {
+    return (
+      <div className="mt-3 flex flex-col gap-2">
+        {renderNewChatAction()}
+        {renderSidebarUtilityActions(isMobile)}
       </div>
     );
   }
 
-  function renderConversationCard(conversation: ConversationItem, isMobile = false) {
-    const isActive = conversation.id === conversationId;
-
+  function renderConversationRow(conversation: ConversationItem, isMobile = false) {
     return (
-      <div
+      <ConversationRow
         key={conversation.id}
-        className={cx(
-          "rounded-xl border p-2 transition",
-          isActive ? "border-blue-400/30 bg-white/10 text-white" : cx(activeTheme.panelBorder, "bg-white/[0.03] text-white hover:bg-white/[0.06]")
-        )}
-      >
-        <button
-          type="button"
-          onClick={() =>
-            isMobile ? handleMobileConversationOpen(conversation.id) : loadConversation(conversation.id)
+        conversation={conversation}
+        theme={activeTheme}
+        isActive={conversation.id === conversationId}
+        disabled={loading || sidebarLoading}
+        onSelect={() => {
+          if (isMobile) {
+            void handleMobileConversationOpen(conversation.id);
+            return;
           }
-          disabled={loading || sidebarLoading}
-          className="w-full text-left"
-        >
-          <div className="truncate font-medium">{conversation.title?.trim() || "New Chat"}</div>
-          <div className={cx("mt-1 text-xs", activeTheme.mutedText)}>
-            {formatConversationDate(conversation.updated_at)}
-          </div>
-        </button>
 
-        <div className="mt-2 flex gap-2">
-          <Tooltip content={TOOLTIP_TEXT.renameConversation}>
-            <button
-              type="button"
-              onClick={() => handleRenameConversation(conversation)}
-              disabled={loading || sidebarLoading}
-              className={cx("rounded-lg px-2 py-1 text-xs", getSecondaryButtonClass(activeTheme))}
-            >
-              Rename
-            </button>
-          </Tooltip>
-
-          <Tooltip content={TOOLTIP_TEXT.deleteConversation}>
-            <button
-              type="button"
-              onClick={() => handleDeleteConversation(conversation)}
-              disabled={loading || sidebarLoading}
-              className="rounded-lg border border-red-900/60 px-2 py-1 text-xs text-red-400 transition hover:border-red-700 disabled:opacity-50"
-            >
-              Delete
-            </button>
-          </Tooltip>
-        </div>
-      </div>
+          void loadConversation(conversation.id);
+        }}
+        onRename={() => {
+          void handleRenameConversation(conversation);
+        }}
+        onDelete={() => {
+          void handleDeleteConversation(conversation);
+        }}
+      />
     );
   }
 
@@ -2358,12 +2611,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 {renderSidebarActions(true)}
               </div>
 
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="flex-1 overflow-y-auto p-3" data-sidebar-history>
                 <div className={cx("mb-2 text-xs uppercase tracking-wide", activeTheme.mutedText)}>
                   Chat History
                 </div>
 
-                <div className="space-y-2">{conversations.map((conversation) => renderConversationCard(conversation, true))}</div>
+                <div className="space-y-1">{conversations.map((conversation) => renderConversationRow(conversation, true))}</div>
               </div>
             </div>
           </div>
@@ -2371,17 +2624,22 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
         <div className="flex h-full overflow-hidden">
           <aside className={cx("hidden h-full w-64 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
-            <div className={cx("sticky top-0 border-b p-4 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
-              <div className="truncate text-sm font-semibold">{userEmail}</div>
+            <div className={cx("sticky top-0 border-b p-3 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
+              <div className={cx("text-xs font-semibold tracking-wide", activeTheme.mutedText)}>{BRAND.name}</div>
+
+              <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
+                <div className="min-w-0 truncate text-sm font-semibold">{userEmail}</div>
+
+                <div className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-medium text-white/80">
+                  {plan === "pro" ? "Pro Plan" : "Free Plan"}
+                </div>
+              </div>
 
               {usage && (
-                <div className={cx("mt-2 text-xs", activeTheme.mutedText)}>
+                <div className={cx("mt-1 text-xs", activeTheme.mutedText)}>
                   {usage.used} / {usage.limit} messages used today
                 </div>
               )}
-                <div className="mt-2 inline-flex rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/80">
-                  {plan === "pro" ? "Pro Plan" : "Free Plan"}
-                </div>
 
               {usage && usage.remaining > 0 && usage.remaining <= 5 && (
                 <div className="mt-1 text-xs text-yellow-400">Only {usage.remaining} messages remaining today</div>
@@ -2394,14 +2652,20 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               )}
 
               {renderStatusMessages()}
-              {renderSidebarActions()}
+              <div className="mt-3">{renderNewChatAction()}</div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3">
+            <div className="flex-1 overflow-y-auto p-3" data-sidebar-history>
               <div className={cx("mb-2 text-xs uppercase tracking-wide", activeTheme.mutedText)}>
                 Chat History
               </div>
-              <div className="space-y-2">{conversations.map((conversation) => renderConversationCard(conversation))}</div>
+              <div className="space-y-1">{conversations.map((conversation) => renderConversationRow(conversation))}</div>
+            </div>
+
+            <div className={cx("shrink-0 border-t p-3", activeTheme.panelBorder)}>
+              <div className="flex flex-col gap-1">
+                {renderSidebarUtilityActions()}
+              </div>
             </div>
           </aside>
 
