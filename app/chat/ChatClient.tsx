@@ -8,10 +8,13 @@ import {
   ChevronUp,
   Clock3,
   HelpCircle,
+  ImageIcon,
   Mic,
   MicOff,
   MoreHorizontal,
   Palette,
+  Plus,
+  Send,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BRAND } from "@/lib/branding";
@@ -3157,7 +3160,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               </div>
             </div>
 
-            <div className={cx("sticky bottom-0 z-20 border-t bg-black/10 backdrop-blur-xl", activeTheme.panelBorder)}>
+            <div className="sticky bottom-0 z-20">
               <div className={`${CONTENT_RAIL_CLASS} space-y-1.5 py-2.5`}>
                 <input
                   ref={imageInputRef}
@@ -3169,7 +3172,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 />
 
                 {!useWebSearch && composerDocuments.length > 0 && (
-                  <div className={cx("rounded-2xl border p-2", activeTheme.panelBg, activeTheme.panelBorder)}>
+                  <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="flex flex-wrap gap-2">
                       {composerDocuments.map((doc) => (
                         <div
@@ -3202,7 +3205,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 )}
 
                 {!useWebSearch && imageBase64 && (
-                  <div className={cx("rounded-2xl border p-2", activeTheme.panelBg, activeTheme.panelBorder)}>
+                  <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-white/80">
                         {imageName || "Image attached"}
@@ -3219,29 +3222,25 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       <img
                         src={imageBase64}
                         alt="Selected upload preview"
-                        className="max-h-24 rounded-xl border border-white/10 object-contain"
+                        className="max-h-24 max-w-full rounded-xl border border-white/10 object-contain"
                       />
                     </div>
                   </div>
                 )}
 
-            <div
-              className={cx(
-                "sticky bottom-0 z-30 border-t backdrop-blur-xl",
-                "pb-[calc(env(safe-area-inset-bottom)+12px)]",
-                activeTheme.panelBg,
-                activeTheme.panelBorder
-              )}
-            >
+            <div className="sticky bottom-0 z-30 pb-[calc(env(safe-area-inset-bottom)+12px)]">
               <div className={`${CONTENT_RAIL_CLASS} py-2`}>
 
-                <form onSubmit={handleSubmit} className="space-y-2">
+                <form
+                  onSubmit={handleSubmit}
+                  className={cx(
+                    "min-w-0 overflow-hidden rounded-2xl border transition focus-within:ring-1 focus-within:ring-blue-400/50",
+                    activeTheme.inputBg,
+                    activeTheme.inputBorder
+                  )}
+                >
                   <div
-                    className={cx(
-                      "relative w-full rounded-2xl border shadow-[0_10px_30px_rgba(0,0,0,0.25)] focus-within:shadow-[0_0_0_1px_rgba(59,130,246,0.4),0_0_25px_rgba(59,130,246,0.18)]",
-                      activeTheme.inputBg,
-                      activeTheme.inputBorder
-                    )}
+                    className="relative w-full"
                   >
                     <textarea
                       value={input}
@@ -3273,28 +3272,31 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       maxLength={MAX_INPUT_LENGTH}
                       disabled={composerDisabled}
                       className={cx(
-                        "w-full resize-none rounded-2xl border bg-transparent px-4 py-3.5 outline-none transition-all duration-200",
+                        "w-full min-w-0 max-w-full resize-none rounded-2xl border-0 bg-transparent px-4 py-3.5 outline-none transition-all duration-200",
                         "min-h-[76px] sm:min-h-[52px]",
                         "max-h-[220px]",
                         "overflow-y-auto",
                         "leading-6",
                         "focus:min-h-[104px]",
                         "sm:focus:min-h-[52px]",
-                        activeTheme.panelBorder,
                         activeTheme.inputText,
                         "placeholder:text-white/40"
                       )}
                     />
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
                     {!useWebSearch && (
                       <>
                         {plan === "pro" ? (
-                          <DocumentUploadButton
-                            disabled={composerDisabled}
-                            onFilesSelected={handleFilesSelected}
-                          />
+                          <div
+                            className="[&>label>div]:!h-11 [&>label>div]:!w-11 [&>label>div]:!rounded-xl [&>label>div]:!border-white/10 [&>label>div]:!bg-white/5 [&>label>div]:!text-base [&>label>div]:hover:!bg-white/10"
+                          >
+                            <DocumentUploadButton
+                              disabled={composerDisabled}
+                              onFilesSelected={handleFilesSelected}
+                            />
+                          </div>
                         ) : (
                           <Tooltip content="File uploads are a Pro feature">
                             <button
@@ -3307,12 +3309,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               }
                               disabled={loading}
                               className={cx(
-                                "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
-                                getSecondaryButtonClass(activeTheme)
+                                "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 text-white/80 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
                               )}
                               aria-label="Upgrade to upload files"
                             >
-                              +
+                              <Plus className="h-4 w-4" />
                             </button>
                           </Tooltip>
                         )}
@@ -3323,12 +3324,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                             onClick={handleOpenImagePicker}
                             disabled={composerDisabled}
                             className={cx(
-                              "flex h-[52px] w-[52px] shrink-0 items-center justify-center text-xl",
-                              getSecondaryButtonClass(activeTheme)
+                              "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 text-white/80 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
                             )}
                             aria-label="Attach image"
                           >
-                            🖼️
+                            <ImageIcon className="h-4 w-4" />
                           </button>
                         </Tooltip>
                       </>
@@ -3341,7 +3341,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         disabled={micDisabled}
                         aria-label={isListening ? "Stop voice input" : "Start voice input"}
                         className={cx(
-                          "flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border transition disabled:cursor-not-allowed disabled:opacity-50",
+                          "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition disabled:cursor-not-allowed disabled:opacity-50",
                           isListening
                             ? "border-red-500 bg-red-500/15 text-red-400 shadow-[0_0_0_6px_rgba(239,68,68,0.12)] animate-pulse"
                             : "border-white/10 bg-white/5 text-white hover:bg-white/10"
@@ -3357,7 +3357,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           <button
                             type="button"
                             onClick={handleStop}
-                            className="h-[52px] rounded-2xl border border-red-700 px-5 py-3.5 text-white transition hover:bg-red-900/30"
+                            className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-red-700 px-3 text-sm text-white transition hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-red-400/50"
                           >
                             Stop
                           </button>
@@ -3371,11 +3371,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               (!input.trim() && !imageBase64 && readyDocumentIds.length === 0)
                             }
                             className={cx(
-                              "h-[52px] rounded-2xl px-5 py-3.5 text-white transition disabled:cursor-not-allowed disabled:opacity-50",
+                              "flex h-11 min-w-11 items-center justify-center rounded-xl px-3 text-white transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
                               activeTheme.buttonPrimary
                             )}
                           >
-                            Send
+                            <Send className="h-4 w-4" aria-hidden="true" />
+                            <span className="sr-only">Send</span>
                           </button>
                         </Tooltip>
                       )}
@@ -3385,17 +3386,21 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               </div>
             </div>
              
-                <div className="flex items-center justify-between gap-3 px-1">
-                  <div className={cx("text-[11px]", activeTheme.mutedText)}>
-                    {MAX_INPUT_LENGTH - input.length} characters remaining
-                  </div>
+                {(input.length >= MAX_INPUT_LENGTH - 200 || conversationDocuments.length > 0) && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+                    {input.length >= MAX_INPUT_LENGTH - 200 && (
+                      <div className={cx("text-[11px]", activeTheme.mutedText)}>
+                        {MAX_INPUT_LENGTH - input.length} characters remaining
+                      </div>
+                    )}
 
-                  <div className={cx("text-[11px]", activeTheme.mutedText)}>
-                    {conversationDocuments.length > 0
-                      ? `${conversationDocuments.length} document${conversationDocuments.length === 1 ? "" : "s"} in this conversation`
-                      : "No conversation documents"}
+                    {conversationDocuments.length > 0 && (
+                      <div className={cx("text-[11px]", activeTheme.mutedText)}>
+                        {`${conversationDocuments.length} document${conversationDocuments.length === 1 ? "" : "s"} in this conversation`}
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
               </div>
             </div>
           </section>
