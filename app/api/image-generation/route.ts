@@ -1,6 +1,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  IMAGE_GENERATION_DEFAULT_PROVIDER,
   IMAGE_GENERATION_DEFAULT_MODEL,
 } from "@/lib/image-generation/config";
 import {
@@ -32,6 +33,8 @@ type ImageGenerationErrorCode =
   | "IMAGE_GENERATION_CONFIGURATION"
   | "IMAGE_GENERATION_PROVIDER"
   | "INVALID_PROVIDER_OUTPUT"
+  | "IMAGE_DAILY_LIMIT_REACHED"
+  | "IMAGE_MONTHLY_LIMIT_REACHED"
   | "INTERNAL_ERROR";
 
 class RequestBodyTooLargeError extends Error {}
@@ -211,6 +214,77 @@ function mapProviderError(error: unknown): Response {
   }
 }
 
+type ImageQuotaReleaseReason =
+  | "provider_failure"
+  | "invalid_provider_output"
+  | "storage_failure"
+  | "persistence_failure"
+  | "request_aborted"
+  | "internal_failure";
+
+function getRpcErrorMessage(error: unknown): string {
+  if (!isRecord(error) || typeof error.message !== "string") {
+    return "";
+  }
+
+  return error.message;
+}
+
+function mapQuotaError(error: unknown): Response | null {
+  switch (getRpcErrorMessage(error)) {
+    case "IMAGE_DAILY_LIMIT_REACHED":
+      return errorResponse(
+        429,
+        "IMAGE_DAILY_LIMIT_REACHED",
+        "You've reached today's image generation limit.",
+      );
+    case "IMAGE_MONTHLY_LIMIT_REACHED":
+      return errorResponse(
+        429,
+        "IMAGE_MONTHLY_LIMIT_REACHED",
+        "You've reached this month's image generation limit.",
+      );
+    case "CONVERSATION_NOT_FOUND":
+      return errorResponse(404, "INVALID_REQUEST", "Conversation not found.");
+    case "UNAUTHORIZED":
+      return errorResponse(401, "UNAUTHORIZED", "Authentication is required.");
+    default:
+      return null;
+  }
+}
+
+function getReservedAttemptId(data: unknown): string | null {
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!isRecord(row) || !isSafeUuid(row.attempt_id)) {
+    return null;
+  }
+
+  return row.attempt_id;
+}
+
+async function releaseImageQuotaReservation(
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
+  attemptId: string,
+  reason: ImageQuotaReleaseReason,
+): Promise<void> {
+  try {
+    const { error } = await supabase.rpc("release_image_generation_quota", {
+      p_attempt_id: attemptId,
+      p_reason: reason,
+    });
+
+    if (error) {
+      console.error("POST /api/image-generation quota release failed", {
+        reason,
+      });
+    }
+  } catch {
+    console.error("POST /api/image-generation quota release exception", {
+      reason,
+    });
+  }
+}
+
 export async function POST(request: Request): Promise<Response> {
   let supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
   let userId = "";
@@ -373,12 +447,79 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  let attemptId: string;
+  try {
+    const { data, error } = await supabase.rpc(
+      "reserve_image_generation_quota",
+      { p_conversation_id: rawConversationId },
+    );
+
+    if (error) {
+      return mapQuotaError(error) ?? errorResponse(
+        500,
+        "INTERNAL_ERROR",
+        "Image generation could not be completed.",
+      );
+    }
+
+    const reservedAttemptId = getReservedAttemptId(data);
+    if (!reservedAttemptId) {
+      return errorResponse(
+        500,
+        "INTERNAL_ERROR",
+        "Image generation could not be completed.",
+      );
+    }
+
+    attemptId = reservedAttemptId;
+  } catch (error) {
+    return mapQuotaError(error) ?? errorResponse(
+      500,
+      "INTERNAL_ERROR",
+      "Image generation could not be completed.",
+    );
+  }
+
+  try {
+    const { data, error } = await supabase.rpc(
+      "start_image_generation_attempt",
+      {
+        p_attempt_id: attemptId,
+        p_provider: IMAGE_GENERATION_DEFAULT_PROVIDER,
+        p_model: IMAGE_GENERATION_DEFAULT_MODEL,
+      },
+    );
+
+    if (error || data !== true) {
+      await releaseImageQuotaReservation(supabase, attemptId, "internal_failure");
+      return errorResponse(
+        500,
+        "INTERNAL_ERROR",
+        "Image generation could not be completed.",
+      );
+    }
+  } catch {
+    await releaseImageQuotaReservation(supabase, attemptId, "internal_failure");
+    return errorResponse(
+      500,
+      "INTERNAL_ERROR",
+      "Image generation could not be completed.",
+    );
+  }
+
   let result: Awaited<ReturnType<ReplicateFluxSchnellProvider["generateImage"]>>;
 
   try {
     const provider = new ReplicateFluxSchnellProvider();
     result = await provider.generateImage(validated.request);
   } catch (error) {
+    await releaseImageQuotaReservation(
+      supabase,
+      attemptId,
+      isProviderError(error) && error.code === "invalid_output"
+        ? "invalid_provider_output"
+        : "provider_failure",
+    );
     return mapProviderError(error);
   }
 
@@ -396,6 +537,11 @@ export async function POST(request: Request): Promise<Response> {
     !isSafeMetadata(providerName) ||
     !isSafeMetadata(modelName)
   ) {
+    await releaseImageQuotaReservation(
+      supabase,
+      attemptId,
+      "invalid_provider_output",
+    );
     return errorResponse(
       502,
       "INVALID_PROVIDER_OUTPUT",
@@ -418,6 +564,7 @@ export async function POST(request: Request): Promise<Response> {
   })();
 
   if (!admin) {
+    await releaseImageQuotaReservation(supabase, attemptId, "internal_failure");
     return errorResponse(
       500,
       "INTERNAL_ERROR",
@@ -439,6 +586,7 @@ export async function POST(request: Request): Promise<Response> {
       conversationId: rawConversationId,
       reason: error instanceof Error ? error.message : "Unknown error.",
     });
+    await releaseImageQuotaReservation(supabase, attemptId, "storage_failure");
     return errorResponse(
       500,
       "INTERNAL_ERROR",
@@ -451,6 +599,7 @@ export async function POST(request: Request): Promise<Response> {
       conversationId: rawConversationId,
       reason: uploadError.message,
     });
+    await releaseImageQuotaReservation(supabase, attemptId, "storage_failure");
     return errorResponse(
       500,
       "INTERNAL_ERROR",
@@ -462,8 +611,9 @@ export async function POST(request: Request): Promise<Response> {
   let persistenceError: { message?: string } | null = null;
   try {
     ({ data: persisted, error: persistenceError } = await supabase.rpc(
-      "create_generated_image_chat_exchange",
+      "complete_generated_image_generation",
       {
+        p_attempt_id: attemptId,
         p_conversation_id: rawConversationId,
         p_content: validated.request.prompt,
         p_storage_path: storagePath,
@@ -491,6 +641,11 @@ export async function POST(request: Request): Promise<Response> {
         reason: cleanupError instanceof Error ? cleanupError.message : "Unknown error.",
       });
     }
+    await releaseImageQuotaReservation(
+      supabase,
+      attemptId,
+      "persistence_failure",
+    );
     return errorResponse(
       500,
       "INTERNAL_ERROR",
@@ -499,6 +654,31 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const durableIds = getDurableIds(persisted);
+  if (
+    !durableIds.userMessageId ||
+    !durableIds.assistantMessageId ||
+    !durableIds.generatedImageId
+  ) {
+    try {
+      await admin.storage.from("chat-images").remove([storagePath]);
+    } catch (cleanupError) {
+      console.error("POST /api/image-generation storage cleanup failed", {
+        conversationId: rawConversationId,
+        reason:
+          cleanupError instanceof Error ? cleanupError.message : "Unknown error.",
+      });
+    }
+    await releaseImageQuotaReservation(
+      supabase,
+      attemptId,
+      "persistence_failure",
+    );
+    return errorResponse(
+      500,
+      "INTERNAL_ERROR",
+      "Image generation could not be completed.",
+    );
+  }
   const responseBytes = new ArrayBuffer(generatedBytes.byteLength);
   new Uint8Array(responseBytes).set(generatedBytes);
 

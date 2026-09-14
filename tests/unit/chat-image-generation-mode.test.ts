@@ -4,6 +4,7 @@ import {
   fetchGeneratedImage,
   downloadGeneratedImage,
   getImageGenerationErrorMessage,
+  getImageGenerationQuotaMessage,
   ImageGenerationClientError,
   normalizeInitialMessages,
   reconcileGeneratedImageMessages,
@@ -287,5 +288,25 @@ describe("chat image-generation mode", () => {
       "Image generation is not configured right now."
     );
     expect(new ImageGenerationClientError("network", "safe")).toBeInstanceOf(Error);
+  });
+
+  it.each([
+    ["free", "daily", "Daily image limit reached. Come back tomorrow or upgrade to Pro."],
+    ["pro", "daily", "Daily image limit reached. Come back tomorrow."],
+    ["free", "monthly", "Monthly image limit reached. Come back next month or upgrade to Pro."],
+    ["pro", "monthly", "Monthly image limit reached. Come back next month."],
+  ] as const)("uses plan-aware %s %s image-quota wording", (plan, window, message) => {
+    expect(getImageGenerationQuotaMessage(plan, window)).toBe(message);
+    expect(message).not.toContain("P0001");
+  });
+
+  it.each([
+    ["free", "IMAGE_DAILY_LIMIT_REACHED", "Daily image limit reached. Come back tomorrow or upgrade to Pro."],
+    ["pro", "IMAGE_DAILY_LIMIT_REACHED", "Daily image limit reached. Come back tomorrow."],
+    ["free", "IMAGE_MONTHLY_LIMIT_REACHED", "Monthly image limit reached. Come back next month or upgrade to Pro."],
+    ["pro", "IMAGE_MONTHLY_LIMIT_REACHED", "Monthly image limit reached. Come back next month."],
+  ] as const)("maps %s %s to the matching safe client message", (plan, code, message) => {
+    expect(getImageGenerationErrorMessage(429, code, plan)).toBe(message);
+    expect(message).not.toContain("P0001");
   });
 });

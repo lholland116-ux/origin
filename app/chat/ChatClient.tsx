@@ -210,7 +210,23 @@ type UsageState = {
   used: number;
   limit: number;
   remaining: number;
+  imageGeneration?: ImageGenerationUsage;
 };
+
+type ImageUsageWindow = {
+  used: number;
+  reserved: number;
+  limit: number;
+  remaining: number;
+};
+
+type ImageGenerationUsage = {
+  plan: Plan;
+  daily: ImageUsageWindow;
+  monthly: ImageUsageWindow;
+};
+
+type ImageQuotaWindow = "daily" | "monthly";
 
 type DocumentsResponse = {
   documents?: UploadedDocument[];
@@ -529,7 +545,19 @@ export function isAbortError(error: unknown): boolean {
   );
 }
 
-export function getImageGenerationErrorMessage(status: number): string {
+export function getImageGenerationErrorMessage(
+  status: number,
+  code?: string,
+  plan: Plan = "free",
+): string {
+  if (status === 429 && code === "IMAGE_DAILY_LIMIT_REACHED") {
+    return getImageGenerationQuotaMessage(plan, "daily");
+  }
+
+  if (status === 429 && code === "IMAGE_MONTHLY_LIMIT_REACHED") {
+    return getImageGenerationQuotaMessage(plan, "monthly");
+  }
+
   switch (status) {
     case 400:
       return "Please enter a valid image prompt.";
@@ -546,6 +574,21 @@ export function getImageGenerationErrorMessage(status: number): string {
     default:
       return "Image generation failed. Please try again.";
   }
+}
+
+export function getImageGenerationQuotaMessage(
+  plan: Plan,
+  window: ImageQuotaWindow,
+): string {
+  if (window === "daily") {
+    return plan === "pro"
+      ? "Daily image limit reached. Come back tomorrow."
+      : "Daily image limit reached. Come back tomorrow or upgrade to Pro.";
+  }
+
+  return plan === "pro"
+    ? "Monthly image limit reached. Come back next month."
+    : "Monthly image limit reached. Come back next month or upgrade to Pro.";
 }
 
 const UUID_PATTERN =
@@ -577,16 +620,33 @@ function getSafeUuidHeader(response: Response, headerName: string): string | und
   return value && UUID_PATTERN.test(value) ? value : undefined;
 }
 
-async function throwImageGenerationHttpError(response: Response): Promise<never> {
+async function throwImageGenerationHttpError(
+  response: Response,
+  plan: Plan,
+): Promise<never> {
   const contentType = response.headers.get("content-type") || "";
+  let errorCode: string | undefined;
 
   if (contentType.includes("application/json")) {
-    await response.json().catch(() => null);
+    const body = await response.json().catch(() => null);
+    if (
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      "error" in body &&
+      body.error &&
+      typeof body.error === "object" &&
+      !Array.isArray(body.error) &&
+      "code" in body.error &&
+      typeof body.error.code === "string"
+    ) {
+      errorCode = body.error.code;
+    }
   }
 
   throw new ImageGenerationClientError(
     "http",
-    getImageGenerationErrorMessage(response.status),
+    getImageGenerationErrorMessage(response.status, errorCode, plan),
     response.status
   );
 }
@@ -596,6 +656,7 @@ export async function fetchGeneratedImage(
   options: {
     conversationId: string;
     signal?: AbortSignal;
+    plan?: Plan;
     fetcher?: typeof fetch;
     createObjectUrl?: (blob: Blob) => string;
   }
@@ -620,7 +681,7 @@ export async function fetchGeneratedImage(
   }
 
   if (!response.ok) {
-    return throwImageGenerationHttpError(response);
+    return throwImageGenerationHttpError(response, options.plan ?? "free");
   }
 
   const responseMimeType = normalizeResponseMimeType(
@@ -2080,7 +2141,26 @@ export default function ChatClient({
     return "Standard assistant";
   }, [useImageGeneration, useWebSearch, isListening, pendingImages.length, composerDocuments.length]);
 
-  const isLimitReached = Boolean(usage && usage.limit > 0 && usage.remaining <= 0);
+  const imageGenerationUsage = usage?.imageGeneration;
+  const isImageLimitReached = Boolean(
+    useImageGeneration &&
+      imageGenerationUsage &&
+      (imageGenerationUsage.daily.remaining <= 0 ||
+        imageGenerationUsage.monthly.remaining <= 0),
+  );
+  const isTextLimitReached = Boolean(
+    usage && usage.limit > 0 && usage.remaining <= 0,
+  );
+  const isLimitReached = useImageGeneration
+    ? isImageLimitReached
+    : isTextLimitReached;
+  const imageQuotaLimitMessage =
+    imageGenerationUsage && isImageLimitReached
+      ? getImageGenerationQuotaMessage(
+          plan,
+          imageGenerationUsage.daily.remaining <= 0 ? "daily" : "monthly",
+        )
+      : null;
   const pendingImageLimitExceeded =
     pendingImages.length > getMaxPendingImages(plan);
 
@@ -2687,13 +2767,61 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       const data = await res.json();
 
+      const imageGeneration =
+        data?.imageGeneration &&
+        (data.imageGeneration.plan === "free" ||
+          data.imageGeneration.plan === "pro") &&
+        data.imageGeneration.daily &&
+        data.imageGeneration.monthly
+          ? {
+              plan: data.imageGeneration.plan as Plan,
+              daily: {
+                used:
+                  typeof data.imageGeneration.daily.used === "number"
+                    ? data.imageGeneration.daily.used
+                    : 0,
+                reserved:
+                  typeof data.imageGeneration.daily.reserved === "number"
+                    ? data.imageGeneration.daily.reserved
+                    : 0,
+                limit:
+                  typeof data.imageGeneration.daily.limit === "number"
+                    ? data.imageGeneration.daily.limit
+                    : 0,
+                remaining:
+                  typeof data.imageGeneration.daily.remaining === "number"
+                    ? data.imageGeneration.daily.remaining
+                    : 0,
+              },
+              monthly: {
+                used:
+                  typeof data.imageGeneration.monthly.used === "number"
+                    ? data.imageGeneration.monthly.used
+                    : 0,
+                reserved:
+                  typeof data.imageGeneration.monthly.reserved === "number"
+                    ? data.imageGeneration.monthly.reserved
+                    : 0,
+                limit:
+                  typeof data.imageGeneration.monthly.limit === "number"
+                    ? data.imageGeneration.monthly.limit
+                    : 0,
+                remaining:
+                  typeof data.imageGeneration.monthly.remaining === "number"
+                    ? data.imageGeneration.monthly.remaining
+                    : 0,
+              },
+            }
+          : undefined;
+
       setUsage({
         used: typeof data?.used === "number" ? data.used : 0,
         limit: typeof data?.limit === "number" ? data.limit : 0,
         remaining: typeof data?.remaining === "number" ? data.remaining : 0,
-   });
+        imageGeneration,
+      });
 
-   setPlan(data?.plan === "pro" ? "pro" : "free");
+      setPlan(data?.plan === "pro" ? "pro" : "free");
     } catch (error) {
       setUsageError(error instanceof Error ? error.message : "Failed to load usage.");
     }
@@ -3229,6 +3357,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
 
     if (isLimitReached) {
+      if (useImageGeneration && imageGenerationUsage) {
+        setUiError(imageQuotaLimitMessage ?? getImageGenerationQuotaMessage(
+          plan,
+          imageGenerationUsage.daily.remaining <= 0 ? "daily" : "monthly",
+        ));
+        return;
+      }
+
       if (plan !== "pro") {
         openUpgradeModal(
           "You’ve reached today’s free limit",
@@ -3330,6 +3466,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         const generatedImageResult = await fetchGeneratedImage(effectiveMessage, {
           conversationId,
           signal: controller.signal,
+          plan,
         });
 
         if (
@@ -3357,6 +3494,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           has_image: false,
           has_documents: false,
         });
+        await fetchUsage();
         return;
       }
 
@@ -3548,6 +3686,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       const generatedImageResult = await fetchGeneratedImage(prompt, {
         conversationId,
         signal: controller.signal,
+        plan,
       });
 
       if (
@@ -3577,6 +3716,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         has_image: false,
         has_documents: false,
       });
+      await fetchUsage();
     } catch (error) {
       if (imageRequestGenerationRef.current !== requestGeneration) return;
 
@@ -3897,7 +4037,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                     {isLimitReached && (
                       <div className="mt-2 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
-                        Daily limit reached. Come back tomorrow or upgrade your plan.
+                        {imageQuotaLimitMessage ??
+                          "Daily limit reached. Come back tomorrow or upgrade your plan."}
                       </div>
                     )}
 
@@ -3957,7 +4098,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
               {isLimitReached && (
                 <div className="mt-2 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
-                  Daily limit reached. Come back tomorrow or upgrade your plan.
+                  {imageQuotaLimitMessage ??
+                    "Daily limit reached. Come back tomorrow or upgrade your plan."}
                 </div>
               )}
 

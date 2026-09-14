@@ -959,6 +959,72 @@ export type Database = {
           },
         ]
       }
+      image_generation_attempts: {
+        Row: {
+          completed_at: string | null
+          conversation_id: string
+          estimated_cost_microusd: number | null
+          expires_at: string
+          id: string
+          model: string | null
+          plan_snapshot: string
+          provider: string | null
+          provider_started_at: string | null
+          release_reason: string | null
+          released_at: string | null
+          reserved_at: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          conversation_id: string
+          estimated_cost_microusd?: number | null
+          expires_at: string
+          id?: string
+          model?: string | null
+          plan_snapshot: string
+          provider?: string | null
+          provider_started_at?: string | null
+          release_reason?: string | null
+          released_at?: string | null
+          reserved_at?: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          conversation_id?: string
+          estimated_cost_microusd?: number | null
+          expires_at?: string
+          id?: string
+          model?: string | null
+          plan_snapshot?: string
+          provider?: string | null
+          provider_started_at?: string | null
+          release_reason?: string | null
+          released_at?: string | null
+          reserved_at?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "image_generation_attempts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_generation_attempts_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       messages: {
         Row: {
           content: string
@@ -1082,6 +1148,52 @@ export type Database = {
     Functions: {
       create_generated_image_chat_exchange: {
         Args: {
+          p_conversation_id: string
+          p_content: string
+          p_mime_type: string
+          p_model: string
+          p_provider: string
+          p_storage_path: string
+        }
+        Returns: {
+          assistant_message_id: string
+          generated_image_id: string
+          user_message_id: string
+        }[]
+      }
+      reserve_image_generation_quota: {
+        Args: { p_conversation_id: string }
+        Returns: {
+          attempt_id: string
+          daily_limit: number
+          daily_remaining: number
+          daily_reserved: number
+          daily_used: number
+          monthly_limit: number
+          monthly_remaining: number
+          monthly_reserved: number
+          monthly_used: number
+          plan: string
+        }[]
+      }
+      start_image_generation_attempt: {
+        Args: {
+          p_attempt_id: string
+          p_model: string
+          p_provider: string
+        }
+        Returns: boolean
+      }
+      release_image_generation_quota: {
+        Args: {
+          p_attempt_id: string
+          p_reason: string
+        }
+        Returns: boolean
+      }
+      complete_generated_image_generation: {
+        Args: {
+          p_attempt_id: string
           p_conversation_id: string
           p_content: string
           p_mime_type: string

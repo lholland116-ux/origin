@@ -15,10 +15,21 @@ const PRO_DAILY_LIMIT = Number.isFinite(RAW_PRO_DAILY_LIMIT)
   ? RAW_PRO_DAILY_LIMIT
   : 300;
 
+const FREE_IMAGE_DAILY_LIMIT = 2;
+const FREE_IMAGE_MONTHLY_LIMIT = 10;
+const PRO_IMAGE_DAILY_LIMIT = 20;
+const PRO_IMAGE_MONTHLY_LIMIT = 200;
+
 type Plan = "free" | "pro";
 
 type ProfileRow = {
   plan: string | null;
+};
+
+type ImageGenerationAttemptRow = {
+  status: string | null;
+  expires_at: string | null;
+  completed_at: string | null;
 };
 
 function jsonError(message: string, status: number) {
@@ -33,12 +44,35 @@ function jsonError(message: string, status: number) {
   );
 }
 
-function normalizePlan(plan: string | null | undefined): Plan {
-  return plan === "pro" ? "pro" : "free";
+function normalizePlan(plan: string | null | undefined): Plan | null {
+  if (plan === "free" || plan === "pro") {
+    return plan;
+  }
+
+  return null;
 }
 
 function getDailyLimit(plan: Plan): number {
   return plan === "pro" ? PRO_DAILY_LIMIT : FREE_DAILY_LIMIT;
+}
+
+function getImageLimits(plan: Plan): {
+  daily: number;
+  monthly: number;
+} {
+  return plan === "pro"
+    ? { daily: PRO_IMAGE_DAILY_LIMIT, monthly: PRO_IMAGE_MONTHLY_LIMIT }
+    : { daily: FREE_IMAGE_DAILY_LIMIT, monthly: FREE_IMAGE_MONTHLY_LIMIT };
+}
+
+function getUtcWindowStarts(now: Date): {
+  dayStart: number;
+  monthStart: number;
+} {
+  return {
+    dayStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    monthStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+  };
 }
 
 export async function GET() {
@@ -66,6 +100,10 @@ export async function GET() {
     }
 
     const plan = normalizePlan(profile?.plan);
+    if (!plan) {
+      return jsonError("Failed to load profile.", 500);
+    }
+
     const limit = getDailyLimit(plan);
 
     const today = new Date().toISOString().slice(0, 10);
@@ -85,12 +123,71 @@ export async function GET() {
     const used = usageRow?.message_count ?? 0;
     const remaining = Math.max(limit - used, 0);
 
+    const { data: imageAttemptRows, error: imageAttemptError } = await supabase
+      .from("image_generation_attempts")
+      .select("status, expires_at, completed_at")
+      .eq("user_id", user.id);
+
+    if (imageAttemptError) {
+      console.error("GET /api/usage image-generation attempts error:", imageAttemptError);
+      return jsonError("Failed to load image usage.", 500);
+    }
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const { dayStart, monthStart } = getUtcWindowStarts(now);
+    let dailyImageUsed = 0;
+    let dailyImageReserved = 0;
+    let monthlyImageUsed = 0;
+    let monthlyImageReserved = 0;
+
+    for (const row of (imageAttemptRows ?? []) as ImageGenerationAttemptRow[]) {
+      if (row.status === "succeeded" && row.completed_at) {
+        const completedAtMs = Date.parse(row.completed_at);
+        if (Number.isFinite(completedAtMs)) {
+          if (completedAtMs >= dayStart) dailyImageUsed += 1;
+          if (completedAtMs >= monthStart) monthlyImageUsed += 1;
+        }
+      }
+
+      if (row.status === "reserved" && row.expires_at) {
+        const expiresAtMs = Date.parse(row.expires_at);
+        if (Number.isFinite(expiresAtMs) && expiresAtMs > nowMs) {
+          dailyImageReserved += 1;
+          monthlyImageReserved += 1;
+        }
+      }
+    }
+
+    const imageLimits = getImageLimits(plan);
+
     return NextResponse.json(
       {
         used,
         limit,
         remaining,
         plan,
+        imageGeneration: {
+          plan,
+          daily: {
+            used: dailyImageUsed,
+            reserved: dailyImageReserved,
+            limit: imageLimits.daily,
+            remaining: Math.max(
+              imageLimits.daily - dailyImageUsed - dailyImageReserved,
+              0,
+            ),
+          },
+          monthly: {
+            used: monthlyImageUsed,
+            reserved: monthlyImageReserved,
+            limit: imageLimits.monthly,
+            remaining: Math.max(
+              imageLimits.monthly - monthlyImageUsed - monthlyImageReserved,
+              0,
+            ),
+          },
+        },
       },
       {
         headers: {

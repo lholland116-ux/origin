@@ -5,6 +5,7 @@ const CONVERSATION_ID = "20000000-0000-4000-8000-000000000001";
 const USER_MESSAGE_ID = "30000000-0000-4000-8000-000000000001";
 const ASSISTANT_MESSAGE_ID = "30000000-0000-4000-8000-000000000002";
 const GENERATED_IMAGE_ID = "30000000-0000-4000-8000-000000000003";
+const ATTEMPT_ID = "40000000-0000-4000-8000-000000000001";
 
 const mocks = vi.hoisted(() => ({
   providerGenerateImage: vi.fn(),
@@ -131,15 +132,29 @@ describe("POST /api/image-generation", () => {
     mocks.supabase.from.mockReset();
     mocks.supabase.from.mockReturnValue(conversationQuery);
     mocks.supabase.rpc.mockReset();
-    mocks.supabase.rpc.mockResolvedValue({
-      data: [
-        {
-          user_message_id: USER_MESSAGE_ID,
-          assistant_message_id: ASSISTANT_MESSAGE_ID,
-          generated_image_id: GENERATED_IMAGE_ID,
-        },
-      ],
-      error: null,
+    mocks.supabase.rpc.mockImplementation(async (name: string) => {
+      if (name === "reserve_image_generation_quota") {
+        return { data: [{ attempt_id: ATTEMPT_ID }], error: null };
+      }
+
+      if (name === "start_image_generation_attempt") {
+        return { data: true, error: null };
+      }
+
+      if (name === "complete_generated_image_generation") {
+        return {
+          data: [
+            {
+              user_message_id: USER_MESSAGE_ID,
+              assistant_message_id: ASSISTANT_MESSAGE_ID,
+              generated_image_id: GENERATED_IMAGE_ID,
+            },
+          ],
+          error: null,
+        };
+      }
+
+      return { data: true, error: null };
     });
     const storage = {
       upload: vi.fn(async () => ({ data: { path: "generated/path.webp" }, error: null })),
@@ -217,6 +232,68 @@ describe("POST /api/image-generation", () => {
 
     expect(response.status).toBe(404);
     expect(mocks.providerGenerateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["IMAGE_DAILY_LIMIT_REACHED", "You've reached today's image generation limit."],
+    ["IMAGE_MONTHLY_LIMIT_REACHED", "You've reached this month's image generation limit."],
+  ])("maps %s to HTTP 429 without provider or Storage work", async (quotaCode, message) => {
+    mocks.supabase.rpc.mockImplementation(async (name: string) => {
+      if (name === "reserve_image_generation_quota") {
+        return { data: null, error: { message: quotaCode } };
+      }
+
+      return { data: true, error: null };
+    });
+
+    const response = await POST(request({ prompt: "A mountain lake" }));
+
+    expect(response.status).toBe(429);
+    expect(await responseJson(response)).toMatchObject({
+      error: { code: quotaCode, message },
+    });
+    expect(mocks.providerGenerateImage).not.toHaveBeenCalled();
+    expect(mocks.storage.upload).not.toHaveBeenCalled();
+    expect(
+      mocks.supabase.rpc.mock.calls.map((call) => call[0]),
+    ).toEqual(["reserve_image_generation_quota"]);
+  });
+
+  it("does not allow a client-supplied plan to influence image quota", async () => {
+    const response = await POST(
+      request({ prompt: "A mountain lake", plan: "pro" }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await responseJson(response)).toMatchObject({
+      error: { code: "UNSUPPORTED_FIELD" },
+    });
+    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+    expect(mocks.providerGenerateImage).not.toHaveBeenCalled();
+  });
+
+  it("reserves and marks the attempt before calling the provider", async () => {
+    const response = await POST(request({ prompt: "A mountain lake" }));
+    const rpcNames = mocks.supabase.rpc.mock.calls.map((call) => call[0]);
+    const startCallIndex = mocks.supabase.rpc.mock.calls.findIndex(
+      (call) => call[0] === "start_image_generation_attempt",
+    );
+
+    expect(response.status).toBe(200);
+    expect(rpcNames.slice(0, 2)).toEqual([
+      "reserve_image_generation_quota",
+      "start_image_generation_attempt",
+    ]);
+    expect(
+      mocks.supabase.rpc.mock.calls[startCallIndex]?.[1],
+    ).toMatchObject({
+      p_attempt_id: ATTEMPT_ID,
+      p_provider: "replicate",
+      p_model: "flux-schnell",
+    });
+    expect(mocks.providerGenerateImage.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mocks.supabase.rpc.mock.invocationCallOrder[startCallIndex] ?? 0,
+    );
   });
 
   it("rejects non-object JSON", async () => {
@@ -407,7 +484,11 @@ describe("POST /api/image-generation", () => {
       error: { code: "IMAGE_GENERATION_PROVIDER" },
     });
     expect(mocks.storage.upload).not.toHaveBeenCalled();
-    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc.mock.calls.map((call) => call[0])).toEqual([
+      "reserve_image_generation_quota",
+      "start_image_generation_attempt",
+      "release_image_generation_quota",
+    ]);
   });
 
   it("maps invalid provider output to a controlled 502", async () => {
@@ -424,6 +505,9 @@ describe("POST /api/image-generation", () => {
     expect(await responseJson(response)).toMatchObject({
       error: { code: "INVALID_PROVIDER_OUTPUT" },
     });
+    expect(mocks.supabase.rpc.mock.calls.at(-1)?.[0]).toBe(
+      "release_image_generation_quota",
+    );
   });
 
   it("returns exact generated bytes and required success headers", async () => {
@@ -466,18 +550,23 @@ describe("POST /api/image-generation", () => {
     );
     expect(Array.from(bytes)).toEqual([1, 2, 3, 255]);
     expect(options).toMatchObject({ contentType: "image/webp", upsert: false });
-    expect(mocks.supabase.rpc).toHaveBeenCalledOnce();
-    expect(mocks.supabase.rpc.mock.calls[0]?.[0]).toBe(
-      "create_generated_image_chat_exchange",
+    expect(mocks.supabase.rpc.mock.calls.map((call) => call[0])).toEqual([
+      "reserve_image_generation_quota",
+      "start_image_generation_attempt",
+      "complete_generated_image_generation",
+    ]);
+    const completionCall = mocks.supabase.rpc.mock.calls.find(
+      (call) => call[0] === "complete_generated_image_generation",
     );
-    expect(mocks.supabase.rpc.mock.calls[0]?.[1]).toMatchObject({
+    expect(completionCall?.[1]).toMatchObject({
+      p_attempt_id: ATTEMPT_ID,
       p_conversation_id: CONVERSATION_ID,
       p_content: "A mountain lake",
       p_mime_type: "image/webp",
       p_provider: "replicate",
       p_model: "flux-schnell",
     });
-    expect(JSON.stringify(mocks.supabase.rpc.mock.calls[0]?.[1])).not.toContain(
+    expect(JSON.stringify(completionCall?.[1])).not.toContain(
       "data:image",
     );
   });
@@ -492,14 +581,29 @@ describe("POST /api/image-generation", () => {
 
     expect(response.status).toBe(500);
     expect(mocks.providerGenerateImage).toHaveBeenCalledOnce();
-    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc.mock.calls.map((call) => call[0])).toEqual([
+      "reserve_image_generation_quota",
+      "start_image_generation_attempt",
+      "release_image_generation_quota",
+    ]);
     expect(mocks.storage.remove).not.toHaveBeenCalled();
   });
 
   it("cleans up the uploaded object when atomic persistence fails without retrying", async () => {
-    mocks.supabase.rpc.mockResolvedValueOnce({
-      data: null,
-      error: { message: "Database unavailable." },
+    mocks.supabase.rpc.mockImplementation(async (name: string) => {
+      if (name === "complete_generated_image_generation") {
+        return { data: null, error: { message: "Database unavailable." } };
+      }
+
+      if (name === "reserve_image_generation_quota") {
+        return { data: [{ attempt_id: ATTEMPT_ID }], error: null };
+      }
+
+      if (name === "start_image_generation_attempt") {
+        return { data: true, error: null };
+      }
+
+      return { data: true, error: null };
     });
 
     const response = await POST(request({ prompt: "A mountain lake" }));
@@ -508,6 +612,12 @@ describe("POST /api/image-generation", () => {
     expect(mocks.providerGenerateImage).toHaveBeenCalledOnce();
     expect(mocks.storage.upload).toHaveBeenCalledOnce();
     expect(mocks.storage.remove).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc.mock.calls.map((call) => call[0])).toEqual([
+      "reserve_image_generation_quota",
+      "start_image_generation_attempt",
+      "complete_generated_image_generation",
+      "release_image_generation_quota",
+    ]);
     expect(mocks.providerGenerateImage).toHaveBeenCalledTimes(1);
   });
 
