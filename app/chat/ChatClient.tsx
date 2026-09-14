@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import NextImage from "next/image";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -14,6 +14,7 @@ import {
   Globe2,
   HelpCircle,
   ImageIcon,
+  Info,
   Mic,
   MicOff,
   MessageCircle,
@@ -232,6 +233,32 @@ type DocumentsResponse = {
   documents?: UploadedDocument[];
   error?: string;
 };
+
+function formatUsageCount(value: number): string {
+  return String(Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0);
+}
+
+export function formatImageGenerationCounter(remaining: number): string {
+  const count = formatUsageCount(remaining);
+  return `${count} image${count === "1" ? "" : "s"} left today`;
+}
+
+export function formatImageGenerationUsageDetail(usage: ImageGenerationUsage): string {
+  return `Images today: ${formatUsageCount(usage.daily.used)} / ${formatUsageCount(usage.daily.limit)}\nImages this month: ${formatUsageCount(usage.monthly.used)} / ${formatUsageCount(usage.monthly.limit)}`;
+}
+
+export function shouldShowImageGenerationCounter(
+  imageModeActive: boolean,
+  imageUsage: ImageGenerationUsage | undefined,
+): boolean {
+  return imageModeActive && Boolean(imageUsage);
+}
+
+export function getUploadedMessageImageGridClass(imageCount: number): string {
+  if (imageCount <= 1) return "grid-cols-1 sm:max-w-md";
+  if (imageCount === 2) return "grid-cols-2";
+  return "grid-cols-2 sm:grid-cols-3";
+}
 
 function ConversationRow({
   conversation,
@@ -1554,8 +1581,7 @@ function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
   }
 
   return cx(
-    "min-w-0 max-w-full rounded-xl border p-3 break-words [overflow-wrap:anywhere]",
-    theme.panelBorder,
+    "min-w-0 max-w-full rounded-xl p-3 break-words [overflow-wrap:anywhere]",
     theme.assistantText
   );
 }
@@ -1796,6 +1822,121 @@ function MessageWidgetRenderer({
   return null;
 }
 
+function ImageGenerationUsageDetails({
+  usage,
+  theme,
+}: {
+  usage: ImageGenerationUsage;
+  theme: ChatTheme;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const popoverId = useId();
+  const detail = formatImageGenerationUsageDetail(usage);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const popoverWidth = 224;
+    const popoverHeight = 68;
+    const gap = 8;
+    const padding = 12;
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const viewportLeft = window.visualViewport?.offsetLeft ?? 0;
+    const viewportTop = window.visualViewport?.offsetTop ?? 0;
+    const minLeft = viewportLeft + padding;
+    const maxLeft = viewportLeft + viewportWidth - popoverWidth - padding;
+    const left = Math.min(Math.max(triggerRect.left, minLeft), Math.max(minLeft, maxLeft));
+    const belowTop = triggerRect.bottom + gap;
+    const bottomLimit = viewportTop + viewportHeight - padding;
+    const top =
+      belowTop + popoverHeight <= bottomLimit
+        ? belowTop
+        : Math.max(viewportTop + padding, triggerRect.top - popoverHeight - gap);
+
+    setPosition({ top, left });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+
+    updatePosition();
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || popoverRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    const handleViewportChange = () => {
+      window.requestAnimationFrame(updatePosition);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("scroll", handleViewportChange);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleViewportChange);
+      window.visualViewport?.removeEventListener("resize", handleViewportChange);
+      window.visualViewport?.removeEventListener("scroll", handleViewportChange);
+    };
+  }, [open, updatePosition]);
+
+  return (
+    <div className="relative inline-flex">
+      <Tooltip content={detail} touchSafe>
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-full text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+          aria-label="Image usage details"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={open ? popoverId : undefined}
+        >
+          <Info className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </Tooltip>
+
+      {open ? (
+        <div
+          ref={popoverRef}
+          id={popoverId}
+          role="dialog"
+          aria-label="Image usage details"
+          className={cx(
+            "fixed z-[80] min-w-[14rem] rounded-lg border p-3 text-xs shadow-xl",
+            theme.panelBg,
+            theme.panelBorder
+          )}
+          style={{ top: position.top, left: position.left }}
+        >
+          <div className="whitespace-pre-line">{detail}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ChatClient({
   userEmail,
   initialConversationId,
@@ -1925,7 +2066,6 @@ export default function ChatClient({
   const nativeSpeechAvailableRef = useRef(false);
   const desktopProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
   const mobileProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const headerProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
@@ -2083,8 +2223,7 @@ export default function ChatClient({
       if (
         profileMenuRef.current?.contains(target) ||
         desktopProfileTriggerRef.current?.contains(target) ||
-        mobileProfileTriggerRef.current?.contains(target) ||
-        headerProfileTriggerRef.current?.contains(target)
+        mobileProfileTriggerRef.current?.contains(target)
       ) {
         return;
       }
@@ -3589,6 +3728,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           return;
         }
 
+        if (error instanceof ImageGenerationClientError && error.status === 429) {
+          await fetchUsage();
+        }
+
         restorePendingImages(pendingImageSnapshot);
         setMessages((prev) => rollbackOptimisticMessages(prev, [optimisticUserId, assistantId]));
 
@@ -3720,6 +3863,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     } catch (error) {
       if (imageRequestGenerationRef.current !== requestGeneration) return;
 
+      if (error instanceof ImageGenerationClientError && error.status === 429) {
+        await fetchUsage();
+      }
+
       setMessages((prev) =>
         rollbackOptimisticMessages(prev, [optimisticUserId, assistantId])
       );
@@ -3783,6 +3930,34 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         {documentError && <div className="mt-2 text-xs text-red-400">{documentError}</div>}
         {speechError && <div className="mt-2 text-xs text-red-400">{speechError}</div>}
       </>
+    );
+  }
+
+  function renderImageGenerationUsage() {
+    const imageUsage = imageGenerationUsage;
+    if (!shouldShowImageGenerationCounter(useImageGeneration, imageUsage) || !imageUsage) {
+      return null;
+    }
+
+    const dailyRemaining = imageUsage.daily.remaining;
+
+    return (
+      <div
+        className="flex min-w-0 items-center gap-1.5 px-4 pt-3 text-xs"
+        role="status"
+        aria-live="polite"
+        aria-label="Image generation usage"
+      >
+        <span
+          className={cx(
+            "font-medium",
+            dailyRemaining <= 0 ? "text-red-300" : activeTheme.mutedText
+          )}
+        >
+          {formatImageGenerationCounter(dailyRemaining)}
+        </span>
+        <ImageGenerationUsageDetails usage={imageUsage} theme={activeTheme} />
+      </div>
     );
   }
 
@@ -3954,11 +4129,89 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     );
   }
 
-  function renderSidebarActions(isMobile = false) {
+  function renderSidebarModeActions() {
+    const standardActive = !useWebSearch && !useImageGeneration;
+
+    return (
+      <div className="flex flex-col gap-1" aria-label="Chat modes">
+        <Tooltip content={TOOLTIP_TEXT.standard}>
+          <button
+            type="button"
+            onClick={() => handleModeChange(false)}
+            disabled={loading}
+            className={cx(
+              "w-full justify-start",
+              getModeButtonClass(activeTheme, standardActive)
+            )}
+            aria-pressed={standardActive}
+          >
+            Standard
+          </button>
+        </Tooltip>
+
+        <Tooltip content={TOOLTIP_TEXT.webSearch}>
+          <button
+            type="button"
+            onClick={() => handleModeChange(true)}
+            disabled={loading}
+            className={cx(
+              "w-full justify-start",
+              getModeButtonClass(activeTheme, useWebSearch)
+            )}
+            aria-pressed={useWebSearch}
+          >
+            <Globe2 className="h-4 w-4" aria-hidden="true" />
+            Web Search
+          </button>
+        </Tooltip>
+
+        <Tooltip content={TOOLTIP_TEXT.imageMode}>
+          <button
+            type="button"
+            onClick={handleImageModeChange}
+            disabled={loading}
+            className={cx(
+              "w-full justify-start",
+              getModeButtonClass(activeTheme, useImageGeneration)
+            )}
+            aria-pressed={useImageGeneration}
+          >
+            <ImageIcon className="h-4 w-4" aria-hidden="true" />
+            Create image
+          </button>
+        </Tooltip>
+
+        {modeLabel !== "Standard assistant" && (
+          <div className={cx("px-3 pt-1 text-xs", activeTheme.mutedText)} aria-live="polite">
+            {modeLabel}
+          </div>
+        )}
+
+        <Tooltip content={TOOLTIP_TEXT.help}>
+          <Link
+            href="/help"
+            className={cx(
+              "flex h-10 w-full items-center gap-1.5 rounded-full border px-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50",
+              activeTheme.panelBorder,
+              "text-white/80 hover:bg-white/10 hover:text-white"
+            )}
+            aria-label="Help"
+          >
+            <HelpCircle className="h-4 w-4" aria-hidden="true" />
+            Help
+          </Link>
+        </Tooltip>
+      </div>
+    );
+  }
+
+  function renderSidebarActions() {
     return (
       <div className="mt-3 flex flex-col gap-2">
         {renderNewChatAction()}
-        {renderSidebarUtilityActions(isMobile)}
+        <div className={cx("border-t pt-3", activeTheme.panelBorder)}>
+          {renderSidebarModeActions()}
+        </div>
       </div>
     );
   }
@@ -4057,7 +4310,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </button>
                 </div>
 
-                {renderSidebarActions(true)}
+                {renderSidebarActions()}
               </div>
 
               <div className="flex-1 overflow-y-auto p-3" data-sidebar-history>
@@ -4066,6 +4319,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 </div>
 
                 <div className="space-y-1">{conversations.map((conversation) => renderConversationRow(conversation, true))}</div>
+              </div>
+
+              <div className={cx("shrink-0 border-t p-3", activeTheme.panelBorder)}>
+                {renderSidebarUtilityActions(true)}
               </div>
             </div>
           </div>
@@ -4104,7 +4361,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               )}
 
               {renderStatusMessages()}
-              <div className="mt-3">{renderNewChatAction()}</div>
+              {renderSidebarActions()}
             </div>
 
             <div className="flex-1 overflow-y-auto p-3" data-sidebar-history>
@@ -4122,99 +4379,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           </aside>
 
           <section className="flex h-full min-w-0 flex-1 flex-col overflow-x-hidden bg-transparent">
-            <div className={cx("sticky top-0 z-20 border-b backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
-              <div className="w-full px-4 py-2 sm:px-6">
-                <div className="flex min-h-11 flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setMobileMenuOpen(true)}
-                      className={cx("h-9 w-9 shrink-0 p-0 text-sm md:hidden", getSecondaryButtonClass(activeTheme))}
-                      aria-label="Open menu"
-                    >
-                      ☰
-                    </button>
-
-                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                      <Tooltip content={TOOLTIP_TEXT.standard}>
-                        <button
-                          type="button"
-                          onClick={() => handleModeChange(false)}
-                          disabled={loading}
-                          className={getModeButtonClass(
-                            activeTheme,
-                            !useWebSearch && !useImageGeneration
-                          )}
-                        >
-                          Standard
-                        </button>
-                      </Tooltip>
-
-                      <Tooltip content={TOOLTIP_TEXT.webSearch}>
-                        <button
-                          type="button"
-                          onClick={() => handleModeChange(true)}
-                          disabled={loading}
-                          className={getModeButtonClass(activeTheme, useWebSearch)}
-                        >
-                          <Globe2 className="h-4 w-4" aria-hidden="true" />
-                          Web Search
-                        </button>
-                      </Tooltip>
-
-                      <Tooltip content={TOOLTIP_TEXT.imageMode}>
-                        <button
-                          type="button"
-                          onClick={handleImageModeChange}
-                          disabled={loading}
-                          className={getModeButtonClass(activeTheme, useImageGeneration)}
-                        >
-                          <ImageIcon className="h-4 w-4" aria-hidden="true" />
-                          Image
-                        </button>
-                      </Tooltip>
-
-                      {modeLabel !== "Standard assistant" && (
-                        <span className={cx("max-w-[12rem] truncate text-xs", activeTheme.mutedText)}>{modeLabel}</span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex shrink-0 items-center gap-3">
-                    <Tooltip content={TOOLTIP_TEXT.help}>
-                      <Link
-                        href="/help"
-                        className={cx(
-                          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-cyan-300/60",
-                          activeTheme.panelBorder,
-                          "text-white/80 hover:bg-white/10 hover:text-white"
-                        )}
-                        aria-label="Help"
-                      >
-                        <HelpCircle className="h-4 w-4" />
-                      </Link>
-                    </Tooltip>
-
-                    <button
-                      ref={headerProfileTriggerRef}
-                      type="button"
-                      onClick={(event) => toggleProfileMenu(event.currentTarget)}
-                      className={cx(
-                        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-white/5 text-[11px] font-semibold text-white transition focus:outline-none focus:ring-2 focus:ring-cyan-300/60",
-                        activeTheme.panelBorder,
-                        "hover:bg-white/10"
-                      )}
-                      aria-label="Open profile and settings"
-                      aria-haspopup="dialog"
-                      aria-expanded={profileMenuOpen}
-                      aria-controls="chat-profile-settings"
-                      title="Open profile and settings"
-                    >
-                      {getUserInitials(userEmail)}
-                    </button>
-                  </div>
-                </div>
-              </div>
+            <div className="flex h-12 shrink-0 items-center px-3 md:hidden">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(true)}
+                className={cx("h-9 w-9 shrink-0 p-0 text-sm", getSecondaryButtonClass(activeTheme))}
+                aria-label="Open menu"
+              >
+                ☰
+              </button>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -4288,6 +4461,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       useImageGeneration &&
                       message.role === "assistant" &&
                       message.id === messages[messages.length - 1]?.id;
+                    const isLatestMessage = message.id === messages[messages.length - 1]?.id;
                     const isRegeneratingImage = regeneratingMessageId === message.id;
 
                     const bubbleWidthClass =
@@ -4357,14 +4531,16 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           </div>
 
                           {message.generatedImage ? (
-                            <div className="mt-3 min-w-0 max-w-full overflow-hidden rounded-xl border border-white/10">
+                            <div className="mt-3 flex w-fit min-w-0 max-w-full overflow-hidden rounded-xl">
                               <NextImage
                                 src={message.generatedImage.url}
                                 alt="Generated image"
                                 width={768}
                                 height={768}
                                 unoptimized
-                                className="h-auto w-auto max-h-[min(70vh,640px)] max-w-full object-contain"
+                                priority={isLatestMessage}
+                                sizes="(max-width: 768px) calc(100vw - 2rem), 768px"
+                                className="block h-auto w-auto max-h-[min(70vh,640px)] max-w-full object-contain"
                               />
                             </div>
                           ) : null}
@@ -4427,8 +4603,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           {messageImageSource === "children" && messageImages.length > 0 ? (
                             <div
                               className={cx(
-                                "mt-3 grid max-w-full gap-2",
-                                messageImages.length > 1 ? "grid-cols-2" : "grid-cols-1"
+                                "mt-3 grid min-w-0 max-w-full gap-2",
+                                getUploadedMessageImageGridClass(messageImages.length)
                               )}
                             >
                               {messageImages.map((image, index) =>
@@ -4696,6 +4872,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     activeTheme.inputBorder
                   )}
                 >
+                  {renderImageGenerationUsage()}
+
                   <div
                     className="relative w-full"
                   >
