@@ -142,6 +142,13 @@ export type MessageImage = {
   image_url?: string;
 };
 
+export type GeneratedImage = {
+  url: string;
+  mimeType: string;
+  provider?: string;
+  model?: string;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -157,6 +164,7 @@ type Message = {
   images?: MessageImage[];
   has_child_images?: boolean;
   documents?: UploadedDocument[];
+  generatedImage?: GeneratedImage;
 };
 
 type ConversationItem = {
@@ -482,6 +490,176 @@ export function calculateComposerTextareaSize(
   };
 }
 
+export type ImageGenerationClientErrorCode =
+  | "http"
+  | "network"
+  | "invalid_response";
+
+export class ImageGenerationClientError extends Error {
+  readonly code: ImageGenerationClientErrorCode;
+  readonly status?: number;
+
+  constructor(
+    code: ImageGenerationClientErrorCode,
+    message: string,
+    status?: number
+  ) {
+    super(message);
+    this.name = "ImageGenerationClientError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function isAbortError(error: unknown): boolean {
+  return (
+    (typeof DOMException !== "undefined" &&
+      error instanceof DOMException &&
+      error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+export function getImageGenerationErrorMessage(status: number): string {
+  switch (status) {
+    case 400:
+      return "Please enter a valid image prompt.";
+    case 401:
+      return "Your session has expired. Please sign in again.";
+    case 413:
+      return "That image request is too large. Please shorten the prompt.";
+    case 415:
+      return "Image generation requires a JSON request.";
+    case 500:
+      return "Image generation is not configured right now.";
+    case 502:
+      return "Image generation is temporarily unavailable. Please try again.";
+    default:
+      return "Image generation failed. Please try again.";
+  }
+}
+
+function normalizeResponseMimeType(value: string | null): string {
+  return value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function isImageMimeType(value: string): boolean {
+  return value.startsWith("image/");
+}
+
+function getSafeImageMetadataHeader(
+  response: Response,
+  headerName: string
+): string | undefined {
+  const value = response.headers.get(headerName)?.trim();
+
+  if (!value || value.length > 100 || !/^[a-zA-Z0-9._:/-]+$/.test(value)) {
+    return undefined;
+  }
+
+  return value;
+}
+
+async function throwImageGenerationHttpError(response: Response): Promise<never> {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    await response.json().catch(() => null);
+  }
+
+  throw new ImageGenerationClientError(
+    "http",
+    getImageGenerationErrorMessage(response.status),
+    response.status
+  );
+}
+
+export async function fetchGeneratedImage(
+  prompt: string,
+  options: {
+    signal?: AbortSignal;
+    fetcher?: typeof fetch;
+    createObjectUrl?: (blob: Blob) => string;
+  } = {}
+): Promise<GeneratedImage> {
+  const fetcher = options.fetcher ?? fetch;
+  let response: Response;
+
+  try {
+    response = await fetcher("/api/image-generation", {
+      method: "POST",
+      signal: options.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+
+    throw new ImageGenerationClientError(
+      "network",
+      "Could not reach image generation. Please try again."
+    );
+  }
+
+  if (!response.ok) {
+    return throwImageGenerationHttpError(response);
+  }
+
+  const responseMimeType = normalizeResponseMimeType(
+    response.headers.get("content-type")
+  );
+
+  if (!isImageMimeType(responseMimeType)) {
+    throw new ImageGenerationClientError(
+      "invalid_response",
+      "Image generation returned an invalid image. Please try again."
+    );
+  }
+
+  let blob: Blob;
+  try {
+    blob = await response.blob();
+  } catch {
+    throw new ImageGenerationClientError(
+      "invalid_response",
+      "Image generation returned an unreadable image. Please try again."
+    );
+  }
+
+  const blobMimeType = normalizeResponseMimeType(blob.type);
+  if (blob.size === 0 || (blobMimeType && !isImageMimeType(blobMimeType))) {
+    throw new ImageGenerationClientError(
+      "invalid_response",
+      "Image generation returned an invalid image. Please try again."
+    );
+  }
+
+  let url: string;
+  try {
+    url = (options.createObjectUrl ?? ((value) => URL.createObjectURL(value)))(
+      blob
+    );
+  } catch {
+    throw new ImageGenerationClientError(
+      "invalid_response",
+      "Generated image could not be displayed. Please try again."
+    );
+  }
+
+  return {
+    url,
+    mimeType: responseMimeType,
+    provider: getSafeImageMetadataHeader(response, "x-lvtchat-image-provider"),
+    model: getSafeImageMetadataHeader(response, "x-lvtchat-image-model"),
+  };
+}
+
+function revokeGeneratedImageObjectUrl(url: string): void {
+  if (typeof URL !== "undefined") {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export function getMaxPendingImages(plan: string | null | undefined): number {
   return plan === "pro" ? PRO_MAX_PENDING_IMAGES : FREE_MAX_PENDING_IMAGES;
 }
@@ -585,6 +763,7 @@ const TOOLTIP_TEXT = {
   newChat: "Start a new conversation",
   standard: "General writing, brainstorming, and everyday help",
   webSearch: "Use current online information when freshness matters",
+  imageMode: "Generate an image from your prompt",
   image: "Attach an image in Standard mode",
   mic: "Speak your message using your microphone",
   send: "Send your message",
@@ -1358,6 +1537,7 @@ export default function ChatClient({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
+  const [useImageGeneration, setUseImageGeneration] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [uploadingImages, setUploadingImages] = useState(false);
   const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>([]);
@@ -1389,6 +1569,8 @@ export default function ChatClient({
 
   const abortRef = useRef<AbortController | null>(null);
   const messageLoadGenerationRef = useRef(0);
+  const imageRequestGenerationRef = useRef(0);
+  const generatedImageUrlsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     let cancelled = false;
     const requestGeneration = ++messageLoadGenerationRef.current;
@@ -1496,6 +1678,30 @@ export default function ChatClient({
     textarea.style.height = `${nextSize.height}px`;
     textarea.style.overflowY = nextSize.overflowY;
   }, [input]);
+
+  function registerGeneratedImageUrl(url: string): void {
+    generatedImageUrlsRef.current.add(url);
+  }
+
+  function revokeGeneratedImageUrl(url: string): void {
+    generatedImageUrlsRef.current.delete(url);
+    revokeGeneratedImageObjectUrl(url);
+  }
+
+  useEffect(() => {
+    const displayedUrls = new Set(
+      messages
+        .map((message) => message.generatedImage?.url)
+        .filter((url): url is string => Boolean(url))
+    );
+
+    for (const url of generatedImageUrlsRef.current) {
+      if (!displayedUrls.has(url)) {
+        generatedImageUrlsRef.current.delete(url);
+        revokeGeneratedImageObjectUrl(url);
+      }
+    }
+  }, [messages]);
 
   const getProfileTrigger = useCallback(
     () =>
@@ -1646,6 +1852,7 @@ export default function ChatClient({
   );
 
   const modeLabel = useMemo(() => {
+    if (useImageGeneration) return "Image generation";
     if (useWebSearch) return "Using web search";
     if (isListening) return "Voice input active";
     if (pendingImages.length > 0) {
@@ -1655,7 +1862,7 @@ export default function ChatClient({
     }
     if (composerDocuments.length > 0) return "Documents attached";
     return "Standard assistant";
-  }, [useWebSearch, isListening, pendingImages.length, composerDocuments.length]);
+  }, [useImageGeneration, useWebSearch, isListening, pendingImages.length, composerDocuments.length]);
 
   const isLimitReached = Boolean(usage && usage.limit > 0 && usage.remaining <= 0);
   const pendingImageLimitExceeded =
@@ -1718,10 +1925,18 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }, []);
 
   useEffect(() => {
+    const generatedImageUrls = generatedImageUrlsRef.current;
+
     return () => {
+      imageRequestGenerationRef.current += 1;
       abortRef.current?.abort();
       recognitionRef.current?.abort();
       recognitionRef.current = null;
+
+      for (const url of generatedImageUrls) {
+        revokeGeneratedImageObjectUrl(url);
+      }
+      generatedImageUrls.clear();
     };
   }, []);
 
@@ -2147,7 +2362,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   function handleOpenImagePicker(): void {
-    if (loading || uploadingImages || isUploadingDocuments || isLimitReached || useWebSearch) {
+    if (
+      loading ||
+      uploadingImages ||
+      isUploadingDocuments ||
+      isLimitReached ||
+      useWebSearch ||
+      useImageGeneration
+    ) {
       return;
     }
 
@@ -2402,7 +2624,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleFilesSelected(files: File[]) {
     if (isUploadingDocuments) return;
 
-    if (useWebSearch) {
+    if (useWebSearch || useImageGeneration) {
       setDocumentError("Document upload is only available in Standard mode.");
       return;
     }
@@ -2531,6 +2753,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function loadConversation(nextConversationId: string) {
     if (loading || nextConversationId === conversationId) return;
 
+    imageRequestGenerationRef.current += 1;
+    abortRef.current?.abort();
     const requestGeneration = ++messageLoadGenerationRef.current;
     setSidebarLoading(true);
     clearTransientErrors();
@@ -2594,6 +2818,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleNewChat() {
     if (loading) return;
 
+    imageRequestGenerationRef.current += 1;
+    abortRef.current?.abort();
     messageLoadGenerationRef.current += 1;
     setSidebarLoading(true);
     clearTransientErrors();
@@ -2714,7 +2940,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     event.target.value = "";
     if (files.length === 0) return;
 
-    if (useWebSearch) {
+    if (useWebSearch || useImageGeneration) {
       setUiError("Image upload is only available in Standard mode.");
       return;
     }
@@ -2813,6 +3039,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
+    if (useImageGeneration && (hasImages || composerDocuments.length > 0)) {
+      setUiError("Image generation mode does not support file upload.");
+      return;
+    }
+
     if (hasPendingDocuments) {
       setUiError("Please wait for attached documents to finish processing before sending.");
       return;
@@ -2875,10 +3106,40 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat";
+    const requestGeneration = ++imageRequestGenerationRef.current;
     let responseAccepted = false;
 
     try {
+      if (useImageGeneration) {
+        const generatedImage = await fetchGeneratedImage(effectiveMessage, {
+          signal: controller.signal,
+        });
+
+        if (
+          controller.signal.aborted ||
+          imageRequestGenerationRef.current !== requestGeneration
+        ) {
+          revokeGeneratedImageUrl(generatedImage.url);
+          return;
+        }
+
+        responseAccepted = true;
+        registerGeneratedImageUrl(generatedImage.url);
+        updateAssistantMessage(assistantId, (msg) => ({
+          ...msg,
+          generatedImage,
+        }));
+
+        trackGaEvent("chat_message_sent", {
+          plan,
+          mode: "image",
+          has_image: false,
+          has_documents: false,
+        });
+        return;
+      }
+
+      const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat";
       const res = await fetch(endpoint, {
         method: "POST",
         signal: controller.signal,
@@ -2964,6 +3225,26 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         has_documents: hasReadyDocuments,
       });
     } catch (error) {
+      if (useImageGeneration) {
+        if (imageRequestGenerationRef.current !== requestGeneration) {
+          return;
+        }
+
+        restorePendingImages(pendingImageSnapshot);
+        setMessages((prev) => rollbackOptimisticMessages(prev, [optimisticUserId, assistantId]));
+
+        if (isAbortError(error)) {
+          setUiError("Image generation stopped.");
+        } else {
+          setUiError(
+            error instanceof ImageGenerationClientError
+              ? error.message
+              : "Image generation failed. Please try again."
+          );
+        }
+        return;
+      }
+
       if (!responseAccepted) {
         restorePendingImages(pendingImageSnapshot);
         setMessages((prev) => rollbackOptimisticMessages(prev, [optimisticUserId, assistantId]));
@@ -3017,6 +3298,17 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
 
     setUseWebSearch(nextUseWebSearch);
+    setUseImageGeneration(false);
+    clearTransientErrors();
+  }
+
+  function handleImageModeChange(): void {
+    if (loading) return;
+
+    discardPendingImages();
+    clearComposerDocuments();
+    setUseWebSearch(false);
+    setUseImageGeneration(true);
     clearTransientErrors();
   }
 
@@ -3384,7 +3676,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           type="button"
                           onClick={() => handleModeChange(false)}
                           disabled={loading}
-                          className={getModeButtonClass(activeTheme, !useWebSearch)}
+                          className={getModeButtonClass(
+                            activeTheme,
+                            !useWebSearch && !useImageGeneration
+                          )}
                         >
                           Standard
                         </button>
@@ -3399,6 +3694,18 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         >
                           <Globe2 className="h-4 w-4" aria-hidden="true" />
                           Web Search
+                        </button>
+                      </Tooltip>
+
+                      <Tooltip content={TOOLTIP_TEXT.imageMode}>
+                        <button
+                          type="button"
+                          onClick={handleImageModeChange}
+                          disabled={loading}
+                          className={getModeButtonClass(activeTheme, useImageGeneration)}
+                        >
+                          <ImageIcon className="h-4 w-4" aria-hidden="true" />
+                          Image
                         </button>
                       </Tooltip>
 
@@ -3511,6 +3818,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     const messageTime = messageTimestamps.get(message.id);
                     const isStreamingAssistant =
                       loading && message.role === "assistant" && message.id === messages[messages.length - 1]?.id;
+                    const isGeneratingImage =
+                      loading &&
+                      useImageGeneration &&
+                      message.role === "assistant" &&
+                      message.id === messages[messages.length - 1]?.id;
 
                     const bubbleWidthClass =
                       message.role === "user"
@@ -3567,9 +3879,29 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                             "
                           >
                             <ChatMessageContent
-                              content={message.content || (isStreamingAssistant ? "Thinking..." : "")}
+                              content={
+                                message.content ||
+                                (isGeneratingImage
+                                  ? "Generating image…"
+                                  : isStreamingAssistant
+                                    ? "Thinking..."
+                                    : "")
+                              }
                             />
                           </div>
+
+                          {message.generatedImage ? (
+                            <div className="mt-3 min-w-0 max-w-full overflow-hidden rounded-xl border border-white/10">
+                              <NextImage
+                                src={message.generatedImage.url}
+                                alt="Generated image"
+                                width={768}
+                                height={768}
+                                unoptimized
+                                className="h-auto w-auto max-h-[min(70vh,640px)] max-w-full object-contain"
+                              />
+                            </div>
+                          ) : null}
 
                           {messageImageSource === "children" && messageImages.length > 0 ? (
                             <div
@@ -3720,7 +4052,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                   {loading && messages.length > 0 && (
                     <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs ${activeTheme.mutedText}`}>
-                      {useWebSearch
+                      {useImageGeneration
+                        ? "Generating image…"
+                        : useWebSearch
                         ? "Using web search..."
                         : uploadingImages
                           ? "Processing images..."
@@ -3743,11 +4077,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   accept="image/*"
                   multiple={plan === "pro"}
                   onChange={handleImageChange}
-                  disabled={composerDisabled || useWebSearch}
+                  disabled={composerDisabled || useWebSearch || useImageGeneration}
                   className="hidden"
                 />
 
-                {!useWebSearch && composerDocuments.length > 0 && (
+                {!useWebSearch && !useImageGeneration && composerDocuments.length > 0 && (
                   <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="flex flex-wrap gap-2">
                       {composerDocuments.map((doc) => (
@@ -3780,7 +4114,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
                 )}
 
-                {!useWebSearch && pendingImages.length > 0 && (
+                {!useWebSearch && !useImageGeneration && pendingImages.length > 0 && (
                   <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="grid max-w-full grid-cols-1 gap-2 sm:grid-cols-3">
                       {pendingImages.map((image) => (
@@ -3855,7 +4189,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         if (speechError) setSpeechError(null);
                       }}
                       placeholder={
-                        useWebSearch
+                        useImageGeneration
+                          ? isListening
+                            ? "Listening… tap mic to stop."
+                            : "Describe the image you want to generate..."
+                          : useWebSearch
                           ? isListening
                             ? "Listening… tap mic to stop."
                             : "Ask something with web search..."
@@ -3886,7 +4224,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
 
                   <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
-                    {!useWebSearch && (
+                    {!useWebSearch && !useImageGeneration && (
                       <>
                         {plan === "pro" ? (
                           <div
