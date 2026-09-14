@@ -908,6 +908,57 @@ export type Database = {
           },
         ]
       }
+      message_generated_images: {
+        Row: {
+          conversation_id: string
+          created_at: string
+          id: string
+          message_id: string
+          mime_type: string
+          model: string
+          provider: string
+          storage_path: string
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string
+          id?: string
+          message_id: string
+          mime_type: string
+          model: string
+          provider: string
+          storage_path: string
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          message_id?: string
+          mime_type?: string
+          model?: string
+          provider?: string
+          storage_path?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_generated_images_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: true
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_generated_images_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages: {
         Row: {
           content: string
@@ -1029,6 +1080,21 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_generated_image_chat_exchange: {
+        Args: {
+          p_conversation_id: string
+          p_content: string
+          p_mime_type: string
+          p_model: string
+          p_provider: string
+          p_storage_path: string
+        }
+        Returns: {
+          assistant_message_id: string
+          generated_image_id: string
+          user_message_id: string
+        }[]
+      }
       create_chat_message_with_images: {
         Args: {
           p_content: string

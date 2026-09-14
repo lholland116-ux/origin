@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
+const CONVERSATION_ID = "20000000-0000-4000-8000-000000000001";
+const USER_MESSAGE_ID = "30000000-0000-4000-8000-000000000001";
+const ASSISTANT_MESSAGE_ID = "30000000-0000-4000-8000-000000000002";
+const GENERATED_IMAGE_ID = "30000000-0000-4000-8000-000000000003";
 
 const mocks = vi.hoisted(() => ({
   providerGenerateImage: vi.fn(),
@@ -9,11 +13,27 @@ const mocks = vi.hoisted(() => ({
     auth: {
       getUser: vi.fn(),
     },
+    from: vi.fn(),
+    rpc: vi.fn(),
+  },
+  admin: {
+    storage: {
+      from: vi.fn(),
+    },
+  },
+  conversationQuery: null as unknown as { maybeSingle: ReturnType<typeof vi.fn> },
+  storage: null as unknown as {
+    upload: ReturnType<typeof vi.fn>;
+    remove: ReturnType<typeof vi.fn>;
   },
 }));
 
 vi.mock("../../lib/supabase/server", () => ({
   createServerSupabaseClient: vi.fn(async () => mocks.supabase),
+}));
+
+vi.mock("../../lib/supabase/admin", () => ({
+  createAdminClient: vi.fn(() => mocks.admin),
 }));
 
 vi.mock(
@@ -49,12 +69,25 @@ function request(
   body: unknown,
   headers: Record<string, string> = {},
 ): Request {
+  const finalBody =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? { conversationId: CONVERSATION_ID, ...body }
+      : body;
+
   return new Request("http://localhost/api/image-generation", {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       ...headers,
     },
+    body: typeof finalBody === "string" ? finalBody : JSON.stringify(finalBody),
+  });
+}
+
+function requestWithoutConversation(body: unknown): Request {
+  return new Request("http://localhost/api/image-generation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
@@ -83,6 +116,38 @@ describe("POST /api/image-generation", () => {
       data: { user: { id: USER_ID } },
       error: null,
     });
+    const conversationQuery = {} as {
+      select: ReturnType<typeof vi.fn>;
+      eq: ReturnType<typeof vi.fn>;
+      maybeSingle: ReturnType<typeof vi.fn>;
+    };
+    conversationQuery.select = vi.fn(() => conversationQuery);
+    conversationQuery.eq = vi.fn(() => conversationQuery);
+    conversationQuery.maybeSingle = vi.fn(async () => ({
+      data: { id: CONVERSATION_ID },
+      error: null,
+    }));
+    mocks.conversationQuery = conversationQuery;
+    mocks.supabase.from.mockReset();
+    mocks.supabase.from.mockReturnValue(conversationQuery);
+    mocks.supabase.rpc.mockReset();
+    mocks.supabase.rpc.mockResolvedValue({
+      data: [
+        {
+          user_message_id: USER_MESSAGE_ID,
+          assistant_message_id: ASSISTANT_MESSAGE_ID,
+          generated_image_id: GENERATED_IMAGE_ID,
+        },
+      ],
+      error: null,
+    });
+    const storage = {
+      upload: vi.fn(async () => ({ data: { path: "generated/path.webp" }, error: null })),
+      remove: vi.fn(async () => ({ data: [], error: null })),
+    };
+    mocks.storage = storage;
+    mocks.admin.storage.from.mockReset();
+    mocks.admin.storage.from.mockReturnValue(storage);
     mocks.providerGenerateImage.mockResolvedValue(successfulProviderResult());
   });
 
@@ -124,6 +189,34 @@ describe("POST /api/image-generation", () => {
       error: { code: "INVALID_JSON" },
     });
     expect(mocks.providerConstructed).not.toHaveBeenCalled();
+  });
+
+  it("requires a conversationId", async () => {
+    const response = await POST(requestWithoutConversation({ prompt: "A mountain lake" }));
+
+    expect(response.status).toBe(400);
+    expect(await responseJson(response)).toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+    });
+    expect(mocks.providerGenerateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed conversationId before provider execution", async () => {
+    const response = await POST(
+      request({ conversationId: "not-a-uuid", prompt: "A mountain lake" }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.providerGenerateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unowned conversation before provider execution", async () => {
+    mocks.conversationQuery.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+
+    const response = await POST(request({ prompt: "A mountain lake" }));
+
+    expect(response.status).toBe(404);
+    expect(mocks.providerGenerateImage).not.toHaveBeenCalled();
   });
 
   it("rejects non-object JSON", async () => {
@@ -313,6 +406,8 @@ describe("POST /api/image-generation", () => {
     expect(await responseJson(response)).toMatchObject({
       error: { code: "IMAGE_GENERATION_PROVIDER" },
     });
+    expect(mocks.storage.upload).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
   });
 
   it("maps invalid provider output to a controlled 502", async () => {
@@ -343,12 +438,77 @@ describe("POST /api/image-generation", () => {
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("X-LVTChat-Image-Provider")).toBe("replicate");
     expect(response.headers.get("X-LVTChat-Image-Model")).toBe("flux-schnell");
+    expect(response.headers.get("X-LVTChat-User-Message-Id")).toBe(USER_MESSAGE_ID);
+    expect(response.headers.get("X-LVTChat-Assistant-Message-Id")).toBe(ASSISTANT_MESSAGE_ID);
+    expect(response.headers.get("X-LVTChat-Generated-Image-Id")).toBe(GENERATED_IMAGE_ID);
+    expect(response.headers.get("X-LVTChat-Storage-Path")).toBeNull();
     expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([
       1,
       2,
       3,
       255,
     ]);
+  });
+
+  it("uploads one server-scoped non-overwriting object before atomic persistence", async () => {
+    const response = await POST(request({ prompt: "A mountain lake" }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.providerGenerateImage).toHaveBeenCalledOnce();
+    expect(mocks.storage.upload).toHaveBeenCalledOnce();
+    const [path, bytes, options] = mocks.storage.upload.mock.calls[0] as [
+      string,
+      Uint8Array,
+      { contentType: string; upsert: boolean },
+    ];
+    expect(path).toMatch(
+      new RegExp(`^generated/${USER_ID}/${CONVERSATION_ID}/[0-9a-f-]+\\.webp$`),
+    );
+    expect(Array.from(bytes)).toEqual([1, 2, 3, 255]);
+    expect(options).toMatchObject({ contentType: "image/webp", upsert: false });
+    expect(mocks.supabase.rpc).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc.mock.calls[0]?.[0]).toBe(
+      "create_generated_image_chat_exchange",
+    );
+    expect(mocks.supabase.rpc.mock.calls[0]?.[1]).toMatchObject({
+      p_conversation_id: CONVERSATION_ID,
+      p_content: "A mountain lake",
+      p_mime_type: "image/webp",
+      p_provider: "replicate",
+      p_model: "flux-schnell",
+    });
+    expect(JSON.stringify(mocks.supabase.rpc.mock.calls[0]?.[1])).not.toContain(
+      "data:image",
+    );
+  });
+
+  it("does not persist or retry when Storage upload fails", async () => {
+    mocks.storage.upload.mockResolvedValueOnce({
+      data: null,
+      error: { message: "Storage unavailable." },
+    });
+
+    const response = await POST(request({ prompt: "A mountain lake" }));
+
+    expect(response.status).toBe(500);
+    expect(mocks.providerGenerateImage).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+    expect(mocks.storage.remove).not.toHaveBeenCalled();
+  });
+
+  it("cleans up the uploaded object when atomic persistence fails without retrying", async () => {
+    mocks.supabase.rpc.mockResolvedValueOnce({
+      data: null,
+      error: { message: "Database unavailable." },
+    });
+
+    const response = await POST(request({ prompt: "A mountain lake" }));
+
+    expect(response.status).toBe(500);
+    expect(mocks.providerGenerateImage).toHaveBeenCalledOnce();
+    expect(mocks.storage.upload).toHaveBeenCalledOnce();
+    expect(mocks.storage.remove).toHaveBeenCalledOnce();
+    expect(mocks.providerGenerateImage).toHaveBeenCalledTimes(1);
   });
 
   it("does not expose an unexpected internal provider error", async () => {

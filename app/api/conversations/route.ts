@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isValidGeneratedImagePath } from "@/lib/chat/generated-image-history";
 
 const MAX_TITLE_LENGTH = 120;
 
@@ -158,6 +160,42 @@ export async function DELETE(req: NextRequest) {
 
     if (!id) {
       return jsonError("Conversation id is required.", 400);
+    }
+
+    const { data: generatedImages, error: generatedImagesError } = await supabase
+      .from("message_generated_images")
+      .select("storage_path")
+      .eq("conversation_id", id)
+      .eq("user_id", user.id);
+
+    if (generatedImagesError) {
+      console.error("DELETE /api/conversations generated image lookup error:", generatedImagesError);
+      return jsonError("Failed to prepare conversation deletion.", 500);
+    }
+
+    const generatedStoragePaths = (generatedImages ?? [])
+      .map((row) => row.storage_path)
+      .filter(
+        (path): path is string =>
+          typeof path === "string" &&
+          isValidGeneratedImagePath(path, user.id, id),
+      );
+
+    if (generatedStoragePaths.length > 0) {
+      try {
+        const admin = createAdminClient();
+        const { error: cleanupError } = await admin.storage
+          .from("chat-images")
+          .remove(generatedStoragePaths);
+
+        if (cleanupError) {
+          console.error("DELETE /api/conversations generated image cleanup error:", cleanupError);
+          return jsonError("Failed to prepare conversation deletion.", 500);
+        }
+      } catch (error) {
+        console.error("DELETE /api/conversations generated image cleanup exception:", error);
+        return jsonError("Failed to prepare conversation deletion.", 500);
+      }
     }
 
     const { error } = await supabase

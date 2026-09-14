@@ -1,5 +1,10 @@
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  hydrateGeneratedImageRows,
+  type GeneratedImageHistory,
+} from "@/lib/chat/generated-image-history";
 import ChatClient from "./ChatClient";
 
 type InitialMessage = {
@@ -8,6 +13,7 @@ type InitialMessage = {
   content: string;
   image_path?: string | null;
   image_name?: string | null;
+  generatedImage?: GeneratedImageHistory;
 };
 
 type ConversationItem = {
@@ -132,6 +138,58 @@ export default async function ChatPage() {
           : null,
     }));
 
+  const initialMessageIds = initialMessages.map((message) => message.id);
+  let generatedImagesByMessageId = new Map<string, GeneratedImageHistory>();
+
+  if (initialMessageIds.length > 0) {
+    const { data: generatedRows, error: generatedRowsError } = await supabase
+      .from("message_generated_images")
+      .select(
+        `
+          id,
+          message_id,
+          conversation_id,
+          user_id,
+          storage_path,
+          mime_type,
+          provider,
+          model
+        `,
+      )
+      .in("message_id", initialMessageIds)
+      .eq("conversation_id", activeConversationId)
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true });
+
+    if (generatedRowsError) {
+      console.error("Failed to load generated image metadata:", generatedRowsError);
+    } else if (generatedRows && generatedRows.length > 0) {
+      try {
+        const admin = createAdminClient();
+        generatedImagesByMessageId = await hydrateGeneratedImageRows({
+          rows: generatedRows as unknown[],
+          userId: user.id,
+          conversationId: activeConversationId,
+          sign: async (storagePath) => {
+            const { data, error } = await admin.storage
+              .from("chat-images")
+              .createSignedUrl(storagePath, 60 * 60);
+            return error || !data?.signedUrl ? null : data.signedUrl;
+          },
+        });
+      } catch (error) {
+        console.error("Failed to hydrate generated image metadata:", error);
+      }
+    }
+  }
+
+  const hydratedInitialMessages = initialMessages.map((message) => ({
+    ...message,
+    ...(generatedImagesByMessageId.has(message.id)
+      ? { generatedImage: generatedImagesByMessageId.get(message.id) }
+      : {}),
+  }));
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#020817_0%,#020617_100%)] text-white">
       <div
@@ -147,7 +205,7 @@ export default async function ChatPage() {
         <ChatClient
           userEmail={user.email ?? ""}
           initialConversationId={activeConversationId}
-          initialMessages={initialMessages}
+          initialMessages={hydratedInitialMessages}
           initialConversations={conversationList}
         />
       </div>

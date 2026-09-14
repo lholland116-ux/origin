@@ -143,10 +143,16 @@ export type MessageImage = {
 };
 
 export type GeneratedImage = {
+  id?: string;
   url: string;
   mimeType: string;
   provider?: string;
   model?: string;
+};
+
+export type GeneratedImageResult = GeneratedImage & {
+  userMessageId?: string;
+  assistantMessageId?: string;
 };
 
 type Message = {
@@ -539,6 +545,9 @@ export function getImageGenerationErrorMessage(status: number): string {
   }
 }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function normalizeResponseMimeType(value: string | null): string {
   return value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
@@ -560,6 +569,11 @@ function getSafeImageMetadataHeader(
   return value;
 }
 
+function getSafeUuidHeader(response: Response, headerName: string): string | undefined {
+  const value = response.headers.get(headerName)?.trim();
+  return value && UUID_PATTERN.test(value) ? value : undefined;
+}
+
 async function throwImageGenerationHttpError(response: Response): Promise<never> {
   const contentType = response.headers.get("content-type") || "";
 
@@ -577,11 +591,12 @@ async function throwImageGenerationHttpError(response: Response): Promise<never>
 export async function fetchGeneratedImage(
   prompt: string,
   options: {
+    conversationId: string;
     signal?: AbortSignal;
     fetcher?: typeof fetch;
     createObjectUrl?: (blob: Blob) => string;
-  } = {}
-): Promise<GeneratedImage> {
+  }
+): Promise<GeneratedImageResult> {
   const fetcher = options.fetcher ?? fetch;
   let response: Response;
 
@@ -590,7 +605,7 @@ export async function fetchGeneratedImage(
       method: "POST",
       signal: options.signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ conversationId: options.conversationId, prompt }),
     });
   } catch (error) {
     if (isAbortError(error)) throw error;
@@ -646,16 +661,47 @@ export async function fetchGeneratedImage(
     );
   }
 
+  const generatedImageId = getSafeUuidHeader(
+    response,
+    "x-lvtchat-generated-image-id"
+  );
+  const userMessageId = getSafeUuidHeader(
+    response,
+    "x-lvtchat-user-message-id"
+  );
+  const assistantMessageId = getSafeUuidHeader(
+    response,
+    "x-lvtchat-assistant-message-id"
+  );
+
   return {
     url,
     mimeType: responseMimeType,
-    provider: getSafeImageMetadataHeader(response, "x-lvtchat-image-provider"),
-    model: getSafeImageMetadataHeader(response, "x-lvtchat-image-model"),
+    ...(getSafeImageMetadataHeader(response, "x-lvtchat-image-provider")
+      ? {
+          provider: getSafeImageMetadataHeader(
+            response,
+            "x-lvtchat-image-provider"
+          ),
+        }
+      : {}),
+    ...(getSafeImageMetadataHeader(response, "x-lvtchat-image-model")
+      ? {
+          model: getSafeImageMetadataHeader(response, "x-lvtchat-image-model"),
+        }
+      : {}),
+    ...(generatedImageId ? { id: generatedImageId } : {}),
+    ...(userMessageId ? { userMessageId } : {}),
+    ...(assistantMessageId ? { assistantMessageId } : {}),
   };
 }
 
+export function shouldRevokeGeneratedImageUrl(url: string): boolean {
+  return url.startsWith("blob:");
+}
+
 function revokeGeneratedImageObjectUrl(url: string): void {
-  if (typeof URL !== "undefined") {
+  if (shouldRevokeGeneratedImageUrl(url) && typeof URL !== "undefined") {
     URL.revokeObjectURL(url);
   }
 }
@@ -921,6 +967,35 @@ export function createOptimisticAssistantMessage(id: string): Message {
     widget: null,
     documents: [],
   };
+}
+
+export function reconcileGeneratedImageMessages(
+  messages: Message[],
+  optimisticUserId: string,
+  optimisticAssistantId: string,
+  result: GeneratedImageResult,
+): Message[] {
+  const {
+    userMessageId,
+    assistantMessageId,
+    ...generatedImage
+  } = result;
+
+  return messages.map((message) => {
+    if (message.id === optimisticUserId && userMessageId) {
+      return { ...message, id: userMessageId };
+    }
+
+    if (message.id !== optimisticAssistantId) {
+      return message;
+    }
+
+    return {
+      ...message,
+      id: assistantMessageId ?? message.id,
+      generatedImage,
+    };
+  });
 }
 
 export function normalizeMessageImages(input: unknown): MessageImage[] {
@@ -3111,7 +3186,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     try {
       if (useImageGeneration) {
-        const generatedImage = await fetchGeneratedImage(effectiveMessage, {
+        const generatedImageResult = await fetchGeneratedImage(effectiveMessage, {
+          conversationId,
           signal: controller.signal,
         });
 
@@ -3119,16 +3195,20 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           controller.signal.aborted ||
           imageRequestGenerationRef.current !== requestGeneration
         ) {
-          revokeGeneratedImageUrl(generatedImage.url);
+          revokeGeneratedImageUrl(generatedImageResult.url);
           return;
         }
 
         responseAccepted = true;
-        registerGeneratedImageUrl(generatedImage.url);
-        updateAssistantMessage(assistantId, (msg) => ({
-          ...msg,
-          generatedImage,
-        }));
+        registerGeneratedImageUrl(generatedImageResult.url);
+        setMessages((prev) =>
+          reconcileGeneratedImageMessages(
+            prev,
+            optimisticUserId,
+            assistantId,
+            generatedImageResult,
+          )
+        );
 
         trackGaEvent("chat_message_sent", {
           plan,

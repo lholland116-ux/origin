@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  hydrateGeneratedImageRows,
+  type GeneratedImageHistory,
+} from "@/lib/chat/generated-image-history";
 
 const MAX_CONVERSATION_ID_LENGTH = 200;
 const SIGNED_IMAGE_URL_LIFETIME_SECONDS = 60 * 60;
@@ -258,6 +263,45 @@ function rawMessageImageMessageId(input: unknown): string | null {
   return messageId || null;
 }
 
+async function loadGeneratedImages(
+  rows: unknown[],
+  userId: string,
+  conversationId: string,
+): Promise<Map<string, GeneratedImageHistory>> {
+  if (rows.length === 0) return new Map();
+
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    admin = createAdminClient();
+  } catch (error) {
+    console.error("GET /api/messages generated image admin client unavailable", {
+      conversationId,
+      reason: error instanceof Error ? error.message : "Unknown error.",
+    });
+    return new Map();
+  }
+
+  return hydrateGeneratedImageRows({
+    rows,
+    userId,
+    conversationId,
+    sign: async (storagePath) => {
+      try {
+        const { data, error } = await admin.storage
+          .from("chat-images")
+          .createSignedUrl(storagePath, SIGNED_IMAGE_URL_LIFETIME_SECONDS);
+        return error || !data?.signedUrl ? null : data.signedUrl;
+      } catch (error) {
+        console.error("GET /api/messages generated image signing failed", {
+          conversationId,
+          reason: error instanceof Error ? error.message : "Unknown error.",
+        });
+        return null;
+      }
+    },
+  });
+}
+
 async function signMessageImage(
   supabase: ServerSupabaseClient,
   row: MessageImageRow,
@@ -426,6 +470,47 @@ export async function GET(req: NextRequest) {
       )
     );
 
+    const generatedImagesByMessageId = new Map<string, GeneratedImageHistory>();
+
+    if (parentMessageIds.length > 0) {
+      const { data: generatedData, error: generatedError } = await supabase
+        .from("message_generated_images")
+        .select(
+          `
+            id,
+            message_id,
+            conversation_id,
+            user_id,
+            storage_path,
+            mime_type,
+            provider,
+            model
+          `,
+        )
+        .in("message_id", parentMessageIds)
+        .eq("conversation_id", conversationId)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true });
+
+      if (generatedError) {
+        console.error("GET /api/messages generated image query failed", {
+          conversationId,
+          reason: generatedError.message,
+        });
+      } else {
+        const hydratedGeneratedImages = await loadGeneratedImages(
+          (generatedData ?? []) as unknown[],
+          user.id,
+          conversationId,
+        );
+        for (const [messageId, image] of hydratedGeneratedImages) {
+          if (parentMessageIdSet.has(messageId)) {
+            generatedImagesByMessageId.set(messageId, image);
+          }
+        }
+      }
+    }
+
     const normalizedMessages = parentMessages.map((message) => {
       const sources = normalizeSources(message.sources);
 
@@ -437,6 +522,9 @@ export async function GET(req: NextRequest) {
         widget: normalizeWidget(message.widget),
         images: signedImagesByMessageId.get(message.id) ?? [],
         has_child_images: childMessageIds.has(message.id),
+        ...(generatedImagesByMessageId.has(message.id)
+          ? { generatedImage: generatedImagesByMessageId.get(message.id) }
+          : {}),
       };
     });
 

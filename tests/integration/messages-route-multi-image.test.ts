@@ -23,10 +23,17 @@ type MockSupabase = {
 
 const mocks = vi.hoisted(() => ({
   supabase: null as unknown as MockSupabase,
+  admin: null as unknown as {
+    storage: { from: ReturnType<typeof vi.fn> };
+  },
 }));
 
 vi.mock("../../lib/supabase/server", () => ({
   createServerSupabaseClient: vi.fn(async () => mocks.supabase),
+}));
+
+vi.mock("../../lib/supabase/admin", () => ({
+  createAdminClient: vi.fn(() => mocks.admin),
 }));
 
 import { GET } from "../../app/api/messages/route";
@@ -74,10 +81,16 @@ function setupSupabase(params: {
   parents: unknown[];
   childRows?: unknown[];
   childQueryError?: { message: string } | null;
+  generatedRows?: unknown[];
+  generatedQueryError?: { message: string } | null;
   signingFailures?: string[];
 }) {
   const messageQuery = queryResult(params.parents);
   const childQuery = queryResult(params.childRows ?? [], params.childQueryError ?? null);
+  const generatedQuery = queryResult(
+    params.generatedRows ?? [],
+    params.generatedQueryError ?? null,
+  );
   const fromCalls: string[] = [];
   const createSignedUrl = vi.fn(async (path: string, lifetime: number) => {
     if (params.signingFailures?.includes(path)) {
@@ -93,7 +106,7 @@ function setupSupabase(params: {
     };
   });
 
-  mocks.supabase = {
+    mocks.supabase = {
     auth: {
       getUser: vi.fn(async () => ({
         data: { user: { id: USER_ID } },
@@ -102,8 +115,15 @@ function setupSupabase(params: {
     },
     from: vi.fn((table: string) => {
       fromCalls.push(table);
-      return table === "messages" ? messageQuery : childQuery;
+      if (table === "messages") return messageQuery;
+      if (table === "message_images") return childQuery;
+      return generatedQuery;
     }),
+    storage: {
+      from: vi.fn(() => ({ createSignedUrl })),
+    },
+  };
+  mocks.admin = {
     storage: {
       from: vi.fn(() => ({ createSignedUrl })),
     },
@@ -163,7 +183,11 @@ describe("GET /api/messages durable multi-image reads", () => {
       expect(body.messages[0].images.every((image: { image_url: string }) => image.image_url.startsWith("https://signed.example/"))).toBe(true);
       expect(body.messages[0].has_child_images).toBe(true);
       expect(body.messages[1].images).toEqual([]);
-      expect(setup.fromCalls).toEqual(["messages", "message_images"]);
+      expect(setup.fromCalls).toEqual([
+        "messages",
+        "message_images",
+        "message_generated_images",
+      ]);
       expect(setup.childQuery.in).toHaveBeenCalledWith("message_id", [firstMessage.id, secondMessage.id]);
       expect(setup.createSignedUrl).toHaveBeenCalledTimes(count);
       expect(setup.createSignedUrl).toHaveBeenCalledWith(
@@ -293,5 +317,88 @@ describe("GET /api/messages durable multi-image reads", () => {
     expect(response.status).toBe(200);
     expect(body.messages).toEqual([]);
     expect(setup.fromCalls).toEqual(["messages"]);
+  });
+
+  it("hydrates an authorized generated image with safe signed metadata", async () => {
+    const parent = {
+      ...parentMessage(
+        "30000000-0000-4000-8000-000000000011",
+        "2026-09-13T12:00:00.000Z",
+      ),
+      role: "assistant",
+      content: "",
+    };
+    const storagePath = `generated/${USER_ID}/${CONVERSATION_ID}/image.webp`;
+    const setup = setupSupabase({
+      parents: [parent],
+      generatedRows: [
+        {
+          id: "40000000-0000-4000-8000-000000000011",
+          message_id: parent.id,
+          conversation_id: CONVERSATION_ID,
+          user_id: USER_ID,
+          storage_path: storagePath,
+          mime_type: "image/webp",
+          provider: "replicate",
+          model: "black-forest-labs/flux-schnell",
+        },
+        {
+          id: "40000000-0000-4000-8000-000000000012",
+          message_id: parent.id,
+          conversation_id: "20000000-0000-4000-8000-000000000099",
+          user_id: USER_ID,
+          storage_path: "generated/other-user/other-conversation/leak.webp",
+          mime_type: "image/webp",
+          provider: "replicate",
+          model: "flux-schnell",
+        },
+      ],
+    });
+
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages[0].generatedImage).toEqual({
+      id: "40000000-0000-4000-8000-000000000011",
+      url: `https://signed.example/${encodeURIComponent(storagePath)}`,
+      mimeType: "image/webp",
+      provider: "replicate",
+      model: "black-forest-labs/flux-schnell",
+    });
+    expect(JSON.stringify(body)).not.toContain(storagePath);
+    expect(setup.fromCalls).toContain("message_generated_images");
+  });
+
+  it("omits generated history safely when signing fails", async () => {
+    const parent = parentMessage(
+      "30000000-0000-4000-8000-000000000012",
+      "2026-09-13T12:00:00.000Z",
+    );
+    const storagePath = `generated/${USER_ID}/${CONVERSATION_ID}/missing.webp`;
+    const setup = setupSupabase({
+      parents: [parent],
+      generatedRows: [
+        {
+          id: "40000000-0000-4000-8000-000000000013",
+          message_id: parent.id,
+          conversation_id: CONVERSATION_ID,
+          user_id: USER_ID,
+          storage_path: storagePath,
+          mime_type: "image/webp",
+          provider: "replicate",
+          model: "flux-schnell",
+        },
+      ],
+      signingFailures: [storagePath],
+    });
+
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages[0]).not.toHaveProperty("generatedImage");
+    expect(JSON.stringify(body)).not.toContain(storagePath);
+    expect(setup.createSignedUrl).toHaveBeenCalledWith(storagePath, 3600);
   });
 });
