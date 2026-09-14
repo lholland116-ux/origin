@@ -2,10 +2,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   fetchGeneratedImage,
+  downloadGeneratedImage,
   getImageGenerationErrorMessage,
   ImageGenerationClientError,
   normalizeInitialMessages,
   reconcileGeneratedImageMessages,
+  resolveGeneratedImagePrompt,
   shouldRevokeGeneratedImageUrl,
 } from "@/app/chat/ChatClient";
 
@@ -110,6 +112,63 @@ describe("chat image-generation mode", () => {
     });
   });
 
+  it("resolves regeneration from the immediately preceding user prompt only", () => {
+    const messages = [
+      { id: "user-1", role: "user" as const, content: "First prompt" },
+      { id: "assistant-1", role: "assistant" as const, content: "", generatedImage: undefined },
+      { id: "user-2", role: "user" as const, content: "Second prompt" },
+      { id: "assistant-2", role: "assistant" as const, content: "" },
+    ];
+
+    expect(resolveGeneratedImagePrompt(messages, "assistant-1")).toBe("First prompt");
+    expect(resolveGeneratedImagePrompt(messages, "assistant-2")).toBe("Second prompt");
+    expect(resolveGeneratedImagePrompt(messages, "user-1")).toBeNull();
+    expect(
+      resolveGeneratedImagePrompt(
+        [{ id: "assistant-only", role: "assistant", content: "" }],
+        "assistant-only",
+      ),
+    ).toBeNull();
+  });
+
+  it("downloads a durable image through its ID and revokes only the temporary download URL", async () => {
+    const generatedImageId = "30000000-0000-4000-8000-000000000003";
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      expect(url).toBe(`/api/generated-images/${generatedImageId}/download`);
+      expect(init).toMatchObject({ method: "GET", cache: "no-store" });
+
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      });
+    });
+    const createObjectUrl = vi.fn((blob: Blob) => {
+      expect(blob.size).toBe(3);
+      return "blob:download-test";
+    });
+    const revokeObjectUrl = vi.fn();
+    const click = vi.fn();
+    const anchor = {
+      click,
+      download: "",
+      href: "",
+      rel: "",
+    } as unknown as HTMLAnchorElement;
+
+    await downloadGeneratedImage(generatedImageId, {
+      fetcher,
+      createObjectUrl,
+      createAnchor: () => anchor,
+      revokeObjectUrl,
+    });
+
+    expect(anchor.download).toBe(`lvtchat-image-${generatedImageId}.png`);
+    expect(anchor.href).toBe("blob:download-test");
+    expect(anchor.rel).toBe("noreferrer");
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:download-test");
+  });
+
   it("revokes transient blob URLs but never durable signed URLs", () => {
     expect(shouldRevokeGeneratedImageUrl("blob:temporary")).toBe(true);
     expect(shouldRevokeGeneratedImageUrl("https://signed.example/image.webp")).toBe(false);
@@ -209,6 +268,12 @@ describe("chat image-generation mode", () => {
     expect(clientSource).toContain("generatedImage?: GeneratedImage;");
     expect(clientSource).toContain("URL.revokeObjectURL(url)");
     expect(clientSource).toContain("<NextImage");
+    expect(clientSource).toContain('aria-label="Download image"');
+    expect(clientSource).toContain('aria-label="Regenerate image"');
+    expect(clientSource).toContain('content="Download image"');
+    expect(clientSource).toContain('content={isRegeneratingImage ? "Regenerating image…" : "Regenerate image"}');
+    expect(clientSource).toContain("/api/generated-images/");
+    expect(clientSource).toContain("message.role === \"assistant\" && message.generatedImage?.id");
   });
 
   it("keeps Standard and Web Search on their existing endpoints", () => {

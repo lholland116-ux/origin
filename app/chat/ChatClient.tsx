@@ -10,6 +10,7 @@ import {
   ChevronUp,
   Clock3,
   Copy as CopyIcon,
+  Download,
   Globe2,
   HelpCircle,
   ImageIcon,
@@ -19,6 +20,7 @@ import {
   MoreHorizontal,
   Palette,
   Plus,
+  RefreshCw,
   Send,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -499,7 +501,8 @@ export function calculateComposerTextareaSize(
 export type ImageGenerationClientErrorCode =
   | "http"
   | "network"
-  | "invalid_response";
+  | "invalid_response"
+  | "download";
 
 export class ImageGenerationClientError extends Error {
   readonly code: ImageGenerationClientErrorCode;
@@ -703,6 +706,119 @@ export function shouldRevokeGeneratedImageUrl(url: string): boolean {
 function revokeGeneratedImageObjectUrl(url: string): void {
   if (shouldRevokeGeneratedImageUrl(url) && typeof URL !== "undefined") {
     URL.revokeObjectURL(url);
+  }
+}
+
+const GENERATED_IMAGE_DOWNLOAD_EXTENSIONS: Record<string, string> = {
+  "image/webp": "webp",
+  "image/png": "png",
+  "image/jpeg": "jpg",
+};
+
+export type GeneratedImageDownloadOptions = {
+  fetcher?: typeof fetch;
+  createObjectUrl?: (blob: Blob) => string;
+  createAnchor?: () => HTMLAnchorElement;
+  revokeObjectUrl?: (url: string) => void;
+};
+
+export async function downloadGeneratedImage(
+  generatedImageId: string,
+  options: GeneratedImageDownloadOptions = {},
+): Promise<void> {
+  if (!UUID_PATTERN.test(generatedImageId)) {
+    throw new ImageGenerationClientError(
+      "download",
+      "This generated image cannot be downloaded.",
+    );
+  }
+
+  let response: Response;
+  try {
+    response = await (options.fetcher ?? fetch)(
+      `/api/generated-images/${encodeURIComponent(generatedImageId)}/download`,
+      { method: "GET", cache: "no-store" },
+    );
+  } catch {
+    throw new ImageGenerationClientError(
+      "download",
+      "Could not download the generated image. Please try again.",
+    );
+  }
+
+  if (!response.ok) {
+    throw new ImageGenerationClientError(
+      "download",
+      "Could not download the generated image. Please try again.",
+      response.status,
+    );
+  }
+
+  const mimeType = normalizeResponseMimeType(response.headers.get("content-type"));
+  const extension = GENERATED_IMAGE_DOWNLOAD_EXTENSIONS[mimeType];
+  if (!extension) {
+    throw new ImageGenerationClientError(
+      "download",
+      "The generated image could not be downloaded safely.",
+      response.status,
+    );
+  }
+
+  let blob: Blob;
+  try {
+    blob = await response.blob();
+  } catch {
+    throw new ImageGenerationClientError(
+      "download",
+      "The generated image could not be downloaded safely.",
+      response.status,
+    );
+  }
+
+  if (blob.size === 0) {
+    throw new ImageGenerationClientError(
+      "download",
+      "The generated image could not be downloaded safely.",
+      response.status,
+    );
+  }
+
+  let temporaryUrl: string;
+  try {
+    temporaryUrl = (
+      options.createObjectUrl ?? ((value: Blob) => URL.createObjectURL(value))
+    )(blob);
+  } catch {
+    throw new ImageGenerationClientError(
+      "download",
+      "The generated image could not be downloaded safely.",
+      response.status,
+    );
+  }
+
+  try {
+    const anchor =
+      options.createAnchor?.() ??
+      (typeof document !== "undefined" ? document.createElement("a") : null);
+
+    if (!anchor) {
+      throw new ImageGenerationClientError(
+        "download",
+        "The generated image could not be downloaded safely.",
+        response.status,
+      );
+    }
+
+    anchor.href = temporaryUrl;
+    anchor.download = `lvtchat-image-${generatedImageId}.${extension}`;
+    anchor.rel = "noreferrer";
+    anchor.click();
+  } finally {
+    if (options.revokeObjectUrl) {
+      options.revokeObjectUrl(temporaryUrl);
+    } else if (typeof URL !== "undefined") {
+      URL.revokeObjectURL(temporaryUrl);
+    }
   }
 }
 
@@ -996,6 +1112,28 @@ export function reconcileGeneratedImageMessages(
       generatedImage,
     };
   });
+}
+
+export function resolveGeneratedImagePrompt(
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+  }>,
+  assistantMessageId: string,
+): string | null {
+  const assistantIndex = messages.findIndex(
+    (message) => message.id === assistantMessageId && message.role === "assistant",
+  );
+  const sourceMessage =
+    assistantIndex > 0 ? messages[assistantIndex - 1] : undefined;
+
+  if (!sourceMessage || sourceMessage.role !== "user") {
+    return null;
+  }
+
+  const prompt = sourceMessage.content.trim();
+  return prompt || null;
 }
 
 export function normalizeMessageImages(input: unknown): MessageImage[] {
@@ -1634,6 +1772,8 @@ export default function ChatClient({
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileMenuPosition, setProfileMenuPosition] = useState({ top: 0, left: 0 });
+  const [downloadingGeneratedImageId, setDownloadingGeneratedImageId] = useState<string | null>(null);
+  const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [plan, setPlan] = useState<Plan>("free");
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [upgradeModalTitle, setUpgradeModalTitle] = useState("Upgrade to Pro");
@@ -1646,6 +1786,7 @@ export default function ChatClient({
   const messageLoadGenerationRef = useRef(0);
   const imageRequestGenerationRef = useRef(0);
   const generatedImageUrlsRef = useRef<Set<string>>(new Set());
+  const regenerationInFlightRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     const requestGeneration = ++messageLoadGenerationRef.current;
@@ -3357,6 +3498,108 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
   }
 
+  async function handleDownloadGeneratedImage(generatedImageId: string): Promise<void> {
+    if (loading || downloadingGeneratedImageId) return;
+
+    setDownloadingGeneratedImageId(generatedImageId);
+
+    try {
+      await downloadGeneratedImage(generatedImageId);
+    } catch (error) {
+      setUiError(
+        error instanceof ImageGenerationClientError
+          ? error.message
+          : "Could not download the generated image. Please try again."
+      );
+    } finally {
+      setDownloadingGeneratedImageId(null);
+    }
+  }
+
+  async function handleRegenerateImage(messageId: string): Promise<void> {
+    if (loading || regenerationInFlightRef.current) return;
+
+    const prompt = resolveGeneratedImagePrompt(messages, messageId);
+    if (!prompt) {
+      setUiError(
+        "This generated image cannot be regenerated because its original prompt is unavailable."
+      );
+      return;
+    }
+
+    regenerationInFlightRef.current = true;
+    const requestGeneration = ++imageRequestGenerationRef.current;
+    const controller = new AbortController();
+    const optimisticUserId = createId();
+    const assistantId = createId();
+
+    setUiError("");
+    setRegeneratingMessageId(messageId);
+    setMessages((prev) => [
+      ...prev,
+      createOptimisticUserMessage(optimisticUserId, prompt),
+      createOptimisticAssistantMessage(assistantId),
+    ]);
+    abortRef.current?.abort();
+    abortRef.current = controller;
+    setLoading(true);
+
+    try {
+      const generatedImageResult = await fetchGeneratedImage(prompt, {
+        conversationId,
+        signal: controller.signal,
+      });
+
+      if (
+        controller.signal.aborted ||
+        imageRequestGenerationRef.current !== requestGeneration
+      ) {
+        revokeGeneratedImageUrl(generatedImageResult.url);
+        setMessages((prev) =>
+          rollbackOptimisticMessages(prev, [optimisticUserId, assistantId])
+        );
+        return;
+      }
+
+      registerGeneratedImageUrl(generatedImageResult.url);
+      setMessages((prev) =>
+        reconcileGeneratedImageMessages(
+          prev,
+          optimisticUserId,
+          assistantId,
+          generatedImageResult,
+        )
+      );
+
+      trackGaEvent("chat_message_sent", {
+        plan,
+        mode: "image",
+        has_image: false,
+        has_documents: false,
+      });
+    } catch (error) {
+      if (imageRequestGenerationRef.current !== requestGeneration) return;
+
+      setMessages((prev) =>
+        rollbackOptimisticMessages(prev, [optimisticUserId, assistantId])
+      );
+      setUiError(
+        isAbortError(error)
+          ? "Image generation stopped."
+          : error instanceof ImageGenerationClientError
+            ? error.message
+            : "Image generation failed. Please try again."
+      );
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setLoading(false);
+        setRegeneratingMessageId(null);
+      }
+      regenerationInFlightRef.current = false;
+    }
+  }
+
   function handleStop(): void {
     abortRef.current?.abort();
   }
@@ -3903,6 +4146,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       useImageGeneration &&
                       message.role === "assistant" &&
                       message.id === messages[messages.length - 1]?.id;
+                    const isRegeneratingImage = regeneratingMessageId === message.id;
 
                     const bubbleWidthClass =
                       message.role === "user"
@@ -3980,6 +4224,61 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 unoptimized
                                 className="h-auto w-auto max-h-[min(70vh,640px)] max-w-full object-contain"
                               />
+                            </div>
+                          ) : null}
+
+                          {message.role === "assistant" && message.generatedImage?.id ? (
+                            <div
+                              className="mt-2 flex flex-wrap items-center gap-1.5"
+                              role="group"
+                              aria-label="Generated image actions"
+                            >
+                              <Tooltip content="Download image" touchSafe>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleDownloadGeneratedImage(message.generatedImage!.id!)
+                                  }
+                                  disabled={loading || downloadingGeneratedImageId !== null}
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Download image"
+                                >
+                                  {downloadingGeneratedImageId === message.generatedImage.id ? (
+                                    <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                  ) : (
+                                    <Download className="h-4 w-4" aria-hidden="true" />
+                                  )}
+                                  <span className="sr-only">Download image</span>
+                                </button>
+                              </Tooltip>
+
+                              <Tooltip
+                                content={isRegeneratingImage ? "Regenerating image…" : "Regenerate image"}
+                                touchSafe
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRegenerateImage(message.id)}
+                                  disabled={loading}
+                                  aria-busy={isRegeneratingImage}
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Regenerate image"
+                                >
+                                  <RefreshCw
+                                    className={cx("h-4 w-4", isRegeneratingImage && "animate-spin")}
+                                    aria-hidden="true"
+                                  />
+                                  <span className="sr-only">
+                                    {isRegeneratingImage ? "Regenerating image" : "Regenerate image"}
+                                  </span>
+                                </button>
+                              </Tooltip>
+
+                              {isRegeneratingImage ? (
+                                <span className="text-xs text-white/50" aria-live="polite">
+                                  Regenerating…
+                                </span>
+                              ) : null}
                             </div>
                           ) : null}
 
