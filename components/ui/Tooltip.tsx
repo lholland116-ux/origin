@@ -16,6 +16,7 @@ import {
 type TooltipProps = {
   content: string;
   children: ReactElement<HTMLAttributes<HTMLElement>>;
+  touchSafe?: boolean;
 };
 
 type TooltipPosition = "top" | "bottom";
@@ -24,12 +25,13 @@ const VIEWPORT_PADDING = 12;
 const TOOLTIP_GAP = 10;
 const TOOLTIP_MAX_WIDTH = 240;
 
-export default function Tooltip({ content, children }: TooltipProps) {
+export default function Tooltip({ content, children, touchSafe = false }: TooltipProps) {
   const id = useId();
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
 
   const [open, setOpen] = useState(false);
+  const [canShowPointerTooltip, setCanShowPointerTooltip] = useState(!touchSafe);
   const [position, setPosition] = useState<TooltipPosition>("top");
   const [left, setLeft] = useState(VIEWPORT_PADDING);
   const [top, setTop] = useState(VIEWPORT_PADDING);
@@ -79,9 +81,27 @@ export default function Tooltip({ content, children }: TooltipProps) {
     setTop(nextTop);
   }, []);
 
+  useEffect(() => {
+    if (!touchSafe) return;
+
+    const mediaQuery = window.matchMedia("(hover: hover) and (pointer: fine)");
+    const updatePointerCapability = () => {
+      const canShow = mediaQuery.matches;
+      setCanShowPointerTooltip(canShow);
+      if (!canShow) setOpen(false);
+    };
+
+    updatePointerCapability();
+    mediaQuery.addEventListener("change", updatePointerCapability);
+
+    return () => {
+      mediaQuery.removeEventListener("change", updatePointerCapability);
+    };
+  }, [touchSafe]);
+
   useLayoutEffect(() => {
     if (!open) return;
-    updatePosition();
+    queueMicrotask(updatePosition);
   }, [open, updatePosition]);
 
   useEffect(() => {
@@ -109,7 +129,7 @@ export default function Tooltip({ content, children }: TooltipProps) {
   }
 
   const showTooltip = () => {
-    if (content.trim()) setOpen(true);
+    if (content.trim() && (!touchSafe || canShowPointerTooltip)) setOpen(true);
   };
 
   const hideTooltip = () => {

@@ -5,9 +5,11 @@ import NextImage from "next/image";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Check,
   ChevronDown,
   ChevronUp,
   Clock3,
+  Copy as CopyIcon,
   Globe2,
   HelpCircle,
   ImageIcon,
@@ -1064,7 +1066,7 @@ function getUserInitials(email: string): string {
   return localPart.slice(0, 2).toUpperCase() || "A";
 }
 
-function getMessageCopyValue(message: Message): string {
+export function getMessageCopyValue(message: Pick<Message, "content">): string {
   return message.content?.trim() || "";
 }
 
@@ -3518,7 +3520,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     return (
                       <div key={message.id} className="space-y-2">
                         <div className={cx(bubbleWidthClass, getBubbleClass(activeTheme, message.role))}>
-                          <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="mb-2 flex items-center gap-2">
                             <div className="flex min-w-0 items-center gap-1.5 text-[11px]">
                               <span className="font-semibold opacity-90">
                                 {getMessageDisplayLabel(message.role)}
@@ -3533,21 +3535,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               ) : null}
                             </div>
 
-                            <Tooltip content={TOOLTIP_TEXT.copy}>
-                              <button
-                                type="button"
-                                onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
-                                className={cx(
-                                  "rounded-md px-1.5 py-1 text-[11px] transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
-                                  message.role === "user"
-                                    ? "text-white/70 hover:bg-black/10 hover:text-white"
-                                    : "text-white/50 hover:bg-white/5 hover:text-white/80"
-                                )}
-                                aria-label="Copy message"
-                              >
-                                {copiedMessageId === message.id ? "Copied" : "Copy"}
-                              </button>
-                            </Tooltip>
                           </div>
 
                           <MessageWidgetRenderer widget={message.widget} theme={activeTheme} />
@@ -3638,44 +3625,88 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                             </div>
                           )}
 
+                          {message.role === "user" && (
+                            <div className="mt-3 flex justify-end">
+                              <Tooltip content="Copy message" touchSafe>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-black/10 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+                                  aria-label="Copy message"
+                                >
+                                  {copiedMessageId === message.id ? (
+                                    <Check className="h-4 w-4" aria-hidden="true" />
+                                  ) : (
+                                    <CopyIcon className="h-4 w-4" aria-hidden="true" />
+                                  )}
+                                  <span className="sr-only">
+                                    {copiedMessageId === message.id ? "Copied" : "Copy message"}
+                                  </span>
+                                </button>
+                              </Tooltip>
+                            </div>
+                          )}
+
                           {isStreamingAssistant ? <span className="ml-1 inline-block animate-pulse">▍</span> : null}
-                          {message.role === "assistant" && message.content.trim() && !isStreamingAssistant ? (
+                          {message.role === "assistant" && (
                             <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-                              <span className="mr-1 text-[11px] opacity-50">Was this helpful?</span>
+                              <Tooltip content="Copy response" touchSafe>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+                                  aria-label="Copy response"
+                                >
+                                  {copiedMessageId === message.id ? (
+                                    <Check className="h-4 w-4" aria-hidden="true" />
+                                  ) : (
+                                    <CopyIcon className="h-4 w-4" aria-hidden="true" />
+                                  )}
+                                  <span className="sr-only">
+                                    {copiedMessageId === message.id ? "Copied" : "Copy response"}
+                                  </span>
+                                </button>
+                              </Tooltip>
 
-                              <button
-                                type="button"
-                                onClick={() => handleMessageFeedback(message.id, "up")}
-                                className={cx(
-                                  "h-7 w-7 rounded-full border border-transparent text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
-                                  message.feedback === "up"
-                                    ? "border-green-400/50 bg-green-500/15 text-green-200"
-                                    : "text-white/60 hover:bg-white/5 hover:text-white"
-                                )}
-                                aria-label="Mark assistant response as helpful"
-                              >
-                                👍
-                              </button>
+                              {message.content.trim() && !isStreamingAssistant ? (
+                                <>
+                                  <span className="mr-1 text-[11px] opacity-50">Was this helpful?</span>
 
-                              <button
-                                type="button"
-                                onClick={() => handleMessageFeedback(message.id, "down")}
-                                className={cx(
-                                  "h-7 w-7 rounded-full border border-transparent text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
-                                  message.feedback === "down"
-                                    ? "border-red-400/50 bg-red-500/15 text-red-200"
-                                    : "text-white/60 hover:bg-white/5 hover:text-white"
-                                )}
-                                aria-label="Mark assistant response as not helpful"
-                              >
-                                👎
-                              </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMessageFeedback(message.id, "up")}
+                                    className={cx(
+                                      "h-7 w-7 rounded-full border border-transparent text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
+                                      message.feedback === "up"
+                                        ? "border-green-400/50 bg-green-500/15 text-green-200"
+                                        : "text-white/60 hover:bg-white/5 hover:text-white"
+                                    )}
+                                    aria-label="Mark assistant response as helpful"
+                                  >
+                                    👍
+                                  </button>
 
-                              {message.feedback ? (
-                                <span className="text-xs text-white/50">Thanks for the feedback.</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMessageFeedback(message.id, "down")}
+                                    className={cx(
+                                      "h-7 w-7 rounded-full border border-transparent text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
+                                      message.feedback === "down"
+                                        ? "border-red-400/50 bg-red-500/15 text-red-200"
+                                        : "text-white/60 hover:bg-white/5 hover:text-white"
+                                    )}
+                                    aria-label="Mark assistant response as not helpful"
+                                  >
+                                    👎
+                                  </button>
+
+                                  {message.feedback ? (
+                                    <span className="text-xs text-white/50">Thanks for the feedback.</span>
+                                  ) : null}
+                                </>
                               ) : null}
                             </div>
-                          ) : null}
+                          )}
                         </div>
 
                         {sources.length > 0 && (
@@ -3932,27 +3963,25 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           </button>
                         </Tooltip>
                       ) : (
-                        <Tooltip content={TOOLTIP_TEXT.send}>
-                          <button
-                            type="submit"
-                              disabled={
-                              composerDisabled ||
-                              pendingImageLimitExceeded ||
-                              !canSubmitWithPendingImages(
-                                input,
-                                pendingImages.length,
-                                readyDocumentIds.length
-                              )
-                            }
-                            className={cx(
-                              "flex h-11 min-w-11 items-center justify-center rounded-xl px-3 text-white transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
-                              activeTheme.buttonPrimary
-                            )}
-                          >
-                            <Send className="h-4 w-4" aria-hidden="true" />
-                            <span className="sr-only">Send</span>
-                          </button>
-                        </Tooltip>
+                        <button
+                          type="submit"
+                          disabled={
+                            composerDisabled ||
+                            pendingImageLimitExceeded ||
+                            !canSubmitWithPendingImages(
+                              input,
+                              pendingImages.length,
+                              readyDocumentIds.length
+                            )
+                          }
+                          className={cx(
+                            "flex h-11 min-w-11 items-center justify-center rounded-xl px-3 text-white transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                            activeTheme.buttonPrimary
+                          )}
+                          aria-label="Send your message"
+                        >
+                          <Send className="h-4 w-4" aria-hidden="true" />
+                        </button>
                       )}
                     </div>
                   </div>
