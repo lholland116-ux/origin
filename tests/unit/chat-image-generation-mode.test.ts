@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   fetchGeneratedImage,
   downloadGeneratedImage,
+  getGeneratedImageDeleteErrorMessage,
   getImageGenerationErrorMessage,
   getImageGenerationQuotaMessage,
   ImageGenerationClientError,
   normalizeInitialMessages,
+  removeGeneratedImageMessage,
   reconcileGeneratedImageMessages,
   resolveGeneratedImagePrompt,
   shouldRevokeGeneratedImageUrl,
@@ -254,6 +256,59 @@ describe("chat image-generation mode", () => {
     });
   });
 
+  it("removes only the generated-image assistant message after deletion", () => {
+    const messages = [
+      { id: "prompt", role: "user" as const, content: "Make a lake" },
+      {
+        id: "generated-assistant",
+        role: "assistant" as const,
+        content: "",
+        generatedImage: {
+          id: "generated-image",
+          url: "https://signed.example/generated.webp",
+          mimeType: "image/webp",
+        },
+      },
+      { id: "unrelated", role: "assistant" as const, content: "A later answer" },
+      {
+        id: "other-generated-assistant",
+        role: "assistant" as const,
+        content: "",
+        generatedImage: {
+          id: "other-generated-image",
+          url: "https://signed.example/other.webp",
+          mimeType: "image/webp",
+        },
+      },
+      {
+        id: "uploaded-image-message",
+        role: "user" as const,
+        content: "Use this upload",
+        images: [{ image_path: "user/uploaded.jpg", image_name: "uploaded.jpg" }],
+      },
+    ];
+
+    expect(removeGeneratedImageMessage(messages, "generated-image")).toEqual([
+      messages[0],
+      messages[2],
+      messages[3],
+      messages[4],
+    ]);
+  });
+
+  it("maps dependent-image conflicts to the controlled non-destructive message", () => {
+    expect(
+      getGeneratedImageDeleteErrorMessage(
+        409,
+        "IMAGE_HAS_DERIVATIVES",
+        "internal database detail",
+      ),
+    ).toBe("This image can't be deleted because edited images depend on it.");
+    expect(getGeneratedImageDeleteErrorMessage(500)).toBe(
+      "The generated image could not be deleted.",
+    );
+  });
+
   it("rejects a successful response that is not an image", async () => {
     const fetcher = vi.fn(async () =>
       new Response("not an image", {
@@ -328,10 +383,36 @@ describe("chat image-generation mode", () => {
     expect(clientSource).toContain("<NextImage");
     expect(clientSource).toContain('aria-label="Download image"');
     expect(clientSource).toContain('aria-label="Regenerate image"');
+    expect(clientSource).toContain('aria-label="Delete image"');
     expect(clientSource).toContain('content="Download image"');
     expect(clientSource).toContain('content={isRegeneratingImage ? "Regenerating image…" : "Regenerate image"}');
     expect(clientSource).toContain("/api/generated-images/");
+    expect(clientSource).toContain('method: "DELETE"');
+    expect(clientSource).toContain('window.confirm("Delete this generated image? This cannot be undone.")');
+    expect(clientSource).toContain("if (!confirmed) return;");
+    expect(clientSource).toContain("deletingGeneratedImageId");
+    expect(clientSource).toContain("getGeneratedImageDeleteErrorMessage");
     expect(clientSource).toContain("message.role === \"assistant\" && message.generatedImage?.id");
+  });
+
+  it("keeps Delete scoped to generated-image actions and preserves other image actions", () => {
+    const generatedActionsStart = clientSource.indexOf(
+      'aria-label="Generated image actions"',
+    );
+    const generatedActionsEnd = clientSource.indexOf(
+      'messageImageSource === "children"',
+      generatedActionsStart,
+    );
+    const generatedActionsSource = clientSource.slice(
+      generatedActionsStart,
+      generatedActionsEnd,
+    );
+
+    expect(generatedActionsSource).toContain('aria-label="Download image"');
+    expect(generatedActionsSource).toContain('aria-label="Regenerate image"');
+    expect(generatedActionsSource).toContain('aria-label="Delete image"');
+    expect(clientSource).not.toContain('aria-label="Delete uploaded image"');
+    expect(clientSource).toContain('className="mt-2 flex flex-wrap items-center gap-1.5"');
   });
 
   it("keeps Standard and Web Search on their existing endpoints", () => {

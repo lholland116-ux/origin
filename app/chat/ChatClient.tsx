@@ -23,6 +23,7 @@ import {
   Plus,
   RefreshCw,
   Send,
+  Trash2,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BRAND } from "@/lib/branding";
@@ -701,6 +702,24 @@ export function getImageGenerationQuotaMessage(
     : "Monthly image limit reached. Come back next month or upgrade to Pro.";
 }
 
+export function getGeneratedImageDeleteErrorMessage(
+  status: number,
+  code?: string,
+  serverMessage?: string,
+): string {
+  if (code === "IMAGE_HAS_DERIVATIVES") {
+    return "This image can't be deleted because edited images depend on it.";
+  }
+
+  if (typeof serverMessage === "string" && serverMessage.trim()) {
+    return serverMessage;
+  }
+
+  return status === 404
+    ? "Generated image not found."
+    : "The generated image could not be deleted.";
+}
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -1269,6 +1288,16 @@ export function normalizeInitialMessages(messages: Message[]): Message[] {
       ? cloneDocuments(message.documents)
       : [],
   }));
+}
+
+export function removeGeneratedImageMessage(
+  messages: Message[],
+  generatedImageId: string,
+): Message[] {
+  return messages.filter(
+    (message) =>
+      message.role !== "assistant" || message.generatedImage?.id !== generatedImageId,
+  );
 }
 
 export function createOptimisticUserMessage(
@@ -2127,6 +2156,7 @@ export default function ChatClient({
   });
   const [downloadingGeneratedImageId, setDownloadingGeneratedImageId] = useState<string | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
+  const [deletingGeneratedImageId, setDeletingGeneratedImageId] = useState<string | null>(null);
   const [plan, setPlan] = useState<Plan>("free");
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [upgradeModalTitle, setUpgradeModalTitle] = useState("Upgrade to Pro");
@@ -4013,7 +4043,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function handleDownloadGeneratedImage(generatedImageId: string): Promise<void> {
-    if (loading || downloadingGeneratedImageId) return;
+    if (loading || downloadingGeneratedImageId || deletingGeneratedImageId) return;
 
     setDownloadingGeneratedImageId(generatedImageId);
 
@@ -4032,6 +4062,42 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       );
     } finally {
       setDownloadingGeneratedImageId(null);
+    }
+  }
+
+  async function handleDeleteGeneratedImage(generatedImageId: string): Promise<void> {
+    if (loading || deletingGeneratedImageId || downloadingGeneratedImageId) return;
+
+    const confirmed = window.confirm("Delete this generated image? This cannot be undone.");
+    if (!confirmed) return;
+
+    setDeletingGeneratedImageId(generatedImageId);
+    setUiError("");
+
+    try {
+      const response = await fetch(
+        `/api/generated-images/${encodeURIComponent(generatedImageId)}`,
+        { method: "DELETE", cache: "no-store" },
+      );
+      const data = (await response.json().catch(() => null)) as
+        | { error?: string; code?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          getGeneratedImageDeleteErrorMessage(response.status, data?.code, data?.error),
+        );
+      }
+
+      setMessages((prev) => removeGeneratedImageMessage(prev, generatedImageId));
+    } catch (error) {
+      setUiError(
+        error instanceof Error
+          ? error.message
+          : "The generated image could not be deleted.",
+      );
+    } finally {
+      setDeletingGeneratedImageId(null);
     }
   }
 
@@ -4817,7 +4883,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                   onClick={() =>
                                     void handleDownloadGeneratedImage(message.generatedImage!.id!)
                                   }
-                                  disabled={loading || downloadingGeneratedImageId !== null}
+                                  disabled={
+                                    loading ||
+                                    downloadingGeneratedImageId !== null ||
+                                    deletingGeneratedImageId !== null
+                                  }
                                   className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Download image"
                                 >
@@ -4837,7 +4907,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 <button
                                   type="button"
                                   onClick={() => void handleRegenerateImage(message.id)}
-                                  disabled={loading}
+                                  disabled={loading || deletingGeneratedImageId !== null}
                                   aria-busy={isRegeneratingImage}
                                   className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Regenerate image"
@@ -4848,6 +4918,43 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                   />
                                   <span className="sr-only">
                                     {isRegeneratingImage ? "Regenerating image" : "Regenerate image"}
+                                  </span>
+                                </button>
+                              </Tooltip>
+
+                              <Tooltip
+                                content={
+                                  deletingGeneratedImageId === message.generatedImage.id
+                                    ? "Deleting image…"
+                                    : "Delete image"
+                                }
+                                touchSafe
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleDeleteGeneratedImage(message.generatedImage!.id!)
+                                  }
+                                  disabled={
+                                    loading ||
+                                    downloadingGeneratedImageId !== null ||
+                                    deletingGeneratedImageId !== null
+                                  }
+                                  aria-busy={
+                                    deletingGeneratedImageId === message.generatedImage.id
+                                  }
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-300/65 transition hover:bg-red-400/10 hover:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Delete image"
+                                >
+                                  {deletingGeneratedImageId === message.generatedImage.id ? (
+                                    <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                  )}
+                                  <span className="sr-only">
+                                    {deletingGeneratedImageId === message.generatedImage.id
+                                      ? "Deleting image"
+                                      : "Delete image"}
                                   </span>
                                 </button>
                               </Tooltip>
