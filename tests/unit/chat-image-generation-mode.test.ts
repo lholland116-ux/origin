@@ -161,6 +161,7 @@ describe("chat image-generation mode", () => {
       createObjectUrl,
       createAnchor: () => anchor,
       revokeObjectUrl,
+      scheduleObjectUrlRevoke: (callback) => callback(),
     });
 
     expect(anchor.download).toBe(`lvtchat-image-${generatedImageId}.png`);
@@ -168,6 +169,62 @@ describe("chat image-generation mode", () => {
     expect(anchor.rel).toBe("noreferrer");
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:download-test");
+  });
+
+  it("keeps the browser download blob alive until scheduled cleanup", async () => {
+    const generatedImageId = "30000000-0000-4000-8000-000000000003";
+    const revokeObjectUrl = vi.fn();
+    const scheduleObjectUrlRevoke = vi.fn();
+    const anchor = {
+      click: vi.fn(),
+      download: "",
+      href: "",
+      rel: "",
+    } as unknown as HTMLAnchorElement;
+
+    await downloadGeneratedImage(generatedImageId, {
+      fetcher: vi.fn(async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        })
+      ),
+      createObjectUrl: () => "blob:scheduled-download-test",
+      createAnchor: () => anchor,
+      revokeObjectUrl,
+      scheduleObjectUrlRevoke,
+    });
+
+    expect(revokeObjectUrl).not.toHaveBeenCalled();
+    expect(scheduleObjectUrlRevoke).toHaveBeenCalledTimes(1);
+
+    const cleanup = scheduleObjectUrlRevoke.mock.calls[0]?.[0];
+    cleanup?.();
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:scheduled-download-test");
+  });
+
+  it("uses the native Android save path without creating a browser download URL", async () => {
+    const generatedImageId = "30000000-0000-4000-8000-000000000003";
+    const nativeSave = vi.fn(async () => undefined);
+    const createObjectUrl = vi.fn(() => "blob:should-not-be-created");
+
+    await downloadGeneratedImage(generatedImageId, {
+      fetcher: vi.fn(async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        })
+      ),
+      createObjectUrl,
+      nativeSave,
+    });
+
+    expect(nativeSave).toHaveBeenCalledWith({
+      base64: "AQID",
+      fileName: `lvtchat-image-${generatedImageId}.png`,
+      mimeType: "image/png",
+    });
+    expect(createObjectUrl).not.toHaveBeenCalled();
   });
 
   it("revokes transient blob URLs but never durable signed URLs", () => {

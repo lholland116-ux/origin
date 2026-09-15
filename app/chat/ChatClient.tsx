@@ -30,6 +30,7 @@ import Tooltip from "@/components/ui/Tooltip";
 import OnboardingModal from "@/components/help/OnboardingModal";
 import DocumentUploadButton from "@/components/DocumentUploadButton";
 import DocumentChip from "@/components/DocumentChip";
+import { DOCUMENT_LIMITS } from "@/lib/documents/config";
 import { validateFiles } from "@/lib/documents/validate-upload";
 import {
   CHAT_THEMES,
@@ -42,7 +43,7 @@ import {
   setStoredChatThemeId,
 } from "@/lib/chat-theme-storage";
 import UpgradeModal from "@/components/UpgradeModal";
-import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
 import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
 
@@ -158,6 +159,20 @@ export type GeneratedImageResult = GeneratedImage & {
   assistantMessageId?: string;
 };
 
+export type NativeGeneratedImageDownloadRequest = {
+  base64: string;
+  fileName: string;
+  mimeType: string;
+};
+
+type NativeGeneratedImageDownloadPlugin = {
+  save(options: NativeGeneratedImageDownloadRequest): Promise<void>;
+};
+
+const NativeGeneratedImageDownload = registerPlugin<NativeGeneratedImageDownloadPlugin>(
+  "GeneratedImageDownload"
+);
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -187,6 +202,12 @@ type ChatClientProps = {
   initialConversationId: string;
   initialMessages: Message[];
   initialConversations: ConversationItem[];
+};
+
+type ProfileMenuPosition = {
+  top: number;
+  left: number;
+  width: number;
 };
 
 type ConversationRowProps = {
@@ -492,9 +513,12 @@ function ConversationRow({
   );
 }
 
-const MAX_INPUT_LENGTH = 2000;
+const MAX_INLINE_INPUT_LENGTH = 2000;
+const MAX_REQUEST_MESSAGE_LENGTH = 4000;
+const PASTED_TEXT_FILE_NAME = "pasted-text.txt";
 const COMPOSER_TEXTAREA_MIN_HEIGHT = 52;
 const COMPOSER_TEXTAREA_MAX_HEIGHT = 180;
+const GENERATED_IMAGE_DOWNLOAD_URL_REVOKE_DELAY_MS = 60_000;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 const JPEG_QUALITY = 0.72;
@@ -520,6 +544,24 @@ const CONVERSATION_STARTERS = [
   "Explain something step by step",
 ] as const;
 
+const SIDEBAR_LABEL_CLASS = "text-sm font-medium";
+const PROFILE_MENU_HORIZONTAL_INSET = 12;
+
+function getProfileMenuContainerBounds(
+  trigger: HTMLElement,
+): { left: number; width: number } | null {
+  const container = trigger.closest<HTMLElement>("[data-profile-sidebar]");
+  if (!container) return null;
+
+  const rect = container.getBoundingClientRect();
+  if (rect.width <= PROFILE_MENU_HORIZONTAL_INSET * 2) return null;
+
+  return {
+    left: rect.left + PROFILE_MENU_HORIZONTAL_INSET,
+    width: rect.width - PROFILE_MENU_HORIZONTAL_INSET * 2,
+  };
+}
+
 export function calculateComposerTextareaSize(
   inputValue: string,
   scrollHeight: number
@@ -539,6 +581,32 @@ export function calculateComposerTextareaSize(
     overflowY:
       scrollHeight > COMPOSER_TEXTAREA_MAX_HEIGHT ? "auto" : "hidden",
   };
+}
+
+export function shouldConvertLargePasteToAttachment(pastedText: string): boolean {
+  return pastedText.length > MAX_INLINE_INPUT_LENGTH;
+}
+
+export function insertTextAtSelection(
+  value: string,
+  pastedText: string,
+  selectionStart: number,
+  selectionEnd: number,
+): string {
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+
+  return `${value.slice(0, start)}${pastedText}${value.slice(end)}`;
+}
+
+export function createPastedTextAttachment(pastedText: string): File {
+  return new File([pastedText], PASTED_TEXT_FILE_NAME, { type: "text/plain" });
+}
+
+export function getComposerMessageLengthError(inputLength: number): string | null {
+  return inputLength > MAX_REQUEST_MESSAGE_LENGTH
+    ? `Message too long. Maximum ${MAX_REQUEST_MESSAGE_LENGTH} characters.`
+    : null;
 }
 
 export type ImageGenerationClientErrorCode =
@@ -808,7 +876,25 @@ export type GeneratedImageDownloadOptions = {
   createObjectUrl?: (blob: Blob) => string;
   createAnchor?: () => HTMLAnchorElement;
   revokeObjectUrl?: (url: string) => void;
+  scheduleObjectUrlRevoke?: (callback: () => void) => void;
+  nativeSave?: (options: NativeGeneratedImageDownloadRequest) => Promise<void>;
 };
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  if (typeof btoa !== "function") {
+    throw new Error("Base64 encoding is unavailable.");
+  }
+
+  return btoa(binary);
+}
 
 export async function downloadGeneratedImage(
   generatedImageId: string,
@@ -871,6 +957,25 @@ export async function downloadGeneratedImage(
     );
   }
 
+  const fileName = `lvtchat-image-${generatedImageId}.${extension}`;
+
+  if (options.nativeSave) {
+    try {
+      await options.nativeSave({
+        base64: await blobToBase64(blob),
+        fileName,
+        mimeType,
+      });
+      return;
+    } catch {
+      throw new ImageGenerationClientError(
+        "download",
+        "Could not save the generated image. Please try again.",
+        response.status,
+      );
+    }
+  }
+
   let temporaryUrl: string;
   try {
     temporaryUrl = (
@@ -898,15 +1003,22 @@ export async function downloadGeneratedImage(
     }
 
     anchor.href = temporaryUrl;
-    anchor.download = `lvtchat-image-${generatedImageId}.${extension}`;
+    anchor.download = fileName;
     anchor.rel = "noreferrer";
     anchor.click();
   } finally {
-    if (options.revokeObjectUrl) {
-      options.revokeObjectUrl(temporaryUrl);
-    } else if (typeof URL !== "undefined") {
-      URL.revokeObjectURL(temporaryUrl);
-    }
+    const revoke = options.revokeObjectUrl ?? ((url: string) => URL.revokeObjectURL(url));
+    const schedule =
+      options.scheduleObjectUrlRevoke ??
+      ((callback: () => void) => {
+        if (typeof window !== "undefined") {
+          window.setTimeout(callback, GENERATED_IMAGE_DOWNLOAD_URL_REVOKE_DELAY_MS);
+        } else {
+          callback();
+        }
+      });
+
+    schedule(() => revoke(temporaryUrl));
   }
 }
 
@@ -1561,11 +1673,13 @@ function getSecondaryButtonClass(theme: ChatTheme): string {
 function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
   return isActive
     ? cx(
-        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
+        SIDEBAR_LABEL_CLASS,
         "border-blue-500/70 bg-blue-600 text-white hover:bg-blue-500"
       )
     : cx(
-        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
+        SIDEBAR_LABEL_CLASS,
         theme.panelBorder,
         "bg-transparent text-white/80 hover:bg-white/10 hover:text-white"
       );
@@ -1600,8 +1714,7 @@ function ChatThemePicker({
   return (
     <section
       className={cx(
-        "rounded-2xl border p-4",
-        "max-h-[calc(100dvh-230px)] overflow-hidden",
+        "rounded-xl border p-2",
         theme.panelBg,
         theme.panelBorder
       )}
@@ -1626,74 +1739,51 @@ function ChatThemePicker({
         </button>
       </div>
 
-      <div className="max-h-[calc(100dvh-310px)] overflow-y-auto overscroll-contain pr-1 pb-28 sm:max-h-none sm:overflow-visible sm:pb-0">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {CHAT_THEMES.map((item) => {
-            const active = item.id === selectedThemeId;
+      <div className="grid grid-cols-1 gap-1.5">
+        {CHAT_THEMES.map((item) => {
+          const active = item.id === selectedThemeId;
 
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onChange(item.id)}
-                aria-pressed={active}
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onChange(item.id)}
+              aria-pressed={active}
+              className={cx(
+                "flex min-h-11 w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition",
+                SIDEBAR_LABEL_CLASS,
+                "focus:outline-none focus:ring-2 focus:ring-blue-400/60 focus:ring-offset-2 focus:ring-offset-black",
+                active ? "border-blue-400/50 bg-white/10" : theme.panelBorder,
+                "hover:bg-white/5"
+              )}
+            >
+              <span
                 className={cx(
-                  "rounded-2xl border p-3 text-left transition",
-                  "focus:outline-none focus:ring-2 focus:ring-blue-400/60 focus:ring-offset-2 focus:ring-offset-black",
-                  active ? "border-blue-400/50 bg-white/10" : theme.panelBorder,
-                  "hover:bg-white/5"
+                  "flex h-8 w-10 shrink-0 gap-0.5 overflow-hidden rounded-lg border p-1",
+                  item.pageBg,
+                  item.panelBorder
                 )}
+                aria-hidden="true"
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-white">
-                      {item.label}
-                    </div>
-                    <div className="mt-1 text-xs text-white/60">
-                      {item.id}
-                    </div>
-                  </div>
+                <span className={cx("min-w-0 flex-1 rounded", item.assistantBubble)} />
+                <span className={cx("min-w-0 flex-1 rounded", item.userBubble)} />
+              </span>
 
-                  {active ? (
-                    <span className="rounded-full bg-white px-2 py-1 text-[10px] font-medium text-black">
-                      Active
-                    </span>
-                  ) : null}
-                </div>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-white">{item.label}</span>
+                <span className={cx("mt-0.5 block truncate text-xs font-normal", theme.mutedText)}>
+                  {item.id}
+                </span>
+              </span>
 
-                <div className="mt-3 rounded-xl border border-white/10 p-2">
-                  <div
-                    className={cx(
-                      "rounded-lg border p-2",
-                      item.panelBg,
-                      item.panelBorder
-                    )}
-                  >
-                    <div
-                      className={cx(
-                        "mb-2 rounded-lg px-3 py-2 text-xs",
-                        item.assistantBubble,
-                        item.assistantText
-                      )}
-                    >
-                      Assistant
-                    </div>
-
-                    <div
-                      className={cx(
-                        "ml-auto w-fit rounded-lg px-3 py-2 text-xs",
-                        item.userBubble,
-                        item.userText
-                      )}
-                    >
-                      User
-                    </div>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
+              {active ? (
+                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[10px] font-medium text-black">
+                  Active
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
     </section>
   );
@@ -1973,7 +2063,11 @@ export default function ChatClient({
   const [selectedThemeId, setSelectedThemeId] = useState(DEFAULT_CHAT_THEME_ID);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [profileMenuPosition, setProfileMenuPosition] = useState({ top: 0, left: 0 });
+  const [profileMenuPosition, setProfileMenuPosition] = useState<ProfileMenuPosition>({
+    top: 0,
+    left: 0,
+    width: 0,
+  });
   const [downloadingGeneratedImageId, setDownloadingGeneratedImageId] = useState<string | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [plan, setPlan] = useState<Plan>("free");
@@ -1989,6 +2083,7 @@ export default function ChatClient({
   const imageRequestGenerationRef = useRef(0);
   const generatedImageUrlsRef = useRef<Set<string>>(new Set());
   const regenerationInFlightRef = useRef(false);
+  const pastedTextUploadInFlightRef = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     const requestGeneration = ++messageLoadGenerationRef.current;
@@ -2150,6 +2245,14 @@ export default function ChatClient({
         return;
       }
 
+      const containerBounds = getProfileMenuContainerBounds(trigger);
+      if (containerBounds) {
+        setProfileMenuPosition((current) => ({
+          ...current,
+          ...containerBounds,
+        }));
+      }
+
       setThemePickerOpen(false);
       setProfileMenuOpen(true);
     },
@@ -2164,19 +2267,13 @@ export default function ChatClient({
 
     const triggerRect = trigger.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const containerBounds = getProfileMenuContainerBounds(trigger);
+    if (!containerBounds) return;
+
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-    const viewportLeft = window.visualViewport?.offsetLeft ?? 0;
     const viewportTop = window.visualViewport?.offsetTop ?? 0;
     const viewportPadding = 12;
     const menuGap = 8;
-
-    const minLeft = viewportLeft + viewportPadding;
-    const maxLeft = viewportLeft + viewportWidth - menuRect.width - viewportPadding;
-    const left = Math.min(
-      Math.max(triggerRect.right - menuRect.width, minLeft),
-      Math.max(minLeft, maxLeft)
-    );
 
     const spaceBelow = viewportTop + viewportHeight - triggerRect.bottom;
     const placeBelow =
@@ -2189,7 +2286,11 @@ export default function ChatClient({
     const maxTop = viewportTop + viewportHeight - menuRect.height - viewportPadding;
     const top = Math.min(Math.max(preferredTop, minTop), Math.max(minTop, maxTop));
 
-    setProfileMenuPosition({ top, left });
+    setProfileMenuPosition({
+      top,
+      left: containerBounds.left,
+      width: containerBounds.width,
+    });
   }, [getProfileTrigger]);
 
   useLayoutEffect(() => {
@@ -3104,31 +3205,31 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     };
   }
 
-  async function handleFilesSelected(files: File[]) {
-    if (isUploadingDocuments) return;
+  async function handleFilesSelected(files: File[]): Promise<boolean> {
+    if (isUploadingDocuments) return false;
 
     if (useWebSearch || useImageGeneration) {
       setDocumentError("Document upload is only available in Standard mode.");
-      return;
+      return false;
     }
 
     const validationError = validateFiles(files);
     if (validationError) {
       setDocumentError(validationError);
-      return;
+      return false;
     }
 
     for (const file of files) {
       const mimeType = inferMimeType(file);
       if (!isAllowedUploadMimeType(mimeType, file.name)) {
         setDocumentError(`Unsupported file type: ${file.name}`);
-        return;
+        return false;
       }
     }
 
     if (!conversationId) {
       setDocumentError("Missing conversationId.");
-      return;
+      return false;
     }
 
     try {
@@ -3179,10 +3280,29 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       throw new Error(errorMessage);
     }
 
+      const responseDocuments =
+        data && "documents" in data && Array.isArray(data.documents)
+          ? data.documents
+          : [];
+      const hasFailedDocument = responseDocuments.some(
+        (document) => document.extraction_status === "failed"
+      );
+      if (hasFailedDocument) {
+        const failedDocument = responseDocuments.find(
+          (document) => document.extraction_status === "failed"
+        );
+        setDocumentError(
+          failedDocument?.extraction_error ||
+            "The text attachment could not be processed. Your full paste remains in the composer."
+        );
+      }
+
       const refreshedDocs = await fetchDocuments(conversationId, { silent: true });
       if (refreshedDocs) {
         setComposerDocuments((prev) => reconcileComposerDocuments(prev, refreshedDocs));
       }
+
+      return !hasFailedDocument;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Upload failed.";
       setDocumentError(message);
@@ -3194,9 +3314,70 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         )
       );
       await fetchDocuments(conversationId, { silent: true });
+      return false;
     } finally {
       setIsUploadingDocuments(false);
     }
+  }
+
+  function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>): void {
+    const pastedText = event.clipboardData.getData("text/plain");
+
+    if (!shouldConvertLargePasteToAttachment(pastedText)) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const textarea = event.currentTarget;
+    const selectionStart = textarea.selectionStart ?? input.length;
+    const selectionEnd = textarea.selectionEnd ?? selectionStart;
+    const nextInput = insertTextAtSelection(
+      input,
+      pastedText,
+      selectionStart,
+      selectionEnd,
+    );
+    const preservePastedText = () => {
+      setInput((current) => {
+        if (current.includes(pastedText)) return current;
+        return current ? `${current}\n\n${pastedText}` : pastedText;
+      });
+    };
+    const pastedFile = createPastedTextAttachment(pastedText);
+
+    if (
+      plan !== "pro" ||
+      useWebSearch ||
+      useImageGeneration ||
+      pastedFile.size > DOCUMENT_LIMITS.maxFileSizeBytes
+    ) {
+      setInput(nextInput);
+      setUiError(
+        plan !== "pro"
+          ? "Large pasted text attachments require Pro. Your full paste remains in the composer; shorten it to send inline or upgrade to attach it."
+          : useWebSearch || useImageGeneration
+            ? "Large pasted text cannot be attached in this mode. Your full paste remains in the composer; shorten it before sending."
+            : "This pasted text is too large for an attachment. Your full paste remains in the composer."
+      );
+      return;
+    }
+
+    if (pastedTextUploadInFlightRef.current === pastedText) {
+      setUiError("This pasted text is already being attached.");
+      return;
+    }
+
+    pastedTextUploadInFlightRef.current = pastedText;
+    void handleFilesSelected([pastedFile])
+      .then((accepted) => {
+        if (!accepted) preservePastedText();
+      })
+      .finally(() => {
+        if (pastedTextUploadInFlightRef.current === pastedText) {
+          pastedTextUploadInFlightRef.current = null;
+        }
+      });
   }
 
   function removeComposerDocument(id: string): void {
@@ -3520,8 +3701,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (trimmed.length > MAX_INPUT_LENGTH) {
-      setUiError(`Message too long. Maximum ${MAX_INPUT_LENGTH} characters.`);
+    const messageLengthError = getComposerMessageLengthError(trimmed.length);
+    if (messageLengthError) {
+      setUiError(messageLengthError);
       return;
     }
 
@@ -3749,6 +3931,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       if (!responseAccepted) {
         restorePendingImages(pendingImageSnapshot);
+        setInput(effectiveMessage);
+        setComposerDocuments(sentDocuments);
         setMessages((prev) => rollbackOptimisticMessages(prev, [optimisticUserId, assistantId]));
         setUiError(
           error instanceof Error ? error.message : "Something went wrong. Please try again."
@@ -3785,7 +3969,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     setDownloadingGeneratedImageId(generatedImageId);
 
     try {
-      await downloadGeneratedImage(generatedImageId);
+      await downloadGeneratedImage(generatedImageId, {
+        nativeSave:
+          Capacitor.getPlatform() === "android"
+            ? (options) => NativeGeneratedImageDownload.save(options)
+            : undefined,
+      });
     } catch (error) {
       setUiError(
         error instanceof ImageGenerationClientError
@@ -3923,10 +4112,13 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   function renderStatusMessages() {
+    const shouldRenderUiError =
+      uiError && !(isImageLimitReached && uiError === imageQuotaLimitMessage);
+
     return (
       <>
         {usageError && <div className="mt-2 text-xs text-red-400">{usageError}</div>}
-        {uiError && <div className="mt-2 text-xs text-red-400">{uiError}</div>}
+        {shouldRenderUiError && <div className="mt-2 text-xs text-red-400">{uiError}</div>}
         {documentError && <div className="mt-2 text-xs text-red-400">{documentError}</div>}
         {speechError && <div className="mt-2 text-xs text-red-400">{speechError}</div>}
       </>
@@ -3986,7 +4178,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             type="button"
             onClick={handleNewChat}
             disabled={loading || sidebarLoading}
-            className={cx("min-h-12 w-full rounded-xl px-4 py-2.5 text-sm font-medium", activeTheme.buttonPrimary)}
+            className={cx("min-h-12 w-full rounded-xl px-4 py-2.5", SIDEBAR_LABEL_CLASS, activeTheme.buttonPrimary)}
           >
             <span className="flex items-center justify-center gap-2">
               <Plus className="h-4 w-4" aria-hidden="true" />
@@ -4036,11 +4228,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         role="dialog"
         aria-label="Profile and settings"
         className={cx(
-          "fixed z-[60] w-[min(22rem,calc(100vw-1.5rem))] max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-2xl border p-3 shadow-2xl shadow-black/40",
+          "fixed z-[60] min-w-0 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-2xl border p-3 shadow-2xl shadow-black/40",
           activeTheme.panelBg,
           activeTheme.panelBorder
         )}
-        style={{ top: profileMenuPosition.top, left: profileMenuPosition.left }}
+        style={{
+          top: profileMenuPosition.top,
+          left: profileMenuPosition.left,
+          width: profileMenuPosition.width || undefined,
+        }}
       >
         <div className="flex min-w-0 items-center gap-2 px-1 pb-3">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">
@@ -4059,7 +4255,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             type="button"
             onClick={() => setThemePickerOpen((prev) => !prev)}
             className={cx(
-              "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition",
+              "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition",
+              SIDEBAR_LABEL_CLASS,
               activeTheme.mutedText,
               "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/20"
             )}
@@ -4092,7 +4289,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               router.push("/account");
             }}
             className={cx(
-              "mt-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition",
+              "mt-1 flex w-full items-center rounded-lg px-3 py-2 text-left transition",
+              SIDEBAR_LABEL_CLASS,
               activeTheme.mutedText,
               "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/20"
             )}
@@ -4108,7 +4306,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 if (mobileMenuOpen) setMobileMenuOpen(false);
                 router.push(BRAND.routes.pricing);
               }}
-              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-blue-300 transition hover:bg-blue-500/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+              className={cx(
+                "flex w-full items-center rounded-lg px-3 py-2 text-left text-blue-300 transition",
+                SIDEBAR_LABEL_CLASS,
+                "hover:bg-blue-500/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+              )}
             >
               Upgrade to Pro
             </button>
@@ -4120,7 +4322,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               closeProfileMenu(false);
               void handleSignOut();
             }}
-            className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-red-300/80 transition hover:bg-red-950/30 hover:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400/30"
+            className={cx(
+              "flex w-full items-center rounded-lg px-3 py-2 text-left text-red-300/80 transition",
+              SIDEBAR_LABEL_CLASS,
+              "hover:bg-red-950/30 hover:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400/30"
+            )}
           >
             Sign Out
           </button>
@@ -4191,7 +4397,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           <Link
             href="/help"
             className={cx(
-              "flex h-10 w-full items-center gap-1.5 rounded-full border px-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50",
+              "flex h-10 w-full items-center gap-1.5 rounded-full border px-3 transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50",
+              SIDEBAR_LABEL_CLASS,
               activeTheme.panelBorder,
               "text-white/80 hover:bg-white/10 hover:text-white"
             )}
@@ -4266,7 +4473,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               }}
             />
 
-            <div className={cx("relative z-10 flex h-full w-80 max-w-[85vw] flex-col border-r", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
+            <div data-profile-sidebar className={cx("relative z-10 flex h-full w-[min(18rem,78vw)] max-w-[calc(100vw-1rem)] min-w-0 flex-col overflow-hidden border-r", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
               <div className={cx("sticky top-0 border-b p-4 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -4331,7 +4538,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         {renderProfileSettingsMenu()}
 
         <div className="flex h-full overflow-hidden">
-          <aside className={cx("hidden h-full w-64 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
+          <aside data-profile-sidebar className={cx("hidden h-full w-64 shrink-0 border-r md:flex md:flex-col", activeTheme.sidebarBg, activeTheme.sidebarBorder)}>
             <div className={cx("sticky top-0 border-b p-3 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               {renderSidebarBrand()}
 
@@ -4880,6 +5087,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <textarea
                       ref={composerTextareaRef}
                       value={input}
+                      onPaste={handleComposerPaste}
                       onChange={(event) => {
                         setInput(event.target.value);
 
@@ -4909,7 +5117,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 : "Ask something..."
                       }
                       rows={1}
-                      maxLength={MAX_INPUT_LENGTH}
                       disabled={composerDisabled}
                       style={{ height: COMPOSER_TEXTAREA_MIN_HEIGHT }}
                       className={cx(
@@ -5026,11 +5233,13 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               </div>
             </div>
              
-                {(input.length >= MAX_INPUT_LENGTH - 200 || conversationDocuments.length > 0) && (
+                {(input.length >= MAX_REQUEST_MESSAGE_LENGTH - 200 || conversationDocuments.length > 0) && (
                   <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-                    {input.length >= MAX_INPUT_LENGTH - 200 && (
+                    {input.length >= MAX_REQUEST_MESSAGE_LENGTH - 200 && (
                       <div className={cx("text-[11px]", activeTheme.mutedText)}>
-                        {MAX_INPUT_LENGTH - input.length} characters remaining
+                        {getComposerMessageLengthError(input.length)
+                          ? `${input.length - MAX_REQUEST_MESSAGE_LENGTH} characters over limit`
+                          : `${MAX_REQUEST_MESSAGE_LENGTH - input.length} characters remaining`}
                       </div>
                     )}
 

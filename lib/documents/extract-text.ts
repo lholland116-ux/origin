@@ -193,7 +193,19 @@ async function extractDocxText(buffer: Buffer): Promise<string> {
 }
 
 async function extractPlainText(buffer: Buffer): Promise<string> {
-  return finalizeText(buffer.toString("utf-8"));
+  const text = buffer.toString("utf-8");
+
+  if (text.includes("\u0000")) {
+    throw new Error("Text document contains unsupported characters.");
+  }
+
+  if (text.length > MAX_EXTRACTED_TEXT_LENGTH) {
+    throw new Error(
+      `Text document exceeds the supported size limit of ${MAX_EXTRACTED_TEXT_LENGTH} characters.`
+    );
+  }
+
+  return text;
 }
 
 async function extractCsvText(buffer: Buffer): Promise<string> {

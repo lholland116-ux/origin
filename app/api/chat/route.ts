@@ -2,7 +2,10 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
-import { buildDocumentContext } from "@/lib/documents/prepare-context";
+import {
+  buildDocumentContext,
+  DocumentContextLimitError,
+} from "@/lib/documents/prepare-context";
 import {
   assertStoredImageCount,
   buildImageInputContent,
@@ -801,6 +804,9 @@ export async function POST(req: Request) {
       documentContext = artifacts.documentContext;
     } catch (error) {
       console.error("Document context load error:", error);
+      if (error instanceof DocumentContextLimitError) {
+        return jsonResponse({ error: error.message, code: "DOCUMENT_CONTEXT_TOO_LARGE" }, 413);
+      }
       return jsonResponse({ error: "Failed to load document context." }, 500);
     }
 

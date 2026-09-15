@@ -187,6 +187,19 @@ describe("GET /api/generated-images/[generatedImageId]/download", () => {
     expect(mocks.admin.storage.from).not.toHaveBeenCalled();
   });
 
+  it("does not proxy an arbitrary external image URL", async () => {
+    configureMetadata({
+      data: ownedRow("image/webp", "https://example.com/not-an-authorized-object.webp"),
+      error: null,
+    });
+
+    const { GET } = await import("../../app/api/generated-images/[generatedImageId]/download/route");
+    const response = await GET(routeRequest(), routeContext());
+
+    expect(response.status).toBe(404);
+    expect(mocks.admin.storage.from).not.toHaveBeenCalled();
+  });
+
   it("maps metadata and storage failures to safe responses without leaking internals", async () => {
     configureMetadata({
       data: null,

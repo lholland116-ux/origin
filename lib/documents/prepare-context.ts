@@ -4,10 +4,15 @@ type DocumentRow = {
   extracted_text: string | null;
 };
 
-const MAX_TOTAL_CHARS = 30000;
+export const MAX_DOCUMENT_CONTEXT_CHARS = 30000;
 
-function trimText(text: string, maxChars: number) {
-  return text.length <= maxChars ? text : text.slice(0, maxChars);
+export class DocumentContextLimitError extends Error {
+  constructor() {
+    super(
+      "Attached document content exceeds the supported context size. Please remove a document or use a shorter file."
+    );
+    this.name = "DocumentContextLimitError";
+  }
 }
 
 export function buildDocumentContext(documents: DocumentRow[]) {
@@ -17,10 +22,17 @@ export function buildDocumentContext(documents: DocumentRow[]) {
     return "";
   }
 
-  const perDocMax = Math.max(4000, Math.floor(MAX_TOTAL_CHARS / usable.length));
+  const totalCharacters = usable.reduce(
+    (total, doc) => total + (doc.extracted_text?.length ?? 0),
+    0
+  );
+
+  if (totalCharacters > MAX_DOCUMENT_CONTEXT_CHARS) {
+    throw new DocumentContextLimitError();
+  }
 
   const sections = usable.map((doc) => {
-    const text = trimText(doc.extracted_text || "", perDocMax);
+    const text = doc.extracted_text || "";
 
     return [
       `Document ID: ${doc.id}`,
