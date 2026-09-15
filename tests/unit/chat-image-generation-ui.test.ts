@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  formatMessageUsage,
+  formatMessageUsageDetail,
   formatImageGenerationCounter,
   formatImageGenerationUsageDetail,
+  getProfileDisplayName,
   getUploadedMessageImageGridClass,
   shouldShowImageGenerationCounter,
 } from "@/app/chat/ChatClient";
@@ -38,7 +41,7 @@ describe("chat image-generation presentation", () => {
 
   it("keeps quota detail behind an adjacent touch-safe info control", () => {
     expect(clientSource).toContain("<ImageGenerationUsageDetails");
-    expect(clientSource).toContain('aria-label="Image usage details"');
+    expect(clientSource).toContain('ariaLabel="Image usage details"');
     expect(clientSource).toContain('aria-haspopup="dialog"');
     expect(clientSource).toContain('role="dialog"');
     expect(clientSource).toContain("touchSafe");
@@ -121,7 +124,7 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain('alt={message.image_name || "Uploaded image"}');
   });
 
-  it("places mode and Help controls in the sidebar and keeps mobile navigation minimal", () => {
+  it("places mode controls in the sidebar and keeps mobile navigation minimal", () => {
     const modeSourceStart = clientSource.indexOf("function renderSidebarModeActions");
     const modeSourceEnd = clientSource.indexOf("function renderSidebarActions", modeSourceStart);
     const modeSource = clientSource.slice(modeSourceStart, modeSourceEnd);
@@ -130,12 +133,13 @@ describe("chat image-generation presentation", () => {
     expect(modeSource).toContain("Web Search");
     expect(modeSource).toContain("Create image");
     expect(modeSource).not.toContain(">Image</");
-    expect(modeSource).toContain('aria-label="Help"');
+    expect(modeSource).not.toContain('aria-label="Help"');
     expect(modeSource).toContain("aria-pressed={standardActive}");
     expect(modeSource).toContain("aria-pressed={useWebSearch}");
     expect(modeSource).toContain("aria-pressed={useImageGeneration}");
     expect(clientSource).toContain("{renderSidebarActions()}");
     expect(clientSource).toContain("{renderSidebarUtilityActions(true)}");
+    expect(clientSource).toContain('href="/help"');
     expect(clientSource).toContain('className="flex h-12 shrink-0 items-center px-3 md:hidden"');
     expect(clientSource).toContain('aria-label="Open menu"');
     expect(clientSource).not.toContain("headerProfileTriggerRef");
@@ -180,18 +184,119 @@ describe("chat image-generation presentation", () => {
     );
     expect(newChatSource).toContain("SIDEBAR_LABEL_CLASS");
     expect(newChatSource).toContain("min-h-12 w-full");
-    expect(sidebarModeSource).toContain("SIDEBAR_LABEL_CLASS");
+    expect(sidebarModeSource).toContain("getModeButtonClass(activeTheme");
     expect(sidebarModeSource).toContain("Standard");
     expect(sidebarModeSource).toContain("Web Search");
     expect(sidebarModeSource).toContain("Create image");
-    expect(sidebarModeSource).toContain("Help");
-    expect(sidebarModeSource).toContain("h-10 w-full");
+    expect(sidebarModeSource).not.toContain("Help");
+    expect(clientSource).toContain(
+      "inline-flex h-10 items-center gap-1.5 rounded-full",
+    );
     expect(profileMenuSource).toContain("SIDEBAR_LABEL_CLASS");
     expect(profileMenuSource).toContain("Theme");
+    expect(profileMenuSource).toContain("Help");
     expect(profileMenuSource).toContain("Account");
     expect(profileMenuSource).toContain("Upgrade to Pro");
     expect(profileMenuSource).toContain("Sign Out");
     expect(profileMenuSource).toContain("px-3 py-2");
+  });
+
+  it("moves the authoritative message counter into the composer", () => {
+    expect(formatMessageUsage({ used: 10, limit: 300 })).toBe(
+      "290 messages left today",
+    );
+    expect(formatMessageUsage({ used: 3, limit: 20 })).toBe(
+      "17 messages left today",
+    );
+    expect(formatMessageUsage({ used: 19, limit: 20 })).toBe(
+      "1 message left today",
+    );
+    expect(formatMessageUsage({ used: 20, limit: 20 })).toBe(
+      "0 messages left today",
+    );
+    expect(formatMessageUsageDetail({ used: 10, limit: 300 })).toBe(
+      "Messages today: 10 / 300",
+    );
+
+    const messageUsageStart = clientSource.indexOf("function renderMessageUsage");
+    const messageUsageEnd = clientSource.indexOf(
+      "function renderSidebarActions",
+      messageUsageStart,
+    );
+    const messageUsageSource = clientSource.slice(messageUsageStart, messageUsageEnd);
+    const composerStart = clientSource.indexOf("<form");
+    const composerEnd = clientSource.indexOf("</form>", composerStart);
+    const composerSource = clientSource.slice(composerStart, composerEnd);
+
+    expect(messageUsageSource).toContain(
+      "if (useImageGeneration || !usage || usage.limit <= 0) return null;",
+    );
+    expect(messageUsageSource).toContain('aria-label="Message usage"');
+    expect(messageUsageSource).toContain("formatMessageUsage(usage)");
+    expect(messageUsageSource).toContain(
+      "<MessageUsageDetails usage={usage} theme={activeTheme} />",
+    );
+    expect(messageUsageSource).toContain("px-4 pt-3 text-xs");
+    expect(composerSource).toContain("{renderMessageUsage()}");
+    expect(composerSource).toContain("{renderImageGenerationUsage()}");
+    expect(composerSource.indexOf("{renderMessageUsage()}")).toBeLessThan(
+      composerSource.indexOf("<textarea"),
+    );
+    expect(clientSource.match(/\{renderMessageUsage\(\)\}/g)).toHaveLength(1);
+    expect(clientSource).toContain("Standard");
+    expect(clientSource).toContain("Web Search");
+    expect(clientSource).toContain("Create image");
+    expect(clientSource).toContain('ariaLabel="Message usage details"');
+    expect(clientSource).toContain("formatMessageUsageDetail(usage)");
+    expect(clientSource).not.toContain("Messages this month:");
+
+    const mobileTopStart = clientSource.indexOf("<div data-profile-sidebar");
+    const mobileTopEnd = clientSource.indexOf("{renderSidebarActions()}", mobileTopStart);
+    const mobileTopSource = clientSource.slice(mobileTopStart, mobileTopEnd);
+    const desktopTopStart = clientSource.indexOf("<aside data-profile-sidebar");
+    const desktopTopEnd = clientSource.indexOf("{renderSidebarActions()}", desktopTopStart);
+    const desktopTopSource = clientSource.slice(desktopTopStart, desktopTopEnd);
+
+    expect(mobileTopSource).not.toContain("messages used today");
+    expect(mobileTopSource).not.toContain("Free Plan");
+    expect(mobileTopSource).not.toContain("Pro Plan");
+    expect(desktopTopSource).not.toContain("messages used today");
+    expect(desktopTopSource).not.toContain("Free Plan");
+    expect(desktopTopSource).not.toContain("Pro Plan");
+  });
+
+  it("removes the conversation document counter without changing composer uploads", () => {
+    expect(clientSource).not.toContain("documents in this conversation");
+    expect(clientSource).not.toContain("conversationDocuments");
+    expect(clientSource).toContain("<form");
+    expect(clientSource).toContain("<textarea");
+    expect(clientSource).toContain("{renderMessageUsage()}");
+    expect(clientSource).toContain("<DocumentUploadButton");
+    expect(clientSource).toContain('plan === "pro"');
+    expect(clientSource).toContain('"/api/documents/upload"');
+    expect(clientSource).toContain("File uploads are a Pro feature");
+    expect(clientSource).toContain('aria-label="Attach image"');
+  });
+
+  it("emphasizes profile identity and Chat History with existing theme tokens", () => {
+    expect(getProfileDisplayName("jane.doe@example.com")).toBe("Jane Doe");
+
+    const profileTriggerStart = clientSource.indexOf("function renderSidebarUtilityActions");
+    const profileMenuStart = clientSource.indexOf("function renderProfileSettingsMenu");
+    const sidebarStart = clientSource.indexOf("function renderSidebarModeActions", profileMenuStart);
+    const profileTriggerSource = clientSource.slice(profileTriggerStart, profileMenuStart);
+    const profileMenuSource = clientSource.slice(profileMenuStart, sidebarStart);
+
+    expect(profileTriggerSource).toContain(
+      'className="min-w-0 flex-1 truncate font-semibold text-white"',
+    );
+    expect(profileTriggerSource).toContain('text-[11px] text-white/50');
+    expect(profileMenuSource).toContain("getProfileDisplayName(userEmail)");
+    expect(profileMenuSource).toContain("truncate text-sm font-semibold text-white");
+    expect(profileMenuSource).toContain("mt-0.5 truncate text-sm font-semibold text-white");
+    expect(profileMenuSource).toContain("mt-0.5 text-xs");
+    expect(clientSource).toContain("activeTheme.badge");
+    expect(clientSource).toContain("bg-white/[0.08] text-white");
   });
 
   it("constrains the profile menu to the active sidebar or mobile drawer", () => {

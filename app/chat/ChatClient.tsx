@@ -259,6 +259,21 @@ function formatUsageCount(value: number): string {
   return String(Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0);
 }
 
+export function formatMessageUsage(
+  usage: Pick<UsageState, "used" | "limit">
+): string {
+  const used = formatUsageCount(usage.used);
+  const limit = formatUsageCount(usage.limit);
+  const remaining = formatUsageCount(Number(limit) - Number(used));
+  return `${remaining} message${remaining === "1" ? "" : "s"} left today`;
+}
+
+export function formatMessageUsageDetail(
+  usage: Pick<UsageState, "used" | "limit">
+): string {
+  return `Messages today: ${formatUsageCount(usage.used)} / ${formatUsageCount(usage.limit)}`;
+}
+
 export function formatImageGenerationCounter(remaining: number): string {
   const count = formatUsageCount(remaining);
   return `${count} image${count === "1" ? "" : "s"} left today`;
@@ -1658,6 +1673,17 @@ function getUserInitials(email: string): string {
   return localPart.slice(0, 2).toUpperCase() || "A";
 }
 
+export function getProfileDisplayName(email: string): string {
+  const localPart = email.trim().split("@")[0] ?? "";
+  const words = localPart.split(/[._-]+/).filter(Boolean);
+
+  if (words.length === 0) return "LVTChat user";
+
+  return words
+    .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+    .join(" ");
+}
+
 export function getMessageCopyValue(message: Pick<Message, "content">): string {
   return message.content?.trim() || "";
 }
@@ -1912,11 +1938,13 @@ function MessageWidgetRenderer({
   return null;
 }
 
-function ImageGenerationUsageDetails({
-  usage,
+function UsageDetailsPopover({
+  detail,
+  ariaLabel,
   theme,
 }: {
-  usage: ImageGenerationUsage;
+  detail: string;
+  ariaLabel: string;
   theme: ChatTheme;
 }) {
   const [open, setOpen] = useState(false);
@@ -1924,8 +1952,6 @@ function ImageGenerationUsageDetails({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const popoverId = useId();
-  const detail = formatImageGenerationUsageDetail(usage);
-
   const updatePosition = useCallback(() => {
     const trigger = triggerRef.current;
     if (!trigger) return;
@@ -1998,7 +2024,7 @@ function ImageGenerationUsageDetails({
           type="button"
           onClick={() => setOpen((current) => !current)}
           className="inline-flex h-7 w-7 items-center justify-center rounded-full text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
-          aria-label="Image usage details"
+          aria-label={ariaLabel}
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={open ? popoverId : undefined}
@@ -2012,7 +2038,7 @@ function ImageGenerationUsageDetails({
           ref={popoverRef}
           id={popoverId}
           role="dialog"
-          aria-label="Image usage details"
+          aria-label={ariaLabel}
           className={cx(
             "fixed z-[80] min-w-[14rem] rounded-lg border p-3 text-xs shadow-xl",
             theme.panelBg,
@@ -2024,6 +2050,38 @@ function ImageGenerationUsageDetails({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ImageGenerationUsageDetails({
+  usage,
+  theme,
+}: {
+  usage: ImageGenerationUsage;
+  theme: ChatTheme;
+}) {
+  return (
+    <UsageDetailsPopover
+      detail={formatImageGenerationUsageDetail(usage)}
+      ariaLabel="Image usage details"
+      theme={theme}
+    />
+  );
+}
+
+function MessageUsageDetails({
+  usage,
+  theme,
+}: {
+  usage: Pick<UsageState, "used" | "limit">;
+  theme: ChatTheme;
+}) {
+  return (
+    <UsageDetailsPopover
+      detail={formatMessageUsageDetail(usage)}
+      ariaLabel="Message usage details"
+      theme={theme}
+    />
   );
 }
 
@@ -2046,7 +2104,6 @@ export default function ChatClient({
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [uploadingImages, setUploadingImages] = useState(false);
   const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>([]);
-  const [conversationDocuments, setConversationDocuments] = useState<UploadedDocument[]>([]);
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
   const [documentError, setDocumentError] = useState("");
   const [conversationId, setConversationId] = useState(initialConversationId);
@@ -2811,10 +2868,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     activeDocumentPollRef.current += 1;
   }
 
-  function clearConversationDocuments(): void {
-    setConversationDocuments([]);
-  }
-
   function clearTransientErrors(): void {
     setUiError("");
     setDocumentError("");
@@ -3072,7 +3125,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     options?: { silent?: boolean }
   ): Promise<UploadedDocument[] | null> {
     if (!targetConversationId) {
-      clearConversationDocuments();
       return [];
     }
 
@@ -3093,7 +3145,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       const data = (await res.json()) as DocumentsResponse;
       const normalized = normalizeUploadedDocuments(data.documents);
-      setConversationDocuments(normalized);
       return normalized;
     } catch (error) {
       if (!options?.silent) {
@@ -3489,7 +3540,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     clearTransientErrors();
     discardPendingImages();
     clearComposerDocuments();
-    clearConversationDocuments();
     setInput("");
 
     try {
@@ -3519,7 +3569,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       setConversationId(newConversationId);
       setMessages([]);
       setComposerDocuments([]);
-      setConversationDocuments([]);
       setMobileMenuOpen(false);
     } catch (error) {
       setUiError(error instanceof Error ? error.message : "Failed to create conversation.");
@@ -4201,7 +4250,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-white">
           {getUserInitials(userEmail)}
         </span>
-        <span className="min-w-0 flex-1 truncate">{userEmail}</span>
+        <span className="min-w-0 flex-1 truncate font-semibold text-white">{userEmail}</span>
         <span className="shrink-0 text-[11px] text-white/50">
           {plan === "pro" ? "Pro" : "Free"}
         </span>
@@ -4235,7 +4284,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             {getUserInitials(userEmail)}
           </span>
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-white">{userEmail}</div>
+            <div className="truncate text-sm font-semibold text-white">
+              {getProfileDisplayName(userEmail)}
+            </div>
+            <div className="mt-0.5 truncate text-sm font-semibold text-white">
+              {userEmail}
+            </div>
             <div className={cx("mt-0.5 text-xs", activeTheme.mutedText)}>
               {plan === "pro" ? "Pro Plan" : "Free Plan"}
             </div>
@@ -4272,6 +4326,24 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               />
             </div>
           )}
+
+          <Link
+            href="/help"
+            onClick={() => {
+              closeProfileMenu(false);
+              if (mobileMenuOpen) setMobileMenuOpen(false);
+            }}
+            className={cx(
+              "mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition",
+              SIDEBAR_LABEL_CLASS,
+              activeTheme.mutedText,
+              "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-white/20"
+            )}
+            aria-label="Help"
+          >
+            <HelpCircle className="h-4 w-4" aria-hidden="true" />
+            Help
+          </Link>
 
           <button
             type="button"
@@ -4385,21 +4457,34 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           </div>
         )}
 
-        <Tooltip content={TOOLTIP_TEXT.help}>
-          <Link
-            href="/help"
-            className={cx(
-              "flex h-10 w-full items-center gap-1.5 rounded-full border px-3 transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50",
-              SIDEBAR_LABEL_CLASS,
-              activeTheme.panelBorder,
-              "text-white/80 hover:bg-white/10 hover:text-white"
-            )}
-            aria-label="Help"
-          >
-            <HelpCircle className="h-4 w-4" aria-hidden="true" />
-            Help
-          </Link>
-        </Tooltip>
+      </div>
+    );
+  }
+
+  function renderMessageUsage() {
+    if (useImageGeneration || !usage || usage.limit <= 0) return null;
+
+    return (
+      <div
+        className="flex min-w-0 items-center gap-1.5 px-4 pt-3 text-xs"
+        role="status"
+        aria-live="polite"
+        aria-label="Message usage"
+      >
+        <span
+          className={cx(
+            "font-medium",
+            usage.remaining <= 0 ? "text-red-300" : activeTheme.mutedText
+          )}
+        >
+          {formatMessageUsage(usage)}
+        </span>
+        <MessageUsageDetails usage={usage} theme={activeTheme} />
+        {usage.remaining > 0 && usage.remaining <= 5 && (
+          <span className="text-yellow-400">
+            Only {usage.remaining} messages remaining today
+          </span>
+        )}
       </div>
     );
   }
@@ -4470,22 +4555,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     {renderSidebarBrand()}
-                    <div className="mt-2 truncate text-sm font-semibold">{userEmail}</div>
-
-                    {usage && (
-                      <div className={cx("mt-2 text-xs", activeTheme.mutedText)}>
-                        {usage.used} / {usage.limit} messages used today
-                      </div>
-                    )}
-                      <div className="mt-2 inline-flex rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/80">
-                        {plan === "pro" ? "Pro Plan" : "Free Plan"}
-                      </div>
-
-                    {usage && usage.remaining > 0 && usage.remaining <= 5 && (
-                      <div className="mt-1 text-xs text-yellow-400">
-                        Only {usage.remaining} messages remaining today
-                      </div>
-                    )}
 
                     {isLimitReached && (
                       <div className="mt-2 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
@@ -4513,7 +4582,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               </div>
 
               <div className="flex-1 overflow-y-auto p-3" data-sidebar-history>
-                <div className={cx("mb-2 text-xs uppercase tracking-wide", activeTheme.mutedText)}>
+                <div
+                  className={cx(
+                    "mb-2 inline-flex rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wide",
+                    activeTheme.badge
+                  )}
+                >
                   Chat History
                 </div>
 
@@ -4534,24 +4608,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             <div className={cx("sticky top-0 border-b p-3 backdrop-blur", activeTheme.panelBg, activeTheme.panelBorder)}>
               {renderSidebarBrand()}
 
-              <div className="mt-3 flex min-w-0 items-center justify-between gap-2">
-                <div className="min-w-0 truncate text-sm font-semibold">{userEmail}</div>
-
-                <div className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-medium text-white/80">
-                  {plan === "pro" ? "Pro Plan" : "Free Plan"}
-                </div>
-              </div>
-
-              {usage && (
-                <div className={cx("mt-1 text-xs", activeTheme.mutedText)}>
-                  {usage.used} / {usage.limit} messages used today
-                </div>
-              )}
-
-              {usage && usage.remaining > 0 && usage.remaining <= 5 && (
-                <div className="mt-1 text-xs text-yellow-400">Only {usage.remaining} messages remaining today</div>
-              )}
-
               {isLimitReached && (
                 <div className="mt-2 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">
                   {imageQuotaLimitMessage ??
@@ -4564,7 +4620,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             </div>
 
             <div className="flex-1 overflow-y-auto p-3" data-sidebar-history>
-              <div className={cx("mb-2 text-xs uppercase tracking-wide", activeTheme.mutedText)}>
+              <div
+                className={cx(
+                  "mb-2 inline-flex rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wide",
+                  activeTheme.badge
+                )}
+              >
                 Chat History
               </div>
               <div className="space-y-1">{conversations.map((conversation) => renderConversationRow(conversation))}</div>
@@ -5071,6 +5132,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     activeTheme.inputBorder
                   )}
                 >
+                  {renderMessageUsage()}
                   {renderImageGenerationUsage()}
 
                   <div
@@ -5224,22 +5286,13 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 </form>
               </div>
             </div>
-             
-                {(input.length >= MAX_REQUEST_MESSAGE_LENGTH - 200 || conversationDocuments.length > 0) && (
+                {input.length >= MAX_REQUEST_MESSAGE_LENGTH - 200 && (
                   <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-                    {input.length >= MAX_REQUEST_MESSAGE_LENGTH - 200 && (
-                      <div className={cx("text-[11px]", activeTheme.mutedText)}>
-                        {getComposerMessageLengthError(input.length)
-                          ? `${input.length - MAX_REQUEST_MESSAGE_LENGTH} characters over limit`
-                          : `${MAX_REQUEST_MESSAGE_LENGTH - input.length} characters remaining`}
-                      </div>
-                    )}
-
-                    {conversationDocuments.length > 0 && (
-                      <div className={cx("text-[11px]", activeTheme.mutedText)}>
-                        {`${conversationDocuments.length} document${conversationDocuments.length === 1 ? "" : "s"} in this conversation`}
-                      </div>
-                    )}
+                    <div className={cx("text-[11px]", activeTheme.mutedText)}>
+                      {getComposerMessageLengthError(input.length)
+                        ? `${input.length - MAX_REQUEST_MESSAGE_LENGTH} characters over limit`
+                        : `${MAX_REQUEST_MESSAGE_LENGTH - input.length} characters remaining`}
+                    </div>
                   </div>
                 )}
               </div>
