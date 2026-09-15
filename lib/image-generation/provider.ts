@@ -33,8 +33,36 @@ export type ImageGenerationResult = {
   cost?: ImageGenerationCost;
 };
 
+/**
+ * Provider-neutral input for a natural-language image edit.
+ *
+ * Source authorization and storage resolution happen outside the provider.
+ * Adapters receive image data only and translate these stable fields into
+ * vendor-specific input.
+ */
+export type ImageEditRequest = {
+  sourceImage: {
+    bytes: Uint8Array;
+    mimeType: string;
+  };
+  instruction: string;
+  model?: string;
+  aspectRatio?: string;
+  seed?: number;
+};
+
 export interface ImageGenerationProvider {
   generateImage(
     request: ImageGenerationRequest,
+  ): Promise<ImageGenerationResult>;
+}
+
+/**
+ * Image editing is intentionally separate from generation because a future
+ * editing provider may differ from the generation provider.
+ */
+export interface ImageEditingProvider {
+  editImage(
+    request: ImageEditRequest,
   ): Promise<ImageGenerationResult>;
 }

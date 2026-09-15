@@ -1,5 +1,6 @@
 import { IMAGE_GENERATION_PROMPT_MAX_LENGTH } from "./config";
-import type { ImageGenerationRequest } from "./provider";
+import { normalizeGeneratedImageMimeType } from "../chat/generated-image-history";
+import type { ImageEditRequest, ImageGenerationRequest } from "./provider";
 
 export type ImageGenerationValidationField =
   | keyof ImageGenerationRequest
@@ -13,6 +14,23 @@ export type ImageGenerationValidationIssue = {
 export type ImageGenerationValidationResult =
   | { success: true; request: ImageGenerationRequest }
   | { success: false; issues: ImageGenerationValidationIssue[] };
+
+export type ImageEditValidationField =
+  | "request"
+  | "sourceImage"
+  | "instruction"
+  | "model"
+  | "aspectRatio"
+  | "seed";
+
+export type ImageEditValidationIssue = {
+  field: ImageEditValidationField;
+  message: string;
+};
+
+export type ImageEditValidationResult =
+  | { success: true; request: ImageEditRequest }
+  | { success: false; issues: ImageEditValidationIssue[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -60,6 +78,25 @@ function hasValidPositiveInteger(
   }
 
   return true;
+}
+
+function hasValidEditOptionalString(
+  input: Record<string, unknown>,
+  field: "model" | "aspectRatio",
+  issues: ImageEditValidationIssue[],
+): void {
+  const value = input[field];
+
+  if (value !== undefined && (typeof value !== "string" || value.trim().length === 0)) {
+    issues.push({
+      field,
+      message: `${field} must be a non-empty string when provided`,
+    });
+  }
+}
+
+function hasOnlyKeys(input: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  return Object.keys(input).every((key) => allowedKeys.includes(key));
 }
 
 /**
@@ -132,6 +169,112 @@ export function validateImageGenerationRequest(
   }
   if (typeof input.quality === "string") {
     request.quality = input.quality;
+  }
+  if (typeof input.seed === "number") {
+    request.seed = input.seed;
+  }
+
+  return { success: true, request };
+}
+
+/**
+ * Validates provider-neutral natural-language edit input. Authorization and
+ * source retrieval intentionally remain outside this validation boundary.
+ */
+export function validateImageEditRequest(
+  input: unknown,
+): ImageEditValidationResult {
+  if (!isRecord(input)) {
+    return {
+      success: false,
+      issues: [{ field: "request", message: "request must be an object" }],
+    };
+  }
+
+  const issues: ImageEditValidationIssue[] = [];
+
+  if (
+    !hasOnlyKeys(input, ["sourceImage", "instruction", "model", "aspectRatio", "seed"])
+  ) {
+    issues.push({
+      field: "request",
+      message: "request contains an unsupported field",
+    });
+  }
+
+  const sourceImage = input.sourceImage;
+  let normalizedMimeType: string | null = null;
+
+  if (!isRecord(sourceImage) || !hasOnlyKeys(sourceImage, ["bytes", "mimeType"])) {
+    issues.push({
+      field: "sourceImage",
+      message: "sourceImage must contain only bytes and mimeType",
+    });
+  } else {
+    if (!(sourceImage.bytes instanceof Uint8Array) || sourceImage.bytes.byteLength === 0) {
+      issues.push({
+        field: "sourceImage",
+        message: "sourceImage.bytes must be a non-empty Uint8Array",
+      });
+    }
+
+    normalizedMimeType = normalizeGeneratedImageMimeType(sourceImage.mimeType);
+    if (!normalizedMimeType) {
+      issues.push({
+        field: "sourceImage",
+        message: "sourceImage.mimeType must be a supported image MIME type",
+      });
+    }
+  }
+
+  const instruction = input.instruction;
+  if (typeof instruction !== "string" || instruction.trim().length === 0) {
+    issues.push({
+      field: "instruction",
+      message: "instruction must be a non-empty string",
+    });
+  } else if (instruction.length > IMAGE_GENERATION_PROMPT_MAX_LENGTH) {
+    issues.push({
+      field: "instruction",
+      message: `instruction must be ${IMAGE_GENERATION_PROMPT_MAX_LENGTH} characters or fewer`,
+    });
+  }
+
+  hasValidEditOptionalString(input, "model", issues);
+  hasValidEditOptionalString(input, "aspectRatio", issues);
+
+  const seed = input.seed;
+  if (seed !== undefined && (typeof seed !== "number" || !Number.isSafeInteger(seed))) {
+    issues.push({
+      field: "seed",
+      message: "seed must be an integer when provided",
+    });
+  }
+
+  if (
+    issues.length > 0 ||
+    !isRecord(sourceImage) ||
+    !(sourceImage.bytes instanceof Uint8Array) ||
+    sourceImage.bytes.byteLength === 0 ||
+    !normalizedMimeType ||
+    typeof instruction !== "string"
+  ) {
+    return { success: false, issues };
+  }
+
+  const request: ImageEditRequest = {
+    sourceImage: {
+      bytes: sourceImage.bytes,
+      mimeType: normalizedMimeType,
+    },
+    instruction,
+  };
+
+  if (typeof input.model === "string") {
+    request.model = input.model;
+  }
+  if (typeof input.aspectRatio === "string") {
+    request.aspectRatio = input.aspectRatio;
   }
   if (typeof input.seed === "number") {
     request.seed = input.seed;
