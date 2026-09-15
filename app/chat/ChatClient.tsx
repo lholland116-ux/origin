@@ -2439,7 +2439,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     openUpgradeModal(
       "Upgrade to unlock this feature",
       data.error ||
-        "This feature is available on the Pro plan. Upgrade to use web search and file uploads."
+        "This feature is available on the Pro plan. Upgrade to use file uploads."
     );
     return true;
   }
@@ -4084,14 +4084,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     if (loading) return;
 
     if (nextUseWebSearch) {
-      if (plan !== "pro") {
-        openUpgradeModal(
-          "Web Search is a Pro feature",
-          "Upgrade to Pro to use real-time web search for current answers."
-        );
-        return;
-      }
-    
       discardPendingImages();
       clearComposerDocuments();
     }

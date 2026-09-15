@@ -10,6 +10,7 @@ const MOBILE_APPS_FEATURE = BRAND.mobile.pricingFeature;
 const FEATURES_FREE = [
   "20 messages per day",
   "Standard AI mode",
+  "Web search with current information",
   "Core chat experience",
   "Conversation history",
   "Analyze one image per prompt",
@@ -19,7 +20,6 @@ const FEATURES_FREE = [
 
 const FEATURES_PRO = [
   "300 messages per day",
-  "Web search with current information",
   "Upload up to 3 documents at once",
   "Analyze PDF, DOCX, XLSX, CSV, and TXT files",
   "Analyze one image per prompt",

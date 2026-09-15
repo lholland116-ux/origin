@@ -395,16 +395,6 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Failed to verify subscription plan." }, 500);
     }
 
-    if (profile.plan !== "pro") {
-      return jsonResponse(
-        {
-          error: "Web search is a Pro feature. Please upgrade to continue.",
-          code: "PRO_REQUIRED",
-        },
-        403
-      );
-    }
-
     let body: ChatRequestBody;
 
     try {

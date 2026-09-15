@@ -340,6 +340,16 @@ describe("chat image-generation mode", () => {
     expect(clientSource).toContain('mode: useWebSearch ? "web_search" : "standard"');
   });
 
+  it("allows Free users to select Web Search without a Pro entitlement gate", () => {
+    const modeHandlerStart = clientSource.indexOf("function handleModeChange");
+    const modeHandlerEnd = clientSource.indexOf("function handleImageModeChange", modeHandlerStart);
+    const modeHandlerSource = clientSource.slice(modeHandlerStart, modeHandlerEnd);
+
+    expect(modeHandlerSource).toContain("setUseWebSearch(nextUseWebSearch)");
+    expect(modeHandlerSource).not.toContain('plan !== "pro"');
+    expect(modeHandlerSource).not.toContain("PRO_REQUIRED");
+  });
+
   it("maps status codes through the same safe error table used by the request helper", () => {
     expect(getImageGenerationErrorMessage(500)).toBe(
       "Image generation is not configured right now."

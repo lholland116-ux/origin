@@ -90,7 +90,7 @@ export default function LaunchArticlePage() {
               </div>
 
               <div>
-                <h3 className="font-semibold text-white">Web Search (Pro)</h3>
+                <h3 className="font-semibold text-white">Web Search</h3>
                 <p className="mt-2">
                   Access current information from the web when you need answers
                   that go beyond the AI&apos;s built-in knowledge.
