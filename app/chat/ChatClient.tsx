@@ -4242,14 +4242,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     return (
       <div
-        className="flex min-w-0 items-center gap-1.5 px-4 pt-3 text-xs"
+        className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-xs"
         role="status"
         aria-live="polite"
         aria-label="Image generation usage"
       >
         <span
           className={cx(
-            "font-medium",
+            "min-w-0 break-words font-medium leading-4",
             dailyRemaining <= 0 ? "text-red-300" : activeTheme.mutedText
           )}
         >
@@ -4532,14 +4532,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     return (
       <div
-        className="flex min-w-0 items-center gap-1.5 px-4 pt-3 text-xs"
+        className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-xs"
         role="status"
         aria-live="polite"
         aria-label="Message usage"
       >
         <span
           className={cx(
-            "font-medium",
+            "min-w-0 break-words font-medium leading-4",
             usage.remaining <= 0 ? "text-red-300" : activeTheme.mutedText
           )}
         >
@@ -5239,9 +5239,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     activeTheme.inputBorder
                   )}
                 >
-                  {renderMessageUsage()}
-                  {renderImageGenerationUsage()}
-
                   <div
                     className="relative w-full"
                   >
@@ -5355,6 +5352,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                       </button>
                     </Tooltip>
+
+                    {renderMessageUsage()}
+                    {renderImageGenerationUsage()}
 
                     <div className="ml-auto">
                       {loading ? (

@@ -236,18 +236,32 @@ describe("chat image-generation presentation", () => {
     expect(messageUsageSource).toContain(
       "<MessageUsageDetails usage={usage} theme={activeTheme} />",
     );
-    expect(messageUsageSource).toContain("px-4 pt-3 text-xs");
+    expect(messageUsageSource).toContain(
+      "flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-xs",
+    );
     expect(composerSource).toContain("{renderMessageUsage()}");
     expect(composerSource).toContain("{renderImageGenerationUsage()}");
-    expect(composerSource.indexOf("{renderMessageUsage()}")).toBeLessThan(
+    expect(composerSource.indexOf("{renderMessageUsage()}")).toBeGreaterThan(
       composerSource.indexOf("<textarea"),
     );
+    expect(composerSource.indexOf("{renderImageGenerationUsage()}")).toBeGreaterThan(
+      composerSource.indexOf("<textarea"),
+    );
+    expect(composerSource.indexOf("{renderMessageUsage()}")).toBeGreaterThan(
+      composerSource.indexOf("TOOLTIP_TEXT.mic"),
+    );
+    expect(composerSource.indexOf("{renderImageGenerationUsage()}")).toBeGreaterThan(
+      composerSource.indexOf("TOOLTIP_TEXT.mic"),
+    );
+    expect(composerSource).toContain("<div className=\"ml-auto\">");
     expect(clientSource.match(/\{renderMessageUsage\(\)\}/g)).toHaveLength(1);
     expect(clientSource).toContain("Standard");
     expect(clientSource).toContain("Web Search");
     expect(clientSource).toContain("Create image");
     expect(clientSource).toContain('ariaLabel="Message usage details"');
     expect(clientSource).toContain("formatMessageUsageDetail(usage)");
+    expect(clientSource).toContain("formatImageGenerationCounter(dailyRemaining)");
+    expect(clientSource).toContain("ImageGenerationUsageDetails usage={imageUsage} theme={activeTheme}");
     expect(clientSource).not.toContain("Messages this month:");
 
     const mobileTopStart = clientSource.indexOf("<div data-profile-sidebar");
