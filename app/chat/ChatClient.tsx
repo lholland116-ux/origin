@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import NextImage from "next/image";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -14,7 +14,6 @@ import {
   Globe2,
   HelpCircle,
   ImageIcon,
-  Info,
   Mic,
   MicOff,
   MessageCircle,
@@ -255,41 +254,6 @@ type DocumentsResponse = {
   documents?: UploadedDocument[];
   error?: string;
 };
-
-function formatUsageCount(value: number): string {
-  return String(Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0);
-}
-
-export function formatMessageUsage(
-  usage: Pick<UsageState, "used" | "limit">
-): string {
-  const used = formatUsageCount(usage.used);
-  const limit = formatUsageCount(usage.limit);
-  const remaining = formatUsageCount(Number(limit) - Number(used));
-  return `${remaining} message${remaining === "1" ? "" : "s"} left today`;
-}
-
-export function formatMessageUsageDetail(
-  usage: Pick<UsageState, "used" | "limit">
-): string {
-  return `Messages today: ${formatUsageCount(usage.used)} / ${formatUsageCount(usage.limit)}`;
-}
-
-export function formatImageGenerationCounter(remaining: number): string {
-  const count = formatUsageCount(remaining);
-  return `${count} image${count === "1" ? "" : "s"} left today`;
-}
-
-export function formatImageGenerationUsageDetail(usage: ImageGenerationUsage): string {
-  return `Images today: ${formatUsageCount(usage.daily.used)} / ${formatUsageCount(usage.daily.limit)}\nImages this month: ${formatUsageCount(usage.monthly.used)} / ${formatUsageCount(usage.monthly.limit)}`;
-}
-
-export function shouldShowImageGenerationCounter(
-  imageModeActive: boolean,
-  imageUsage: ImageGenerationUsage | undefined,
-): boolean {
-  return imageModeActive && Boolean(imageUsage);
-}
 
 export function getUploadedMessageImageGridClass(imageCount: number): string {
   if (imageCount <= 1) return "grid-cols-1 sm:max-w-md";
@@ -1965,153 +1929,6 @@ function MessageWidgetRenderer({
   }
 
   return null;
-}
-
-function UsageDetailsPopover({
-  detail,
-  ariaLabel,
-  theme,
-}: {
-  detail: string;
-  ariaLabel: string;
-  theme: ChatTheme;
-}) {
-  const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState({ top: 0, left: 0 });
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  const popoverId = useId();
-  const updatePosition = useCallback(() => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-
-    const triggerRect = trigger.getBoundingClientRect();
-    const popoverWidth = 224;
-    const popoverHeight = 68;
-    const gap = 8;
-    const padding = 12;
-    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-    const viewportLeft = window.visualViewport?.offsetLeft ?? 0;
-    const viewportTop = window.visualViewport?.offsetTop ?? 0;
-    const minLeft = viewportLeft + padding;
-    const maxLeft = viewportLeft + viewportWidth - popoverWidth - padding;
-    const left = Math.min(Math.max(triggerRect.left, minLeft), Math.max(minLeft, maxLeft));
-    const belowTop = triggerRect.bottom + gap;
-    const bottomLimit = viewportTop + viewportHeight - padding;
-    const top =
-      belowTop + popoverHeight <= bottomLimit
-        ? belowTop
-        : Math.max(viewportTop + padding, triggerRect.top - popoverHeight - gap);
-
-    setPosition({ top, left });
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-
-    updatePosition();
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (triggerRef.current?.contains(target) || popoverRef.current?.contains(target)) {
-        return;
-      }
-      setOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    const handleViewportChange = () => {
-      window.requestAnimationFrame(updatePosition);
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("resize", handleViewportChange);
-    window.visualViewport?.addEventListener("resize", handleViewportChange);
-    window.visualViewport?.addEventListener("scroll", handleViewportChange);
-
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("resize", handleViewportChange);
-      window.visualViewport?.removeEventListener("resize", handleViewportChange);
-      window.visualViewport?.removeEventListener("scroll", handleViewportChange);
-    };
-  }, [open, updatePosition]);
-
-  return (
-    <div className="relative inline-flex">
-      <Tooltip content={detail} touchSafe>
-        <button
-          ref={triggerRef}
-          type="button"
-          onClick={() => setOpen((current) => !current)}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-full text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
-          aria-label={ariaLabel}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-controls={open ? popoverId : undefined}
-        >
-          <Info className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </Tooltip>
-
-      {open ? (
-        <div
-          ref={popoverRef}
-          id={popoverId}
-          role="dialog"
-          aria-label={ariaLabel}
-          className={cx(
-            "fixed z-[80] min-w-[14rem] rounded-lg border p-3 text-xs shadow-xl",
-            theme.panelBg,
-            theme.panelBorder
-          )}
-          style={{ top: position.top, left: position.left }}
-        >
-          <div className="whitespace-pre-line">{detail}</div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ImageGenerationUsageDetails({
-  usage,
-  theme,
-}: {
-  usage: ImageGenerationUsage;
-  theme: ChatTheme;
-}) {
-  return (
-    <UsageDetailsPopover
-      detail={formatImageGenerationUsageDetail(usage)}
-      ariaLabel="Image usage details"
-      theme={theme}
-    />
-  );
-}
-
-function MessageUsageDetails({
-  usage,
-  theme,
-}: {
-  usage: Pick<UsageState, "used" | "limit">;
-  theme: ChatTheme;
-}) {
-  return (
-    <UsageDetailsPopover
-      detail={formatMessageUsageDetail(usage)}
-      ariaLabel="Message usage details"
-      theme={theme}
-    />
-  );
 }
 
 export default function ChatClient({
@@ -4232,34 +4049,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     );
   }
 
-  function renderImageGenerationUsage() {
-    const imageUsage = imageGenerationUsage;
-    if (!shouldShowImageGenerationCounter(useImageGeneration, imageUsage) || !imageUsage) {
-      return null;
-    }
-
-    const dailyRemaining = imageUsage.daily.remaining;
-
-    return (
-      <div
-        className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-xs"
-        role="status"
-        aria-live="polite"
-        aria-label="Image generation usage"
-      >
-        <span
-          className={cx(
-            "min-w-0 break-words font-medium leading-4",
-            dailyRemaining <= 0 ? "text-red-300" : activeTheme.mutedText
-          )}
-        >
-          {formatImageGenerationCounter(dailyRemaining)}
-        </span>
-        <ImageGenerationUsageDetails usage={imageUsage} theme={activeTheme} />
-      </div>
-    );
-  }
-
   function renderSidebarBrand() {
     return (
       <div className="flex min-w-0 items-center gap-2.5" aria-label={BRAND.name}>
@@ -4523,34 +4312,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           </div>
         )}
 
-      </div>
-    );
-  }
-
-  function renderMessageUsage() {
-    if (useImageGeneration || !usage || usage.limit <= 0) return null;
-
-    return (
-      <div
-        className="flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-xs"
-        role="status"
-        aria-live="polite"
-        aria-label="Message usage"
-      >
-        <span
-          className={cx(
-            "min-w-0 break-words font-medium leading-4",
-            usage.remaining <= 0 ? "text-red-300" : activeTheme.mutedText
-          )}
-        >
-          {formatMessageUsage(usage)}
-        </span>
-        <MessageUsageDetails usage={usage} theme={activeTheme} />
-        {usage.remaining > 0 && usage.remaining <= 5 && (
-          <span className="text-yellow-400">
-            Only {usage.remaining} messages remaining today
-          </span>
-        )}
       </div>
     );
   }
@@ -5353,8 +5114,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       </button>
                     </Tooltip>
 
-                    {renderMessageUsage()}
-                    {renderImageGenerationUsage()}
+                    {!useImageGeneration &&
+                      usage &&
+                      usage.remaining > 0 &&
+                      usage.remaining <= 5 && (
+                        <span className="text-xs text-yellow-400">
+                          Only {usage.remaining} messages remaining today
+                        </span>
+                      )}
 
                     <div className="ml-auto">
                       {loading ? (

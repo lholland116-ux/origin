@@ -1,67 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  formatMessageUsage,
-  formatMessageUsageDetail,
-  formatImageGenerationCounter,
-  formatImageGenerationUsageDetail,
   getProfileDisplayName,
   getUploadedMessageImageGridClass,
-  shouldShowImageGenerationCounter,
 } from "@/app/chat/ChatClient";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
 
-const imageUsage = {
-  plan: "pro" as const,
-  daily: { used: 5, reserved: 0, limit: 20, remaining: 15 },
-  monthly: { used: 17, reserved: 0, limit: 200, remaining: 183 },
-};
-
 describe("chat image-generation presentation", () => {
-  it("shows the counter only when Image mode has authoritative usage", () => {
-    expect(shouldShowImageGenerationCounter(false, imageUsage)).toBe(false);
-    expect(shouldShowImageGenerationCounter(true, undefined)).toBe(false);
-    expect(shouldShowImageGenerationCounter(true, imageUsage)).toBe(true);
-  });
-
-  it.each([
-    [15, "15 images left today"],
-    [1, "1 image left today"],
-    [0, "0 images left today"],
-  ])("formats the daily remaining count for %s", (remaining, expected) => {
-    expect(formatImageGenerationCounter(remaining)).toBe(expected);
-  });
-
-  it("uses the server-provided daily and monthly values for detail", () => {
-    expect(formatImageGenerationUsageDetail(imageUsage)).toBe(
-      "Images today: 5 / 20\nImages this month: 17 / 200",
-    );
-  });
-
-  it("keeps quota detail behind an adjacent touch-safe info control", () => {
-    expect(clientSource).toContain("<ImageGenerationUsageDetails");
-    expect(clientSource).toContain('ariaLabel="Image usage details"');
-    expect(clientSource).toContain('aria-haspopup="dialog"');
-    expect(clientSource).toContain('role="dialog"');
-    expect(clientSource).toContain("touchSafe");
-    expect(clientSource).not.toContain(
-      "formatImageGenerationUsageDetail(imageUsage)}</span>",
-    );
-  });
-
-  it("keeps a zero daily remaining state visible", () => {
-    expect(
-      formatImageGenerationCounter(0),
-    ).toBe("0 images left today");
-    expect(
-      shouldShowImageGenerationCounter(true, {
-        ...imageUsage,
-        daily: { ...imageUsage.daily, remaining: 0 },
-      }),
-    ).toBe(true);
-  });
-
   it("keeps uploaded image layouts intentional for one, two, and three images", () => {
     expect(getUploadedMessageImageGridClass(1)).toBe("grid-cols-1 sm:max-w-md");
     expect(getUploadedMessageImageGridClass(2)).toBe("grid-cols-2");
@@ -78,8 +24,6 @@ describe("chat image-generation presentation", () => {
 
   it("keeps the existing usage refresh lifecycle for generation and regeneration", () => {
     expect(clientSource).toContain("await fetchUsage();");
-    expect(clientSource).toContain("formatImageGenerationCounter(dailyRemaining)");
-    expect(clientSource).toContain("formatImageGenerationUsageDetail(usage)");
     expect(clientSource).toContain("imageGenerationUsage.daily.remaining");
     expect(
       clientSource.match(/error instanceof ImageGenerationClientError && error\.status === 429/g),
@@ -201,68 +145,36 @@ describe("chat image-generation presentation", () => {
     expect(profileMenuSource).toContain("px-3 py-2");
   });
 
-  it("moves the authoritative message counter into the composer", () => {
-    expect(formatMessageUsage({ used: 10, limit: 300 })).toBe(
-      "290 messages left today",
-    );
-    expect(formatMessageUsage({ used: 3, limit: 20 })).toBe(
-      "17 messages left today",
-    );
-    expect(formatMessageUsage({ used: 19, limit: 20 })).toBe(
-      "1 message left today",
-    );
-    expect(formatMessageUsage({ used: 20, limit: 20 })).toBe(
-      "0 messages left today",
-    );
-    expect(formatMessageUsageDetail({ used: 10, limit: 300 })).toBe(
-      "Messages today: 10 / 300",
-    );
-
-    const messageUsageStart = clientSource.indexOf("function renderMessageUsage");
-    const messageUsageEnd = clientSource.indexOf(
-      "function renderSidebarActions",
-      messageUsageStart,
-    );
-    const messageUsageSource = clientSource.slice(messageUsageStart, messageUsageEnd);
+  it("removes persistent usage counters while preserving quota enforcement", () => {
     const composerStart = clientSource.indexOf("<form");
     const composerEnd = clientSource.indexOf("</form>", composerStart);
     const composerSource = clientSource.slice(composerStart, composerEnd);
 
-    expect(messageUsageSource).toContain(
-      "if (useImageGeneration || !usage || usage.limit <= 0) return null;",
+    expect(clientSource).not.toContain("renderMessageUsage");
+    expect(clientSource).not.toContain("renderImageGenerationUsage");
+    expect(clientSource).not.toContain('aria-label="Message usage"');
+    expect(clientSource).not.toContain('aria-label="Image generation usage"');
+    expect(clientSource).not.toContain("messages left today");
+    expect(clientSource).not.toContain("images left today");
+    expect(clientSource).toContain("const isTextLimitReached = Boolean(");
+    expect(clientSource).toContain("const isLimitReached = useImageGeneration");
+    expect(clientSource).toContain("imageGenerationUsage.daily.remaining");
+    expect(clientSource).toContain("imageQuotaLimitMessage");
+    expect(clientSource).toContain("getImageGenerationQuotaMessage(");
+    expect(clientSource).toContain("fetchUsage");
+    expect(clientSource).toMatch(
+      /!useImageGeneration\s*&&\s*usage\s*&&\s*usage\.remaining > 0\s*&&\s*usage\.remaining <= 5/,
     );
-    expect(messageUsageSource).toContain('aria-label="Message usage"');
-    expect(messageUsageSource).toContain("formatMessageUsage(usage)");
-    expect(messageUsageSource).toContain(
-      "<MessageUsageDetails usage={usage} theme={activeTheme} />",
-    );
-    expect(messageUsageSource).toContain(
-      "flex min-w-0 max-w-full flex-1 items-center gap-1.5 text-xs",
-    );
-    expect(composerSource).toContain("{renderMessageUsage()}");
-    expect(composerSource).toContain("{renderImageGenerationUsage()}");
-    expect(composerSource.indexOf("{renderMessageUsage()}")).toBeGreaterThan(
-      composerSource.indexOf("<textarea"),
-    );
-    expect(composerSource.indexOf("{renderImageGenerationUsage()}")).toBeGreaterThan(
-      composerSource.indexOf("<textarea"),
-    );
-    expect(composerSource.indexOf("{renderMessageUsage()}")).toBeGreaterThan(
-      composerSource.indexOf("TOOLTIP_TEXT.mic"),
-    );
-    expect(composerSource.indexOf("{renderImageGenerationUsage()}")).toBeGreaterThan(
-      composerSource.indexOf("TOOLTIP_TEXT.mic"),
+    expect(clientSource).toContain("Only {usage.remaining} messages remaining today");
+    expect(composerSource).toContain("<DocumentUploadButton");
+    expect(composerSource).toContain('aria-label="Attach image"');
+    expect(composerSource).toContain(
+      'aria-label={isListening ? "Stop voice input" : "Start voice input"}',
     );
     expect(composerSource).toContain("<div className=\"ml-auto\">");
-    expect(clientSource.match(/\{renderMessageUsage\(\)\}/g)).toHaveLength(1);
     expect(clientSource).toContain("Standard");
     expect(clientSource).toContain("Web Search");
     expect(clientSource).toContain("Create image");
-    expect(clientSource).toContain('ariaLabel="Message usage details"');
-    expect(clientSource).toContain("formatMessageUsageDetail(usage)");
-    expect(clientSource).toContain("formatImageGenerationCounter(dailyRemaining)");
-    expect(clientSource).toContain("ImageGenerationUsageDetails usage={imageUsage} theme={activeTheme}");
-    expect(clientSource).not.toContain("Messages this month:");
 
     const mobileTopStart = clientSource.indexOf("<div data-profile-sidebar");
     const mobileTopEnd = clientSource.indexOf("{renderSidebarActions()}", mobileTopStart);
@@ -284,7 +196,8 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).not.toContain("conversationDocuments");
     expect(clientSource).toContain("<form");
     expect(clientSource).toContain("<textarea");
-    expect(clientSource).toContain("{renderMessageUsage()}");
+    expect(clientSource).not.toContain("messages left today");
+    expect(clientSource).not.toContain("images left today");
     expect(clientSource).toContain("<DocumentUploadButton");
     expect(clientSource).toContain('plan === "pro"');
     expect(clientSource).toContain('"/api/documents/upload"');
