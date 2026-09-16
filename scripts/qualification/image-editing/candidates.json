@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "lvtchat-image-edit-qualification-candidates-1.0.0",
+  "candidates": [
+    {
+      "candidateId": "runware-flux2-klein-4b",
+      "provider": "runware",
+      "displayName": "FLUX.2 [klein] 4B",
+      "declaredModelRef": "runware:400@4"
+    },
+    {
+      "candidateId": "runware-qwen-image-edit-2511",
+      "provider": "runware",
+      "displayName": "Qwen-Image-Edit-2511",
+      "declaredModelRef": "alibaba:qwen-image-edit@2511"
+    },
+    {
+      "candidateId": "fal-flux2-flash-edit",
+      "provider": "fal",
+      "displayName": "FLUX.2 Flash Edit",
+      "declaredModelRef": "fal-ai/flux-2/flash/edit"
+    },
+    {
+      "candidateId": "replicate-flux1-kontext-dev",
+      "provider": "replicate",
+      "displayName": "FLUX.1 Kontext Dev",
+      "declaredModelRef": "black-forest-labs/flux-kontext-dev"
+    }
+  ]
+}

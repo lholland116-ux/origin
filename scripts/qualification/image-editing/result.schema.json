@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lvtchat-image-edit-qualification-result-1.0.0",
+  "title": "LVTChat image-editing qualification result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "runnerVersion",
+    "matrixVersion",
+    "candidateManifestVersion",
+    "gitCommit",
+    "startedAt",
+    "endedAt",
+    "status",
+    "expectedScenarioCount",
+    "expectedInvocationCount",
+    "completedScenarioCount",
+    "completedInvocationCount",
+    "candidates",
+    "scenarios",
+    "invocations",
+    "resultFile",
+    "rawOutputDirectory"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "lvtchat-image-edit-qualification-result-1.0.0"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "runnerVersion": {
+      "type": "string"
+    },
+    "matrixVersion": {
+      "type": "string"
+    },
+    "candidateManifestVersion": {
+      "type": "string"
+    },
+    "gitCommit": {
+      "type": ["string", "null"]
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "endedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": ["dry_run", "complete", "failed"]
+    },
+    "expectedScenarioCount": {
+      "const": 120
+    },
+    "expectedInvocationCount": {
+      "const": 160
+    },
+    "completedScenarioCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 120
+    },
+    "completedInvocationCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 160
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 120,
+      "maxItems": 120,
+      "items": { "$ref": "#/$defs/scenario" }
+    },
+    "invocations": {
+      "type": "array",
+      "minItems": 160,
+      "maxItems": 160,
+      "items": { "$ref": "#/$defs/invocation" }
+    },
+    "resultFile": {
+      "const": "result.json"
+    },
+    "rawOutputDirectory": {
+      "const": "raw"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "dry_run" }
+        }
+      },
+      "then": {
+        "properties": {
+          "completedScenarioCount": { "const": 0 },
+          "completedInvocationCount": { "const": 0 },
+          "scenarios": {
+            "items": { "$ref": "#/$defs/dryRunScenario" }
+          },
+          "invocations": {
+            "items": { "$ref": "#/$defs/dryRunInvocation" }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateId", "provider", "displayName", "declaredModelRef"],
+      "properties": {
+        "candidateId": {
+          "enum": [
+            "runware-flux2-klein-4b",
+            "runware-qwen-image-edit-2511",
+            "fal-flux2-flash-edit",
+            "replicate-flux1-kontext-dev"
+          ]
+        },
+        "provider": {
+          "enum": ["runware", "fal", "replicate"]
+        },
+        "displayName": {
+          "enum": [
+            "FLUX.2 [klein] 4B",
+            "Qwen-Image-Edit-2511",
+            "FLUX.2 Flash Edit",
+            "FLUX.1 Kontext Dev"
+          ]
+        },
+        "declaredModelRef": {
+          "enum": [
+            "runware:400@4",
+            "alibaba:qwen-image-edit@2511",
+            "fal-ai/flux-2/flash/edit",
+            "black-forest-labs/flux-kontext-dev"
+          ]
+        }
+      }
+    },
+    "evaluation": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "instructionAdherence",
+        "untouchedContentPreservation",
+        "visualQuality",
+        "identityPreservation",
+        "sequentialEditStability",
+        "evaluatorId",
+        "evaluatedAt",
+        "notes"
+      ],
+      "properties": {
+        "instructionAdherence": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "untouchedContentPreservation": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "visualQuality": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "identityPreservation": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "sequentialEditStability": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "evaluatorId": { "type": "string" },
+        "evaluatedAt": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenarioId",
+        "candidateId",
+        "sourceId",
+        "taskId",
+        "instruction",
+        "instructionReference",
+        "invocationCount",
+        "status",
+        "sequenceSteps",
+        "evaluation"
+      ],
+      "properties": {
+        "scenarioId": { "type": "string" },
+        "candidateId": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "instruction": { "type": ["string", "null"] },
+        "instructionReference": { "type": "string" },
+        "invocationCount": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["not_run", "succeeded", "failed"] },
+        "sequenceSteps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sequenceStep", "source", "instructionReference"],
+            "properties": {
+              "sequenceStep": { "type": "integer", "minimum": 1 },
+              "source": { "enum": ["original", "prior_step_output"] },
+              "instructionReference": { "type": "string" }
+            }
+          }
+        },
+        "evaluation": { "$ref": "#/$defs/evaluation" }
+      }
+    },
+    "dryRunScenario": {
+      "allOf": [
+        { "$ref": "#/$defs/scenario" },
+        {
+          "type": "object",
+          "properties": {
+            "status": { "const": "not_run" },
+            "evaluation": { "const": null }
+          }
+        }
+      ]
+    },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invocationId",
+        "scenarioId",
+        "sequenceId",
+        "sequenceStep",
+        "sourceArtifactReference",
+        "sourceSha256",
+        "startedAt",
+        "endedAt",
+        "latencyMs",
+        "status",
+        "providerRequestId",
+        "providerCost",
+        "providerCostCurrency",
+        "providerCostSource",
+        "outputArtifactReference",
+        "rawOutputArtifactReference",
+        "outputSha256",
+        "failureCode",
+        "failureNotes"
+      ],
+      "properties": {
+        "invocationId": { "type": "string" },
+        "scenarioId": { "type": "string" },
+        "sequenceId": { "type": ["string", "null"] },
+        "sequenceStep": { "type": "integer", "minimum": 1 },
+        "sourceArtifactReference": { "type": "string" },
+        "sourceSha256": { "type": ["string", "null"] },
+        "startedAt": { "type": ["string", "null"], "format": "date-time" },
+        "endedAt": { "type": ["string", "null"], "format": "date-time" },
+        "latencyMs": { "type": ["number", "null"], "minimum": 0 },
+        "status": { "enum": ["not_run", "succeeded", "failed"] },
+        "providerRequestId": { "type": ["string", "null"] },
+        "providerCost": { "type": ["number", "null"], "minimum": 0 },
+        "providerCostCurrency": { "type": ["string", "null"] },
+        "providerCostSource": { "type": ["string", "null"] },
+        "outputArtifactReference": { "type": ["string", "null"] },
+        "rawOutputArtifactReference": { "type": ["string", "null"] },
+        "outputSha256": { "type": ["string", "null"] },
+        "failureCode": { "type": ["string", "null"] },
+        "failureNotes": { "type": ["string", "null"] }
+      }
+    },
+    "dryRunInvocation": {
+      "allOf": [
+        { "$ref": "#/$defs/invocation" },
+        {
+          "type": "object",
+          "properties": {
+            "status": { "const": "not_run" },
+            "startedAt": { "const": null },
+            "endedAt": { "const": null },
+            "latencyMs": { "const": null },
+            "providerRequestId": { "const": null },
+            "providerCost": { "const": null },
+            "providerCostCurrency": { "const": null },
+            "providerCostSource": { "const": null },
+            "outputArtifactReference": { "const": null },
+            "rawOutputArtifactReference": { "const": null },
+            "outputSha256": { "const": null },
+            "failureCode": { "const": null },
+            "failureNotes": { "const": null }
+          }
+        }
+      ]
+    }
+  }
+}

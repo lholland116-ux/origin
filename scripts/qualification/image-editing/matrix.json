@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "lvtchat-image-edit-qualification-matrix-1.0.0",
+  "sources": [
+    {
+      "sourceId": "source-01",
+      "fixtureRelativePath": null,
+      "sha256": null,
+      "mimeType": null,
+      "label": "Controlled source image 01",
+      "fixtureVersion": null
+    },
+    {
+      "sourceId": "source-02",
+      "fixtureRelativePath": null,
+      "sha256": null,
+      "mimeType": null,
+      "label": "Controlled source image 02",
+      "fixtureVersion": null
+    },
+    {
+      "sourceId": "source-03",
+      "fixtureRelativePath": null,
+      "sha256": null,
+      "mimeType": null,
+      "label": "Controlled source image 03",
+      "fixtureVersion": null
+    },
+    {
+      "sourceId": "source-04",
+      "fixtureRelativePath": null,
+      "sha256": null,
+      "mimeType": null,
+      "label": "Controlled source image 04",
+      "fixtureVersion": null
+    },
+    {
+      "sourceId": "source-05",
+      "fixtureRelativePath": null,
+      "sha256": null,
+      "mimeType": null,
+      "label": "Controlled source image 05",
+      "fixtureVersion": null
+    }
+  ],
+  "tasks": [
+    {
+      "taskId": "task-01-object-removal",
+      "category": "object_removal",
+      "invocationCount": 1,
+      "instruction": "Remove the small red ceramic mug from the table while preserving the table, hands, lighting, and all other scene content."
+    },
+    {
+      "taskId": "task-02-localized-add-replace",
+      "category": "localized_object_add_replace",
+      "invocationCount": 1,
+      "instruction": "Replace the small red ceramic mug with a matte blue ceramic mug in the same position; preserve the surrounding scene."
+    },
+    {
+      "taskId": "task-03-color-material-change",
+      "category": "color_material_change",
+      "invocationCount": 1,
+      "instruction": "Change the subject's jacket from olive green cotton to deep navy denim; preserve the subject, pose, fit, and background."
+    },
+    {
+      "taskId": "task-04-background-environment",
+      "category": "background_environment",
+      "invocationCount": 1,
+      "instruction": "Replace only the background with a quiet coastal meadow at golden hour; preserve the foreground subject and its edges."
+    },
+    {
+      "taskId": "task-05-identity-preserving-edit",
+      "category": "identity_preserving_subject_clothing",
+      "invocationCount": 1,
+      "instruction": "Change the subject's shirt to a white linen shirt while preserving the person's face, hair, identity, pose, and lighting."
+    },
+    {
+      "taskId": "task-06-sequential-stability",
+      "category": "sequential_multi_edit_stability",
+      "invocationCount": 3,
+      "steps": [
+        {
+          "sequenceStep": 1,
+          "source": "original",
+          "instruction": "Remove the small red ceramic mug from the table; preserve the rest of the scene."
+        },
+        {
+          "sequenceStep": 2,
+          "source": "prior_step_output",
+          "instruction": "Add a folded yellow scarf to the cleared area on the table; preserve all existing subjects and scene details."
+        },
+        {
+          "sequenceStep": 3,
+          "source": "prior_step_output",
+          "instruction": "Change the scarf material from cotton to textured wool while keeping its position and color; preserve the rest of the scene."
+        }
+      ]
+    }
+  ]
+}
