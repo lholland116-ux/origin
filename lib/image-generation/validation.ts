@@ -19,6 +19,8 @@ export type ImageEditValidationField =
   | "request"
   | "sourceImage"
   | "instruction"
+  | "width"
+  | "height"
   | "model"
   | "aspectRatio"
   | "seed";
@@ -91,6 +93,42 @@ function hasValidEditOptionalString(
     issues.push({
       field,
       message: `${field} must be a non-empty string when provided`,
+    });
+  }
+}
+
+function validateEditDimensions(
+  input: Record<string, unknown>,
+  issues: ImageEditValidationIssue[],
+): void {
+  const width = input.width;
+  const height = input.height;
+  const hasWidth = width !== undefined;
+  const hasHeight = height !== undefined;
+
+  if (hasWidth !== hasHeight) {
+    issues.push({
+      field: hasWidth ? "height" : "width",
+      message: "width and height must be provided together",
+    });
+    return;
+  }
+
+  if (!hasWidth) {
+    return;
+  }
+
+  if (typeof width !== "number" || !Number.isSafeInteger(width) || width <= 0) {
+    issues.push({
+      field: "width",
+      message: "width must be a positive finite integer when provided",
+    });
+  }
+
+  if (typeof height !== "number" || !Number.isSafeInteger(height) || height <= 0) {
+    issues.push({
+      field: "height",
+      message: "height must be a positive finite integer when provided",
     });
   }
 }
@@ -194,7 +232,15 @@ export function validateImageEditRequest(
   const issues: ImageEditValidationIssue[] = [];
 
   if (
-    !hasOnlyKeys(input, ["sourceImage", "instruction", "model", "aspectRatio", "seed"])
+    !hasOnlyKeys(input, [
+      "sourceImage",
+      "instruction",
+      "width",
+      "height",
+      "model",
+      "aspectRatio",
+      "seed",
+    ])
   ) {
     issues.push({
       field: "request",
@@ -242,6 +288,7 @@ export function validateImageEditRequest(
 
   hasValidEditOptionalString(input, "model", issues);
   hasValidEditOptionalString(input, "aspectRatio", issues);
+  validateEditDimensions(input, issues);
 
   const seed = input.seed;
   if (seed !== undefined && (typeof seed !== "number" || !Number.isSafeInteger(seed))) {
@@ -275,6 +322,12 @@ export function validateImageEditRequest(
   }
   if (typeof input.aspectRatio === "string") {
     request.aspectRatio = input.aspectRatio;
+  }
+  if (typeof input.width === "number") {
+    request.width = input.width;
+  }
+  if (typeof input.height === "number") {
+    request.height = input.height;
   }
   if (typeof input.seed === "number") {
     request.seed = input.seed;

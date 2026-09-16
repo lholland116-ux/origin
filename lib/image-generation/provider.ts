@@ -46,6 +46,9 @@ export type ImageEditRequest = {
     mimeType: string;
   };
   instruction: string;
+  /** Server-resolved output dimensions; never trust these from a client. */
+  width?: number;
+  height?: number;
   model?: string;
   aspectRatio?: string;
   seed?: number;
