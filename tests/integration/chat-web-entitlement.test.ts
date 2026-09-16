@@ -190,6 +190,9 @@ describe("Free Web Search entitlement", () => {
     );
     expect(queries.usage.upsert).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.create).toHaveBeenCalledTimes(1);
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-5.6-luna" }),
+    );
     expect(JSON.stringify(body)).not.toContain("PRO_REQUIRED");
   });
 
@@ -243,6 +246,9 @@ describe("Free Web Search entitlement", () => {
     );
     expect(queries.usage.upsert).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.stream).toHaveBeenCalledTimes(1);
+    expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-5.6-luna" }),
+    );
   });
 
   it("uses one shared pool across mixed Standard and Web Search usage", async () => {

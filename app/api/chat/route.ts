@@ -31,7 +31,7 @@ const MODEL_IMAGE_URL_TTL_SECONDS = 5 * 60;
 const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 
-const MODEL = "gpt-5.6";
+const MODEL = "gpt-5.6-luna";
 
 const TONE_LAYER = `
 Tone and style requirements:
