@@ -56,37 +56,37 @@
       "enum": ["dry_run", "complete", "failed"]
     },
     "expectedScenarioCount": {
-      "const": 120
+      "const": 90
     },
     "expectedInvocationCount": {
-      "const": 160
+      "const": 120
     },
     "completedScenarioCount": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 120
+      "maximum": 90
     },
     "completedInvocationCount": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 160
+      "maximum": 120
     },
     "candidates": {
       "type": "array",
-      "minItems": 4,
-      "maxItems": 4,
+      "minItems": 3,
+      "maxItems": 3,
       "items": { "$ref": "#/$defs/candidate" }
     },
     "scenarios": {
       "type": "array",
-      "minItems": 120,
-      "maxItems": 120,
+      "minItems": 90,
+      "maxItems": 90,
       "items": { "$ref": "#/$defs/scenario" }
     },
     "invocations": {
       "type": "array",
-      "minItems": 160,
-      "maxItems": 160,
+      "minItems": 120,
+      "maxItems": 120,
       "items": { "$ref": "#/$defs/invocation" }
     },
     "resultFile": {
@@ -127,18 +127,16 @@
           "enum": [
             "runware-flux2-klein-4b",
             "runware-qwen-image-edit-2511",
-            "fal-flux2-flash-edit",
             "replicate-flux1-kontext-dev"
           ]
         },
         "provider": {
-          "enum": ["runware", "fal", "replicate"]
+          "enum": ["runware", "replicate"]
         },
         "displayName": {
           "enum": [
             "FLUX.2 [klein] 4B",
             "Qwen-Image-Edit-2511",
-            "FLUX.2 Flash Edit",
             "FLUX.1 Kontext Dev"
           ]
         },
@@ -146,7 +144,6 @@
           "enum": [
             "runware:400@4",
             "alibaba:qwen-image-edit@2511",
-            "fal-ai/flux-2/flash/edit",
             "black-forest-labs/flux-kontext-dev"
           ]
         }

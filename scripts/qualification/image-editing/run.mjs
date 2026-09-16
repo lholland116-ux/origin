@@ -1,11 +1,12 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { validatePositiveBudgetUsd } from "./live/contracts.mjs";
 
 const RUNNER_VERSION = "lvtchat-image-edit-qualification-runner-1.0.0";
 const RESULT_SCHEMA_VERSION = "lvtchat-image-edit-qualification-result-1.0.0";
-const EXPECTED_SCENARIO_COUNT = 120;
-const EXPECTED_INVOCATION_COUNT = 160;
+const EXPECTED_SCENARIO_COUNT = 90;
+const EXPECTED_INVOCATION_COUNT = 120;
 const CANDIDATE_KEYS = ["candidateId", "provider", "displayName", "declaredModelRef"];
 const EXPECTED_CANDIDATES = [
   {
@@ -19,12 +20,6 @@ const EXPECTED_CANDIDATES = [
     provider: "runware",
     displayName: "Qwen-Image-Edit-2511",
     declaredModelRef: "alibaba:qwen-image-edit@2511",
-  },
-  {
-    candidateId: "fal-flux2-flash-edit",
-    provider: "fal",
-    displayName: "FLUX.2 Flash Edit",
-    declaredModelRef: "fal-ai/flux-2/flash/edit",
   },
   {
     candidateId: "replicate-flux1-kontext-dev",
@@ -152,7 +147,7 @@ function ensureSafeArtifactReference(reference) {
 
 function validateCandidates(manifest) {
   ensure(manifest && manifest.schemaVersion === "lvtchat-image-edit-qualification-candidates-1.0.0", "unsupported candidate manifest");
-  ensure(Array.isArray(manifest.candidates) && manifest.candidates.length === EXPECTED_CANDIDATES.length, "candidate manifest must contain exactly four candidates");
+  ensure(Array.isArray(manifest.candidates) && manifest.candidates.length === EXPECTED_CANDIDATES.length, "candidate manifest must contain exactly three candidates");
 
   manifest.candidates.forEach((candidate, index) => {
     ensure(sameKeys(candidate, CANDIDATE_KEYS), `candidate ${index + 1} contains unsupported fields`);
@@ -267,18 +262,65 @@ function defaultRunId() {
   return new Date().toISOString().replace(/[^0-9A-Za-z-]/g, "").slice(0, 24);
 }
 
+function argumentValue(argumentsList, index, option) {
+  const value = argumentsList[index + 1];
+  ensure(typeof value === "string" && value.length > 0 && !value.startsWith("--"), `${option} requires a value`);
+  return value;
+}
+
 function parseArguments(argumentsList) {
   let runId = defaultRunId();
   let dryRun = false;
+  let live = false;
+  let candidateId = null;
+  let sourceId = null;
+  let taskId = null;
+  let confirmPaidQualification = false;
+  let maxSpendUsd = null;
 
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
     if (argument === "--dry-run") {
+      ensure(!live, "--dry-run and --live cannot be combined");
       dryRun = true;
       continue;
     }
+    if (argument === "--live") {
+      ensure(!dryRun, "--dry-run and --live cannot be combined");
+      live = true;
+      continue;
+    }
+    if (argument === "--candidate") {
+      ensure(candidateId === null, "--candidate may be specified only once");
+      candidateId = argumentValue(argumentsList, index, argument);
+      index += 1;
+      continue;
+    }
+    if (argument === "--source") {
+      ensure(sourceId === null, "--source may be specified only once");
+      sourceId = argumentValue(argumentsList, index, argument);
+      index += 1;
+      continue;
+    }
+    if (argument === "--task") {
+      ensure(taskId === null, "--task may be specified only once");
+      taskId = argumentValue(argumentsList, index, argument);
+      index += 1;
+      continue;
+    }
+    if (argument === "--confirm-paid-qualification") {
+      ensure(!confirmPaidQualification, "--confirm-paid-qualification may be specified only once");
+      confirmPaidQualification = true;
+      continue;
+    }
+    if (argument === "--max-spend-usd") {
+      ensure(maxSpendUsd === null, "--max-spend-usd may be specified only once");
+      maxSpendUsd = argumentValue(argumentsList, index, argument);
+      index += 1;
+      continue;
+    }
     if (argument === "--run-id") {
-      runId = argumentsList[index + 1];
+      runId = argumentValue(argumentsList, index, argument);
       index += 1;
       ensureSafeRunId(runId);
       continue;
@@ -287,11 +329,27 @@ function parseArguments(argumentsList) {
     throw new Error(`unsupported option ${argument}; this harness supports dry-run only`);
   }
 
-  return { runId, dryRun };
+  return { runId, dryRun, live, candidateId, sourceId, taskId, confirmPaidQualification, maxSpendUsd };
+}
+
+function validateLiveSmokeArguments(options) {
+  if (!options.live) {
+    ensure(!options.candidateId && !options.sourceId && !options.taskId && !options.confirmPaidQualification && options.maxSpendUsd === null, "live qualification options require --live");
+    return;
+  }
+
+  ensure(EXPECTED_CANDIDATES.some((candidate) => candidate.candidateId === options.candidateId), "live smoke requires one approved candidate");
+  ensure(EXPECTED_SOURCE_IDS.includes(options.sourceId), "live smoke requires one approved source");
+  ensure(EXPECTED_TASK_IDS.includes(options.taskId), "live smoke requires one approved task");
+  ensure(options.confirmPaidQualification, "live smoke requires --confirm-paid-qualification");
+  validatePositiveBudgetUsd(options.maxSpendUsd);
+  throw new Error("LIVE_QUALIFICATION_NOT_IMPLEMENTED");
 }
 
 async function run(argumentsList = []) {
-  const { runId, dryRun } = parseArguments(argumentsList);
+  const options = parseArguments(argumentsList);
+  validateLiveSmokeArguments(options);
+  const { runId, dryRun } = options;
   ensure(dryRun || argumentsList.length === 0, "only dry-run execution is available in CS4A");
 
   const [manifest, matrix] = await Promise.all([
@@ -336,7 +394,7 @@ async function run(argumentsList = []) {
   return resultFile;
 }
 
-export { ensureSafeFixturePath, ensureSafeRunId, validateMatrix };
+export { ensureSafeFixturePath, ensureSafeRunId, parseArguments, validateLiveSmokeArguments, validateMatrix };
 
 const invokedScript = process.argv[1]
   ? pathToFileURL(resolve(process.argv[1])).href

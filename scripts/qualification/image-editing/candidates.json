@@ -14,12 +14,6 @@
       "declaredModelRef": "alibaba:qwen-image-edit@2511"
     },
     {
-      "candidateId": "fal-flux2-flash-edit",
-      "provider": "fal",
-      "displayName": "FLUX.2 Flash Edit",
-      "declaredModelRef": "fal-ai/flux-2/flash/edit"
-    },
-    {
       "candidateId": "replicate-flux1-kontext-dev",
       "provider": "replicate",
       "displayName": "FLUX.1 Kontext Dev",

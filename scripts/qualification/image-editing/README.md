@@ -11,8 +11,7 @@ order:
 
 1. Runware — FLUX.2 [klein] 4B — `runware:400@4`
 2. Runware — Qwen-Image-Edit-2511 — `alibaba:qwen-image-edit@2511`
-3. fal — FLUX.2 Flash Edit — `fal-ai/flux-2/flash/edit`
-4. Replicate — FLUX.1 Kontext Dev — `black-forest-labs/flux-kontext-dev`
+3. Replicate — FLUX.1 Kontext Dev — `black-forest-labs/flux-kontext-dev`
 
 These are qualification references only. They are not trusted executable API
 identifiers. Each supplier's current API documentation and model identifier
@@ -29,10 +28,10 @@ The fixed matrix has five source-image slots and six logical task categories:
 5. identity-preserving subject/clothing edit
 6. sequential multi-edit stability
 
-This produces 120 logical scenarios:
+This produces 90 logical scenarios:
 
 ```text
-5 sources × 6 tasks × 4 candidates = 120 scenarios
+5 sources × 6 tasks × 3 candidates = 90 scenarios
 ```
 
 The sequential task is a true three-step chain. Step 1 consumes the original
@@ -44,7 +43,7 @@ not reset to the original. Therefore eventual live execution contains:
 ```
 
 For each candidate/source pair, tasks 01–05 contribute five invocations and
-task 06 contributes three invocations: 40 invocations per candidate and 160
+task 06 contributes three invocations: 40 invocations per candidate and 120
 eventual provider invocations overall.
 
 ## Dry-run only
@@ -85,8 +84,9 @@ sequential-edit stability. A result may remain unevaluated until a manual
 reviewer scores the artifacts and records notes.
 
 The later live phase requires separately approved, dedicated qualification
-credentials. It must re-verify supplier documentation, add isolated provider
-adapters, and retain the same fixed candidate/matrix ordering. It must never
+credentials for Runware and Replicate. It must re-verify supplier documentation,
+add isolated provider adapters, and retain the same fixed candidate/matrix
+ordering. It must never
 use application production credentials, create chat messages, reserve user
 quota, write image-edit lineage, access production Storage, or call a
 production API route.

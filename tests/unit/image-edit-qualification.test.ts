@@ -132,12 +132,6 @@ describe("M9-CS4A image-editing qualification harness", () => {
         declaredModelRef: "alibaba:qwen-image-edit@2511",
       },
       {
-        candidateId: "fal-flux2-flash-edit",
-        provider: "fal",
-        displayName: "FLUX.2 Flash Edit",
-        declaredModelRef: "fal-ai/flux-2/flash/edit",
-      },
-      {
         candidateId: "replicate-flux1-kontext-dev",
         provider: "replicate",
         displayName: "FLUX.1 Kontext Dev",
@@ -258,16 +252,16 @@ describe("M9-CS4A image-editing qualification harness", () => {
     }
   });
 
-  it("expands 120 logical scenarios and 160 ordered invocations deterministically", () => {
+  it("expands 90 logical scenarios and 120 ordered invocations deterministically", () => {
     const first = runDryRun("cs4a-unit-fixed");
     const second = runDryRun("cs4a-unit-fixed");
 
-    expect(first.expectedScenarioCount).toBe(120);
-    expect(first.expectedInvocationCount).toBe(160);
-    expect(first.scenarios).toHaveLength(120);
-    expect(first.invocations).toHaveLength(160);
-    expect(new Set(first.scenarios.map((scenario) => scenario.scenarioId)).size).toBe(120);
-    expect(new Set(first.invocations.map((invocation) => invocation.invocationId)).size).toBe(160);
+    expect(first.expectedScenarioCount).toBe(90);
+    expect(first.expectedInvocationCount).toBe(120);
+    expect(first.scenarios).toHaveLength(90);
+    expect(first.invocations).toHaveLength(120);
+    expect(new Set(first.scenarios.map((scenario) => scenario.scenarioId)).size).toBe(90);
+    expect(new Set(first.invocations.map((invocation) => invocation.invocationId)).size).toBe(120);
     for (const candidate of candidates) {
       const candidateScenarios = first.scenarios.filter((scenario) => scenario.candidateId === candidate.candidateId);
       const candidateScenarioIds = new Set(candidateScenarios.map((scenario) => scenario.scenarioId));
@@ -288,15 +282,13 @@ describe("M9-CS4A image-editing qualification harness", () => {
     }
 
     for (const scenarios of grouped.values()) {
-      expect(scenarios).toHaveLength(4);
+      expect(scenarios).toHaveLength(3);
       expect(scenarios.map((scenario) => scenario.instructionReference)).toEqual([
-        scenarios[0].instructionReference,
         scenarios[0].instructionReference,
         scenarios[0].instructionReference,
         scenarios[0].instructionReference,
       ]);
       expect(scenarios.map((scenario) => scenario.sequenceSteps)).toEqual([
-        scenarios[0].sequenceSteps,
         scenarios[0].sequenceSteps,
         scenarios[0].sequenceSteps,
         scenarios[0].sequenceSteps,
@@ -308,7 +300,7 @@ describe("M9-CS4A image-editing qualification harness", () => {
     const result = runDryRun("cs4a-sequence");
     const sequenceInvocations = result.invocations.filter((invocation) => invocation.sequenceId);
 
-    expect(sequenceInvocations).toHaveLength(60);
+    expect(sequenceInvocations).toHaveLength(45);
     for (let index = 0; index < sequenceInvocations.length; index += 3) {
       const [stepOne, stepTwo, stepThree] = sequenceInvocations.slice(index, index + 3);
       expect(stepOne.sequenceStep).toBe(1);
@@ -324,6 +316,7 @@ describe("M9-CS4A image-editing qualification harness", () => {
     expectRejected(["--live"]);
     expectRejected(["--endpoint", "https://example.test"]);
     expectRejected(["--candidate", "unapproved"]);
+    expect(runnerSource).toContain("LIVE_QUALIFICATION_NOT_IMPLEMENTED");
   });
 
   it("rejects unsafe run IDs through the CLI before writing output", () => {

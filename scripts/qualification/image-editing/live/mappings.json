@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "lvtchat-image-edit-qualification-mappings-1.0.0",
+  "mappings": [
+    {
+      "candidateId": "runware-flux2-klein-4b",
+      "provider": "runware",
+      "modelRef": "runware:400@4",
+      "credentialEnv": "RUNWARE_QUAL_API_KEY",
+      "transportMetadata": {
+        "apiStyle": "imageInference",
+        "promptField": "positivePrompt",
+        "imageInputConcept": "inputs.referenceImages",
+        "supportedSourceForms": ["URL", "UUID", "Data URI", "Base64"],
+        "includeCostCapability": true
+      }
+    },
+    {
+      "candidateId": "runware-qwen-image-edit-2511",
+      "provider": "runware",
+      "modelRef": "alibaba:qwen-image-edit@2511",
+      "credentialEnv": "RUNWARE_QUAL_API_KEY",
+      "transportMetadata": {
+        "apiStyle": "imageInference",
+        "promptField": "positivePrompt",
+        "imageInputConcept": "inputs.referenceImages",
+        "supportedSourceForms": ["URL", "UUID", "Data URI", "Base64"],
+        "includeCostCapability": true,
+        "minimumReferenceImages": 1,
+        "maximumReferenceImages": 3
+      }
+    },
+    {
+      "candidateId": "replicate-flux1-kontext-dev",
+      "provider": "replicate",
+      "modelRef": "black-forest-labs/flux-kontext-dev",
+      "credentialEnv": "REPLICATE_QUAL_API_TOKEN",
+      "transportMetadata": {
+        "apiStyle": "official_model_prediction_api",
+        "promptField": "prompt",
+        "imageInputField": "input_image",
+        "outputFieldConcept": "prediction_output",
+        "pollingCapability": true,
+        "temporaryOutputRetention": true,
+        "localArtifactDownloadRequired": true
+      }
+    }
+  ]
+}
