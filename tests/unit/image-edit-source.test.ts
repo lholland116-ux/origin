@@ -172,6 +172,30 @@ describe("image-edit source inspection", () => {
     ).resolves.toMatchObject({ mimeType: "image/png" });
   });
 
+  it.each([
+    ["image/png", PNG_BASE64],
+    ["image/jpeg", JPEG_BASE64],
+    ["image/webp", WEBP_BASE64],
+  ])("detects a valid %s source without a declared MIME type", async (_mimeType, base64) => {
+    await expect(
+      inspectImageEditSource({ bytes: bytes(base64) }),
+    ).resolves.toMatchObject({ mimeType: _mimeType });
+  });
+
+  it("rejects unsupported bytes without a declared MIME type", async () => {
+    await expectSourceError(
+      inspectImageEditSource({ bytes: new Uint8Array([1, 2, 3]) }),
+      "unsupported_format",
+    );
+  });
+
+  it("does not treat an empty declared MIME string as absent", async () => {
+    await expectSourceError(
+      inspectImageEditSource({ bytes: bytes(PNG_BASE64), declaredMimeType: "" }),
+      "unsupported_format",
+    );
+  });
+
   it("accepts a genuine VP8L WebP fixture after independently verifying its image chunk", async () => {
     const vp8l = bytes(VP8L_BASE64);
     expect(firstWebpChunk(vp8l, "VP8L").slice(0, 4)).toEqual(

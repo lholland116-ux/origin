@@ -529,7 +529,7 @@ function parseImage(bytes: Uint8Array, mimeType: ImageEditSourceMimeType): Parse
 
 export async function inspectImageEditSource(input: {
   bytes: Uint8Array;
-  declaredMimeType: string;
+  declaredMimeType?: string | null;
 }): Promise<ImageEditSourceInspection> {
   if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength === 0) {
     fail("invalid_image", "Image source is empty.");
@@ -545,12 +545,17 @@ export async function inspectImageEditSource(input: {
     fail("unsupported_format", "Image source format is not supported.");
   }
 
-  const declaredMimeType = normalizeDeclaredMimeType(input.declaredMimeType);
-  if (!declaredMimeType) {
+  const hasDeclaredMimeType =
+    input.declaredMimeType !== undefined && input.declaredMimeType !== null;
+  const declaredMimeType = hasDeclaredMimeType
+    ? normalizeDeclaredMimeType(input.declaredMimeType)
+    : null;
+
+  if (hasDeclaredMimeType && !declaredMimeType) {
     fail("unsupported_format", "Image source format is not supported.");
   }
 
-  if (declaredMimeType !== detectedMimeType) {
+  if (declaredMimeType && declaredMimeType !== detectedMimeType) {
     fail("mime_mismatch", "Declared image MIME type does not match the image bytes.");
   }
 
