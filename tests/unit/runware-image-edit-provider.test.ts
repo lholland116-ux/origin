@@ -300,6 +300,164 @@ describe("Runware image-edit provider", () => {
     expect(String((error as Error).message)).not.toContain(SOURCE_BASE64);
   });
 
+  it("records bounded metadata for a non-2xx JSON error without logging request data", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let outgoingTaskUUID: unknown;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestBody = JSON.parse(String(init?.body)) as Array<Record<string, unknown>>;
+      outgoingTaskUUID = requestBody[0]?.taskUUID;
+
+      return jsonResponse(
+        {
+          error: {
+            code: "MODEL_UNAVAILABLE",
+            type: "provider_error",
+            message: "private instruction and image payload must not be retained",
+          },
+        },
+        { status: 429 },
+      );
+    });
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest({ instruction: "private instruction" }))
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      failureStage: "upstream_http",
+      status: 429,
+      upstreamStatus: 429,
+      upstreamCode: "MODEL_UNAVAILABLE",
+      upstreamType: "provider_error",
+      taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
+    });
+    expect(outgoingTaskUUID).toEqual(expect.stringMatching(TASK_UUID_PATTERN));
+    expect(error).not.toHaveProperty("upstreamMessage");
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0]).toEqual([
+      "image-edit:runware_provider_failure",
+      {
+        code: "provider_failure",
+        failureStage: "upstream_http",
+        upstreamStatus: 429,
+        upstreamCode: "MODEL_UNAVAILABLE",
+        upstreamType: "provider_error",
+        taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
+        provider: "runware",
+        model: RUNWARE_IMAGE_EDIT_MODEL,
+      },
+    ]);
+    const diagnostic = consoleError.mock.calls[0]?.[1] as { taskUUID?: unknown };
+    expect(diagnostic.taskUUID).toBe(outgoingTaskUUID);
+
+    const diagnosticText = JSON.stringify(consoleError.mock.calls);
+    expect(diagnosticText).not.toContain("provider-secret");
+    expect(diagnosticText).not.toContain("private instruction");
+    expect(diagnosticText).not.toContain("image payload");
+  });
+
+  it("retains status and safe stage for a non-JSON upstream error without retaining its body", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetcher = vi.fn(async () =>
+      new Response("raw upstream response with private instruction", { status: 503 }),
+    );
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest({ instruction: "private instruction" }))
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      failureStage: "upstream_http",
+      status: 503,
+      upstreamStatus: 503,
+      upstreamCode: null,
+      upstreamType: null,
+      taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
+    });
+    expect(JSON.stringify(error)).not.toContain("raw upstream response");
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0]?.[1]).toMatchObject({
+      upstreamStatus: 503,
+      upstreamCode: null,
+      upstreamType: null,
+    });
+  });
+
+  it("classifies a network exception without exposing the exception or request data", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetcher = vi.fn(async () => {
+      throw new Error("network failure included private instruction");
+    });
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest({ instruction: "private instruction" }))
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      failureStage: "network",
+      upstreamStatus: null,
+      upstreamCode: null,
+      upstreamType: null,
+      taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
+    });
+    expect(JSON.stringify(error)).not.toContain("network failure");
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("private instruction");
+  });
+
+  it("classifies malformed success JSON as response parsing failure", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetcher = vi.fn(async () => new Response("not-json", { status: 200 }));
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest())
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      failureStage: "response_parse",
+      upstreamStatus: 200,
+      taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
+    });
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0]?.[1]).toMatchObject({
+      failureStage: "response_parse",
+      upstreamStatus: 200,
+    });
+  });
+
+  it("classifies an unexpected response-processing exception without exposing details", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const body = {
+      get data(): never {
+        throw new Error("private processing detail");
+      },
+    };
+    const fetcher = vi.fn(async () =>
+      ({ ok: true, status: 200, json: async () => body }) as Response,
+    );
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest())
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      failureStage: "response_processing",
+      upstreamStatus: 200,
+      taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
+    });
+    expect(JSON.stringify(error)).not.toContain("private processing detail");
+    expect(consoleError).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["missing data", () => []],
     ["task mismatch", () => [{ taskUUID: "wrong", imageBase64Data: SOURCE_BASE64 }]],

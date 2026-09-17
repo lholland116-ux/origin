@@ -434,9 +434,18 @@ describe("POST /api/image-edit", () => {
 
     const response = await POST(request(validBody));
     expect(response.status).toBe(status);
-    expect(await bodyOf(response)).toMatchObject({
+    const responseBody = await bodyOf(response);
+    expect(responseBody).toMatchObject({
       error: { code: responseCode },
     });
+    if (code === "provider_failure") {
+      expect(responseBody).toEqual({
+        error: {
+          code: "IMAGE_EDIT_PROVIDER_FAILURE",
+          message: "The image edit provider failed.",
+        },
+      });
+    }
   });
 
   it("does not expose provider, SQL, Storage, fingerprint, or credential data", async () => {

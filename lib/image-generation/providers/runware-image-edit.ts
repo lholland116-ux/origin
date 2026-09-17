@@ -27,25 +27,54 @@ export type RunwareImageEditProviderErrorCode =
   | "invalid_output"
   | "timeout";
 
+export type RunwareImageEditFailureStage =
+  | "network"
+  | "upstream_http"
+  | "response_parse"
+  | "response_processing";
+
+type RunwareImageEditProviderErrorDetails = Readonly<{
+  failureStage?: RunwareImageEditFailureStage;
+  upstreamStatus?: number | null;
+  upstreamCode?: string | null;
+  upstreamType?: string | null;
+  taskUUID?: string;
+}>;
+
 export class RunwareImageEditProviderError extends Error {
   readonly code: RunwareImageEditProviderErrorCode;
   readonly status?: number;
+  readonly failureStage: RunwareImageEditFailureStage | null;
+  readonly upstreamStatus: number | null;
+  readonly upstreamCode: string | null;
+  readonly upstreamType: string | null;
+  readonly taskUUID: string | null;
 
   constructor(
     code: RunwareImageEditProviderErrorCode,
     message: string,
     status?: number,
+    details: RunwareImageEditProviderErrorDetails = {},
   ) {
     super(message);
     this.name = "RunwareImageEditProviderError";
     this.code = code;
     this.status = status;
+    this.failureStage = details.failureStage ?? null;
+    this.upstreamStatus = details.upstreamStatus ?? status ?? null;
+    this.upstreamCode = details.upstreamCode ?? null;
+    this.upstreamType = details.upstreamType ?? null;
+    this.taskUUID = details.taskUUID ?? null;
   }
 }
 
 type RunwareFetcher = typeof fetch;
 
 type JsonRecord = Record<string, unknown>;
+
+const RUNWARE_PROVIDER_FAILURE_EVENT = "image-edit:runware_provider_failure" as const;
+const MAX_UPSTREAM_DIAGNOSTIC_BYTES = 4096;
+const MAX_UPSTREAM_DIAGNOSTIC_VALUE_LENGTH = 128;
 
 const PNG_SIGNATURE = new Uint8Array([
   0x89,
@@ -60,6 +89,120 @@ const PNG_SIGNATURE = new Uint8Array([
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sanitizeDiagnosticScalar(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const sanitized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  if (sanitized.length === 0) {
+    return null;
+  }
+
+  return sanitized.slice(0, MAX_UPSTREAM_DIAGNOSTIC_VALUE_LENGTH);
+}
+
+async function readBoundedResponseBody(response: Response): Promise<string | null> {
+  if (!response.body) {
+    return null;
+  }
+
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = response.body.getReader();
+  } catch {
+    return null;
+  }
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (!value) {
+        continue;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_UPSTREAM_DIAGNOSTIC_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return new TextDecoder().decode(bytes);
+}
+
+async function readUpstreamErrorMetadata(response: Response): Promise<{
+  upstreamCode: string | null;
+  upstreamType: string | null;
+}> {
+  const body = await readBoundedResponseBody(response);
+  if (!body) {
+    return { upstreamCode: null, upstreamType: null };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { upstreamCode: null, upstreamType: null };
+  }
+
+  if (!isRecord(parsed) || !isRecord(parsed.error)) {
+    return { upstreamCode: null, upstreamType: null };
+  }
+
+  return {
+    upstreamCode: sanitizeDiagnosticScalar(parsed.error.code),
+    upstreamType: sanitizeDiagnosticScalar(parsed.error.type),
+  };
+}
+
+function createProviderFailureError(details: {
+  failureStage: RunwareImageEditFailureStage;
+  taskUUID: string;
+  upstreamStatus?: number;
+  upstreamCode?: string | null;
+  upstreamType?: string | null;
+}): RunwareImageEditProviderError {
+  const diagnostic = {
+    code: "provider_failure" as const,
+    failureStage: details.failureStage,
+    upstreamStatus: details.upstreamStatus ?? null,
+    upstreamCode: details.upstreamCode ?? null,
+    upstreamType: details.upstreamType ?? null,
+    taskUUID: details.taskUUID,
+    provider: RUNWARE_IMAGE_EDIT_PROVIDER,
+    model: RUNWARE_IMAGE_EDIT_MODEL,
+  } as const;
+
+  console.error(RUNWARE_PROVIDER_FAILURE_EVENT, diagnostic);
+
+  return new RunwareImageEditProviderError(
+    "provider_failure",
+    "Runware image editing failed",
+    details.upstreamStatus,
+    diagnostic,
+  );
 }
 
 function getApiKey(): string {
@@ -236,10 +379,6 @@ function getCost(value: unknown): ImageGenerationCost | undefined {
   return { currency: currency.trim(), amount };
 }
 
-function getResponseErrorMessage(status: number): string {
-  return `Runware image edit request failed with HTTP ${status}`;
-}
-
 export class RunwareImageEditProvider implements ImageEditingProvider {
   private readonly fetcher: RunwareFetcher;
 
@@ -334,18 +473,20 @@ export class RunwareImageEditProvider implements ImageEditingProvider {
           );
         }
 
-        throw new RunwareImageEditProviderError(
-          "provider_failure",
-          "Runware image editing failed",
-        );
+        throw createProviderFailureError({
+          failureStage: "network",
+          taskUUID,
+        });
       }
 
       if (!response.ok) {
-        throw new RunwareImageEditProviderError(
-          "provider_failure",
-          getResponseErrorMessage(response.status),
-          response.status,
-        );
+        const upstreamError = await readUpstreamErrorMetadata(response);
+        throw createProviderFailureError({
+          failureStage: "upstream_http",
+          upstreamStatus: response.status,
+          taskUUID,
+          ...upstreamError,
+        });
       }
 
       let body: unknown;
@@ -366,54 +507,67 @@ export class RunwareImageEditProvider implements ImageEditingProvider {
           );
         }
 
-        throw new RunwareImageEditProviderError(
-          "provider_failure",
-          "Runware returned malformed JSON",
-        );
+        throw createProviderFailureError({
+          failureStage: "response_parse",
+          upstreamStatus: response.status,
+          taskUUID,
+        });
       }
 
-      if (!isRecord(body) || !Array.isArray(body.data) || body.data.length !== 1) {
-        throw new RunwareImageEditProviderError(
-          "invalid_output",
-          "Runware returned an unexpected image result",
-        );
+      try {
+        if (!isRecord(body) || !Array.isArray(body.data) || body.data.length !== 1) {
+          throw new RunwareImageEditProviderError(
+            "invalid_output",
+            "Runware returned an unexpected image result",
+          );
+        }
+
+        const result = body.data[0];
+        if (!isRecord(result) || result.taskUUID !== taskUUID) {
+          throw new RunwareImageEditProviderError(
+            "invalid_output",
+            "Runware returned an image for an unexpected task",
+          );
+        }
+
+        if (typeof result.imageBase64Data !== "string" || result.imageBase64Data.trim().length === 0) {
+          throw new RunwareImageEditProviderError(
+            "invalid_output",
+            "Runware returned no inline image data",
+          );
+        }
+
+        const bytes = decodeBase64(result.imageBase64Data);
+        if (!isPng(bytes)) {
+          throw new RunwareImageEditProviderError(
+            "invalid_output",
+            "Runware returned an invalid PNG image",
+          );
+        }
+
+        const cost = getCost(result.cost);
+
+        return {
+          provider: RUNWARE_IMAGE_EDIT_PROVIDER,
+          model: RUNWARE_IMAGE_EDIT_MODEL,
+          mimeType: "image/png",
+          bytes,
+          generationId: getProviderId(result.imageUUID, taskUUID),
+          width: normalizedRequest.width,
+          height: normalizedRequest.height,
+          ...(cost ? { cost } : {}),
+        };
+      } catch (error) {
+        if (error instanceof RunwareImageEditProviderError) {
+          throw error;
+        }
+
+        throw createProviderFailureError({
+          failureStage: "response_processing",
+          upstreamStatus: response.status,
+          taskUUID,
+        });
       }
-
-      const result = body.data[0];
-      if (!isRecord(result) || result.taskUUID !== taskUUID) {
-        throw new RunwareImageEditProviderError(
-          "invalid_output",
-          "Runware returned an image for an unexpected task",
-        );
-      }
-
-      if (typeof result.imageBase64Data !== "string" || result.imageBase64Data.trim().length === 0) {
-        throw new RunwareImageEditProviderError(
-          "invalid_output",
-          "Runware returned no inline image data",
-        );
-      }
-
-      const bytes = decodeBase64(result.imageBase64Data);
-      if (!isPng(bytes)) {
-        throw new RunwareImageEditProviderError(
-          "invalid_output",
-          "Runware returned an invalid PNG image",
-        );
-      }
-
-      const cost = getCost(result.cost);
-
-      return {
-        provider: RUNWARE_IMAGE_EDIT_PROVIDER,
-        model: RUNWARE_IMAGE_EDIT_MODEL,
-        mimeType: "image/png",
-        bytes,
-        generationId: getProviderId(result.imageUUID, taskUUID),
-        width: normalizedRequest.width,
-        height: normalizedRequest.height,
-        ...(cost ? { cost } : {}),
-      };
     } finally {
       clearTimeout(timeoutId);
     }
