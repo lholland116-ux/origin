@@ -873,6 +873,164 @@ export type Database = {
           },
         ]
       }
+      image_edit_lineage: {
+        Row: {
+          created_at: string
+          derivative_generated_image_id: string
+          id: string
+          instruction: string
+          operation: string
+          source_generated_image_id: string | null
+          source_uploaded_message_id: string | null
+          source_uploaded_ordinal: number | null
+        }
+        Insert: {
+          created_at?: string
+          derivative_generated_image_id: string
+          id?: string
+          instruction: string
+          operation: string
+          source_generated_image_id?: string | null
+          source_uploaded_message_id?: string | null
+          source_uploaded_ordinal?: number | null
+        }
+        Update: {
+          created_at?: string
+          derivative_generated_image_id?: string
+          id?: string
+          instruction?: string
+          operation?: string
+          source_generated_image_id?: string | null
+          source_uploaded_message_id?: string | null
+          source_uploaded_ordinal?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "image_edit_lineage_derivative_fkey"
+            columns: ["derivative_generated_image_id"]
+            isOneToOne: true
+            referencedRelation: "message_generated_images"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_edit_lineage_source_generated_fkey"
+            columns: ["source_generated_image_id"]
+            isOneToOne: false
+            referencedRelation: "message_generated_images"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_edit_lineage_source_uploaded_fkey"
+            columns: ["source_uploaded_message_id", "source_uploaded_ordinal"]
+            isOneToOne: false
+            referencedRelation: "message_images"
+            referencedColumns: ["message_id", "ordinal"]
+          },
+        ]
+      }
+      image_edit_requests: {
+        Row: {
+          assistant_message_id: string | null
+          attempt_id: string | null
+          claim_expires_at: string
+          completed_at: string | null
+          conversation_id: string
+          created_at: string
+          failed_at: string | null
+          failure_code: string | null
+          generated_image_id: string | null
+          id: string
+          idempotency_key: string
+          request_fingerprint: string
+          retry_count: number
+          status: string
+          updated_at: string
+          user_id: string
+          user_message_id: string | null
+        }
+        Insert: {
+          assistant_message_id?: string | null
+          attempt_id?: string | null
+          claim_expires_at: string
+          completed_at?: string | null
+          conversation_id: string
+          created_at?: string
+          failed_at?: string | null
+          failure_code?: string | null
+          generated_image_id?: string | null
+          id?: string
+          idempotency_key: string
+          request_fingerprint: string
+          retry_count?: number
+          status: string
+          updated_at?: string
+          user_id: string
+          user_message_id?: string | null
+        }
+        Update: {
+          assistant_message_id?: string | null
+          attempt_id?: string | null
+          claim_expires_at?: string
+          completed_at?: string | null
+          conversation_id?: string
+          created_at?: string
+          failed_at?: string | null
+          failure_code?: string | null
+          generated_image_id?: string | null
+          id?: string
+          idempotency_key?: string
+          request_fingerprint?: string
+          retry_count?: number
+          status?: string
+          updated_at?: string
+          user_id?: string
+          user_message_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "image_edit_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_edit_requests_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_edit_requests_attempt_id_fkey"
+            columns: ["attempt_id"]
+            isOneToOne: false
+            referencedRelation: "image_generation_attempts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_edit_requests_user_message_id_fkey"
+            columns: ["user_message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_edit_requests_assistant_message_id_fkey"
+            columns: ["assistant_message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_edit_requests_generated_image_id_fkey"
+            columns: ["generated_image_id"]
+            isOneToOne: false
+            referencedRelation: "message_generated_images"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       message_images: {
         Row: {
           created_at: string
@@ -1190,6 +1348,59 @@ export type Database = {
           p_reason: string
         }
         Returns: boolean
+      }
+      claim_image_edit_request: {
+        Args: {
+          p_conversation_id: string
+          p_idempotency_key: string
+          p_request_fingerprint: string
+        }
+        Returns: {
+          assistant_message_id: string | null
+          attempt_id: string | null
+          disposition: string
+          generated_image_id: string | null
+          image_edit_request_id: string
+          stale_attempt_id: string | null
+          status: string
+          user_message_id: string | null
+        }[]
+      }
+      bind_image_edit_request_attempt: {
+        Args: {
+          p_attempt_id: string
+          p_image_edit_request_id: string
+        }
+        Returns: boolean
+      }
+      fail_image_edit_request: {
+        Args: {
+          p_failure_code: string
+          p_image_edit_request_id: string
+        }
+        Returns: boolean
+      }
+      complete_generated_image_edit: {
+        Args: {
+          p_attempt_id: string
+          p_authenticated_user_id: string
+          p_conversation_id: string
+          p_image_edit_request_id: string
+          p_instruction: string
+          p_mime_type: string
+          p_model: string
+          p_provider: string
+          p_request_fingerprint: string
+          p_source_generated_image_id: string | null
+          p_source_uploaded_message_id: string | null
+          p_source_uploaded_ordinal: number | null
+          p_storage_path: string
+        }
+        Returns: {
+          assistant_message_id: string
+          generated_image_id: string
+          user_message_id: string
+        }[]
       }
       complete_generated_image_generation: {
         Args: {
