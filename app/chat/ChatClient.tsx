@@ -19,6 +19,7 @@ import {
   MessageCircle,
   MoreHorizontal,
   Palette,
+  Pencil,
   Plus,
   RefreshCw,
   Send,
@@ -43,6 +44,11 @@ import {
   setStoredChatThemeId,
 } from "@/lib/chat-theme-storage";
 import UpgradeModal from "@/components/UpgradeModal";
+import ImageEditDialog, {
+  getImageEditInstructionError,
+  type ImageEditDialogStatus,
+} from "@/components/chat/ImageEditDialog";
+import type { ImageEditSourceReference } from "@/lib/image-generation/lineage";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
 import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
@@ -254,6 +260,19 @@ type ImageQuotaWindow = "daily" | "monthly";
 type DocumentsResponse = {
   documents?: UploadedDocument[];
   error?: string;
+};
+
+export type ImageEditOperation = {
+  conversationId: string;
+  sourceReference: ImageEditSourceReference;
+  sourcePreview: string;
+  sourceLabel: string;
+  instruction: string;
+  idempotencyKey: string | null;
+  status: ImageEditDialogStatus;
+  error: string | null;
+  errorCode: string | null;
+  canRetry: boolean;
 };
 
 export function getUploadedMessageImageGridClass(imageCount: number): string {
@@ -683,6 +702,104 @@ export function getGeneratedImageDeleteErrorMessage(
   return status === 404
     ? "Generated image not found."
     : "The generated image could not be deleted.";
+}
+
+export function buildImageEditRequestBody(
+  operation: Pick<ImageEditOperation, "conversationId" | "sourceReference" | "instruction">,
+  idempotencyKey: string,
+) {
+  return {
+    conversationId: operation.conversationId,
+    sourceReference: operation.sourceReference,
+    instruction: operation.instruction,
+    idempotencyKey,
+  };
+}
+
+export function getImageEditErrorMessage(
+  status: number,
+  code?: string,
+  plan: Plan = "free",
+): { message: string; canRetry: boolean } {
+  if (status === 429 && (code === "IMAGE_DAILY_LIMIT_REACHED" || code === "IMAGE_MONTHLY_LIMIT_REACHED")) {
+    return {
+      message: getImageGenerationErrorMessage(status, code, plan),
+      canRetry: false,
+    };
+  }
+
+  switch (code) {
+    case "IMAGE_EDIT_SOURCE_UNAVAILABLE":
+      return { message: "This image is no longer available to edit.", canRetry: false };
+    case "IMAGE_EDIT_IDEMPOTENCY_CONFLICT":
+      return { message: "This edit request conflicts with an earlier request. Start a new edit.", canRetry: false };
+    case "IMAGE_EDIT_RESULT_UNAVAILABLE":
+      return { message: "This completed edit is no longer available.", canRetry: false };
+    case "IMAGE_EDIT_CONFIGURATION":
+      return { message: "Image editing is not configured right now.", canRetry: false };
+    case "INVALID_REQUEST":
+      return { message: "The image edit request is invalid.", canRetry: false };
+    case "IMAGE_EDIT_PROVIDER_TIMEOUT":
+      return { message: "Image editing timed out. You can retry this edit.", canRetry: true };
+    case "IMAGE_EDIT_PROVIDER_FAILURE":
+    case "IMAGE_EDIT_INVALID_PROVIDER_OUTPUT":
+    case "IMAGE_EDIT_ATTEMPT_START_FAILED":
+      return { message: "Image editing could not be completed. Try again.", canRetry: true };
+    case "IMAGE_DAILY_LIMIT_REACHED":
+    case "IMAGE_MONTHLY_LIMIT_REACHED":
+      return { message: "Image editing is temporarily unavailable.", canRetry: false };
+    case "UNAUTHORIZED":
+      return { message: "Your session has expired. Please sign in again.", canRetry: false };
+  }
+
+  if (status === 400) {
+    return { message: "The image edit request is invalid.", canRetry: false };
+  }
+
+  if (status === 401) {
+    return { message: "Your session has expired. Please sign in again.", canRetry: false };
+  }
+
+  if (status === 404) {
+    return { message: "This image is no longer available to edit.", canRetry: false };
+  }
+
+  if (status === 409) {
+    return { message: "This edit request conflicts with an earlier request. Start a new edit.", canRetry: false };
+  }
+
+  if (status === 410) {
+    return { message: "This completed edit is no longer available.", canRetry: false };
+  }
+
+  if (status === 429) {
+    return { message: "Image editing is temporarily unavailable.", canRetry: false };
+  }
+
+  if (status === 504) {
+    return { message: "Image editing timed out. You can retry this edit.", canRetry: true };
+  }
+
+  return {
+    message:
+      status === 502
+        ? "Image editing could not be completed. Try again."
+        : "Image editing is temporarily unavailable.",
+    canRetry: true,
+  };
+}
+
+function getImageEditResponseField(data: unknown, field: "status" | "code"): string | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+
+  const value = (data as Record<string, unknown>)[field];
+  if (typeof value === "string") return value;
+
+  const error = (data as Record<string, unknown>).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+
+  const nestedValue = (error as Record<string, unknown>)[field];
+  return typeof nestedValue === "string" ? nestedValue : null;
 }
 
 const UUID_PATTERN =
@@ -1375,6 +1492,30 @@ export function normalizeMessageImages(input: unknown): MessageImage[] {
     .filter((image) => image.image_path.length > 0 && image.image_name.length > 0);
 }
 
+export function isEligibleUploadedMessageImage(
+  image: MessageImage | null | undefined,
+): image is MessageImage & { ordinal: number } {
+  return Boolean(
+    image &&
+      typeof image.ordinal === "number" &&
+      Number.isSafeInteger(image.ordinal) &&
+      image.ordinal >= 1,
+  );
+}
+
+export function getUploadedImageEditSourceReference(
+  messageId: string,
+  image: MessageImage,
+): ImageEditSourceReference | null {
+  if (!messageId || !isEligibleUploadedMessageImage(image)) return null;
+
+  return {
+    kind: "uploaded_image",
+    messageId,
+    ordinal: image.ordinal,
+  };
+}
+
 export function hasCanonicalChildImages(message: {
   images?: unknown;
   has_child_images?: boolean;
@@ -1984,6 +2125,8 @@ export default function ChatClient({
   const [upgradeModalMessage, setUpgradeModalMessage] = useState(
     "This feature is available on the Pro plan."
   );
+  const [imageEditOperation, setImageEditOperation] =
+    useState<ImageEditOperation | null>(null);
   const planRef = useRef<Plan>("free");
 
   const abortRef = useRef<AbortController | null>(null);
@@ -1991,6 +2134,8 @@ export default function ChatClient({
   const imageRequestGenerationRef = useRef(0);
   const generatedImageUrlsRef = useRef<Set<string>>(new Set());
   const regenerationInFlightRef = useRef(false);
+  const imageEditOperationRef = useRef<ImageEditOperation | null>(null);
+  const imageEditInFlightRef = useRef(false);
   const pastedTextUploadInFlightRef = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -2363,6 +2508,198 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
   return false;
 }
+
+  function setImageEditOperationState(next: ImageEditOperation | null): void {
+    imageEditOperationRef.current = next;
+    setImageEditOperation(next);
+  }
+
+  function handleOpenImageEdit(
+    sourceReference: ImageEditSourceReference,
+    sourcePreview: string,
+    sourceLabel: string,
+  ): void {
+    if (loading || imageEditInFlightRef.current || !conversationId) return;
+
+    setUiError("");
+    setImageEditOperationState({
+      conversationId,
+      sourceReference,
+      sourcePreview,
+      sourceLabel,
+      instruction: "",
+      idempotencyKey: null,
+      status: "idle",
+      error: null,
+      errorCode: null,
+      canRetry: false,
+    });
+  }
+
+  function handleImageEditInstructionChange(value: string): void {
+    const current = imageEditOperationRef.current;
+    if (!current || current.status !== "idle") return;
+
+    setImageEditOperationState({ ...current, instruction: value, error: null });
+  }
+
+  function handleCloseImageEdit(): void {
+    if (imageEditInFlightRef.current) return;
+    setImageEditOperationState(null);
+  }
+
+  async function refreshMessagesForConversation(
+    targetConversationId: string,
+  ): Promise<boolean> {
+    const requestGeneration = ++messageLoadGenerationRef.current;
+
+    try {
+      const response = await fetch(
+        `/api/messages?conversationId=${encodeURIComponent(targetConversationId)}`,
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) return false;
+
+      const data = await response.json();
+      const rawMessages = Array.isArray(data?.messages) ? data.messages : [];
+      const refreshedMessages = await hydrateMessagesWithImageUrls(rawMessages);
+
+      if (
+        shouldApplyMessageLoad(
+          requestGeneration,
+          messageLoadGenerationRef.current,
+        ) &&
+        targetConversationId === conversationId
+      ) {
+        setMessages(refreshedMessages);
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function handleImageEditSubmit(): Promise<void> {
+    if (imageEditInFlightRef.current) return;
+
+    const current = imageEditOperationRef.current;
+    if (!current) return;
+
+    const validationError = getImageEditInstructionError(current.instruction);
+    if (validationError) {
+      setImageEditOperationState({
+        ...current,
+        status: "idle",
+        error: validationError,
+        canRetry: false,
+      });
+      return;
+    }
+
+    const canAttempt =
+      current.status === "idle" ||
+      (current.status === "in_progress" && current.canRetry) ||
+      (current.status === "error" && current.canRetry);
+    if (!canAttempt) return;
+
+    const idempotencyKey = current.idempotencyKey ?? createId();
+    const submittingOperation: ImageEditOperation = {
+      ...current,
+      idempotencyKey,
+      status: "submitting",
+      error: null,
+      errorCode: null,
+      canRetry: false,
+    };
+
+    imageEditInFlightRef.current = true;
+    setImageEditOperationState(submittingOperation);
+
+    try {
+      let response: Response;
+
+      try {
+        response = await fetch("/api/image-edit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            buildImageEditRequestBody(submittingOperation, idempotencyKey),
+          ),
+          cache: "no-store",
+        });
+      } catch {
+        setImageEditOperationState({
+          ...submittingOperation,
+          status: "error",
+          error: "Image editing is temporarily unavailable.",
+          errorCode: "NETWORK_ERROR",
+          canRetry: true,
+        });
+        return;
+      }
+
+      const data = await response.json().catch(() => null);
+      const responseStatus = getImageEditResponseField(data, "status");
+
+      if (response.ok && response.status === 200 && responseStatus === "completed") {
+        const refreshed = await refreshMessagesForConversation(
+          submittingOperation.conversationId,
+        );
+
+        if (!refreshed) {
+          setImageEditOperationState({
+            ...submittingOperation,
+            status: "error",
+            error: "The edit completed, but the conversation could not be refreshed. Try again.",
+            errorCode: "REFRESH_FAILED",
+            canRetry: true,
+          });
+          return;
+        }
+
+        await refreshConversations().catch(() => undefined);
+        setImageEditOperationState(null);
+        return;
+      }
+
+      if (response.status === 202 && responseStatus === "in_progress") {
+        setImageEditOperationState({
+          ...submittingOperation,
+          status: "in_progress",
+          error: null,
+          errorCode: null,
+          canRetry: true,
+        });
+        return;
+      }
+
+      const errorCode = getImageEditResponseField(data, "code") ?? undefined;
+      const mappedError = getImageEditErrorMessage(
+        response.status,
+        errorCode,
+        planRef.current,
+      );
+      setImageEditOperationState({
+        ...submittingOperation,
+        status: "error",
+        error: mappedError.message,
+        errorCode: errorCode ?? null,
+        canRetry: mappedError.canRetry,
+      });
+    } catch {
+      setImageEditOperationState({
+        ...submittingOperation,
+        status: "error",
+        error: "Image editing is temporarily unavailable.",
+        errorCode: "INTERNAL_ERROR",
+        canRetry: true,
+      });
+    } finally {
+      imageEditInFlightRef.current = false;
+    }
+  }
 
   useEffect(() => {
     setSelectedThemeId(getStoredChatThemeId());
@@ -3317,7 +3654,17 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function loadConversation(nextConversationId: string) {
-    if (loading || nextConversationId === conversationId) return;
+    if (
+      loading ||
+      imageEditInFlightRef.current ||
+      nextConversationId === conversationId
+    ) {
+      return;
+    }
+
+    if (imageEditOperationRef.current) {
+      setImageEditOperationState(null);
+    }
 
     imageRequestGenerationRef.current += 1;
     abortRef.current?.abort();
@@ -3382,7 +3729,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function handleNewChat() {
-    if (loading) return;
+    if (loading || imageEditInFlightRef.current) return;
+
+    if (imageEditOperationRef.current) {
+      setImageEditOperationState(null);
+    }
 
     imageRequestGenerationRef.current += 1;
     abortRef.current?.abort();
@@ -4368,6 +4719,22 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         onClose={() => setUpgradeModalOpen(false)}
       />
 
+      {imageEditOperation ? (
+        <ImageEditDialog
+          isOpen
+          sourcePreview={imageEditOperation.sourcePreview}
+          sourceLabel={imageEditOperation.sourceLabel}
+          theme={activeTheme}
+          instruction={imageEditOperation.instruction}
+          status={imageEditOperation.status}
+          error={imageEditOperation.error}
+          canRetry={imageEditOperation.canRetry}
+          onInstructionChange={handleImageEditInstructionChange}
+          onSubmit={() => void handleImageEditSubmit()}
+          onClose={handleCloseImageEdit}
+        />
+      ) : null}
+
       <main className={cx("h-[100dvh] overflow-hidden transition-colors", activeTheme.pageBg, activeTheme.inputText)}>
         {mobileMenuOpen && (
           <div className="fixed inset-0 z-50 flex md:hidden">
@@ -4642,6 +5009,28 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               role="group"
                               aria-label="Generated image actions"
                             >
+                              <Tooltip content="Edit image" touchSafe>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenImageEdit(
+                                      {
+                                        kind: "generated_image",
+                                        generatedImageId: message.generatedImage!.id!,
+                                      },
+                                      message.generatedImage!.url,
+                                      "Generated image",
+                                    )
+                                  }
+                                  disabled={loading || imageEditOperation?.status === "submitting"}
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Edit image"
+                                >
+                                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                                  <span className="sr-only">Edit image</span>
+                                </button>
+                              </Tooltip>
+
                               <Tooltip content="Download image" touchSafe>
                                 <button
                                   type="button"
@@ -4739,16 +5128,46 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 getUploadedMessageImageGridClass(messageImages.length)
                               )}
                             >
-                              {messageImages.map((image, index) =>
-                                image.image_url ? (
-                                  <img
+                              {messageImages.map((image, index) => {
+                                const editSource =
+                                  getUploadedImageEditSourceReference(message.id, image);
+
+                                return image.image_url ? (
+                                  <div
                                     key={`${message.id}-image-${index}`}
-                                    src={image.image_url}
-                                    alt={image.image_name || "Uploaded image"}
-                                    className="max-h-56 max-w-full rounded-xl border border-white/10 object-contain"
-                                  />
-                                ) : null
-                              )}
+                                    className="relative min-w-0"
+                                  >
+                                    <img
+                                      src={image.image_url}
+                                      alt={image.image_name || "Uploaded image"}
+                                      className="max-h-56 max-w-full rounded-xl border border-white/10 object-contain"
+                                    />
+
+                                    {message.role === "user" && editSource ? (
+                                      <div className="absolute right-1 top-1">
+                                        <Tooltip content="Edit image" touchSafe>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleOpenImageEdit(
+                                                editSource,
+                                                image.image_url!,
+                                                image.image_name || "Uploaded image",
+                                              )
+                                            }
+                                            disabled={loading || imageEditOperation?.status === "submitting"}
+                                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-black/60 text-white/85 transition hover:bg-black/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-400/60 disabled:cursor-not-allowed disabled:opacity-50"
+                                            aria-label="Edit uploaded image"
+                                          >
+                                            <Pencil className="h-4 w-4" aria-hidden="true" />
+                                            <span className="sr-only">Edit uploaded image</span>
+                                          </button>
+                                        </Tooltip>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null;
+                              })}
                             </div>
                           ) : messageImageSource === "children" ? null : message.image_url ? (
                             <div className="mt-3">
