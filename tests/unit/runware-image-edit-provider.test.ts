@@ -310,11 +310,15 @@ describe("Runware image-edit provider", () => {
 
       return jsonResponse(
         {
-          error: {
-            code: "MODEL_UNAVAILABLE",
-            type: "provider_error",
-            message: "private instruction and image payload must not be retained",
-          },
+          errors: [
+            {
+              code: "MODEL_UNAVAILABLE",
+              type: "provider_error",
+              parameter: "model",
+              taskType: "imageInference",
+              message: "safe provider explanation",
+            },
+          ],
         },
         { status: 429 },
       );
@@ -330,11 +334,13 @@ describe("Runware image-edit provider", () => {
       status: 429,
       upstreamStatus: 429,
       upstreamCode: "MODEL_UNAVAILABLE",
+      upstreamParameter: "model",
+      upstreamTaskType: "imageInference",
       upstreamType: "provider_error",
+      upstreamMessage: "safe provider explanation",
       taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
     });
     expect(outgoingTaskUUID).toEqual(expect.stringMatching(TASK_UUID_PATTERN));
-    expect(error).not.toHaveProperty("upstreamMessage");
     expect(consoleError).toHaveBeenCalledOnce();
     expect(consoleError.mock.calls[0]).toEqual([
       "image-edit:runware_provider_failure",
@@ -343,7 +349,10 @@ describe("Runware image-edit provider", () => {
         failureStage: "upstream_http",
         upstreamStatus: 429,
         upstreamCode: "MODEL_UNAVAILABLE",
+        upstreamParameter: "model",
+        upstreamTaskType: "imageInference",
         upstreamType: "provider_error",
+        upstreamMessage: "safe provider explanation",
         taskUUID: expect.stringMatching(TASK_UUID_PATTERN),
         provider: "runware",
         model: RUNWARE_IMAGE_EDIT_MODEL,
@@ -356,6 +365,33 @@ describe("Runware image-edit provider", () => {
     expect(diagnosticText).not.toContain("provider-secret");
     expect(diagnosticText).not.toContain("private instruction");
     expect(diagnosticText).not.toContain("image payload");
+  });
+
+  it("omits URL-bearing upstream messages from diagnostic metadata", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetcher = vi.fn(async () =>
+      jsonResponse(
+        {
+          errors: [
+            {
+              message: "source https://storage.example/signed-image-token",
+            },
+          ],
+        },
+        { status: 400 },
+      ),
+    );
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest())
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      upstreamMessage: null,
+    });
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("storage.example");
   });
 
   it("retains status and safe stage for a non-JSON upstream error without retaining its body", async () => {
@@ -385,6 +421,64 @@ describe("Runware image-edit provider", () => {
       upstreamCode: null,
       upstreamType: null,
     });
+  });
+
+  it("ignores non-string upstream diagnostic values", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetcher = vi.fn(async () =>
+      jsonResponse(
+        {
+          errors: [
+            {
+              code: { value: "MODEL_UNAVAILABLE" },
+              parameter: 400,
+              taskType: ["imageInference"],
+              type: null,
+              message: { detail: "not a scalar" },
+            },
+          ],
+        },
+        { status: 400 },
+      ),
+    );
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest())
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      upstreamCode: null,
+      upstreamParameter: null,
+      upstreamTaskType: null,
+      upstreamType: null,
+      upstreamMessage: null,
+    });
+    expect(consoleError).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an excessively long upstream message", async () => {
+    vi.stubEnv(RUNWARE_IMAGE_EDIT_API_KEY_ENV, "provider-secret");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const longMessage = "safe provider explanation ".repeat(20);
+    const fetcher = vi.fn(async () =>
+      jsonResponse(
+        { errors: [{ message: longMessage }] },
+        { status: 400 },
+      ),
+    );
+
+    const error = await new RunwareImageEditProvider({ fetcher })
+      .editImage(validRequest())
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({
+      code: "provider_failure",
+      upstreamMessage: longMessage.slice(0, 256),
+    });
+    expect((error as RunwareImageEditProviderError).upstreamMessage).toHaveLength(256);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(longMessage.slice(256));
   });
 
   it("classifies a network exception without exposing the exception or request data", async () => {

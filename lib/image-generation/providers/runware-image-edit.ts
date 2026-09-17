@@ -37,7 +37,10 @@ type RunwareImageEditProviderErrorDetails = Readonly<{
   failureStage?: RunwareImageEditFailureStage;
   upstreamStatus?: number | null;
   upstreamCode?: string | null;
+  upstreamParameter?: string | null;
+  upstreamTaskType?: string | null;
   upstreamType?: string | null;
+  upstreamMessage?: string | null;
   taskUUID?: string;
 }>;
 
@@ -47,7 +50,10 @@ export class RunwareImageEditProviderError extends Error {
   readonly failureStage: RunwareImageEditFailureStage | null;
   readonly upstreamStatus: number | null;
   readonly upstreamCode: string | null;
+  readonly upstreamParameter: string | null;
+  readonly upstreamTaskType: string | null;
   readonly upstreamType: string | null;
+  readonly upstreamMessage: string | null;
   readonly taskUUID: string | null;
 
   constructor(
@@ -63,7 +69,10 @@ export class RunwareImageEditProviderError extends Error {
     this.failureStage = details.failureStage ?? null;
     this.upstreamStatus = details.upstreamStatus ?? status ?? null;
     this.upstreamCode = details.upstreamCode ?? null;
+    this.upstreamParameter = details.upstreamParameter ?? null;
+    this.upstreamTaskType = details.upstreamTaskType ?? null;
     this.upstreamType = details.upstreamType ?? null;
+    this.upstreamMessage = details.upstreamMessage ?? null;
     this.taskUUID = details.taskUUID ?? null;
   }
 }
@@ -75,6 +84,9 @@ type JsonRecord = Record<string, unknown>;
 const RUNWARE_PROVIDER_FAILURE_EVENT = "image-edit:runware_provider_failure" as const;
 const MAX_UPSTREAM_DIAGNOSTIC_BYTES = 4096;
 const MAX_UPSTREAM_DIAGNOSTIC_VALUE_LENGTH = 128;
+const MAX_UPSTREAM_DIAGNOSTIC_MESSAGE_LENGTH = 256;
+const SENSITIVE_DIAGNOSTIC_CONTENT_PATTERN =
+  /(?:https?:\/\/|s3:\/\/|gs:\/\/|data:[^,\s]*,|authorization|bearer\s|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret|cookie|signed[_ -]?url|[A-Za-z0-9+/]{80,}={0,2})/i;
 
 const PNG_SIGNATURE = new Uint8Array([
   0x89,
@@ -91,17 +103,23 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function sanitizeDiagnosticScalar(value: unknown): string | null {
+function sanitizeDiagnosticScalar(
+  value: unknown,
+  maxLength = MAX_UPSTREAM_DIAGNOSTIC_VALUE_LENGTH,
+): string | null {
   if (typeof value !== "string") {
     return null;
   }
 
   const sanitized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-  if (sanitized.length === 0) {
+  if (
+    sanitized.length === 0 ||
+    SENSITIVE_DIAGNOSTIC_CONTENT_PATTERN.test(sanitized)
+  ) {
     return null;
   }
 
-  return sanitized.slice(0, MAX_UPSTREAM_DIAGNOSTIC_VALUE_LENGTH);
+  return sanitized.slice(0, maxLength);
 }
 
 async function readBoundedResponseBody(response: Response): Promise<string | null> {
@@ -153,27 +171,67 @@ async function readBoundedResponseBody(response: Response): Promise<string | nul
 
 async function readUpstreamErrorMetadata(response: Response): Promise<{
   upstreamCode: string | null;
+  upstreamParameter: string | null;
+  upstreamTaskType: string | null;
   upstreamType: string | null;
+  upstreamMessage: string | null;
 }> {
   const body = await readBoundedResponseBody(response);
   if (!body) {
-    return { upstreamCode: null, upstreamType: null };
+    return {
+      upstreamCode: null,
+      upstreamParameter: null,
+      upstreamTaskType: null,
+      upstreamType: null,
+      upstreamMessage: null,
+    };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
-    return { upstreamCode: null, upstreamType: null };
+    return {
+      upstreamCode: null,
+      upstreamParameter: null,
+      upstreamTaskType: null,
+      upstreamType: null,
+      upstreamMessage: null,
+    };
   }
 
-  if (!isRecord(parsed) || !isRecord(parsed.error)) {
-    return { upstreamCode: null, upstreamType: null };
+  if (!isRecord(parsed)) {
+    return {
+      upstreamCode: null,
+      upstreamParameter: null,
+      upstreamTaskType: null,
+      upstreamType: null,
+      upstreamMessage: null,
+    };
+  }
+
+  const firstError = Array.isArray(parsed.errors)
+    ? parsed.errors[0]
+    : parsed.error;
+  if (!isRecord(firstError)) {
+    return {
+      upstreamCode: null,
+      upstreamParameter: null,
+      upstreamTaskType: null,
+      upstreamType: null,
+      upstreamMessage: null,
+    };
   }
 
   return {
-    upstreamCode: sanitizeDiagnosticScalar(parsed.error.code),
-    upstreamType: sanitizeDiagnosticScalar(parsed.error.type),
+    upstreamCode: sanitizeDiagnosticScalar(firstError.code),
+    upstreamParameter: sanitizeDiagnosticScalar(firstError.parameter),
+    upstreamTaskType: sanitizeDiagnosticScalar(firstError.taskType),
+    upstreamType: sanitizeDiagnosticScalar(firstError.type),
+    upstreamMessage: sanitizeDiagnosticScalar(
+      firstError.message,
+      MAX_UPSTREAM_DIAGNOSTIC_MESSAGE_LENGTH,
+    ),
   };
 }
 
@@ -182,14 +240,20 @@ function createProviderFailureError(details: {
   taskUUID: string;
   upstreamStatus?: number;
   upstreamCode?: string | null;
+  upstreamParameter?: string | null;
+  upstreamTaskType?: string | null;
   upstreamType?: string | null;
+  upstreamMessage?: string | null;
 }): RunwareImageEditProviderError {
   const diagnostic = {
     code: "provider_failure" as const,
     failureStage: details.failureStage,
     upstreamStatus: details.upstreamStatus ?? null,
     upstreamCode: details.upstreamCode ?? null,
+    upstreamParameter: details.upstreamParameter ?? null,
+    upstreamTaskType: details.upstreamTaskType ?? null,
     upstreamType: details.upstreamType ?? null,
+    upstreamMessage: details.upstreamMessage ?? null,
     taskUUID: details.taskUUID,
     provider: RUNWARE_IMAGE_EDIT_PROVIDER,
     model: RUNWARE_IMAGE_EDIT_MODEL,
