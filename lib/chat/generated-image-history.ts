@@ -17,7 +17,7 @@ function isSafeMetadata(value: unknown): value is string {
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= 100 &&
-    /^[a-zA-Z0-9._:/-]+$/.test(value)
+    /^[a-zA-Z0-9._:/@-]+$/.test(value)
   );
 }
 

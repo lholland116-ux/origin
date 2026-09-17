@@ -428,6 +428,48 @@ describe("GET /api/messages durable multi-image reads", () => {
     expect(setup.fromCalls).toContain("message_generated_images");
   });
 
+  it("hydrates a completed image-edit derivative using its Runware model identifier", async () => {
+    const assistantMessage = {
+      ...parentMessage(
+        "30000000-0000-4000-8000-000000000013",
+        "2026-09-13T12:00:00.000Z",
+      ),
+      role: "assistant",
+      content: "",
+    };
+    const storagePath = `generated/${USER_ID}/${CONVERSATION_ID}/edited-image.png`;
+    const generatedImageId = "40000000-0000-4000-8000-000000000014";
+    const setup = setupSupabase({
+      parents: [assistantMessage],
+      generatedRows: [
+        {
+          id: generatedImageId,
+          message_id: assistantMessage.id,
+          conversation_id: CONVERSATION_ID,
+          user_id: USER_ID,
+          storage_path: storagePath,
+          mime_type: "image/png",
+          provider: "runware",
+          model: "runware:400@4",
+        },
+      ],
+    });
+
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages[0].id).toBe(assistantMessage.id);
+    expect(body.messages[0].generatedImage).toEqual({
+      id: generatedImageId,
+      url: `https://signed.example/${encodeURIComponent(storagePath)}`,
+      mimeType: "image/png",
+      provider: "runware",
+      model: "runware:400@4",
+    });
+    expect(setup.createSignedUrl).toHaveBeenCalledWith(storagePath, 3600);
+  });
+
   it("omits generated history safely when signing fails", async () => {
     const parent = parentMessage(
       "30000000-0000-4000-8000-000000000012",
