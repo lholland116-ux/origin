@@ -20,12 +20,12 @@ export type ChatTheme = {
   badge: string;
 };
 
-export const DEFAULT_CHAT_THEME_ID = "default-dark";
+export const DEFAULT_CHAT_THEME_ID = "midnight-blue";
 
 export const CHAT_THEMES: ChatTheme[] = [
   {
     id: "default-dark",
-    label: "Default Dark",
+    label: "Dark",
     pageBg: "bg-zinc-950",
     panelBg: "bg-zinc-900/95",
     panelBorder: "border-zinc-800",
