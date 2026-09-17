@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap;
 
-select plan(68);
+select plan(80);
 
 select has_table(
   'public',
@@ -513,6 +513,115 @@ select is(
   (select monthly_limit from pro_reservation),
   200,
   'Pro monthly image limit is two hundred'
+);
+
+create temporary table runware_reservation on commit drop as
+select *
+from public.reserve_image_generation_quota('20000000-0000-4000-8000-000000000003');
+
+select is(
+  public.start_image_generation_attempt(
+    (select attempt_id from runware_reservation),
+    'runware',
+    'runware:400@4'
+  ),
+  true,
+  'qualified Runware image-edit model can start a reserved attempt'
+);
+
+select is(
+  (select status from public.image_generation_attempts where id = (select attempt_id from runware_reservation)),
+  'reserved',
+  'Runware start preserves the reserved attempt lifecycle state'
+);
+
+select is(
+  (select provider from public.image_generation_attempts where id = (select attempt_id from runware_reservation)),
+  'runware',
+  'Runware start records the provider identifier'
+);
+
+select is(
+  (select model from public.image_generation_attempts where id = (select attempt_id from runware_reservation)),
+  'runware:400@4',
+  'Runware start records the at-sign model identifier'
+);
+
+select ok(
+  (select provider_started_at is not null from public.image_generation_attempts where id = (select attempt_id from runware_reservation)),
+  'Runware start records provider_started_at'
+);
+
+select is(
+  (select estimated_cost_microusd from public.image_generation_attempts where id = (select attempt_id from runware_reservation)),
+  null::bigint,
+  'Runware model uses no hard-coded estimated cost'
+);
+
+select is(
+  public.release_image_generation_quota(
+    (select attempt_id from runware_reservation),
+    'request_aborted'
+  ),
+  true,
+  'Runware qualification reservation can be released'
+);
+
+create temporary table model_validation_reservation on commit drop as
+select *
+from public.reserve_image_generation_quota('20000000-0000-4000-8000-000000000003');
+
+select throws_ok(
+  $$select public.start_image_generation_attempt(
+    (select attempt_id from model_validation_reservation),
+    'runware',
+    'runware 400@4'
+  )$$,
+  '22023',
+  'INVALID_PROVIDER_METADATA',
+  'Runware model identifiers reject spaces'
+);
+
+select throws_ok(
+  $$select public.start_image_generation_attempt(
+    (select attempt_id from model_validation_reservation),
+    'runware',
+    'runware:400@4;drop'
+  )$$,
+  '22023',
+  'INVALID_PROVIDER_METADATA',
+  'Runware model identifiers reject semicolons'
+);
+
+select throws_ok(
+  $$select public.start_image_generation_attempt(
+    (select attempt_id from model_validation_reservation),
+    'runware',
+    'runware:400@4''x'
+  )$$,
+  '22023',
+  'INVALID_PROVIDER_METADATA',
+  'Runware model identifiers reject single quotes'
+);
+
+select throws_ok(
+  $$select public.start_image_generation_attempt(
+    (select attempt_id from model_validation_reservation),
+    '@',
+    'runware:400@4'
+  )$$,
+  '22023',
+  'INVALID_PROVIDER_METADATA',
+  'provider identifiers continue to reject at-signs'
+);
+
+select is(
+  public.release_image_generation_quota(
+    (select attempt_id from model_validation_reservation),
+    'request_aborted'
+  ),
+  true,
+  'invalid metadata qualification reservation can be released'
 );
 
 select is(
