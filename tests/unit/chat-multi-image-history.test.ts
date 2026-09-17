@@ -17,10 +17,11 @@ const pendingImage = (id: string): PendingImage => ({
   previewUrl: `data:image/jpeg;base64,${id}`,
 });
 
-const durableImage = (id: string): MessageImage => ({
+const durableImage = (id: string, ordinal?: number): MessageImage => ({
   image_path: `user/${id}`,
   image_name: `${id}.jpg`,
   image_url: `https://signed.example/${id}`,
+  ...(ordinal === undefined ? {} : { ordinal }),
 });
 
 describe("durable multi-image chat history", () => {
@@ -76,6 +77,16 @@ describe("durable multi-image chat history", () => {
       "https://signed.example/two",
       "https://signed.example/three",
     ]);
+    expect(optimistic.every((image) => image.ordinal === undefined)).toBe(true);
+  });
+
+  it("preserves authoritative uploaded ordinals without using presentation position", () => {
+    const durable = normalizeMessageImages([
+      durableImage("three", 3),
+      durableImage("one", 1),
+    ]);
+
+    expect(durable.map((image) => image.ordinal)).toEqual([3, 1]);
   });
 
   it("does not truncate historical images after a plan downgrade", () => {

@@ -65,6 +65,7 @@ type MessageImageResponse = {
   image_path: string;
   image_name: string;
   image_url: string;
+  ordinal: number;
 };
 
 type ServerSupabaseClient = Awaited<
@@ -237,7 +238,7 @@ function normalizeMessageImageRow(input: unknown): MessageImageRow | null {
     !imageName ||
     imageName.length > 255 ||
     typeof ordinal !== "number" ||
-    !Number.isInteger(ordinal) ||
+    !Number.isSafeInteger(ordinal) ||
     ordinal < 1 ||
     !createdAt
   ) {
@@ -333,6 +334,7 @@ async function signMessageImage(
       image_path: row.storage_path,
       image_name: row.image_name,
       image_url: data.signedUrl,
+      ordinal: row.ordinal,
     };
   } catch (error) {
     console.error("GET /api/messages child image signing error", {

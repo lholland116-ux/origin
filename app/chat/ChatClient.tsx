@@ -144,6 +144,7 @@ export type MessageImage = {
   image_path: string;
   image_name: string;
   image_url?: string;
+  ordinal?: number;
 };
 
 export type GeneratedImage = {
@@ -1361,11 +1362,14 @@ export function normalizeMessageImages(input: unknown): MessageImage[] {
         typeof item.image_url === "string" && item.image_url.trim()
           ? item.image_url
           : undefined;
+      const ordinal =
+        typeof item.ordinal === "number" ? item.ordinal : undefined;
 
       return {
         image_path: imagePath,
         image_name: imageName,
         ...(imageUrl ? { image_url: imageUrl } : {}),
+        ...(ordinal !== undefined ? { ordinal } : {}),
       };
     })
     .filter((image) => image.image_path.length > 0 && image.image_name.length > 0);

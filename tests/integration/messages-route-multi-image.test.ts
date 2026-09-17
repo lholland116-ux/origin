@@ -180,6 +180,9 @@ describe("GET /api/messages durable multi-image reads", () => {
       expect(body.messages[0].images.map((image: { image_name: string }) => image.image_name)).toEqual(
         Array.from({ length: count }, (_, index) => `image-${index + 1}.jpg`)
       );
+      expect(body.messages[0].images.map((image: { ordinal: number }) => image.ordinal)).toEqual(
+        Array.from({ length: count }, (_, index) => index + 1)
+      );
       expect(body.messages[0].images.every((image: { image_url: string }) => image.image_url.startsWith("https://signed.example/"))).toBe(true);
       expect(body.messages[0].has_child_images).toBe(true);
       expect(body.messages[1].images).toEqual([]);
@@ -196,6 +199,61 @@ describe("GET /api/messages durable multi-image reads", () => {
       );
     }
   );
+
+  it("preserves non-contiguous authoritative child ordinals without renumbering", async () => {
+    const parent = parentMessage(
+      "30000000-0000-4000-8000-000000000007",
+      "2026-09-13T12:00:00.000Z",
+    );
+    const setup = setupSupabase({
+      parents: [parent],
+      childRows: [
+        childImage(parent.id, "40000000-0000-4000-8000-000000000007", 3, "three.jpg"),
+        childImage(parent.id, "40000000-0000-4000-8000-000000000006", 1, "one.jpg"),
+      ],
+    });
+
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages[0].images.map((image: { ordinal: number }) => image.ordinal)).toEqual([1, 3]);
+    expect(body.messages[0].images.map((image: { image_name: string }) => image.image_name)).toEqual([
+      "one.jpg",
+      "three.jpg",
+    ]);
+    expect(setup.createSignedUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits child rows with malformed ordinals without deriving a replacement ordinal", async () => {
+    const parent = parentMessage(
+      "30000000-0000-4000-8000-000000000008",
+      "2026-09-13T12:00:00.000Z",
+    );
+    const setup = setupSupabase({
+      parents: [parent],
+      childRows: [
+        childImage(parent.id, "40000000-0000-4000-8000-000000000014", 3, "valid.jpg"),
+        childImage(parent.id, "40000000-0000-4000-8000-000000000015", 0, "zero.jpg"),
+        childImage(
+          parent.id,
+          "40000000-0000-4000-8000-000000000016",
+          Number.MAX_SAFE_INTEGER + 1,
+          "unsafe.jpg",
+        ),
+      ],
+    });
+
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages[0].images.map((image: { image_name: string }) => image.image_name)).toEqual([
+      "valid.jpg",
+    ]);
+    expect(body.messages[0].images.map((image: { ordinal: number }) => image.ordinal)).toEqual([3]);
+    expect(setup.createSignedUrl).toHaveBeenCalledTimes(1);
+  });
 
   it("excludes child rows outside the authorized parent message IDs", async () => {
     const parent = parentMessage(
