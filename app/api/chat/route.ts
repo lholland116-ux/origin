@@ -694,6 +694,7 @@ export async function POST(req: Request) {
 
     let plan: Plan;
     let storedImageUrls: string[] = [];
+    let persistedUserMessageId: string | null = null;
 
     if (hasStoredImages) {
       const authoritativePlan = await getAuthoritativeUserPlan({
@@ -912,6 +913,10 @@ export async function POST(req: Request) {
 
         return jsonResponse({ error: "Failed to save user message." }, 500);
       }
+
+      if (hasStoredImages && typeof userMessageResult.data === "string") {
+        persistedUserMessageId = userMessageResult.data;
+      }
     }
 
     const { data: history, error: historyError } = await supabase
@@ -1077,6 +1082,9 @@ export async function POST(req: Request) {
         "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        ...(persistedUserMessageId
+          ? { "X-LVTChat-User-Message-Id": persistedUserMessageId }
+          : {}),
       },
     });
   } catch (error) {

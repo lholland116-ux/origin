@@ -5,6 +5,8 @@ import {
   getMessageImageSource,
   hasCanonicalChildImages,
   normalizeMessageImages,
+  getUploadedImageEditSourceReference,
+  reconcileSubmittedImageMessage,
   shouldApplyMessageLoad,
   type MessageImage,
   type PendingImage,
@@ -114,5 +116,49 @@ describe("durable multi-image chat history", () => {
 
     expect(messages).toEqual(conversationB);
     expect(shouldApplyMessageLoad(1, 2)).toBe(false);
+  });
+
+  it("reconciles the accepted live message with its persisted identity and ordinals", () => {
+    const optimisticUser = {
+      id: "optimistic-user",
+      role: "user" as const,
+      content: "Review these images.",
+      images: buildOptimisticImageAttachments([
+        pendingImage("one"),
+        pendingImage("two"),
+      ]),
+    };
+    const persistedMessageId = "40000000-0000-4000-8000-000000000001";
+    const reconciled = reconcileSubmittedImageMessage(
+      [
+        optimisticUser,
+        { id: "optimistic-assistant", role: "assistant", content: "" },
+      ],
+      optimisticUser.id,
+      persistedMessageId,
+      [pendingImage("one"), pendingImage("two")],
+    );
+
+    expect(reconciled).toHaveLength(2);
+    expect(reconciled.map((message) => message.id)).toEqual([
+      persistedMessageId,
+      "optimistic-assistant",
+    ]);
+    expect(reconciled[0]).toMatchObject({ has_child_images: true });
+    expect(reconciled[0].images?.map((image) => image.ordinal)).toEqual([1, 2]);
+    expect(
+      getUploadedImageEditSourceReference(
+        reconciled[0].id,
+        reconciled[0].images?.[1] as MessageImage,
+      ),
+    ).toEqual({
+      kind: "uploaded_image",
+      messageId: persistedMessageId,
+      ordinal: 2,
+    });
+    expect(reconciled[0].images?.map((image) => image.image_path)).toEqual([
+      "user/one",
+      "user/two",
+    ]);
   });
 });

@@ -4101,6 +4101,21 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       }
 
       responseAccepted = true;
+      const persistedUserMessageId = hasImages
+        ? getSafeUuidHeader(res, "X-LVTChat-User-Message-Id")
+        : undefined;
+
+      if (hasImages && persistedUserMessageId) {
+        setMessages((prev) =>
+          reconcileSubmittedImageMessage(
+            prev,
+            optimisticUserId,
+            persistedUserMessageId,
+            pendingImageSnapshot,
+          ),
+        );
+      }
+
       if (hasImages) {
         clearSubmittedPendingImages(pendingImageSnapshot.map((image) => image.id));
       }
@@ -4144,6 +4159,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           ...msg,
           content: msg.content.trim() || "No response generated.",
         }));
+      }
+
+      if (hasImages && !persistedUserMessageId) {
+        await refreshMessagesForConversation(conversationId);
       }
 
       await refreshConversations(conversationId);
@@ -5599,4 +5618,34 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       </main>
     </>
   );
+}
+
+export function reconcileSubmittedImageMessage(
+  messages: Message[],
+  optimisticMessageId: string,
+  persistedMessageId: string,
+  images: PendingImage[],
+): Message[] {
+  const persistedImages = images.map((image, index) => ({
+    image_path: image.path,
+    image_name: image.name,
+    image_url: image.previewUrl,
+    ordinal: index + 1,
+  }));
+
+  return messages
+    .filter(
+      (message) =>
+        message.id === optimisticMessageId || message.id !== persistedMessageId,
+    )
+    .map((message) =>
+      message.id === optimisticMessageId
+        ? {
+            ...message,
+            id: persistedMessageId,
+            images: persistedImages,
+            has_child_images: true,
+          }
+        : message,
+    );
 }

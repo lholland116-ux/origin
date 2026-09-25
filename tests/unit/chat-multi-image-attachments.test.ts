@@ -100,6 +100,13 @@ describe("multi-image chat attachments", () => {
     expect(clientSource).toContain("responseAccepted = true");
   });
 
+  it("reconciles accepted image submissions before enabling edit eligibility", () => {
+    expect(clientSource).toContain('getSafeUuidHeader(res, "X-LVTChat-User-Message-Id")');
+    expect(clientSource).toContain("reconcileSubmittedImageMessage(");
+    expect(clientSource).toContain("ordinal: index + 1");
+    expect(clientSource).toContain("if (hasImages && !persistedUserMessageId)");
+  });
+
   it("keeps new submissions on the images[] contract without legacy singular fields", () => {
     expect(clientSource).toContain("buildStoredImagePayload(pendingImageSnapshot)");
     expect(clientSource).toContain("buildOptimisticImageAttachments(pendingImageSnapshot)");
