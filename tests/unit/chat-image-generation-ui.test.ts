@@ -1,13 +1,122 @@
 import { readFileSync } from "node:fs";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  COMPOSER_PLUS_MENU_LABELS,
+  ComposerPlusMenu,
+  getComposerPlusMenuActions,
   getProfileDisplayName,
   getUploadedMessageImageGridClass,
 } from "@/app/chat/ChatClient";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
 
+function renderPlusMenu(mode: "standard" | "web_search" | "create_image"): string {
+  return renderToStaticMarkup(
+    ComposerPlusMenu({
+      open: true,
+      mode,
+      disabled: false,
+      onToggle: () => undefined,
+      onAction: () => undefined,
+    })
+  );
+}
+
 describe("chat image-generation presentation", () => {
+  it("renders the exact context-aware plus actions for every composer mode", () => {
+    expect(getComposerPlusMenuActions("standard")).toEqual([
+      "camera",
+      "photos",
+      "files",
+      "create_image",
+      "web_search",
+    ]);
+    expect(getComposerPlusMenuActions("web_search")).toEqual([
+      "standard",
+      "create_image",
+    ]);
+    expect(getComposerPlusMenuActions("create_image")).toEqual([
+      "standard",
+      "web_search",
+    ]);
+    expect(COMPOSER_PLUS_MENU_LABELS).toEqual({
+      camera: "Camera",
+      photos: "Photos",
+      files: "Files",
+      create_image: "Create image",
+      web_search: "Web search",
+      standard: "Standard",
+    });
+
+    const standardMarkup = renderPlusMenu("standard");
+    expect(standardMarkup.match(/role="menuitem"/g)).toHaveLength(5);
+    expect(standardMarkup).toContain(">Camera</span>");
+    expect(standardMarkup).toContain(">Photos</span>");
+    expect(standardMarkup).toContain(">Files</span>");
+    expect(standardMarkup).toContain(">Create image</span>");
+    expect(standardMarkup).toContain(">Web search</span>");
+    expect(standardMarkup.match(/disabled=""/g)).toHaveLength(1);
+
+    const webSearchMarkup = renderPlusMenu("web_search");
+    expect(webSearchMarkup.match(/role="menuitem"/g)).toHaveLength(2);
+    expect(webSearchMarkup).toContain(">Standard</span>");
+    expect(webSearchMarkup).toContain(">Create image</span>");
+    expect(webSearchMarkup).not.toContain(">Camera</span>");
+    expect(webSearchMarkup).not.toContain(">Photos</span>");
+    expect(webSearchMarkup).not.toContain(">Files</span>");
+
+    const createImageMarkup = renderPlusMenu("create_image");
+    expect(createImageMarkup.match(/role="menuitem"/g)).toHaveLength(2);
+    expect(createImageMarkup).toContain(">Standard</span>");
+    expect(createImageMarkup).toContain(">Web search</span>");
+    expect(createImageMarkup).not.toContain(">Camera</span>");
+    expect(createImageMarkup).not.toContain(">Photos</span>");
+    expect(createImageMarkup).not.toContain(">Files</span>");
+
+    expect(clientSource).toContain('aria-label="Open composer actions"');
+    expect(clientSource).toContain('aria-haspopup="menu"');
+    expect(clientSource).toContain('role="menu"');
+    expect(clientSource).toContain('className="absolute bottom-full');
+    expect(clientSource).toContain("handleOpenImagePicker");
+    expect(clientSource).toContain("handleOpenDocumentPicker");
+    expect(clientSource).toContain("handleImageModeChange()");
+    expect(clientSource).toContain("handleModeChange(true)");
+    expect(clientSource).toContain("handleModeChange(false)");
+    expect(clientSource).toContain("document.addEventListener(\"pointerdown\"");
+    expect(clientSource).toContain('if (event.key !== "Escape") return;');
+    expect(clientSource).toContain(
+      'aria-label={isListening ? "Stop voice input" : "Start voice input"}'
+    );
+    expect(clientSource).toContain('aria-label="Attach image"');
+    expect(clientSource).toContain("inputRef={documentInputRef}");
+
+    const composerStart = clientSource.indexOf("<form");
+    const composerEnd = clientSource.indexOf("</form>", composerStart);
+    const composerSource = clientSource.slice(composerStart, composerEnd);
+    expect(composerSource).toContain("<ComposerPlusMenu");
+    expect(composerSource).toContain("overflow-visible rounded-2xl");
+    expect(composerSource).not.toContain("overflow-hidden rounded-2xl");
+
+    expect(clientSource).toContain(
+      'const COMPOSER_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 min-w-0";'
+    );
+    const composerViewportStart = clientSource.indexOf(
+      '<div className="sticky bottom-0 z-20">'
+    );
+    const composerViewportEnd = clientSource.indexOf(
+      "<Tooltip content={TOOLTIP_TEXT.mic}",
+      composerViewportStart
+    );
+    const composerViewportSource = clientSource.slice(
+      composerViewportStart,
+      composerViewportEnd
+    );
+    expect(composerViewportSource).toContain("COMPOSER_RAIL_CLASS");
+    expect(composerViewportSource).not.toContain("CONTENT_RAIL_CLASS");
+    expect(composerViewportSource).not.toContain("overflow-x-hidden");
+  });
+
   it("keeps uploaded image layouts intentional for one, two, and three images", () => {
     expect(getUploadedMessageImageGridClass(1)).toBe("grid-cols-1 sm:max-w-md");
     expect(getUploadedMessageImageGridClass(2)).toBe("grid-cols-2");

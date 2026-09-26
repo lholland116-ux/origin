@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import NextImage from "next/image";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
+  Camera,
   ChevronDown,
   ChevronUp,
   Clock3,
   Copy as CopyIcon,
   Download,
+  FileText,
   Globe2,
   HelpCircle,
   ImageIcon,
@@ -261,6 +263,100 @@ type DocumentsResponse = {
   documents?: UploadedDocument[];
   error?: string;
 };
+
+export type ComposerPlusMenuMode = "standard" | "web_search" | "create_image";
+
+export type ComposerPlusMenuAction =
+  | "camera"
+  | "photos"
+  | "files"
+  | "create_image"
+  | "web_search"
+  | "standard";
+
+export const COMPOSER_PLUS_MENU_LABELS: Record<ComposerPlusMenuAction, string> = {
+  camera: "Camera",
+  photos: "Photos",
+  files: "Files",
+  create_image: "Create image",
+  web_search: "Web search",
+  standard: "Standard",
+};
+
+export function getComposerPlusMenuActions(
+  mode: ComposerPlusMenuMode
+): ComposerPlusMenuAction[] {
+  if (mode === "web_search") return ["standard", "create_image"];
+  if (mode === "create_image") return ["standard", "web_search"];
+  return ["camera", "photos", "files", "create_image", "web_search"];
+}
+
+type ComposerPlusMenuProps = {
+  open: boolean;
+  mode: ComposerPlusMenuMode;
+  disabled: boolean;
+  onToggle: () => void;
+  onAction: (action: ComposerPlusMenuAction) => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+  menuRef?: Ref<HTMLDivElement>;
+};
+
+export function ComposerPlusMenu({
+  open,
+  mode,
+  disabled,
+  onToggle,
+  onAction,
+  buttonRef,
+  menuRef,
+}: ComposerPlusMenuProps) {
+  return (
+    <div ref={menuRef} className="relative shrink-0">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label="Open composer actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls="composer-plus-menu"
+      >
+        <Plus className="h-5 w-5" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div
+          id="composer-plus-menu"
+          role="menu"
+          aria-label="Composer actions"
+          className="absolute bottom-full left-0 z-40 mb-2 min-w-52 max-w-[calc(100vw-1.5rem)] origin-bottom-left rounded-xl border border-white/10 bg-neutral-950/95 p-1.5 shadow-2xl backdrop-blur"
+        >
+          {getComposerPlusMenuActions(mode).map((action) => (
+            <button
+              key={action}
+              type="button"
+              role="menuitem"
+              onClick={() => onAction(action)}
+              disabled={action === "camera"}
+              aria-disabled={action === "camera"}
+              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white/85 transition hover:bg-white/10 focus:bg-white/10 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {action === "camera" && <Camera className="h-4 w-4" aria-hidden="true" />}
+              {action === "photos" && <ImageIcon className="h-4 w-4" aria-hidden="true" />}
+              {action === "files" && <FileText className="h-4 w-4" aria-hidden="true" />}
+              {action === "create_image" && <Palette className="h-4 w-4" aria-hidden="true" />}
+              {action === "web_search" && <Globe2 className="h-4 w-4" aria-hidden="true" />}
+              {action === "standard" && <MessageCircle className="h-4 w-4" aria-hidden="true" />}
+              <span>{COMPOSER_PLUS_MENU_LABELS[action]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export type ImageEditOperation = {
   conversationId: string;
@@ -1255,6 +1351,7 @@ const TOOLTIP_TEXT = {
 } as const;
 
 const CONTENT_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 min-w-0 overflow-x-hidden";
+const COMPOSER_RAIL_CLASS = "mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8 min-w-0";
 const ASSISTANT_BUBBLE_CLASS = "w-full max-w-3xl min-w-0";
 const USER_BUBBLE_CLASS = "ml-auto w-fit max-w-[90%] min-w-0 sm:max-w-[70%]";
 
@@ -2111,6 +2208,7 @@ export default function ChatClient({
   const [selectedThemeId, setSelectedThemeId] = useState(DEFAULT_CHAT_THEME_ID);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [profileMenuPosition, setProfileMenuPosition] = useState<ProfileMenuPosition>({
     top: 0,
     left: 0,
@@ -2202,6 +2300,7 @@ export default function ChatClient({
   
   const endRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeDocumentPollRef = useRef(0);
   const recognitionRef = useRef<AppSpeechRecognition | null>(null);
@@ -2216,8 +2315,15 @@ export default function ChatClient({
   const mobileProfileTriggerRef = useRef<HTMLButtonElement | null>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
+  const plusMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const plusMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
+  const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration
+    ? "create_image"
+    : useWebSearch
+      ? "web_search"
+      : "standard";
   const messageTimestamps = useMemo(
     () =>
       new Map(
@@ -2267,6 +2373,14 @@ export default function ChatClient({
       }
     }
   }, [messages]);
+
+  const closePlusMenu = useCallback((restoreFocus = false) => {
+    setPlusMenuOpen(false);
+
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => plusMenuButtonRef.current?.focus());
+    }
+  }, []);
 
   const getProfileTrigger = useCallback(
     () =>
@@ -2400,6 +2514,31 @@ export default function ChatClient({
       document.removeEventListener("keydown", handleEscape, true);
     };
   }, [closeProfileMenu, profileMenuOpen]);
+
+  useEffect(() => {
+    if (!plusMenuOpen) return;
+
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && plusMenuRef.current?.contains(target)) return;
+      closePlusMenu();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      event.preventDefault();
+      closePlusMenu(true);
+    };
+
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+    document.addEventListener("keydown", handleEscape, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+      document.removeEventListener("keydown", handleEscape, true);
+    };
+  }, [closePlusMenu, plusMenuOpen]);
 
   const readyComposerDocuments = useMemo(
     () => composerDocuments.filter((doc) => doc.extraction_status === "ready"),
@@ -3156,6 +3295,28 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
 
     imageInputRef.current?.click();
+  }
+
+  function handleOpenDocumentPicker(): void {
+    if (
+      loading ||
+      uploadingImages ||
+      isUploadingDocuments ||
+      useWebSearch ||
+      useImageGeneration
+    ) {
+      return;
+    }
+
+    if (plan !== "pro") {
+      openUpgradeModal(
+        "File uploads are a Pro feature",
+        "Upgrade to Pro to upload and analyze PDF, DOCX, XLSX, CSV, and text files."
+      );
+      return;
+    }
+
+    documentInputRef.current?.click();
   }
 
   async function handleStartListening(): Promise<void> {
@@ -4389,6 +4550,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   function handleModeChange(nextUseWebSearch: boolean): void {
     if (loading) return;
 
+    closePlusMenu();
+
     if (nextUseWebSearch) {
       discardPendingImages();
       clearComposerDocuments();
@@ -4402,11 +4565,41 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   function handleImageModeChange(): void {
     if (loading) return;
 
+    closePlusMenu();
+
     discardPendingImages();
     clearComposerDocuments();
     setUseWebSearch(false);
     setUseImageGeneration(true);
     clearTransientErrors();
+  }
+
+  function handleComposerPlusMenuAction(action: ComposerPlusMenuAction): void {
+    if (action === "camera") return;
+
+    closePlusMenu();
+
+    if (action === "photos") {
+      handleOpenImagePicker();
+      return;
+    }
+
+    if (action === "files") {
+      handleOpenDocumentPicker();
+      return;
+    }
+
+    if (action === "create_image") {
+      handleImageModeChange();
+      return;
+    }
+
+    if (action === "web_search") {
+      handleModeChange(true);
+      return;
+    }
+
+    handleModeChange(false);
   }
 
   function renderStatusMessages() {
@@ -5337,7 +5530,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             </div>
 
             <div className="sticky bottom-0 z-20">
-              <div className={`${CONTENT_RAIL_CLASS} space-y-1.5 py-2.5`}>
+              <div className={`${COMPOSER_RAIL_CLASS} space-y-1.5 py-2.5`}>
                 <input
                   ref={imageInputRef}
                   type="file"
@@ -5432,12 +5625,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 )}
 
             <div className="sticky bottom-0 z-30 pb-[calc(env(safe-area-inset-bottom)+12px)]">
-              <div className={`${CONTENT_RAIL_CLASS} py-2`}>
+              <div className={`${COMPOSER_RAIL_CLASS} py-2`}>
 
                 <form
                   onSubmit={handleSubmit}
                   className={cx(
-                    "min-w-0 overflow-hidden rounded-2xl border transition focus-within:ring-1 focus-within:ring-blue-400/50",
+                    "min-w-0 overflow-visible rounded-2xl border transition focus-within:ring-1 focus-within:ring-blue-400/50",
                     activeTheme.inputBg,
                     activeTheme.inputBorder
                   )}
@@ -5491,52 +5684,39 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
 
                   <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
-                    {!useWebSearch && !useImageGeneration && (
-                      <>
-                        {plan === "pro" ? (
-                          <div
-                            className="[&>label>div]:!h-11 [&>label>div]:!w-11 [&>label>div]:!rounded-xl [&>label>div]:!border-white/10 [&>label>div]:!bg-white/5 [&>label>div]:!text-base [&>label>div]:hover:!bg-white/10"
-                          >
-                            <DocumentUploadButton
-                              disabled={composerDisabled}
-                              onFilesSelected={handleFilesSelected}
-                            />
-                          </div>
-                        ) : (
-                          <Tooltip content="File uploads are a Pro feature">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openUpgradeModal(
-                                  "File uploads are a Pro feature",
-                                  "Upgrade to Pro to upload and analyze PDF, DOCX, XLSX, CSV, and text files."
-                                )
-                              }
-                              disabled={loading}
-                              className={cx(
-                                "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 text-white/80 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
-                              )}
-                              aria-label="Upgrade to upload files"
-                            >
-                              <Plus className="h-4 w-4" />
-                            </button>
-                          </Tooltip>
-                        )}
+                    <ComposerPlusMenu
+                      open={plusMenuOpen}
+                      mode={composerPlusMenuMode}
+                      disabled={composerDisabled}
+                      onToggle={() => setPlusMenuOpen((open) => !open)}
+                      onAction={handleComposerPlusMenuAction}
+                      buttonRef={plusMenuButtonRef}
+                      menuRef={plusMenuRef}
+                    />
 
-                        <Tooltip content={TOOLTIP_TEXT.image}>
-                          <button
-                            type="button"
-                            onClick={handleOpenImagePicker}
-                            disabled={composerDisabled}
-                            className={cx(
-                              "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 text-white/80 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
-                            )}
-                            aria-label="Attach image"
-                          >
-                            <ImageIcon className="h-4 w-4" />
-                          </button>
-                        </Tooltip>
-                      </>
+                    <div className="hidden">
+                      <DocumentUploadButton
+                        inputRef={documentInputRef}
+                        disabled={composerDisabled || plan !== "pro"}
+                        hideTrigger
+                        onFilesSelected={handleFilesSelected}
+                      />
+                    </div>
+
+                    {!useWebSearch && !useImageGeneration && (
+                      <Tooltip content={TOOLTIP_TEXT.image}>
+                        <button
+                          type="button"
+                          onClick={handleOpenImagePicker}
+                          disabled={composerDisabled}
+                          className={cx(
+                            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 text-white/80 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                          )}
+                          aria-label="Attach image"
+                        >
+                          <ImageIcon className="h-4 w-4" />
+                        </button>
+                      </Tooltip>
                     )}
 
                     <Tooltip content={TOOLTIP_TEXT.mic}>
