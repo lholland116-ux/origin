@@ -145,7 +145,7 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain('aria-label="Open composer actions"');
     expect(clientSource).toContain('aria-haspopup="menu"');
     expect(clientSource).toContain('role="menu"');
-    expect(clientSource).toContain('className="absolute bottom-full');
+    expect(clientSource).toContain("absolute bottom-full left-0 z-40");
     expect(clientSource).toContain("handleOpenImagePicker");
     expect(clientSource).toContain("handleOpenDocumentPicker");
     expect(clientSource).toContain("handleImageModeChange()");
@@ -260,7 +260,7 @@ describe("chat image-generation presentation", () => {
       '"min-w-0 max-w-full rounded-xl border p-3 break-words [overflow-wrap:anywhere]"',
     );
     expect(clientSource).toContain(
-      '"max-w-full rounded-2xl border border-white/15 px-3 py-2.5 break-words [overflow-wrap:anywhere]"',
+      '"max-w-full rounded-2xl border px-3 py-2.5 break-words [overflow-wrap:anywhere]"',
     );
     expect(clientSource).toContain(
       'message.role === "assistant" && message.generatedImage?.id',
@@ -419,12 +419,12 @@ describe("chat image-generation presentation", () => {
     const profileMenuSource = clientSource.slice(profileMenuStart, sidebarStart);
 
     expect(profileTriggerSource).toContain(
-      'className="min-w-0 flex-1 truncate font-semibold text-white"',
+      'activeTheme.titleText',
     );
-    expect(profileTriggerSource).toContain('text-[11px] text-white/50');
+    expect(profileTriggerSource).toContain("activeTheme.mutedText");
     expect(profileMenuSource).toContain("getProfileDisplayName(userEmail)");
-    expect(profileMenuSource).toContain("truncate text-sm font-semibold text-white");
-    expect(profileMenuSource).toContain("mt-0.5 truncate text-sm font-semibold text-white");
+    expect(profileMenuSource).toContain("activeTheme.titleText");
+    expect(profileMenuSource).toContain("activeTheme.titleText");
     expect(profileMenuSource).toContain("mt-0.5 text-xs");
     expect(clientSource).toContain("activeTheme.badge");
     expect(clientSource).toContain("bg-white/[0.08] text-white");
@@ -459,8 +459,10 @@ describe("chat image-generation presentation", () => {
     const themePickerSource = clientSource.slice(themePickerStart, themePickerEnd);
 
     expect(themePickerSource).toContain('aria-label="Chat theme picker"');
-    expect(themePickerSource).toContain("grid grid-cols-1 gap-1.5");
-    expect(themePickerSource).toContain("min-h-11 w-full");
+    expect(themePickerSource).toContain("grid grid-cols-1 gap-1");
+    expect(themePickerSource).toContain("min-h-10 w-full");
+    expect(themePickerSource).toContain("getChatThemeFocusOffsetClass(theme)");
+    expect(themePickerSource).toContain("getChatThemeHoverClass(theme)");
     expect(themePickerSource).toContain("SIDEBAR_LABEL_CLASS");
     expect(themePickerSource).toContain("item.pageBg");
     expect(themePickerSource).toContain("item.assistantBubble");
@@ -471,5 +473,43 @@ describe("chat image-generation presentation", () => {
     expect(themePickerSource).not.toContain("xl:grid-cols-3");
     expect(themePickerSource).not.toContain("max-h-[calc(100dvh-310px)]");
     expect(themePickerSource).not.toContain("overflow-y-auto");
+  });
+
+  it("keeps conversation history actions visible in Light", () => {
+    const rowStart = clientSource.indexOf("function ConversationRow");
+    const rowEnd = clientSource.indexOf("const MAX_INLINE_INPUT_LENGTH", rowStart);
+    const rowSource = clientSource.slice(rowStart, rowEnd);
+
+    expect(rowSource).toContain("More actions for");
+    expect(rowSource).toContain("theme.id === \"light\"");
+    expect(rowSource).toContain("text-slate-700 hover:bg-slate-100 hover:text-slate-950");
+    expect(rowSource).toContain("bg-slate-200 text-slate-900");
+    expect(rowSource).toContain("onRename();");
+    expect(rowSource).toContain("onDelete();");
+  });
+
+  it("keeps one visible themed microphone control in the final composer", () => {
+    const micStart = clientSource.indexOf(
+      '<Tooltip theme={activeTheme} content={TOOLTIP_TEXT.mic}>'
+    );
+    const micEnd = clientSource.indexOf("</Tooltip>", micStart);
+    const micSource = clientSource.slice(micStart, micEnd);
+
+    expect(micStart).toBeGreaterThanOrEqual(0);
+    expect(micSource).toContain("disabled={micDisabled}");
+    expect(micSource).toContain("handleStartListening");
+    expect(micSource).toContain("handleStopListening");
+    expect(micSource).toContain("activeTheme.inputBg");
+    expect(micSource).toContain("activeTheme.inputBorder");
+    expect(micSource).toContain("activeTheme.inputText");
+    expect(micSource).toContain("getChatThemeHoverClass(activeTheme)");
+    expect(clientSource.match(/<Mic className="h-5 w-5" \/>/g)).toHaveLength(1);
+    expect(clientSource).not.toContain('aria-label="Attach image"');
+    expect(clientSource.indexOf("<ComposerPlusMenu")).toBeLessThan(micStart);
+    expect(micStart).toBeLessThan(clientSource.indexOf('aria-label="Send your message"'));
+    expect(clientSource).toContain(
+      "window.SpeechRecognition || window.webkitSpeechRecognition"
+    );
+    expect(clientSource).toContain("setSpeechSupported(false)");
   });
 });

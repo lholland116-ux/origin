@@ -3,7 +3,7 @@
 import NextImage from "next/image";
 import { useEffect, useId, useRef } from "react";
 import { RefreshCw, X } from "lucide-react";
-import type { ChatTheme } from "@/lib/chat-themes";
+import { getChatThemeHoverClass, type ChatTheme } from "@/lib/chat-themes";
 
 export type ImageEditDialogStatus =
   | "idle"
@@ -174,7 +174,7 @@ export default function ImageEditDialog({
             onClick={onClose}
             disabled={!canDismiss}
             aria-label="Close image edit dialog"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white/70 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-400/60 disabled:cursor-not-allowed disabled:opacity-50"
+            className={cx("inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition focus:outline-none focus:ring-2 focus:ring-blue-400/60 disabled:cursor-not-allowed disabled:opacity-50", theme.mutedText, getChatThemeHoverClass(theme), theme.titleText)}
           >
             <X className="h-4 w-4" aria-hidden="true" />
           </button>

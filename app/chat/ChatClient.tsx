@@ -39,6 +39,8 @@ import {
   CHAT_THEMES,
   DEFAULT_CHAT_THEME_ID,
   getChatThemeById,
+  getChatThemeFocusOffsetClass,
+  getChatThemeHoverClass,
   type ChatTheme,
 } from "@/lib/chat-themes";
 import {
@@ -307,6 +309,7 @@ type ComposerPlusMenuProps = {
   mode: ComposerPlusMenuMode;
   disabled: boolean;
   cameraEnabled: boolean;
+  theme?: ChatTheme;
   onToggle: () => void;
   onAction: (action: ComposerPlusMenuAction) => void;
   buttonRef?: Ref<HTMLButtonElement>;
@@ -318,6 +321,7 @@ export function ComposerPlusMenu({
   mode,
   disabled,
   cameraEnabled,
+  theme = getChatThemeById(),
   onToggle,
   onAction,
   buttonRef,
@@ -330,7 +334,13 @@ export function ComposerPlusMenu({
         type="button"
         onClick={onToggle}
         disabled={disabled}
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+        className={cx(
+          "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+          theme.inputBg,
+          theme.inputBorder,
+          theme.inputText,
+          getChatThemeHoverClass(theme)
+        )}
         aria-label="Open composer actions"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -344,7 +354,11 @@ export function ComposerPlusMenu({
           id="composer-plus-menu"
           role="menu"
           aria-label="Composer actions"
-          className="absolute bottom-full left-0 z-40 mb-2 min-w-52 max-w-[calc(100vw-1.5rem)] origin-bottom-left rounded-xl border border-white/10 bg-neutral-950/95 p-1.5 shadow-2xl backdrop-blur"
+          className={cx(
+            "absolute bottom-full left-0 z-40 mb-2 min-w-52 max-w-[calc(100vw-1.5rem)] origin-bottom-left rounded-xl border p-1.5 shadow-2xl backdrop-blur",
+            theme.panelBg,
+            theme.panelBorder
+          )}
         >
           {getComposerPlusMenuActions(mode).map((action) => (
             <button
@@ -354,7 +368,12 @@ export function ComposerPlusMenu({
               onClick={() => onAction(action)}
               disabled={action === "camera" && !cameraEnabled}
               aria-disabled={action === "camera" && !cameraEnabled}
-              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white/85 transition hover:bg-white/10 focus:bg-white/10 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              className={cx(
+                "flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+                theme.inputText,
+                getChatThemeHoverClass(theme),
+                theme.id === "light" ? "focus:bg-black/5" : "focus:bg-white/10"
+              )}
             >
               {action === "camera" && <Camera className="h-4 w-4" aria-hidden="true" />}
               {action === "photos" && <ImageIcon className="h-4 w-4" aria-hidden="true" />}
@@ -537,8 +556,12 @@ function ConversationRow({
       className={cx(
         "relative flex min-w-0 items-center gap-1 rounded-lg px-2 py-2 transition",
         isActive
-          ? "bg-white/[0.08] text-white"
-          : "text-white/80 hover:bg-white/[0.05]"
+          ? theme.id === "light"
+            ? "bg-slate-200 text-slate-900"
+            : "bg-white/[0.08] text-white"
+          : theme.id === "light"
+            ? "text-slate-700 hover:bg-slate-100"
+            : "text-white/80 hover:bg-white/[0.05]"
       )}
     >
       <button
@@ -556,7 +579,7 @@ function ConversationRow({
         </div>
       </button>
 
-      <Tooltip content={`More actions for ${conversationTitle}`}>
+      <Tooltip theme={theme} content={`More actions for ${conversationTitle}`}>
         <button
           ref={menuButtonRef}
           type="button"
@@ -564,8 +587,10 @@ function ConversationRow({
           disabled={disabled}
           className={cx(
             "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition",
-            "text-white/50 hover:bg-white/10 hover:text-white",
-            "focus:outline-none focus:ring-2 focus:ring-white/30",
+            theme.id === "light"
+              ? "text-slate-700 hover:bg-slate-100 hover:text-slate-950 focus:ring-slate-500/40"
+              : "text-white/50 hover:bg-white/10 hover:text-white focus:ring-white/30",
+            "focus:outline-none focus:ring-2",
             "disabled:cursor-not-allowed disabled:opacity-50"
           )}
           aria-label={`More actions for ${conversationTitle}`}
@@ -1937,7 +1962,8 @@ function getSecondaryButtonClass(theme: ChatTheme): string {
   return cx(
     "rounded-xl border px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-50",
     theme.panelBorder,
-    "text-white/90 hover:bg-white/10"
+    theme.inputText,
+    getChatThemeHoverClass(theme)
   );
 }
 
@@ -1952,14 +1978,18 @@ function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
         "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
         SIDEBAR_LABEL_CLASS,
         theme.panelBorder,
-        "bg-transparent text-white/80 hover:bg-white/10 hover:text-white"
+        "bg-transparent",
+        theme.inputText,
+        getChatThemeHoverClass(theme),
+        theme.titleText
       );
 }
 
 function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
   if (role === "user") {
     return cx(
-      "max-w-full rounded-2xl border border-white/15 px-3 py-2.5 break-words [overflow-wrap:anywhere]",
+      "max-w-full rounded-2xl border px-3 py-2.5 break-words [overflow-wrap:anywhere]",
+      theme.panelBorder,
       theme.userBubble,
       theme.userText
     );
@@ -1991,7 +2021,7 @@ function ChatThemePicker({
       )}
       aria-label="Chat theme picker"
     >
-      <div className="mb-3 flex items-start justify-between gap-3">
+      <div className="mb-2 flex items-start justify-between gap-2">
         <div>
           <h2 className={cx("text-sm font-semibold", theme.titleText)}>
             Chat theme
@@ -2010,7 +2040,7 @@ function ChatThemePicker({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-1.5">
+      <div className="grid grid-cols-1 gap-1">
         {CHAT_THEMES.map((item) => {
           const active = item.id === selectedThemeId;
 
@@ -2021,16 +2051,21 @@ function ChatThemePicker({
               onClick={() => onChange(item.id)}
               aria-pressed={active}
               className={cx(
-                "flex min-h-11 w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition",
+                "flex min-h-10 w-full items-center gap-2 rounded-xl border px-2 py-1.5 text-left transition",
                 SIDEBAR_LABEL_CLASS,
-                "focus:outline-none focus:ring-2 focus:ring-blue-400/60 focus:ring-offset-2 focus:ring-offset-black",
-                active ? "border-blue-400/50 bg-white/10" : theme.panelBorder,
-                "hover:bg-white/5"
+                "focus:outline-none focus:ring-2 focus:ring-blue-400/60",
+                getChatThemeFocusOffsetClass(theme),
+                active
+                  ? theme.id === "light"
+                    ? "border-blue-500 bg-blue-50"
+                    : "border-blue-400/50 bg-white/10"
+                  : theme.panelBorder,
+                getChatThemeHoverClass(theme)
               )}
             >
               <span
                 className={cx(
-                  "flex h-8 w-10 shrink-0 gap-0.5 overflow-hidden rounded-lg border p-1",
+                  "flex h-7 w-9 shrink-0 gap-0.5 overflow-hidden rounded-lg border p-1",
                   item.pageBg,
                   item.panelBorder
                 )}
@@ -2041,14 +2076,17 @@ function ChatThemePicker({
               </span>
 
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-white">{item.label}</span>
+                <span className={cx("block truncate", theme.inputText)}>{item.label}</span>
                 <span className={cx("mt-0.5 block truncate text-xs font-normal", theme.mutedText)}>
                   {item.id}
                 </span>
               </span>
 
               {active ? (
-                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[10px] font-medium text-black">
+                <span className={cx(
+                  "shrink-0 rounded-full px-2 py-1 text-[10px] font-medium",
+                  theme.id === "light" ? "bg-blue-600 text-white" : "bg-white text-black"
+                )}>
                   Active
                 </span>
               ) : null}
@@ -2080,7 +2118,8 @@ function SourcesDisclosure({
         className={cx(
           "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs",
           theme.panelBorder,
-          "text-white/80 hover:bg-white/5"
+          theme.inputText,
+          getChatThemeHoverClass(theme)
         )}
         aria-expanded={open}
       >
@@ -2105,9 +2144,9 @@ function SourcesDisclosure({
                 <div className="text-xs font-medium text-blue-300">
                   {source.title?.trim() || getSourceHostname(source.url)}
                 </div>
-                <div className="mt-1 text-[11px] text-white/50">{getSourceHostname(source.url)}</div>
+                <div className={cx("mt-1 text-[11px]", theme.mutedText)}>{getSourceHostname(source.url)}</div>
                 {source.snippet ? (
-                  <div className="mt-1 line-clamp-3 text-xs text-white/80">{source.snippet}</div>
+                  <div className={cx("mt-1 line-clamp-3 text-xs", theme.inputText)}>{source.snippet}</div>
                 ) : null}
               </a>
             ))}
@@ -4675,7 +4714,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           <MessageCircle className="h-[18px] w-[18px]" />
         </span>
         <span className={cx("truncate text-2xl font-semibold tracking-tight", activeTheme.titleText)}>
-          <span className="text-white">LVT</span>
+          <span className={activeTheme.titleText}>LVT</span>
           <span className="text-blue-300">Chat</span>
         </span>
       </div>
@@ -4685,7 +4724,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   function renderNewChatAction() {
     return (
       <div className="w-full">
-        <Tooltip content={TOOLTIP_TEXT.newChat}>
+        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.newChat}>
           <button
             type="button"
             onClick={handleNewChat}
@@ -4718,11 +4757,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         aria-expanded={profileMenuOpen}
         aria-controls="chat-profile-settings"
       >
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-white">
+        <span className={cx("flex h-7 w-7 shrink-0 items-center justify-center rounded-full", activeTheme.inputBg, activeTheme.inputText)}>
           {getUserInitials(userEmail)}
         </span>
-        <span className="min-w-0 flex-1 truncate font-semibold text-white">{userEmail}</span>
-        <span className="shrink-0 text-[11px] text-white/50">
+        <span className={cx("min-w-0 flex-1 truncate font-semibold", activeTheme.titleText)}>{userEmail}</span>
+        <span className={cx("shrink-0 text-[11px]", activeTheme.mutedText)}>
           {plan === "pro" ? "Pro" : "Free"}
         </span>
         <ChevronDown className={cx("h-4 w-4 shrink-0 transition-transform", profileMenuOpen && "rotate-180")} />
@@ -4751,14 +4790,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         }}
       >
         <div className="flex min-w-0 items-center gap-2 px-1 pb-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">
+          <span className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-full", activeTheme.inputBg, activeTheme.inputText)}>
             {getUserInitials(userEmail)}
           </span>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-white">
+            <div className={cx("truncate text-sm font-semibold", activeTheme.titleText)}>
               {getProfileDisplayName(userEmail)}
             </div>
-            <div className="mt-0.5 truncate text-sm font-semibold text-white">
+            <div className={cx("mt-0.5 truncate text-sm font-semibold", activeTheme.titleText)}>
               {userEmail}
             </div>
             <div className={cx("mt-0.5 text-xs", activeTheme.mutedText)}>
@@ -4875,7 +4914,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     return (
       <div className="flex flex-col gap-1" aria-label="Chat modes">
-        <Tooltip content={TOOLTIP_TEXT.standard}>
+        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.standard}>
           <button
             type="button"
             onClick={() => handleModeChange(false)}
@@ -4890,7 +4929,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           </button>
         </Tooltip>
 
-        <Tooltip content={TOOLTIP_TEXT.webSearch}>
+        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.webSearch}>
           <button
             type="button"
             onClick={() => handleModeChange(true)}
@@ -4906,7 +4945,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           </button>
         </Tooltip>
 
-        <Tooltip content={TOOLTIP_TEXT.imageMode}>
+        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.imageMode}>
           <button
             type="button"
             onClick={handleImageModeChange}
@@ -5207,33 +5246,32 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           <MessageWidgetRenderer widget={message.widget} theme={activeTheme} />
 
                           <div
-                            className="
+                            className={cx(`
                               prose
-                              prose-invert
                               max-w-none
                               min-w-0
                               overflow-x-hidden
                               break-words
                               [overflow-wrap:anywhere]
                               [&_*]:max-w-full
-                              prose-headings:text-white
-                              prose-p:text-white
                               prose-p:break-words
                               prose-p:[overflow-wrap:anywhere]
-                              prose-strong:text-white
-                              prose-code:text-white
                               prose-code:break-words
                               prose-code:[overflow-wrap:anywhere]
                               prose-a:text-blue-300
                               prose-a:break-all
                               prose-ul:pl-6
                               prose-ol:pl-6
-                              prose-li:text-white
                               prose-li:break-words
                               prose-li:[overflow-wrap:anywhere]
-                            "
+                            `,
+                            activeTheme.id === "light"
+                              ? "prose-headings:text-slate-900 prose-p:text-slate-900 prose-strong:text-slate-900 prose-code:text-slate-900 prose-li:text-slate-900"
+                              : "prose-invert prose-headings:text-white prose-p:text-white prose-strong:text-white prose-code:text-white prose-li:text-white"
+                          )}
                           >
                             <ChatMessageContent
+                              theme={activeTheme}
                               content={
                                 message.content ||
                                 (isGeneratingImage
@@ -5266,7 +5304,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               role="group"
                               aria-label="Generated image actions"
                             >
-                              <Tooltip content="Edit image" touchSafe>
+                              <Tooltip theme={activeTheme} content="Edit image" touchSafe>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -5288,7 +5326,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 </button>
                               </Tooltip>
 
-                              <Tooltip content="Download image" touchSafe>
+                              <Tooltip theme={activeTheme} content="Download image" touchSafe>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -5402,7 +5440,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                                     {message.role === "user" && editSource ? (
                                       <div className="absolute right-1 top-1">
-                                        <Tooltip content="Edit image" touchSafe>
+                                        <Tooltip theme={activeTheme} content="Edit image" touchSafe>
                                           <button
                                             type="button"
                                             onClick={() =>
@@ -5464,7 +5502,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                           {message.role === "user" && (
                             <div className="mt-3 flex justify-end">
-                              <Tooltip content="Copy message" touchSafe>
+                              <Tooltip theme={activeTheme} content="Copy message" touchSafe>
                                 <button
                                   type="button"
                                   onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
@@ -5487,7 +5525,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           {isStreamingAssistant ? <span className="ml-1 inline-block animate-pulse">▍</span> : null}
                           {message.role === "assistant" && (
                             <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-                              <Tooltip content="Copy response" touchSafe>
+                              <Tooltip theme={activeTheme} content="Copy response" touchSafe>
                                 <button
                                   type="button"
                                   onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
@@ -5738,7 +5776,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         "min-h-[52px] max-h-[180px] overflow-y-hidden",
                         "leading-6",
                         activeTheme.inputText,
-                        "placeholder:text-white/40"
+                        activeTheme.id === "light" ? "placeholder:text-slate-400" : "placeholder:text-white/40"
                       )}
                     />
                   </div>
@@ -5749,6 +5787,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       mode={composerPlusMenuMode}
                       disabled={composerDisabled}
                       cameraEnabled={cameraCaptureSupported}
+                      theme={activeTheme}
                       onToggle={() => setPlusMenuOpen((open) => !open)}
                       onAction={handleComposerPlusMenuAction}
                       buttonRef={plusMenuButtonRef}
@@ -5764,7 +5803,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       />
                     </div>
 
-                    <Tooltip content={TOOLTIP_TEXT.mic}>
+                    <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.mic}>
                       <button
                         type="button"
                         onClick={isListening ? handleStopListening : handleStartListening}
@@ -5774,7 +5813,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition disabled:cursor-not-allowed disabled:opacity-50",
                           isListening
                             ? "border-red-500 bg-red-500/15 text-red-400 shadow-[0_0_0_6px_rgba(239,68,68,0.12)] animate-pulse"
-                            : "border-white/10 bg-white/5 text-white hover:bg-white/10"
+                            : cx(
+                                activeTheme.inputBg,
+                                activeTheme.inputBorder,
+                                activeTheme.inputText,
+                                getChatThemeHoverClass(activeTheme)
+                              )
                         )}
                       >
                         {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
@@ -5792,7 +5836,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                     <div className="ml-auto">
                       {loading ? (
-                        <Tooltip content={TOOLTIP_TEXT.stop}>
+                        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.stop}>
                           <button
                             type="button"
                             onClick={handleStop}

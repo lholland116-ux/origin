@@ -9,19 +9,26 @@ import {
   type MarkdownContentBlock,
 } from "@/lib/chat/parse-fenced-code";
 import Tooltip from "@/components/ui/Tooltip";
+import { getChatThemeById, getChatThemeHoverClass, type ChatTheme } from "@/lib/chat-themes";
 
 const REMARK_PLUGINS = [remarkGfm];
 
+function cx(...values: Array<string | false | null | undefined>): string {
+  return values.filter(Boolean).join(" ");
+}
+
 type ChatMessageContentProps = {
   content: string;
+  theme?: ChatTheme;
 };
 
 type CodePanelProps = {
   content: string;
   language: string | null;
+  theme: ChatTheme;
 };
 
-const CodePanel = memo(function CodePanel({ content, language }: CodePanelProps) {
+const CodePanel = memo(function CodePanel({ content, language, theme }: CodePanelProps) {
   const [copied, setCopied] = useState(false);
   const resetCopiedTimeoutRef = useRef<number | null>(null);
 
@@ -52,14 +59,14 @@ const CodePanel = memo(function CodePanel({ content, language }: CodePanelProps)
   }, [content]);
 
   return (
-    <div className="my-4 min-w-0 max-w-full overflow-hidden rounded-xl border border-white/10 bg-black/30">
-      <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70">
+    <div className={cx("my-4 min-w-0 max-w-full overflow-hidden rounded-xl border", theme.panelBg, theme.panelBorder)}>
+      <div className={cx("flex min-w-0 items-center justify-between gap-3 border-b px-3 py-2 text-xs", theme.panelBorder, theme.mutedText)}>
         <span className="min-w-0 truncate font-medium">{language ?? "Code"}</span>
-        <Tooltip content="Copy code" touchSafe>
+        <Tooltip theme={theme} content="Copy code" touchSafe>
           <button
             type="button"
             onClick={handleCopy}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/10 text-white/80 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+            className={cx("inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-400/50", theme.panelBorder, theme.inputText, getChatThemeHoverClass(theme))}
             aria-label="Copy code"
           >
             {copied ? (
@@ -71,7 +78,7 @@ const CodePanel = memo(function CodePanel({ content, language }: CodePanelProps)
           </button>
         </Tooltip>
       </div>
-      <pre className="m-0 max-w-full overflow-x-auto p-4 text-xs leading-5 text-white/90">
+      <pre className={cx("m-0 max-w-full overflow-x-auto p-4 text-xs leading-5", theme.assistantText)}>
         <code
           className="block max-w-none whitespace-pre font-mono"
           style={{ overflowWrap: "normal", wordBreak: "normal" }}
@@ -93,13 +100,14 @@ const MarkdownText = memo(function MarkdownText({ content }: { content: string }
   );
 });
 
-function renderContentBlock(block: MarkdownContentBlock, index: number) {
+function renderContentBlock(block: MarkdownContentBlock, index: number, theme: ChatTheme) {
   if (block.type === "code") {
     return (
       <CodePanel
         key={`code-${index}`}
         content={block.content}
         language={block.language}
+        theme={theme}
       />
     );
   }
@@ -109,8 +117,9 @@ function renderContentBlock(block: MarkdownContentBlock, index: number) {
 
 export const ChatMessageContent = memo(function ChatMessageContent({
   content,
+  theme = getChatThemeById(),
 }: ChatMessageContentProps) {
   const blocks = useMemo(() => parseFencedCodeBlocks(content), [content]);
 
-  return <>{blocks.map(renderContentBlock)}</>;
+  return <>{blocks.map((block, index) => renderContentBlock(block, index, theme))}</>;
 });

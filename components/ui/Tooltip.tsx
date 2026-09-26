@@ -12,11 +12,13 @@ import {
   type HTMLAttributes,
   type ReactElement,
 } from "react";
+import { getChatThemeById, type ChatTheme } from "@/lib/chat-themes";
 
 type TooltipProps = {
   content: string;
   children: ReactElement<HTMLAttributes<HTMLElement>>;
   touchSafe?: boolean;
+  theme?: ChatTheme;
 };
 
 type TooltipPosition = "top" | "bottom";
@@ -25,7 +27,7 @@ const VIEWPORT_PADDING = 12;
 const TOOLTIP_GAP = 10;
 const TOOLTIP_MAX_WIDTH = 240;
 
-export default function Tooltip({ content, children, touchSafe = false }: TooltipProps) {
+export default function Tooltip({ content, children, touchSafe = false, theme = getChatThemeById() }: TooltipProps) {
   const id = useId();
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
@@ -159,8 +161,11 @@ export default function Tooltip({ content, children, touchSafe = false }: Toolti
           role="tooltip"
           className={[
             "pointer-events-none fixed z-[100]",
-            "rounded-xl border border-zinc-700 bg-zinc-950",
-            "px-3 py-2 text-center text-xs leading-relaxed text-white",
+            "rounded-xl border",
+            "px-3 py-2 text-center text-xs leading-relaxed",
+            theme.panelBg,
+            theme.panelBorder,
+            theme.inputText,
             "shadow-xl shadow-black/30",
           ].join(" ")}
           style={{

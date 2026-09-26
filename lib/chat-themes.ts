@@ -24,6 +24,28 @@ export const DEFAULT_CHAT_THEME_ID = "midnight-blue";
 
 export const CHAT_THEMES: ChatTheme[] = [
   {
+    id: "light",
+    label: "Light",
+    pageBg: "bg-white",
+    panelBg: "bg-white",
+    panelBorder: "border-slate-200",
+    sidebarBg: "bg-slate-50",
+    sidebarBorder: "border-slate-200",
+    inputBg: "bg-white",
+    inputBorder: "border-slate-300",
+    inputText: "text-slate-900",
+    mutedText: "text-slate-600",
+    titleText: "text-slate-950",
+    userBubble: "bg-slate-100",
+    assistantBubble: "bg-white",
+    assistantText: "text-slate-900",
+    userText: "text-slate-900",
+    buttonPrimary: "bg-blue-600 text-white hover:bg-blue-500",
+    buttonSecondary:
+      "bg-slate-100 text-slate-900 hover:bg-slate-200 border border-slate-300",
+    badge: "bg-blue-50 text-blue-700 border border-blue-200",
+  },
+  {
     id: "default-dark",
     label: "Dark",
     pageBg: "bg-zinc-950",
@@ -142,4 +164,16 @@ export function getChatThemeById(themeId?: string | null): ChatTheme {
     CHAT_THEMES.find((theme) => theme.id === DEFAULT_CHAT_THEME_ID) ??
     CHAT_THEMES[0]
   );
+}
+
+export function getChatThemeHoverClass(theme: Pick<ChatTheme, "id">): string {
+  return theme.id === "light" ? "hover:bg-black/5" : "hover:bg-white/10";
+}
+
+export function getChatThemeFocusOffsetClass(
+  theme: Pick<ChatTheme, "id">,
+): string {
+  return theme.id === "light"
+    ? "focus:ring-offset-white"
+    : "focus:ring-offset-black";
 }

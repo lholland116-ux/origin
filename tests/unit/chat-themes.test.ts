@@ -36,6 +36,7 @@ describe("chat theme defaults and persistence", () => {
   });
 
   it.each([
+    ["light", "light"],
     ["default-dark", "default-dark"],
     ["midnight-blue", "midnight-blue"],
     ["emerald", "emerald"],
@@ -61,5 +62,22 @@ describe("chat theme defaults and persistence", () => {
     expect(
       CHAT_THEMES.find((theme) => theme.id === "midnight-blue")?.label,
     ).toBe("Midnight Blue");
+  });
+
+  it("keeps Light first with a readable light palette", () => {
+    expect(CHAT_THEMES.map((theme) => theme.label)).toEqual([
+      "Light",
+      "Dark",
+      "Midnight Blue",
+      "Emerald",
+      "Purple",
+      "Warm Gray",
+    ]);
+
+    const lightTheme = CHAT_THEMES[0];
+    expect(lightTheme.id).toBe("light");
+    expect(lightTheme.inputText).toBe("text-slate-900");
+    expect(lightTheme.mutedText).toBe("text-slate-600");
+    expect(lightTheme.panelBorder).toBe("border-slate-200");
   });
 });
