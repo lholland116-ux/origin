@@ -30,6 +30,63 @@ function renderPlusMenu(
 }
 
 describe("chat image-generation presentation", () => {
+  it("renders one compact conversation starter with the requested label", () => {
+    expect(clientSource).toContain(
+      'const CONVERSATION_STARTER = "Explain something step by step";'
+    );
+    expect(clientSource).not.toContain("CONVERSATION_STARTERS");
+    expect(clientSource).not.toContain("Summarize this image or document for me");
+    expect(clientSource).toContain("Try asking");
+    expect(clientSource).toContain("handleConversationStarterClick(CONVERSATION_STARTER)");
+    expect(clientSource).toContain("whitespace-nowrap rounded-lg px-3 py-2 text-sm");
+
+    const starterBlockStart = clientSource.indexOf("{messages.length === 0 && (");
+    const starterBlockEnd = clientSource.indexOf(
+      '<div className="space-y-5 sm:space-y-6">',
+      starterBlockStart
+    );
+    const starterBlock = clientSource.slice(starterBlockStart, starterBlockEnd);
+
+    expect(starterBlock).toContain("Try asking");
+    expect(starterBlock).toContain("CONVERSATION_STARTER");
+    expect(starterBlock).not.toContain("Conversation starters");
+  });
+
+  it("keeps the empty-conversation safety notice compact and exact", () => {
+    const emptyConversationStart = clientSource.indexOf("{messages.length === 0 && (");
+    const emptyConversationEnd = clientSource.indexOf(
+      '<div className="space-y-5 sm:space-y-6">',
+      emptyConversationStart
+    );
+    const emptyConversationSource = clientSource.slice(
+      emptyConversationStart,
+      emptyConversationEnd
+    );
+    const safetyNoticeStart = emptyConversationSource.indexOf(
+      '"mt-3 rounded-xl border px-3 py-2.5 text-sm"'
+    );
+    const safetyNoticeEnd = emptyConversationSource.indexOf(
+      "\n                    </div>",
+      safetyNoticeStart
+    );
+    const safetyNotice = emptyConversationSource.slice(
+      safetyNoticeStart,
+      safetyNoticeEnd
+    );
+
+    expect(emptyConversationSource).toContain("Do not share sensitive information.");
+    expect(emptyConversationSource).not.toContain("Safety");
+    expect(emptyConversationSource).not.toContain(
+      "Do not share sensitive personal, medical, or confidential"
+    );
+    expect(safetyNotice.match(/\bborder\b/g)).toHaveLength(1);
+    expect(safetyNotice).toContain("px-3 py-2.5");
+    expect(safetyNotice).not.toContain("p-4");
+    expect(safetyNotice).not.toContain("rounded-2xl border");
+    expect(clientSource).toContain("setMessages([])");
+    expect(clientSource).toContain("handleNewChat");
+  });
+
   it("renders the exact context-aware plus actions for every composer mode", () => {
     expect(getComposerPlusMenuActions("standard")).toEqual([
       "camera",

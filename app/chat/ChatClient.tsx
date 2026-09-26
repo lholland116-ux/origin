@@ -648,10 +648,7 @@ const ALLOWED_DOCUMENT_MIME_TYPES = [
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ] as const;
 
-const CONVERSATION_STARTERS = [
-  "Summarize this image or document for me",
-  "Explain something step by step",
-] as const;
+const CONVERSATION_STARTER = "Explain something step by step";
 
 const SIDEBAR_LABEL_CLASS = "text-sm font-medium";
 const PROFILE_MENU_HORIZONTAL_INSET = 12;
@@ -5133,36 +5130,32 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                 )}
 
                 {messages.length === 0 && (
-                  <div className="mb-6">
-                    <div className={cx("mb-2 text-[11px] uppercase tracking-wide", activeTheme.mutedText)}>
-                      Conversation starters
+                  <div className="mb-4">
+                    <div className={cx("mb-1 text-xs", activeTheme.mutedText)}>
+                      Try asking
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      {CONVERSATION_STARTERS.map((starter) => (
-                        <button
-                          key={starter}
-                          type="button"
-                          onClick={() => handleConversationStarterClick(starter)}
-                          disabled={loading || isLimitReached}
-                          className={cx("rounded-full px-3 py-2 text-sm", getSecondaryButtonClass(activeTheme))}
-                        >
-                          {starter}
-                        </button>
-                      ))}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleConversationStarterClick(CONVERSATION_STARTER)}
+                      disabled={loading || isLimitReached}
+                      className={cx(
+                        "inline-flex min-h-10 items-center whitespace-nowrap rounded-lg px-3 py-2 text-sm",
+                        getSecondaryButtonClass(activeTheme)
+                      )}
+                    >
+                      {CONVERSATION_STARTER}
+                    </button>
 
-                    <div className={cx("mt-4 rounded-2xl border p-4", activeTheme.panelBg, activeTheme.panelBorder)}>
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                        <p className="text-xs uppercase tracking-wide text-white/40">
-                          Safety
-                        </p>
-
-                        <p className="mt-3 text-sm leading-6 text-white/60">
-                          Do not share sensitive personal, financial, medical, or confidential
-                          information.
-                        </p>
-                      </div>
+                    <div
+                      className={cx(
+                        "mt-3 rounded-xl border px-3 py-2.5 text-sm",
+                        activeTheme.panelBg,
+                        activeTheme.panelBorder,
+                        activeTheme.mutedText
+                      )}
+                    >
+                      Do not share sensitive information.
                     </div>
                   </div>
                 )}
