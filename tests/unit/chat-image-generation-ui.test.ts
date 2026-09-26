@@ -5,18 +5,24 @@ import {
   COMPOSER_PLUS_MENU_LABELS,
   ComposerPlusMenu,
   getComposerPlusMenuActions,
+  getSelectedImageFiles,
   getProfileDisplayName,
   getUploadedMessageImageGridClass,
+  isCameraCaptureSupported,
 } from "@/app/chat/ChatClient";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
 
-function renderPlusMenu(mode: "standard" | "web_search" | "create_image"): string {
+function renderPlusMenu(
+  mode: "standard" | "web_search" | "create_image",
+  cameraEnabled = false,
+): string {
   return renderToStaticMarkup(
     ComposerPlusMenu({
       open: true,
       mode,
       disabled: false,
+      cameraEnabled,
       onToggle: () => undefined,
       onAction: () => undefined,
     })
@@ -58,6 +64,11 @@ describe("chat image-generation presentation", () => {
     expect(standardMarkup).toContain(">Web search</span>");
     expect(standardMarkup.match(/disabled=""/g)).toHaveLength(1);
 
+    const mobileStandardMarkup = renderPlusMenu("standard", true);
+    expect(mobileStandardMarkup.match(/role="menuitem"/g)).toHaveLength(5);
+    expect(mobileStandardMarkup).toContain(">Camera</span>");
+    expect(mobileStandardMarkup).not.toContain('aria-disabled="true"');
+
     const webSearchMarkup = renderPlusMenu("web_search");
     expect(webSearchMarkup.match(/role="menuitem"/g)).toHaveLength(2);
     expect(webSearchMarkup).toContain(">Standard</span>");
@@ -88,7 +99,7 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain(
       'aria-label={isListening ? "Stop voice input" : "Start voice input"}'
     );
-    expect(clientSource).toContain('aria-label="Attach image"');
+    expect(clientSource).not.toContain('aria-label="Attach image"');
     expect(clientSource).toContain("inputRef={documentInputRef}");
 
     const composerStart = clientSource.indexOf("<form");
@@ -115,6 +126,33 @@ describe("chat image-generation presentation", () => {
     expect(composerViewportSource).toContain("COMPOSER_RAIL_CLASS");
     expect(composerViewportSource).not.toContain("CONTENT_RAIL_CLASS");
     expect(composerViewportSource).not.toContain("overflow-x-hidden");
+  });
+
+  it("uses the existing image pipeline for mobile camera capture and Photos", () => {
+    expect(isCameraCaptureSupported("Mozilla/5.0 (Linux; Android 14)", false)).toBe(true);
+    expect(isCameraCaptureSupported("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)", false)).toBe(true);
+    expect(isCameraCaptureSupported("Mozilla/5.0 (X11; Linux x86_64)", false)).toBe(false);
+    expect(isCameraCaptureSupported("desktop-webview", true)).toBe(true);
+    expect(getSelectedImageFiles(null)).toEqual([]);
+
+    const cameraInputStart = clientSource.indexOf("ref={cameraInputRef}");
+    const cameraInputEnd = clientSource.indexOf('className="hidden"', cameraInputStart);
+    const cameraInputSource = clientSource.slice(cameraInputStart, cameraInputEnd);
+
+    expect(cameraInputSource).toContain('type="file"');
+    expect(cameraInputSource).toContain('accept="image/*"');
+    expect(cameraInputSource).toContain('capture="environment"');
+    expect(cameraInputSource).toContain("onChange={handleImageChange}");
+    expect(clientSource).toContain("handleOpenCameraPicker");
+    expect(clientSource).toContain('if (action === "camera")');
+    expect(clientSource).toContain('if (action === "photos")');
+    expect(clientSource).toContain("getSelectedImageFiles(event.target.files)");
+    expect(clientSource).toContain("if (files.length === 0) return;");
+    expect(clientSource).toContain("setPendingImages((current) => [...current, ...uploadedBatch])");
+    expect(clientSource).toContain("previewUrl: uploaded.dataUrl");
+    expect(clientSource).toContain("reconcileSubmittedImageMessage(");
+    expect(clientSource).toContain('ref={imageInputRef}');
+    expect(clientSource).toContain('onChange={handleImageChange}');
   });
 
   it("keeps uploaded image layouts intentional for one, two, and three images", () => {
@@ -276,7 +314,7 @@ describe("chat image-generation presentation", () => {
     );
     expect(clientSource).toContain("Only {usage.remaining} messages remaining today");
     expect(composerSource).toContain("<DocumentUploadButton");
-    expect(composerSource).toContain('aria-label="Attach image"');
+    expect(composerSource).not.toContain('aria-label="Attach image"');
     expect(composerSource).toContain(
       'aria-label={isListening ? "Stop voice input" : "Start voice input"}',
     );
@@ -311,7 +349,7 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain('plan === "pro"');
     expect(clientSource).toContain('"/api/documents/upload"');
     expect(clientSource).toContain("File uploads are a Pro feature");
-    expect(clientSource).toContain('aria-label="Attach image"');
+    expect(clientSource).not.toContain('aria-label="Attach image"');
   });
 
   it("emphasizes profile identity and Chat History with existing theme tokens", () => {

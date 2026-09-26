@@ -291,10 +291,22 @@ export function getComposerPlusMenuActions(
   return ["camera", "photos", "files", "create_image", "web_search"];
 }
 
+export function isCameraCaptureSupported(
+  userAgent: string,
+  isNativeApp: boolean
+): boolean {
+  return isNativeApp || /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
+}
+
+export function getSelectedImageFiles(files: FileList | null): File[] {
+  return Array.from(files ?? []);
+}
+
 type ComposerPlusMenuProps = {
   open: boolean;
   mode: ComposerPlusMenuMode;
   disabled: boolean;
+  cameraEnabled: boolean;
   onToggle: () => void;
   onAction: (action: ComposerPlusMenuAction) => void;
   buttonRef?: Ref<HTMLButtonElement>;
@@ -305,6 +317,7 @@ export function ComposerPlusMenu({
   open,
   mode,
   disabled,
+  cameraEnabled,
   onToggle,
   onAction,
   buttonRef,
@@ -339,8 +352,8 @@ export function ComposerPlusMenu({
               type="button"
               role="menuitem"
               onClick={() => onAction(action)}
-              disabled={action === "camera"}
-              aria-disabled={action === "camera"}
+              disabled={action === "camera" && !cameraEnabled}
+              aria-disabled={action === "camera" && !cameraEnabled}
               className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white/85 transition hover:bg-white/10 focus:bg-white/10 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             >
               {action === "camera" && <Camera className="h-4 w-4" aria-hidden="true" />}
@@ -2191,6 +2204,7 @@ export default function ChatClient({
   const [useImageGeneration, setUseImageGeneration] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [cameraCaptureSupported, setCameraCaptureSupported] = useState(false);
   const [composerDocuments, setComposerDocuments] = useState<UploadedDocument[]>([]);
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
   const [documentError, setDocumentError] = useState("");
@@ -2300,6 +2314,7 @@ export default function ChatClient({
   
   const endRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeDocumentPollRef = useRef(0);
@@ -2338,6 +2353,15 @@ export default function ChatClient({
   useEffect(() => {
     planRef.current = plan;
   }, [plan]);
+
+  useEffect(() => {
+    setCameraCaptureSupported(
+      isCameraCaptureSupported(
+        typeof navigator === "undefined" ? "" : navigator.userAgent,
+        isNativeApp
+      )
+    );
+  }, [isNativeApp]);
 
   useLayoutEffect(() => {
     const textarea = composerTextareaRef.current;
@@ -3157,6 +3181,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     if (imageInputRef.current) {
       imageInputRef.current.value = "";
     }
+
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = "";
+    }
   }
 
   function discardPendingImages(): void {
@@ -3295,6 +3323,27 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
 
     imageInputRef.current?.click();
+  }
+
+  function handleOpenCameraPicker(): void {
+    if (
+      !cameraCaptureSupported ||
+      loading ||
+      uploadingImages ||
+      isUploadingDocuments ||
+      isLimitReached ||
+      useWebSearch ||
+      useImageGeneration
+    ) {
+      return;
+    }
+
+    if (!canAddPendingImages(pendingImages.length, 1, plan)) {
+      setUiError(getPendingImageLimitMessage(plan));
+      return;
+    }
+
+    cameraInputRef.current?.click();
   }
 
   function handleOpenDocumentPicker(): void {
@@ -4012,7 +4061,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
+    const files = getSelectedImageFiles(event.target.files);
     event.target.value = "";
     if (files.length === 0) return;
 
@@ -4575,9 +4624,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   function handleComposerPlusMenuAction(action: ComposerPlusMenuAction): void {
-    if (action === "camera") return;
-
     closePlusMenu();
+
+    if (action === "camera") {
+      handleOpenCameraPicker();
+      return;
+    }
 
     if (action === "photos") {
       handleOpenImagePicker();
@@ -5541,6 +5593,21 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   className="hidden"
                 />
 
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleImageChange}
+                  disabled={
+                    composerDisabled ||
+                    !cameraCaptureSupported ||
+                    useWebSearch ||
+                    useImageGeneration
+                  }
+                  className="hidden"
+                />
+
                 {!useWebSearch && !useImageGeneration && composerDocuments.length > 0 && (
                   <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="flex flex-wrap gap-2">
@@ -5688,6 +5755,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       open={plusMenuOpen}
                       mode={composerPlusMenuMode}
                       disabled={composerDisabled}
+                      cameraEnabled={cameraCaptureSupported}
                       onToggle={() => setPlusMenuOpen((open) => !open)}
                       onAction={handleComposerPlusMenuAction}
                       buttonRef={plusMenuButtonRef}
@@ -5702,22 +5770,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         onFilesSelected={handleFilesSelected}
                       />
                     </div>
-
-                    {!useWebSearch && !useImageGeneration && (
-                      <Tooltip content={TOOLTIP_TEXT.image}>
-                        <button
-                          type="button"
-                          onClick={handleOpenImagePicker}
-                          disabled={composerDisabled}
-                          className={cx(
-                            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 text-white/80 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
-                          )}
-                          aria-label="Attach image"
-                        >
-                          <ImageIcon className="h-4 w-4" />
-                        </button>
-                      </Tooltip>
-                    )}
 
                     <Tooltip content={TOOLTIP_TEXT.mic}>
                       <button
