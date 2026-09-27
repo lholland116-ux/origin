@@ -78,9 +78,13 @@ const CodePanel = memo(function CodePanel({ content, language, theme }: CodePane
           </button>
         </Tooltip>
       </div>
-      <pre className={cx("m-0 max-w-full overflow-x-auto p-4 text-xs leading-5", theme.assistantText)}>
+      <pre className={cx("m-0 max-w-full overflow-x-auto p-4 text-xs leading-5", theme.codeText)}>
         <code
-          className="block max-w-none whitespace-pre font-mono"
+          className={cx(
+            "block max-w-none whitespace-pre font-mono",
+            theme.codeText,
+            theme.id === "light" && "!text-slate-100",
+          )}
           style={{ overflowWrap: "normal", wordBreak: "normal" }}
         >
           {content}

@@ -36,12 +36,12 @@ describe("chat message and composer actions", () => {
     expect(messageHeader).not.toContain('aria-label="Copy message"');
     expect((clientSource.match(/aria-label="Copy message"/g) ?? []).length).toBe(1);
     expect(clientSource).toContain('aria-label="Copy response"');
-    expect(clientSource).toContain('<Tooltip content="Copy message" touchSafe>');
-    expect(clientSource).toContain('<Tooltip content="Copy response" touchSafe>');
+    expect(clientSource).toContain('<Tooltip theme={activeTheme} content="Copy message" touchSafe>');
+    expect(clientSource).toContain('<Tooltip theme={activeTheme} content="Copy response" touchSafe>');
     expect(clientSource).not.toContain(">Copy</button>");
     expect(messageContentSource).toContain('aria-label="Copy code"');
     expect(messageContentSource).toContain("<CopyIcon");
-    expect(messageContentSource).toContain('<Tooltip content="Copy code" touchSafe>');
+    expect(messageContentSource).toContain('<Tooltip theme={theme} content="Copy code" touchSafe>');
     expect(messageContentSource).not.toContain(">Copy code</button>");
     expect(clientSource).not.toMatch(/aria-label="Copy message"[\s\S]{0,500}title=/);
     expect(clientSource).not.toMatch(/aria-label="Copy response"[\s\S]{0,500}title=/);
@@ -53,5 +53,15 @@ describe("chat message and composer actions", () => {
   it("keeps the send button accessible without the persistent send tooltip", () => {
     expect(clientSource).toContain('aria-label="Send your message"');
     expect(clientSource).not.toContain("<Tooltip content={TOOLTIP_TEXT.send}>");
+  });
+
+  it("keeps both Copy controls contrast-safe across themes", () => {
+    expect(clientSource).toContain("getMessageCopyActionClass(activeTheme, \"user\")");
+    expect(clientSource).toContain("getMessageCopyActionClass(activeTheme, \"assistant\")");
+    expect(clientSource).toContain("text-slate-700 hover:bg-slate-200 hover:text-slate-950");
+    expect(clientSource).toContain("text-slate-700 hover:bg-slate-100 hover:text-slate-950");
+    expect(clientSource).toContain("text-white\/55 hover:bg-black\/10 hover:text-white\/90");
+    expect(clientSource).toContain("text-white\/55 hover:bg-white\/5 hover:text-white\/90");
+    expect(clientSource).toContain("focus:ring-2 focus:ring-blue-400\/50");
   });
 });

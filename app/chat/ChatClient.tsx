@@ -56,6 +56,8 @@ import type { ImageEditSourceReference } from "@/lib/image-generation/lineage";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
 import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
+import ReadAloudButton from "@/components/chat/ReadAloudButton";
+import { stopReadAloud } from "@/lib/read-aloud";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -1394,6 +1396,21 @@ function cx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+export function getGeneratedImageActionClass(
+  theme: Pick<ChatTheme, "id">,
+  variant: "default" | "delete",
+): string {
+  if (theme.id === "light") {
+    return variant === "delete"
+      ? "text-red-700 hover:bg-red-100 hover:text-red-900"
+      : "text-slate-700 hover:bg-slate-100 hover:text-slate-950";
+  }
+
+  return variant === "delete"
+    ? "text-red-300/65 hover:bg-red-400/10 hover:text-red-200"
+    : "text-white/55 hover:bg-white/5 hover:text-white/90";
+}
+
 function createId(): string {
   return crypto.randomUUID();
 }
@@ -1967,6 +1984,21 @@ function getSecondaryButtonClass(theme: ChatTheme): string {
   );
 }
 
+function getMessageCopyActionClass(
+  theme: ChatTheme,
+  variant: "user" | "assistant",
+): string {
+  if (theme.id === "light") {
+    return variant === "user"
+      ? "text-slate-700 hover:bg-slate-200 hover:text-slate-950"
+      : "text-slate-700 hover:bg-slate-100 hover:text-slate-950";
+  }
+
+  return variant === "user"
+    ? "text-white/55 hover:bg-black/10 hover:text-white/90"
+    : "text-white/55 hover:bg-white/5 hover:text-white/90";
+}
+
 function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
   return isActive
     ? cx(
@@ -2389,6 +2421,10 @@ export default function ChatClient({
   useEffect(() => {
     planRef.current = plan;
   }, [plan]);
+
+  useEffect(() => {
+    return () => stopReadAloud();
+  }, [conversationId]);
 
   useEffect(() => {
     setCameraCaptureSupported(
@@ -5318,7 +5354,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                     )
                                   }
                                   disabled={loading || imageEditOperation?.status === "submitting"}
-                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className={cx(
+                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                    getGeneratedImageActionClass(activeTheme, "default")
+                                  )}
                                   aria-label="Edit image"
                                 >
                                   <Pencil className="h-4 w-4" aria-hidden="true" />
@@ -5337,7 +5376,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                     downloadingGeneratedImageId !== null ||
                                     deletingGeneratedImageId !== null
                                   }
-                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className={cx(
+                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                    getGeneratedImageActionClass(activeTheme, "default")
+                                  )}
                                   aria-label="Download image"
                                 >
                                   {downloadingGeneratedImageId === message.generatedImage.id ? (
@@ -5358,7 +5400,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                   onClick={() => void handleRegenerateImage(message.id)}
                                   disabled={loading || deletingGeneratedImageId !== null}
                                   aria-busy={isRegeneratingImage}
-                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className={cx(
+                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                    getGeneratedImageActionClass(activeTheme, "default")
+                                  )}
                                   aria-label="Regenerate image"
                                 >
                                   <RefreshCw
@@ -5392,7 +5437,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                   aria-busy={
                                     deletingGeneratedImageId === message.generatedImage.id
                                   }
-                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-300/65 transition hover:bg-red-400/10 hover:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className={cx(
+                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                    getGeneratedImageActionClass(activeTheme, "delete")
+                                  )}
                                   aria-label="Delete image"
                                 >
                                   {deletingGeneratedImageId === message.generatedImage.id ? (
@@ -5506,7 +5554,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 <button
                                   type="button"
                                   onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
-                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-black/10 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+                                  className={cx(
+                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
+                                    getMessageCopyActionClass(activeTheme, "user"),
+                                  )}
                                   aria-label="Copy message"
                                 >
                                   {copiedMessageId === message.id ? (
@@ -5529,7 +5580,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 <button
                                   type="button"
                                   onClick={() => handleCopyMessage(message.id, getMessageCopyValue(message))}
-                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/55 transition hover:bg-white/5 hover:text-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+                                  className={cx(
+                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50",
+                                    getMessageCopyActionClass(activeTheme, "assistant"),
+                                  )}
                                   aria-label="Copy response"
                                 >
                                   {copiedMessageId === message.id ? (
@@ -5545,6 +5599,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
                               {message.content.trim() && !isStreamingAssistant ? (
                                 <>
+                                  <ReadAloudButton
+                                    messageId={message.id}
+                                    text={message.content}
+                                    theme={activeTheme}
+                                  />
+
                                   <span className="mr-1 text-[11px] opacity-50">Was this helpful?</span>
 
                                   <button

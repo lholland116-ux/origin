@@ -5,6 +5,7 @@ import {
   COMPOSER_PLUS_MENU_LABELS,
   ComposerPlusMenu,
   getComposerPlusMenuActions,
+  getGeneratedImageActionClass,
   getSelectedImageFiles,
   getProfileDisplayName,
   getUploadedMessageImageGridClass,
@@ -224,6 +225,37 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain("max-h-[min(70vh,640px)] max-w-full object-contain");
     expect(clientSource).toContain('aria-label="Download image"');
     expect(clientSource).toContain('aria-label="Regenerate image"');
+  });
+
+  it("keeps generated-image actions visible in Light without changing other themes", () => {
+    expect(getGeneratedImageActionClass({ id: "light" }, "default")).toBe(
+      "text-slate-700 hover:bg-slate-100 hover:text-slate-950",
+    );
+    expect(getGeneratedImageActionClass({ id: "light" }, "delete")).toBe(
+      "text-red-700 hover:bg-red-100 hover:text-red-900",
+    );
+    expect(getGeneratedImageActionClass({ id: "default-dark" }, "default")).toBe(
+      "text-white/55 hover:bg-white/5 hover:text-white/90",
+    );
+    expect(getGeneratedImageActionClass({ id: "default-dark" }, "delete")).toBe(
+      "text-red-300/65 hover:bg-red-400/10 hover:text-red-200",
+    );
+    for (const themeId of ["midnight-blue", "emerald", "purple", "warm-gray"]) {
+      expect(getGeneratedImageActionClass({ id: themeId }, "default")).toBe(
+        "text-white/55 hover:bg-white/5 hover:text-white/90",
+      );
+      expect(getGeneratedImageActionClass({ id: themeId }, "delete")).toBe(
+        "text-red-300/65 hover:bg-red-400/10 hover:text-red-200",
+      );
+    }
+
+    expect(clientSource).toContain('aria-label="Edit image"');
+    expect(clientSource).toContain('aria-label="Download image"');
+    expect(clientSource).toContain('aria-label="Regenerate image"');
+    expect(clientSource).toContain('aria-label="Delete image"');
+    expect(clientSource).toContain('getGeneratedImageActionClass(activeTheme, "default")');
+    expect(clientSource).toContain('getGeneratedImageActionClass(activeTheme, "delete")');
+    expect(clientSource).toContain('aria-label="Edit uploaded image"');
   });
 
   it("keeps the existing usage refresh lifecycle for generation and regeneration", () => {

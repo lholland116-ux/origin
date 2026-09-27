@@ -14,6 +14,7 @@ export type ChatTheme = {
   userBubble: string;
   assistantBubble: string;
   assistantText: string;
+  codeText: string;
   userText: string;
   buttonPrimary: string;
   buttonSecondary: string;
@@ -39,6 +40,7 @@ export const CHAT_THEMES: ChatTheme[] = [
     userBubble: "bg-slate-100",
     assistantBubble: "bg-white",
     assistantText: "text-slate-900",
+    codeText: "text-slate-100",
     userText: "text-slate-900",
     buttonPrimary: "bg-blue-600 text-white hover:bg-blue-500",
     buttonSecondary:
@@ -61,6 +63,7 @@ export const CHAT_THEMES: ChatTheme[] = [
     userBubble: "bg-blue-600",
     assistantBubble: "bg-zinc-800",
     assistantText: "text-zinc-100",
+    codeText: "text-zinc-100",
     userText: "text-white",
     buttonPrimary: "bg-blue-600 text-white hover:bg-blue-500",
     buttonSecondary:
@@ -83,6 +86,7 @@ export const CHAT_THEMES: ChatTheme[] = [
     userBubble: "bg-cyan-600",
     assistantBubble: "bg-slate-800",
     assistantText: "text-slate-100",
+    codeText: "text-slate-100",
     userText: "text-white",
     buttonPrimary: "bg-cyan-600 text-white hover:bg-cyan-500",
     buttonSecondary:
@@ -105,6 +109,7 @@ export const CHAT_THEMES: ChatTheme[] = [
     userBubble: "bg-emerald-600",
     assistantBubble: "bg-emerald-800/70",
     assistantText: "text-emerald-50",
+    codeText: "text-emerald-50",
     userText: "text-white",
     buttonPrimary: "bg-emerald-600 text-white hover:bg-emerald-500",
     buttonSecondary:
@@ -128,6 +133,7 @@ export const CHAT_THEMES: ChatTheme[] = [
     userBubble: "bg-violet-600",
     assistantBubble: "bg-violet-800/70",
     assistantText: "text-violet-50",
+    codeText: "text-violet-50",
     userText: "text-white",
     buttonPrimary: "bg-violet-600 text-white hover:bg-violet-500",
     buttonSecondary:
@@ -150,6 +156,7 @@ export const CHAT_THEMES: ChatTheme[] = [
     userBubble: "bg-amber-700",
     assistantBubble: "bg-stone-800",
     assistantText: "text-stone-100",
+    codeText: "text-stone-100",
     userText: "text-white",
     buttonPrimary: "bg-amber-700 text-white hover:bg-amber-600",
     buttonSecondary:

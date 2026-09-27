@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
+import { getChatThemeById } from "@/lib/chat-themes";
 import { parseFencedCodeBlocks } from "@/lib/chat/parse-fenced-code";
 
 describe("parseFencedCodeBlocks", () => {
@@ -81,5 +82,50 @@ describe("parseFencedCodeBlocks", () => {
     expect((markup.match(/aria-label=\"Copy code\"/g) ?? []).length).toBe(2);
     expect(markup).toContain("&quot;ok&quot;");
     expect(markup).toContain("print(&#x27;ok&#x27;)");
+  });
+
+  it("uses readable Light code text while preserving non-Light code styling", () => {
+    const content = "```js\nconst ready = true;\n```";
+    const lightMarkup = renderToStaticMarkup(
+      createElement(
+        "div",
+        { className: "prose prose-code:text-slate-900" },
+        createElement(ChatMessageContent, {
+          content,
+          theme: getChatThemeById("light"),
+        })
+      )
+    );
+    const lightPreClass = lightMarkup.match(/<pre class="([^"]*)">/)?.[1] ?? "";
+    const lightCodeClass = lightMarkup.match(/<code class="([^"]*)"/)?.[1] ?? "";
+
+    expect(lightMarkup).toContain("prose-code:text-slate-900");
+    expect(lightPreClass).toContain("text-slate-100");
+    expect(lightPreClass).not.toContain("text-slate-900");
+    expect(lightCodeClass).toContain("!text-slate-100");
+    expect(lightCodeClass).not.toContain("text-slate-900");
+    expect(lightMarkup).toContain("const ready = true;");
+    expect(lightMarkup).toContain("aria-label=\"Copy code\"");
+
+    const nonLightThemes = [
+      ["default-dark", "text-zinc-100"],
+      ["midnight-blue", "text-slate-100"],
+      ["emerald", "text-emerald-50"],
+      ["purple", "text-violet-50"],
+      ["warm-gray", "text-stone-100"],
+    ] as const;
+
+    for (const [themeId, expectedCodeText] of nonLightThemes) {
+      const markup = renderToStaticMarkup(
+        createElement(ChatMessageContent, {
+          content,
+          theme: getChatThemeById(themeId),
+        })
+      );
+      const preClass = markup.match(/<pre class="([^"]*)">/)?.[1] ?? "";
+
+      expect(preClass).toContain(expectedCodeText);
+      expect(markup).toContain("aria-label=\"Copy code\"");
+    }
   });
 });
