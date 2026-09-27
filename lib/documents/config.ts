@@ -1,5 +1,12 @@
 export const DOCUMENT_BUCKET = "documents";
 
+export type DocumentPlan = "free" | "pro";
+
+export type DocumentPlanLimits = {
+  maxFilesPerMessage: number;
+  maxFileSizeBytes: number;
+};
+
 export const DOCUMENT_LIMITS = {
   maxFilesPerMessage: 3,
   maxFileSizeBytes: 10 * 1024 * 1024,
@@ -15,6 +22,25 @@ export const DOCUMENT_LIMITS = {
   ],
   allowedExtensions: [".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx"],
 } as const;
+
+export const DOCUMENT_PLAN_LIMITS: Record<DocumentPlan, DocumentPlanLimits> = {
+  free: {
+    maxFilesPerMessage: 1,
+    maxFileSizeBytes: 5 * 1024 * 1024,
+  },
+  pro: {
+    maxFilesPerMessage: DOCUMENT_LIMITS.maxFilesPerMessage,
+    maxFileSizeBytes: DOCUMENT_LIMITS.maxFileSizeBytes,
+  },
+};
+
+export function getDocumentLimits(plan: DocumentPlan): DocumentPlanLimits {
+  return DOCUMENT_PLAN_LIMITS[plan];
+}
+
+export function formatMaxDocumentCount(count: number): string {
+  return String(count) + " " + (count === 1 ? "document" : "documents");
+}
 
 export type AllowedDocumentMimeType =
   (typeof DOCUMENT_LIMITS.allowedMimeTypes)[number];

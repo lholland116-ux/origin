@@ -6,6 +6,7 @@ import {
   buildDocumentContext,
   DocumentContextLimitError,
 } from "@/lib/documents/prepare-context";
+import { formatMaxDocumentCount, getDocumentLimits } from "@/lib/documents/config";
 import {
   assertStoredImageCount,
   buildImageInputContent,
@@ -745,6 +746,18 @@ export async function POST(req: Request) {
     }
 
     const dailyLimit = getPlanLimit(plan);
+    const documentLimits = getDocumentLimits(plan);
+
+    if (documentIds.length > documentLimits.maxFilesPerMessage) {
+      return jsonResponse(
+        {
+          error: `You can upload up to ${formatMaxDocumentCount(documentLimits.maxFilesPerMessage)} per message.`,
+          code: "DOCUMENT_LIMIT_EXCEEDED",
+          plan,
+        },
+        400,
+      );
+    }
 
     const today = new Date().toISOString().slice(0, 10);
 

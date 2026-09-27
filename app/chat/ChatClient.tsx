@@ -33,7 +33,11 @@ import Tooltip from "@/components/ui/Tooltip";
 import OnboardingModal from "@/components/help/OnboardingModal";
 import DocumentUploadButton from "@/components/DocumentUploadButton";
 import DocumentChip from "@/components/DocumentChip";
-import { DOCUMENT_LIMITS } from "@/lib/documents/config";
+import {
+  formatMaxDocumentCount,
+  formatMaxFileSize,
+  getDocumentLimits,
+} from "@/lib/documents/config";
 import { validateFiles } from "@/lib/documents/validate-upload";
 import {
   CHAT_THEMES,
@@ -2691,6 +2695,8 @@ export default function ChatClient({
       : null;
   const pendingImageLimitExceeded =
     pendingImages.length > getMaxPendingImages(plan);
+  const pendingDocumentLimitExceeded =
+    composerDocuments.length > getDocumentLimits(plan).maxFilesPerMessage;
 
   useEffect(() => {
     if (pendingImageLimitExceeded) {
@@ -3429,14 +3435,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (plan !== "pro") {
-      openUpgradeModal(
-        "File uploads are a Pro feature",
-        "Upgrade to Pro to upload and analyze PDF, DOCX, XLSX, CSV, and text files."
-      );
-      return;
-    }
-
     documentInputRef.current?.click();
   }
 
@@ -3734,7 +3732,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return false;
     }
 
-    const validationError = validateFiles(files);
+    const currentPlan = planRef.current;
+    const documentLimits = getDocumentLimits(currentPlan);
+
+    if (composerDocuments.length + files.length > documentLimits.maxFilesPerMessage) {
+      setDocumentError(`You can upload up to ${formatMaxDocumentCount(documentLimits.maxFilesPerMessage)} per message.`);
+      return false;
+    }
+
+    const validationError = validateFiles(files, currentPlan);
     if (validationError) {
       setDocumentError(validationError);
       return false;
@@ -3867,19 +3873,18 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     };
     const pastedFile = createPastedTextAttachment(pastedText);
 
-    if (
-      plan !== "pro" ||
-      useWebSearch ||
-      useImageGeneration ||
-      pastedFile.size > DOCUMENT_LIMITS.maxFileSizeBytes
-    ) {
+    const pastedDocumentLimits = getDocumentLimits(plan);
+    const documentLimitReached = composerDocuments.length >= pastedDocumentLimits.maxFilesPerMessage;
+    const pastedFileTooLarge = pastedFile.size > pastedDocumentLimits.maxFileSizeBytes;
+
+    if (useWebSearch || useImageGeneration || documentLimitReached || pastedFileTooLarge) {
       setInput(nextInput);
       setUiError(
-        plan !== "pro"
-          ? "Large pasted text attachments require Pro. Your full paste remains in the composer; shorten it to send inline or upgrade to attach it."
-          : useWebSearch || useImageGeneration
-            ? "Large pasted text cannot be attached in this mode. Your full paste remains in the composer; shorten it before sending."
-            : "This pasted text is too large for an attachment. Your full paste remains in the composer."
+        useWebSearch || useImageGeneration
+          ? "Large pasted text cannot be attached in this mode. Your full paste remains in the composer; shorten it before sending."
+          : documentLimitReached
+            ? `You can upload up to ${formatMaxDocumentCount(pastedDocumentLimits.maxFilesPerMessage)} per message.`
+            : `This pasted text exceeds ${formatMaxFileSize(pastedDocumentLimits.maxFileSizeBytes)} for an attachment. Your full paste remains in the composer.`
       );
       return;
     }
@@ -4203,6 +4208,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     const hasReadyDocuments = readyDocumentIds.length > 0;
 
     if (loading || uploadingImages || isUploadingDocuments) return;
+
+    if (pendingDocumentLimitExceeded) {
+      const limits = getDocumentLimits(plan);
+      setDocumentError(`You can upload up to ${formatMaxDocumentCount(limits.maxFilesPerMessage)} per message.`);
+      return;
+    }
 
     if (hasImages && !canAddPendingImages(0, pendingImageSnapshot.length, plan)) {
       setUiError(getPendingImageLimitMessage(plan));
@@ -5857,7 +5868,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <div className="hidden">
                       <DocumentUploadButton
                         inputRef={documentInputRef}
-                        disabled={composerDisabled || plan !== "pro"}
+                        disabled={composerDisabled}
                         hideTrigger
                         onFilesSelected={handleFilesSelected}
                       />
@@ -5911,6 +5922,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           disabled={
                             composerDisabled ||
                             pendingImageLimitExceeded ||
+                            pendingDocumentLimitExceeded ||
                             !canSubmitWithPendingImages(
                               input,
                               pendingImages.length,

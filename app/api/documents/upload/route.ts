@@ -3,10 +3,10 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   DOCUMENT_BUCKET,
-  DOCUMENT_LIMITS,
-  formatMaxFileSize,
-  isAllowedDocumentExtension,
+  isAllowedDocumentMimeType,
+  type DocumentPlan,
 } from "@/lib/documents/config";
+import { validateFiles } from "@/lib/documents/validate-upload";
 import { extractTextFromFile } from "@/lib/documents/extract-text";
 
 export const runtime = "nodejs";
@@ -40,18 +40,6 @@ type UploadDocumentsApiResponse = {
 
 const EXTRACTION_TIMEOUT_MS = 30_000;
 
-const allowedMimeTypes = [
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "application/csv",
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-] as const;
-
-type AllowedMimeType = (typeof allowedMimeTypes)[number];
-
 function jsonResponse(body: unknown, status = 200) {
   return NextResponse.json(body, {
     status,
@@ -63,10 +51,6 @@ function jsonResponse(body: unknown, status = 200) {
 
 function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function isAllowedMimeType(mimeType: string): mimeType is AllowedMimeType {
-  return allowedMimeTypes.includes(mimeType as AllowedMimeType);
 }
 
 function inferMimeTypeFromExtension(fileName: string): string {
@@ -89,7 +73,7 @@ function inferMimeTypeFromExtension(fileName: string): string {
 function getSafeMimeType(file: File): string {
   const mimeType = file.type?.trim() || "";
 
-  if (mimeType && isAllowedMimeType(mimeType)) {
+  if (mimeType && isAllowedDocumentMimeType(mimeType)) {
     return mimeType;
   }
 
@@ -176,44 +160,7 @@ function buildResponse(
   };
 }
 
-function validateFiles(files: File[]) {
-  if (!files.length) {
-    return "No files uploaded.";
-  }
-
-  if (files.length > DOCUMENT_LIMITS.maxFilesPerMessage) {
-    return `You can upload up to ${DOCUMENT_LIMITS.maxFilesPerMessage} files per message.`;
-  }
-
-  for (const file of files) {
-    const fileName = file.name?.trim() || "Unnamed file";
-    const safeMimeType = getSafeMimeType(file);
-
-    if (file.size <= 0) {
-      return `File is empty: ${fileName}`;
-    }
-
-    if (file.size > DOCUMENT_LIMITS.maxFileSizeBytes) {
-      return `File exceeds ${formatMaxFileSize(
-        DOCUMENT_LIMITS.maxFileSizeBytes
-      )}: ${fileName}`;
-    }
-
-    const hasAllowedMimeType = safeMimeType
-      ? isAllowedMimeType(safeMimeType)
-      : false;
-
-    const hasAllowedExtension = isAllowedDocumentExtension(fileName);
-
-    if (!hasAllowedMimeType && !hasAllowedExtension) {
-      return `Unsupported file type: ${fileName}`;
-    }
-  }
-
-  return null;
-}
-
-async function assertProUser(params: {
+async function getUserPlan(params: {
   supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
   userId: string;
 }) {
@@ -236,20 +183,18 @@ async function assertProUser(params: {
     };
   }
 
-  if (profile.plan !== "pro") {
+  if (profile.plan !== "free" && profile.plan !== "pro") {
+    console.error("/api/documents/upload: invalid subscription plan", profile.plan);
     return {
       ok: false as const,
       response: jsonResponse(
-        {
-          error: "File uploads are a Pro feature. Please upgrade to continue.",
-          code: "PRO_REQUIRED",
-        },
-        403
+        { error: "Failed to verify subscription plan." },
+        500
       ),
     };
   }
 
-  return { ok: true as const };
+  return { ok: true as const, plan: profile.plan as DocumentPlan };
 }
 
 async function verifyConversationOwnership(params: {
@@ -458,10 +403,10 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Unauthorized." }, 401);
     }
 
-    const proCheck = await assertProUser({ supabase, userId: user.id });
+    const planCheck = await getUserPlan({ supabase, userId: user.id });
 
-    if (!proCheck.ok) {
-      return proCheck.response;
+    if (!planCheck.ok) {
+      return planCheck.response;
     }
 
     const formData = await req.formData();
@@ -490,7 +435,9 @@ export async function POST(req: Request) {
       return conversationCheck.response;
     }
 
-    const validationError = validateFiles(files);
+    const validationError = validateFiles(files, planCheck.plan, {
+      getMimeType: getSafeMimeType,
+    });
 
     if (validationError) {
       return jsonResponse({ error: validationError }, 400);
