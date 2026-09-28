@@ -4,6 +4,7 @@ import { footerColumns } from "@/lib/landing-content";
 
 const FOOTER_ROUTES: Readonly<Record<string, string>> = {
   Features: "#features",
+  "AI Agents": "#ai-agents",
   Pricing: BRAND.routes.pricing,
   About: BRAND.routes.about,
   Blog: BRAND.routes.blog,

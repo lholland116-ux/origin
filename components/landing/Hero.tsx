@@ -57,6 +57,10 @@ export default function Hero() {
           {BRAND.subheadline}
         </p>
 
+        <p className="mt-4 max-w-xl text-sm leading-6 text-blue-100/80">
+          LVTChat combines practical general-purpose AI with purpose-built AI Agents for quality, engineering, and regulatory workflows.
+        </p>
+
         <div className="mt-3 grid max-w-xl gap-3">
           <p className="rounded-2xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm font-medium leading-6 text-blue-200">
             <span aria-hidden="true">🎉 </span>

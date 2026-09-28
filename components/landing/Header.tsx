@@ -6,11 +6,11 @@ import { BRAND } from "@/lib/branding";
 import { navItems } from "@/lib/landing-content";
 
 const NAV_ROUTES = {
-  Features: "#features",
-  "Use Cases": "#use-cases",
+  Product: "#features",
+  "AI Agents": "#ai-agents",
   Pricing: BRAND.routes.pricing,
+  Help: BRAND.routes.help,
   About: BRAND.routes.about,
-  Blog: BRAND.routes.blog,
 } satisfies Record<string, string>;
 
 function isInternalRoute(href: string): boolean {

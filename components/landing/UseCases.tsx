@@ -10,23 +10,22 @@ export default function UseCases() {
     >
       <div className="text-center">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/40">
-          Built for everyday impact
+          Real work and specialized workflows
         </p>
 
         <h2
           id="use-cases-heading"
           className="mt-4 text-3xl font-semibold tracking-tight text-white md:text-4xl"
         >
-          One AI assistant. Endless possibilities.
+          Practical help for everyday work, quality, engineering, and regulatory workflows.
         </h2>
 
         <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
-          {BRAND.name} helps individuals, professionals, businesses, and
-          developers solve problems faster with practical AI support.
+          {BRAND.name} is useful today for general-purpose work and is expanding into purpose-built quality, engineering, and regulatory workflows.
         </p>
       </div>
 
-      <div className="mt-10 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-10 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {useCases.map((item) => (
           <article
             key={item.title}

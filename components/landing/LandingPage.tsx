@@ -1,3 +1,4 @@
+import AgentRoadmap from "@/components/landing/AgentRoadmap";
 import CTASection from "@/components/landing/CTASection";
 import FeatureGrid from "@/components/landing/FeatureGrid";
 import Footer from "@/components/landing/Footer";
@@ -31,6 +32,7 @@ export default function LandingPage() {
 
         <TrustedSection />
         <UseCases />
+        <AgentRoadmap />
         <CTASection />
         <Footer />
       </div>

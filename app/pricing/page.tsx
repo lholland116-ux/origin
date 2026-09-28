@@ -5,28 +5,42 @@ import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 const LOGIN_REDIRECT = "/login?redirectTo=/pricing";
-const MOBILE_APPS_FEATURE = BRAND.mobile.pricingFeature;
-
 const FEATURES_FREE = [
-  "20 messages per day",
-  "Standard AI mode",
-  "Web search with current information",
-  "Core chat experience",
+  "20 messages/day",
+  "Standard AI",
+  "Web Search",
   "Conversation history",
-  "Analyze one image per prompt",
-  "Android app access",
-  "Great for everyday use",
+  "1 document per Standard message (TXT, MD, CSV, PDF, DOCX, XLSX)",
+  "5 MB maximum document size",
+  "1 image attachment per Standard message",
+  "Image upload and analysis",
+  "Image generation",
+  "Image editing",
+  "3 shared image operations/day",
+  "21 shared image operations/month",
+  "Generated-image deletion",
+  "Voice Input",
+  "Read Aloud",
+  "Android access",
 ] as const;
 
 const FEATURES_PRO = [
-  "300 messages per day",
-  "Upload up to 3 documents at once",
-  "Analyze PDF, DOCX, XLSX, CSV, and TXT files",
-  "Analyze one image per prompt",
-  "Priority performance",
-  "Custom AI Agents",
-  MOBILE_APPS_FEATURE,
-  "Built for serious work",
+  "300 messages/day",
+  "Standard AI",
+  "Web Search",
+  "Conversation history",
+  "Up to 3 documents per message (TXT, MD, CSV, PDF, DOCX, XLSX)",
+  "10 MB maximum per document",
+  "Up to 3 image attachments per Standard message",
+  "Image upload and analysis",
+  "Image generation",
+  "Image editing",
+  "20 shared image operations/day",
+  "200 shared image operations/month",
+  "Generated-image deletion",
+  "Voice Input",
+  "Read Aloud",
+  "Android access",
 ] as const;
 
 const PRICING_NAV_ITEMS = [
@@ -158,30 +172,12 @@ function ProCheckoutButton() {
 }
 
 function FeatureItem({ feature }: { feature: string }) {
-  const isCustomAgents = feature === "Custom AI Agents";
-  const isMobileApps = feature === MOBILE_APPS_FEATURE;
-
   return (
     <li className="flex gap-3">
       <span aria-hidden="true" className="mt-0.5 text-emerald-400">
         ✓
       </span>
-
-      <span>
-        {feature}
-
-        {isCustomAgents ? (
-          <span className="ml-2 inline-flex rounded-full border border-blue-400/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-200">
-            Pro — Coming Soon
-          </span>
-        ) : null}
-
-        {isMobileApps ? (
-          <span className="ml-2 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
-            {BRAND.mobile.availabilityLabel}
-          </span>
-        ) : null}
-      </span>
+      <span>{feature}</span>
     </li>
   );
 }
@@ -361,7 +357,7 @@ export default function PricingPage() {
           {earlyAdopter.enabled ? (
             <div className="mx-auto mb-6 inline-flex rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">
               <span aria-hidden="true">🔥&nbsp;</span>
-              {earlyAdopter.headline} — ${formatPrice(proPrice)}/month
+              {BRAND.pricing.currencySymbol}{formatPrice(proPrice)}/month — Limited-time offer
             </div>
           ) : null}
 
@@ -442,11 +438,11 @@ export default function PricingPage() {
             {earlyAdopter.enabled ? (
               <>
                 <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-                  {earlyAdopter.subheadline}
+                  $5.99/month is a limited-time offer. Future pricing may differ.
                 </div>
 
                 <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm leading-6 text-zinc-300">
-                  {earlyAdopter.note}
+                  Future subscribers may pay different rates as the product expands.
                 </div>
               </>
             ) : null}
@@ -479,6 +475,10 @@ export default function PricingPage() {
             <ProCheckoutButton />
           </article>
         </div>
+
+        <p className="mx-auto mt-8 max-w-3xl text-center text-sm leading-6 text-zinc-400">
+          Generate, Regenerate, and Edit share the same image-operation allowance.
+        </p>
 
         <p className="mt-8 text-center text-sm text-zinc-400">
           No credit card required for the free plan • Cancel Pro anytime

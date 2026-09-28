@@ -98,7 +98,7 @@ export const BRAND = {
     availabilityLabel: "Available for Free and Pro users",
 
     proMessage:
-      "The Android app is available now for both Free and Pro users. The iPhone app and Custom AI Agents are coming soon.",
+      "The Android app is available now for both Free and Pro users. The iPhone app is coming soon.",
 
     downloadLabel: "Download on Google Play",
   },

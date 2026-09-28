@@ -1,4 +1,3 @@
-import { BRAND } from "@/lib/branding";
 import { features } from "@/lib/landing-content";
 
 export default function FeatureGrid() {
@@ -10,15 +9,15 @@ export default function FeatureGrid() {
     >
       <div className="text-center">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/40">
-          Powered by advanced AI. Built for real-world impact.
+          General-purpose LVTChat - Available Now
         </p>
 
-        <h2 id="features-heading" className="sr-only">
-          {BRAND.name} features
+        <h2 id="features-heading" className="mt-3 text-2xl font-semibold tracking-tight text-white md:text-3xl">
+          Practical AI capabilities for work, research, and everyday tasks
         </h2>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {features.map((item) => (
           <article
             key={item.title}

@@ -24,7 +24,7 @@ const stats = [
   },
   {
     label: "AI build and study hours",
-    value: "2,500+",
+    value: "4,000+",
   },
 ] as const;
 
@@ -115,6 +115,18 @@ export default function AboutPage() {
             </p>
 
             <p>
+              LVTChat combines practical general-purpose AI with purpose-built AI Agents for quality, engineering, and regulatory workflows.
+            </p>
+
+            <p>
+              LVTChat is expanding from practical general-purpose AI into purpose-built workflows, with medical-device quality and regulatory applications as an initial specialized focus.
+            </p>
+
+            <p>
+              <strong>CAPA AI Agent - Workflow  In Development</strong> is the first major specialized regulated workflow being built on the platform. Qualified humans retain authority for controlled decisions, reviews, approvals, dispositions, and regulated records.
+            </p>
+
+            <p>
               {BRAND.name} was also built with the support and encouragement of
               family and friends, whose belief in the vision helped shape a
               product focused on usefulness, clarity, and trust.
@@ -186,7 +198,7 @@ export default function AboutPage() {
               </p>
 
               <p>
-                As artificial intelligence evolved, I invested more than 2,500
+                As artificial intelligence evolved, I invested more than 4,000
                 hours studying, building, and deploying AI systems while
                 completing more than 30 AI certifications through IBM and
                 Vanderbilt University. That experience became the foundation
