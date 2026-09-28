@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:database-integration": "CAPA_DATABASE_INTEGRATION_TESTS=true vitest run tests/integration/supabase-persistence.test.ts"
+    "test:database-integration": "CAPA_DATABASE_INTEGRATION_TESTS=true vitest run tests/integration/supabase-persistence.test.ts",
+    "release:hostinger": "bash scripts/release-hostinger.sh"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",
