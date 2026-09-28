@@ -5,6 +5,7 @@ import {
   COMPOSER_PLUS_MENU_LABELS,
   ComposerPlusMenu,
   getComposerPlusMenuActions,
+  GeneratedImageAttribution,
   getGeneratedImageActionClass,
   getSelectedImageFiles,
   getProfileDisplayName,
@@ -256,6 +257,40 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain('getGeneratedImageActionClass(activeTheme, "default")');
     expect(clientSource).toContain('getGeneratedImageActionClass(activeTheme, "delete")');
     expect(clientSource).toContain('aria-label="Edit uploaded image"');
+  });
+
+  it("renders UI-only attribution for generated and edited result images", () => {
+    const lightMarkup = renderToStaticMarkup(
+      GeneratedImageAttribution({ theme: { id: "light" } })
+    );
+    const darkMarkup = renderToStaticMarkup(
+      GeneratedImageAttribution({ theme: { id: "default-dark" } })
+    );
+
+    expect(lightMarkup).toContain("Created with LVTChat");
+    expect(lightMarkup).toContain("text-slate-500");
+    expect(darkMarkup).toContain("Created with LVTChat");
+    expect(darkMarkup).toContain("text-white/50");
+
+    const generatedResultStart = clientSource.indexOf("{message.generatedImage ? (");
+    const generatedResultEnd = clientSource.indexOf(
+      '{message.role === "assistant" && message.generatedImage?.id ? (',
+      generatedResultStart
+    );
+    const generatedResultSource = clientSource.slice(generatedResultStart, generatedResultEnd);
+
+    expect(generatedResultSource).toContain("<GeneratedImageAttribution theme={activeTheme} />");
+    expect(generatedResultSource).toContain("src={message.generatedImage.url}");
+    expect(
+      clientSource.split("<GeneratedImageAttribution theme={activeTheme} />")
+    ).toHaveLength(2);
+
+    const uploadedImageStart = clientSource.indexOf(
+      '{messageImageSource === "children" && messageImages.length > 0 ? ('
+    );
+    expect(clientSource.slice(uploadedImageStart, uploadedImageStart + 3600)).not.toContain(
+      "GeneratedImageAttribution"
+    );
   });
 
   it("keeps the existing usage refresh lifecycle for generation and regeneration", () => {

@@ -74,7 +74,7 @@ describe("GET /api/usage image-generation quota section", () => {
     });
   });
 
-  it("preserves text usage and returns separate Free image limits", async () => {
+  it("preserves text usage and returns the Free shared image-operation limits", async () => {
     setup({});
 
     const response = await GET();
@@ -88,8 +88,8 @@ describe("GET /api/usage image-generation quota section", () => {
       plan: "free",
       imageGeneration: {
         plan: "free",
-        daily: { used: 0, reserved: 0, limit: 2, remaining: 2 },
-        monthly: { used: 0, reserved: 0, limit: 10, remaining: 10 },
+        daily: { used: 0, reserved: 0, limit: 3, remaining: 3 },
+        monthly: { used: 0, reserved: 0, limit: 21, remaining: 21 },
       },
     });
   });

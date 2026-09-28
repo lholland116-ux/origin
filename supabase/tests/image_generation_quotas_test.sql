@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap;
 
-select plan(80);
+select plan(81);
 
 select has_table(
   'public',
@@ -383,26 +383,26 @@ select is(
 
 select is(
   (select daily_limit from owner_reservations),
-  2,
-  'Free daily image limit is two'
+  3,
+  'Free daily image limit is three'
 );
 
 select is(
   (select monthly_limit from owner_reservations),
-  10,
-  'Free monthly image limit is ten'
+  21,
+  'Free monthly image limit is twenty-one'
 );
 
 select is(
   (select daily_remaining from owner_reservations),
-  1::bigint,
-  'one active reservation leaves one Free daily slot'
+  2::bigint,
+  'one active reservation leaves two Free daily slots'
 );
 
 select is(
   (select monthly_remaining from owner_reservations),
-  9::bigint,
-  'one active reservation leaves nine Free monthly slots'
+  20::bigint,
+  'one active reservation leaves twenty Free monthly slots'
 );
 
 select is(
@@ -427,11 +427,21 @@ select is(
   'active reservations count toward daily capacity'
 );
 
+create temporary table owner_third_reservation on commit drop as
+select *
+from public.reserve_image_generation_quota('20000000-0000-4000-8000-000000000001');
+
+select is(
+  (select daily_reserved from owner_third_reservation),
+  3::bigint,
+  'three shared image operations can be reserved for Free'
+);
+
 select throws_ok(
   $$select * from public.reserve_image_generation_quota('20000000-0000-4000-8000-000000000001')$$,
   'P0001',
   'IMAGE_DAILY_LIMIT_REACHED',
-  'daily capacity rejects a third Free reservation'
+  'daily capacity rejects a fourth Free reservation'
 );
 
 select is(
@@ -483,6 +493,10 @@ select is(
   'released',
   'lazy reservation cleanup reclassifies expired attempts'
 );
+
+create temporary table counts_second_reservation on commit drop as
+select *
+from public.reserve_image_generation_quota('20000000-0000-4000-8000-000000000004');
 
 select throws_ok(
   $$select * from public.reserve_image_generation_quota('20000000-0000-4000-8000-000000000004')$$,
@@ -805,7 +819,7 @@ select
   'replicate',
   'flux-schnell',
   3000
-from generate_series(1, 10) as series;
+from generate_series(1, 21) as series;
 
 set local role authenticated;
 
@@ -813,7 +827,7 @@ select throws_ok(
   $$select * from public.reserve_image_generation_quota('20000000-0000-4000-8000-000000000005')$$,
   'P0001',
   'IMAGE_MONTHLY_LIMIT_REACHED',
-  'monthly capacity rejects a Free reservation after ten current-UTC successes'
+  'monthly capacity rejects a Free reservation after twenty-one current-UTC successes'
 );
 
 select *

@@ -884,7 +884,13 @@ export function getImageEditErrorMessage(
       return { message: "Image editing could not be completed. Try again.", canRetry: true };
     case "IMAGE_DAILY_LIMIT_REACHED":
     case "IMAGE_MONTHLY_LIMIT_REACHED":
-      return { message: "Image editing is temporarily unavailable.", canRetry: false };
+      return {
+        message: getImageGenerationQuotaMessage(
+          plan,
+          code === "IMAGE_DAILY_LIMIT_REACHED" ? "daily" : "monthly",
+        ),
+        canRetry: false,
+      };
     case "UNAUTHORIZED":
       return { message: "Your session has expired. Please sign in again.", canRetry: false };
   }
@@ -1413,6 +1419,21 @@ export function getGeneratedImageActionClass(
   return variant === "delete"
     ? "text-red-300/65 hover:bg-red-400/10 hover:text-red-200"
     : "text-white/55 hover:bg-white/5 hover:text-white/90";
+}
+
+export function GeneratedImageAttribution({ theme }: { theme: Pick<ChatTheme, "id"> }) {
+  return (
+    <span
+      data-testid="generated-image-attribution"
+      aria-label="Image attribution"
+      className={cx(
+        "mt-1 text-xs",
+        theme.id === "light" ? "text-slate-500" : "text-white/50"
+      )}
+    >
+      Created with LVTChat
+    </span>
+  );
 }
 
 function createId(): string {
@@ -5331,8 +5352,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           </div>
 
                           {message.generatedImage ? (
-                            <div className="mt-3 flex w-fit min-w-0 max-w-full overflow-hidden rounded-xl">
-                              <NextImage
+                            <div className="mt-3 flex w-fit min-w-0 max-w-full flex-col items-start">
+                              <div className="overflow-hidden rounded-xl">
+                                <NextImage
                                 src={message.generatedImage.url}
                                 alt="Generated image"
                                 width={768}
@@ -5342,6 +5364,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                 sizes="(max-width: 768px) calc(100vw - 2rem), 768px"
                                 className="block h-auto w-auto max-h-[min(70vh,640px)] max-w-full object-contain"
                               />
+                              </div>
+                              <GeneratedImageAttribution theme={activeTheme} />
                             </div>
                           ) : null}
 
