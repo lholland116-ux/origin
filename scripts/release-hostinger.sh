@@ -12,9 +12,11 @@ BRANCH="$(git branch --show-current)"
 COMMIT="$(git rev-parse HEAD)"
 SHORT="$(git rev-parse --short HEAD)"
 
-echo "Refreshing origin/main..."
-git fetch --quiet origin main
-REMOTE_MAIN="$(git rev-parse origin/main 2>/dev/null || true)"
+echo "Reading remote main directly..."
+REMOTE_MAIN="$(
+  git ls-remote --exit-code origin refs/heads/main |
+  awk 'NR == 1 {print $1}'
+)"
 
 ENV_FILE="$ROOT_DIR/.env.local"
 DOWNLOAD_DIR="$HOME/Downloads"
@@ -61,15 +63,15 @@ echo "Commit: $SHORT"
 
 [ "$BRANCH" = "main" ] || fail "release must be run from main"
 
-[ -n "$REMOTE_MAIN" ] || fail "origin/main is unavailable"
+[ -n "$REMOTE_MAIN" ] || fail "remote main is unavailable"
 
 [ "$COMMIT" = "$REMOTE_MAIN" ] || {
   echo "HEAD:        $COMMIT"
-  echo "origin/main: $REMOTE_MAIN"
-  fail "HEAD must exactly match origin/main before release"
+  echo "remote main:  $REMOTE_MAIN"
+  fail "HEAD must exactly match remote main before release"
 }
 
-echo "PASS — HEAD exactly matches origin/main"
+echo "PASS — HEAD exactly matches remote main"
 
 echo
 echo "===== 2. WORKTREE ISOLATION ====="
