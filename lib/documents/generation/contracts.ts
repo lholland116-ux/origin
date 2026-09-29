@@ -123,7 +123,7 @@ export type GeneratedArtifact = {
   readonly mimeType: string;
   readonly bytes: Uint8Array;
   readonly sizeBytes: number;
-  readonly format: Exclude<DocumentFormat, "zip">;
+  readonly format: DocumentFormat;
 };
 
 export type ZipPackageRequest = {

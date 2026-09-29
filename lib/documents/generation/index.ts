@@ -6,5 +6,6 @@ export * from "./generators/pdf";
 export * from "./generators/pptx";
 export * from "./generators/text";
 export * from "./generators/xlsx";
+export * from "./generators/zip";
 export * from "./mime";
 export * from "./validation";

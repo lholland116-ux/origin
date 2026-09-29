@@ -162,8 +162,6 @@ export function validateGeneratedArtifact(artifact: GeneratedArtifact): string[]
 
   if (!isSupportedDocumentFormat(format)) {
     issues.push("Artifact format is unsupported.");
-  } else if (format === "zip") {
-    issues.push("Artifact format is unsupported.");
   } else if (!isSafeFilename(artifact.filename, artifact.format)) {
     issues.push("Artifact filename is unsafe.");
   } else if (!artifact.filename.endsWith(getDocumentExtension(artifact.format))) {
@@ -173,7 +171,7 @@ export function validateGeneratedArtifact(artifact: GeneratedArtifact): string[]
   if (!(artifact.bytes instanceof Uint8Array)) {
     issues.push("Artifact bytes are invalid.");
   }
-  if (isSupportedDocumentFormat(format) && format !== "zip" && artifact.mimeType !== getDocumentMimeType(format)) {
+  if (isSupportedDocumentFormat(format) && artifact.mimeType !== getDocumentMimeType(format)) {
     issues.push("Artifact MIME type does not match its format.");
   }
   if (artifact.bytes instanceof Uint8Array && artifact.sizeBytes !== artifact.bytes.byteLength) {
