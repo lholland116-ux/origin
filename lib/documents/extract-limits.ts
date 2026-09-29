@@ -1,0 +1,1 @@
+export const MAX_EXTRACTED_TEXT_LENGTH = 200_000;

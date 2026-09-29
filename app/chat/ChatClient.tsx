@@ -37,6 +37,7 @@ import {
   formatMaxDocumentCount,
   formatMaxFileSize,
   getDocumentLimits,
+  isAllowedDocumentMimeTypeForExtension,
 } from "@/lib/documents/config";
 import { validateFiles } from "@/lib/documents/validate-upload";
 import {
@@ -668,16 +669,6 @@ const DOCUMENT_POLL_INTERVAL_MS = 2000;
 const DOCUMENT_POLL_MAX_ATTEMPTS = 10;
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 30_000;
 const ENABLE_UPLOAD_DEBUG = process.env.NODE_ENV !== "production";
-
-const ALLOWED_DOCUMENT_MIME_TYPES = [
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "application/csv",
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-] as const;
 
 const CONVERSATION_STARTER = "Explain something step by step";
 
@@ -1479,6 +1470,9 @@ function inferMimeType(file: File): string {
   if (lowerName.endsWith(".xlsx")) {
     return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   }
+  if (lowerName.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
   if (lowerName.endsWith(".csv")) return "text/csv";
   if (lowerName.endsWith(".txt")) return "text/plain";
   if (lowerName.endsWith(".md")) return "text/markdown";
@@ -1487,17 +1481,7 @@ function inferMimeType(file: File): string {
 }
 
 function isAllowedUploadMimeType(mimeType: string, fileName: string): boolean {
-  return (
-    ALLOWED_DOCUMENT_MIME_TYPES.includes(
-      mimeType as (typeof ALLOWED_DOCUMENT_MIME_TYPES)[number]
-    ) ||
-    fileName.toLowerCase().endsWith(".xlsx") ||
-    fileName.toLowerCase().endsWith(".csv") ||
-    fileName.toLowerCase().endsWith(".txt") ||
-    fileName.toLowerCase().endsWith(".md") ||
-    fileName.toLowerCase().endsWith(".docx") ||
-    fileName.toLowerCase().endsWith(".pdf")
-  );
+  return isAllowedDocumentMimeTypeForExtension(mimeType, fileName);
 }
 
 function cloneDocuments(documents: UploadedDocument[]): UploadedDocument[] {

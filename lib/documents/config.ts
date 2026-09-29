@@ -19,8 +19,9 @@ export const DOCUMENT_LIMITS = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   ],
-  allowedExtensions: [".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx"],
+  allowedExtensions: [".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx", ".pptx"],
 } as const;
 
 export const DOCUMENT_PLAN_LIMITS: Record<DocumentPlan, DocumentPlanLimits> = {
@@ -59,6 +60,26 @@ export function isAllowedDocumentMimeType(
 export function isAllowedDocumentExtension(fileName: string): boolean {
   const lowerName = fileName.toLowerCase();
   return DOCUMENT_LIMITS.allowedExtensions.some((ext) => lowerName.endsWith(ext));
+}
+
+const DOCUMENT_MIME_TYPES_BY_EXTENSION: Readonly<Record<AllowedDocumentExtension, readonly AllowedDocumentMimeType[]>> = {
+  ".txt": ["text/plain"],
+  ".md": ["text/markdown"],
+  ".csv": ["text/csv", "application/csv"],
+  ".pdf": ["application/pdf"],
+  ".docx": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  ".xlsx": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  ".pptx": ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+};
+
+export function getDocumentExtension(fileName: string): AllowedDocumentExtension | null {
+  const lowerName = fileName.toLowerCase();
+  return DOCUMENT_LIMITS.allowedExtensions.find((extension) => lowerName.endsWith(extension)) ?? null;
+}
+
+export function isAllowedDocumentMimeTypeForExtension(mimeType: string, fileName: string): boolean {
+  const extension = getDocumentExtension(fileName);
+  return extension ? DOCUMENT_MIME_TYPES_BY_EXTENSION[extension].includes(mimeType as AllowedDocumentMimeType) : false;
 }
 
 export function formatMaxFileSize(bytes: number): string {

@@ -3,7 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   DOCUMENT_BUCKET,
-  isAllowedDocumentMimeType,
+  isAllowedDocumentMimeTypeForExtension,
   type DocumentPlan,
 } from "@/lib/documents/config";
 import { validateFiles } from "@/lib/documents/validate-upload";
@@ -67,22 +67,41 @@ function inferMimeTypeFromExtension(fileName: string): string {
     return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   }
 
+  if (lowerName.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
   return "";
 }
 
 function getSafeMimeType(file: File): string {
   const mimeType = file.type?.trim() || "";
+  const inferredMimeType = inferMimeTypeFromExtension(file.name);
 
-  if (mimeType && isAllowedDocumentMimeType(mimeType)) {
-    return mimeType;
+  if (!inferredMimeType) {
+    return "";
   }
 
-  return inferMimeTypeFromExtension(file.name);
+  if (mimeType && !isAllowedDocumentMimeTypeForExtension(mimeType, file.name)) {
+    return "";
+  }
+
+  return inferredMimeType;
 }
 
 function normalizeExtractionError(error: unknown, mimeType: string): string {
   const message =
     error instanceof Error ? error.message : "Unknown extraction error.";
+
+  if (mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation") {
+    if (/timed out|aborted|AbortError/i.test(message)) {
+      return "PowerPoint extraction timed out.";
+    }
+
+    if (/encrypted|password-protected|password required/i.test(message)) {
+      return "Encrypted or password-protected PowerPoint is not supported.";
+    }
+
+    return "PowerPoint extraction failed: " + message;
+  }
 
   if (mimeType === "application/pdf") {
     if (/timed out/i.test(message)) {

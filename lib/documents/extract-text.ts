@@ -1,11 +1,15 @@
 import mammoth from "mammoth";
 import ExcelJS from "exceljs";
+import { extractPptxText } from "@/lib/documents/extract-pptx";
+import { MAX_EXTRACTED_TEXT_LENGTH } from "@/lib/documents/extract-limits";
 
 // Official pdf-parse Node/Vercel setup.
 // Load worker support first, then use CanvasFactory + PDFParse.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { CanvasFactory } = require("pdf-parse/worker") as {
   CanvasFactory: unknown;
 };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { PDFParse } = require("pdf-parse") as {
   PDFParse: new (options: {
     data: Buffer;
@@ -16,7 +20,6 @@ const { PDFParse } = require("pdf-parse") as {
   };
 };
 
-const MAX_EXTRACTED_TEXT_LENGTH = 200_000;
 const MIN_MEANINGFUL_TEXT_LENGTH = 20;
 const LOW_TEXT_WARNING_PREFIX =
   "[Low text content detected — document may be scanned]\n\n";
@@ -271,6 +274,9 @@ export async function extractTextFromFile(
 
     case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
       return extractXlsxText(buffer);
+
+    case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+      return extractPptxText(buffer);
 
     default:
       throw new Error(`Unsupported MIME type for extraction: ${mimeType}`);

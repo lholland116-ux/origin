@@ -2,6 +2,7 @@ import {
   formatMaxDocumentCount,
   formatMaxFileSize,
   getDocumentLimits,
+  isAllowedDocumentMimeTypeForExtension,
   isAllowedDocumentExtension,
   isAllowedDocumentMimeType,
   type DocumentPlan,
@@ -25,6 +26,7 @@ export function validateFiles(
   for (const file of files) {
     const fileName = file.name?.trim() || "Unnamed file";
     const mimeType = options?.getMimeType?.(file) ?? file.type?.trim() ?? "";
+    const hasAuthoritativeMimeType = Boolean(options?.getMimeType) || Boolean(mimeType);
 
     if (file.size <= 0) {
       return `File is empty: ${fileName}`;
@@ -34,13 +36,12 @@ export function validateFiles(
       return `File exceeds ${formatMaxFileSize(limits.maxFileSizeBytes)}: ${fileName}`;
     }
 
+    const hasAllowedExtension = isAllowedDocumentExtension(fileName);
     const hasAllowedMimeType = mimeType
-      ? isAllowedDocumentMimeType(mimeType)
+      ? isAllowedDocumentMimeType(mimeType) && isAllowedDocumentMimeTypeForExtension(mimeType, fileName)
       : false;
 
-    const hasAllowedExtension = isAllowedDocumentExtension(fileName);
-
-    if (!hasAllowedMimeType && !hasAllowedExtension) {
+    if (!hasAllowedExtension || (hasAuthoritativeMimeType && !hasAllowedMimeType)) {
       return `Unsupported file type: ${fileName}`;
     }
   }
