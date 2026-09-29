@@ -11,6 +11,14 @@ describe("plain-text document preservation", () => {
     ).resolves.toBe(content);
   });
 
+  it("preserves Markdown content exactly", async () => {
+    const content = "# Heading\n\nBody **bold**";
+
+    await expect(
+      extractTextFromFile(Buffer.from(content), "text/markdown")
+    ).resolves.toBe(content);
+  });
+
   it("rejects a plain-text extraction that exceeds its explicit limit", async () => {
     await expect(
       extractTextFromFile(
