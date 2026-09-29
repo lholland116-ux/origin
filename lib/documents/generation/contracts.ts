@@ -1,4 +1,11 @@
-export type DocumentFormat = "txt" | "md" | "docx" | "pdf" | "xlsx" | "zip";
+export type DocumentFormat =
+  | "txt"
+  | "md"
+  | "docx"
+  | "pdf"
+  | "xlsx"
+  | "pptx"
+  | "zip";
 
 export type DocumentMetadata = Readonly<Record<string, string>>;
 export type TemplateVariables = Readonly<

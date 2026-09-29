@@ -7,7 +7,7 @@ export const DEFAULT_DOCUMENT_FILENAME = "lvtchat-document";
 const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.[^.]+)?$/i;
 
 function removeKnownExtension(value: string): string {
-  return value.replace(/\.(?:txt|md|docx|pdf|xlsx|zip)(?:\.(?:txt|md|docx|pdf|xlsx|zip))*$/i, "");
+  return value.replace(/\.(?:(?:txt|md|docx|pdf|xlsx|pptx|zip))(?:\.(?:(?:txt|md|docx|pdf|xlsx|pptx|zip)))*$/i, "");
 }
 
 function trimFilenameStem(value: string): string {

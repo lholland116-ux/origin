@@ -11,6 +11,7 @@ import {
   normalizeWorkbookCell,
   sanitizeFilename,
   validateGenerationRequest,
+  validateGeneratedArtifact,
   validateZipPackage,
   validateWorksheetName,
 } from "@/lib/documents/generation";
@@ -44,13 +45,14 @@ function artifact(
 
 describe("document generation contracts", () => {
   it("defines the supported formats and exact MIME registry", () => {
-    expect(DOCUMENT_FORMATS).toEqual(["txt", "md", "docx", "pdf", "xlsx", "zip"]);
+    expect(DOCUMENT_FORMATS).toEqual(["txt", "md", "docx", "pdf", "xlsx", "pptx", "zip"]);
     expect(DOCUMENT_MIME_TYPES).toEqual({
       txt: "text/plain; charset=utf-8",
       md: "text/markdown; charset=utf-8",
       docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       pdf: "application/pdf",
       xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       zip: "application/zip",
     });
   });
@@ -60,6 +62,10 @@ describe("document generation contracts", () => {
     expect(sanitizeFilename("../../report.md", "md")).not.toContain("..");
     expect(sanitizeFilename("bad" + String.fromCharCode(0) + "name.txt", "txt")).toBe("badname.txt");
     expect(sanitizeFilename("report.txt.txt", "md")).toBe("report.md");
+    expect(sanitizeFilename("slides", "pptx")).toBe("slides.pptx");
+    expect(sanitizeFilename("slides.pdf.pptx", "pptx")).toBe("slides.pptx");
+    expect(sanitizeFilename("../../slides.pptx", "pptx")).not.toContain("..");
+    expect(isSafeFilename("slides.pptx", "pptx")).toBe(true);
     expect(sanitizeFilename("CON", "txt")).toBe("lvtchat-document.txt");
 
     const longFilename = sanitizeFilename("x".repeat(300), "pdf");
@@ -111,6 +117,12 @@ describe("document generation contracts", () => {
     expect(normalizeWorkbookCell("-cmd")).toBe(quote + "-cmd");
     expect(normalizeWorkbookCell("@reference")).toBe(quote + "@reference");
     expect(normalizeWorkbookCell(-10)).toBe(-10);
+  });
+
+  it("validates PPTX artifacts and ZIP entries", () => {
+    const pptx = artifact("slides.pptx", "pptx");
+    expect(validateGeneratedArtifact(pptx)).toEqual([]);
+    expect(validateZipPackage({ format: "zip", entries: [pptx] })).toEqual([]);
   });
 
   it("validates ZIP entry count, duplicate names, nesting, and total size", () => {

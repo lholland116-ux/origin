@@ -6,6 +6,7 @@ export const DOCUMENT_FORMATS = [
   "docx",
   "pdf",
   "xlsx",
+  "pptx",
   "zip",
 ] as const satisfies readonly DocumentFormat[];
 
@@ -16,6 +17,7 @@ export const DOCUMENT_MIME_TYPES: Readonly<Record<DocumentFormat, string>> = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   pdf: "application/pdf",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   zip: "application/zip",
 };
 
@@ -25,6 +27,7 @@ export const DOCUMENT_EXTENSIONS: Readonly<Record<DocumentFormat, string>> = {
   docx: ".docx",
   pdf: ".pdf",
   xlsx: ".xlsx",
+  pptx: ".pptx",
   zip: ".zip",
 };
 
