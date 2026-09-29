@@ -21,11 +21,14 @@ type MockSupabase = {
   };
 };
 
+type MockAdmin = {
+  from: ReturnType<typeof vi.fn>;
+  storage: { from: ReturnType<typeof vi.fn> };
+};
+
 const mocks = vi.hoisted(() => ({
   supabase: null as unknown as MockSupabase,
-  admin: null as unknown as {
-    storage: { from: ReturnType<typeof vi.fn> };
-  },
+  admin: null as unknown as MockAdmin,
 }));
 
 vi.mock("../../lib/supabase/server", () => ({
@@ -83,6 +86,8 @@ function setupSupabase(params: {
   childQueryError?: { message: string } | null;
   generatedRows?: unknown[];
   generatedQueryError?: { message: string } | null;
+  generatedDocumentRows?: unknown[];
+  generatedDocumentQueryError?: { message: string } | null;
   signingFailures?: string[];
 }) {
   const messageQuery = queryResult(params.parents);
@@ -91,7 +96,12 @@ function setupSupabase(params: {
     params.generatedRows ?? [],
     params.generatedQueryError ?? null,
   );
+  const generatedDocumentQuery = queryResult(
+    params.generatedDocumentRows ?? [],
+    params.generatedDocumentQueryError ?? null,
+  );
   const fromCalls: string[] = [];
+  const adminFromCalls: string[] = [];
   const createSignedUrl = vi.fn(async (path: string, lifetime: number) => {
     if (params.signingFailures?.includes(path)) {
       return { data: null, error: { message: "Storage object unavailable." } };
@@ -117,6 +127,7 @@ function setupSupabase(params: {
       fromCalls.push(table);
       if (table === "messages") return messageQuery;
       if (table === "message_images") return childQuery;
+      if (table === "message_generated_images") return generatedQuery;
       return generatedQuery;
     }),
     storage: {
@@ -124,6 +135,11 @@ function setupSupabase(params: {
     },
   };
   mocks.admin = {
+    from: vi.fn((table: string) => {
+      adminFromCalls.push(table);
+      if (table === "generated_documents") return generatedDocumentQuery;
+      return generatedQuery;
+    }),
     storage: {
       from: vi.fn(() => ({ createSignedUrl })),
     },
@@ -133,7 +149,9 @@ function setupSupabase(params: {
     childQuery,
     createSignedUrl,
     fromCalls,
+    adminFromCalls,
     messageQuery,
+    generatedDocumentQuery,
   };
 }
 
@@ -191,6 +209,7 @@ describe("GET /api/messages durable multi-image reads", () => {
         "message_images",
         "message_generated_images",
       ]);
+      expect(setup.adminFromCalls).toEqual(["generated_documents"]);
       expect(setup.childQuery.in).toHaveBeenCalledWith("message_id", [firstMessage.id, secondMessage.id]);
       expect(setup.createSignedUrl).toHaveBeenCalledTimes(count);
       expect(setup.createSignedUrl).toHaveBeenCalledWith(
@@ -468,6 +487,165 @@ describe("GET /api/messages durable multi-image reads", () => {
       model: "runware:400@4",
     });
     expect(setup.createSignedUrl).toHaveBeenCalledWith(storagePath, 3600);
+  });
+
+  it("hydrates generated documents onto their exact assistant message without exposing storage paths", async () => {
+    const userMessage = parentMessage(
+      "30000000-0000-4000-8000-000000000020",
+      "2026-09-13T12:00:00.000Z",
+    );
+    const assistantMessage = {
+      ...parentMessage(
+        "30000000-0000-4000-8000-000000000021",
+        "2026-09-13T12:01:00.000Z",
+      ),
+      role: "assistant",
+      content: "I created the requested report.",
+    };
+    const storagePath = USER_ID + "/" + CONVERSATION_ID + "/generated/50000000-0000-4000-8000-000000000020/report.pdf";
+    const setup = setupSupabase({
+      parents: [userMessage, assistantMessage],
+      generatedDocumentRows: [
+        {
+          id: "50000000-0000-4000-8000-000000000020",
+          user_id: USER_ID,
+          conversation_id: CONVERSATION_ID,
+          message_id: assistantMessage.id,
+          filename: "report.pdf",
+          format: "pdf",
+          mime_type: "application/pdf",
+          size_bytes: 2048,
+          template_id: "general-report",
+          created_at: "2026-09-13T12:01:01.000Z",
+          storage_path: storagePath,
+        },
+        {
+          id: "50000000-0000-4000-8000-000000000020",
+          user_id: USER_ID,
+          conversation_id: CONVERSATION_ID,
+          message_id: assistantMessage.id,
+          filename: "duplicate-report.pdf",
+          format: "pdf",
+          mime_type: "application/pdf",
+          size_bytes: 2048,
+          template_id: "general-report",
+          created_at: "2026-09-13T12:01:00.500Z",
+          storage_path: "private/duplicate.pdf",
+        },
+        {
+          id: "50000000-0000-4000-8000-000000000021",
+          user_id: USER_ID,
+          conversation_id: CONVERSATION_ID,
+          message_id: assistantMessage.id,
+          filename: "report.txt",
+          format: "txt",
+          mime_type: "text/plain",
+          size_bytes: 128,
+          template_id: null,
+          created_at: "2026-09-13T12:01:02.000Z",
+          storage_path: "private/second.txt",
+        },
+        {
+          id: "50000000-0000-4000-8000-000000000022",
+          user_id: "90000000-0000-4000-8000-000000000001",
+          conversation_id: CONVERSATION_ID,
+          message_id: assistantMessage.id,
+          filename: "leak.pdf",
+          format: "pdf",
+          mime_type: "application/pdf",
+          size_bytes: 12,
+          template_id: null,
+          created_at: "2026-09-13T12:01:03.000Z",
+          storage_path: "other-user/leak.pdf",
+        },
+        {
+          id: "50000000-0000-4000-8000-000000000023",
+          user_id: USER_ID,
+          conversation_id: "70000000-0000-4000-8000-000000000001",
+          message_id: assistantMessage.id,
+          filename: "other-conversation.pdf",
+          format: "pdf",
+          mime_type: "application/pdf",
+          size_bytes: 64,
+          template_id: null,
+          created_at: "2026-09-13T12:01:04.000Z",
+          storage_path: "other-conversation/file.pdf",
+        },
+      ],
+    });
+
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages.map((message: { id: string }) => message.id)).toEqual([
+      userMessage.id,
+      assistantMessage.id,
+    ]);
+    expect(body.messages[0].generatedDocuments).toEqual([]);
+    expect(body.messages[1].generatedDocuments).toEqual([
+      {
+        id: "50000000-0000-4000-8000-000000000020",
+        conversationId: CONVERSATION_ID,
+        messageId: assistantMessage.id,
+        filename: "report.pdf",
+        format: "pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 2048,
+        templateId: "general-report",
+        createdAt: "2026-09-13T12:01:01.000Z",
+      },
+      {
+        id: "50000000-0000-4000-8000-000000000021",
+        conversationId: CONVERSATION_ID,
+        messageId: assistantMessage.id,
+        filename: "report.txt",
+        format: "txt",
+        mimeType: "text/plain",
+        sizeBytes: 128,
+        templateId: null,
+        createdAt: "2026-09-13T12:01:02.000Z",
+      },
+    ]);
+    expect(JSON.stringify(body)).not.toContain(storagePath);
+    expect(setup.generatedDocumentQuery.in).toHaveBeenCalledWith(
+      "message_id",
+      [userMessage.id, assistantMessage.id],
+    );
+    expect(setup.generatedDocumentQuery.eq).toHaveBeenCalledWith(
+      "conversation_id",
+      CONVERSATION_ID,
+    );
+    expect(setup.generatedDocumentQuery.eq).toHaveBeenCalledWith("user_id", USER_ID);
+    expect(setup.fromCalls).not.toContain("generated_documents");
+    expect(setup.adminFromCalls).toEqual(["generated_documents"]);
+  });
+
+  it("preserves uploaded document metadata on the parent message during history hydration", async () => {
+    const parent = {
+      ...parentMessage(
+        "30000000-0000-4000-8000-000000000023",
+        "2026-09-13T12:00:00.000Z",
+      ),
+      documents: [
+        {
+          id: "60000000-0000-4000-8000-000000000001",
+          file_name: "source.md",
+          mime_type: "text/markdown",
+          size_bytes: 42,
+          extraction_status: "ready",
+          extraction_error: null,
+          conversation_id: CONVERSATION_ID,
+        },
+      ],
+    };
+    setupSupabase({ parents: [parent] });
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages[0].documents).toEqual(parent.documents);
+    expect(body.messages[0]).not.toHaveProperty("storage_path");
   });
 
   it("omits generated history safely when signing fails", async () => {

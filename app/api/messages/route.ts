@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  isValidGeneratedDocumentMetadata,
+  type GeneratedDocumentMetadata,
+} from "@/lib/documents/generated-document-contracts";
+import {
   hydrateGeneratedImageRows,
   type GeneratedImageHistory,
 } from "@/lib/chat/generated-image-history";
@@ -67,6 +71,125 @@ type MessageImageResponse = {
   image_url: string;
   ordinal: number;
 };
+
+type GeneratedDocumentHistoryRow = {
+  id: unknown;
+  user_id: unknown;
+  conversation_id: unknown;
+  message_id: unknown;
+  filename: unknown;
+  format: unknown;
+  mime_type: unknown;
+  size_bytes: unknown;
+  template_id: unknown;
+  created_at: unknown;
+};
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+function normalizeGeneratedDocumentHistoryRow(
+  input: unknown,
+  userId: string,
+  conversationId: string,
+  parentMessageIds: Set<string>,
+): GeneratedDocumentMetadata | null {
+  if (!isRecord(input)) return null;
+
+  const row = input as GeneratedDocumentHistoryRow;
+  if (
+    !isUuid(row.id) ||
+    row.user_id !== userId ||
+    row.conversation_id !== conversationId ||
+    !isUuid(row.message_id) ||
+    !parentMessageIds.has(row.message_id)
+  ) {
+    return null;
+  }
+
+  const metadata = {
+    id: row.id,
+    conversationId,
+    messageId: row.message_id,
+    filename: row.filename,
+    format: row.format,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    templateId: row.template_id ?? null,
+    createdAt: row.created_at,
+  };
+
+  return isValidGeneratedDocumentMetadata(metadata) ? metadata : null;
+}
+
+async function loadGeneratedDocuments(
+  userId: string,
+  conversationId: string,
+  parentMessageIds: string[],
+): Promise<Map<string, GeneratedDocumentMetadata[]>> {
+  const byMessageId = new Map<string, GeneratedDocumentMetadata[]>();
+  if (parentMessageIds.length === 0) return byMessageId;
+
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    admin = createAdminClient();
+  } catch (error) {
+    console.error("GET /api/messages generated document admin client unavailable", {
+      conversationId,
+      reason: error instanceof Error ? error.message : "Unknown error.",
+    });
+    return byMessageId;
+  }
+
+  const { data, error } = await admin
+    .from("generated_documents")
+    .select(
+      "id, user_id, conversation_id, message_id, filename, format, mime_type, size_bytes, template_id, created_at",
+    )
+    .in("message_id", parentMessageIds)
+    .eq("conversation_id", conversationId)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("GET /api/messages generated document query failed", {
+      conversationId,
+      reason: error.message,
+    });
+    return byMessageId;
+  }
+
+  const seenDocumentIds = new Set<string>();
+
+  for (const rawRow of (data ?? []) as unknown[]) {
+    const metadata = normalizeGeneratedDocumentHistoryRow(
+      rawRow,
+      userId,
+      conversationId,
+      new Set(parentMessageIds),
+    );
+    if (!metadata || seenDocumentIds.has(metadata.id)) continue;
+    seenDocumentIds.add(metadata.id);
+
+    const documents = byMessageId.get(metadata.messageId) ?? [];
+    documents.push(metadata);
+    byMessageId.set(metadata.messageId, documents);
+  }
+
+  for (const documents of byMessageId.values()) {
+    documents.sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+  }
+
+  return byMessageId;
+}
 
 type ServerSupabaseClient = Awaited<
   ReturnType<typeof createServerSupabaseClient>
@@ -513,6 +636,12 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    const generatedDocumentsByMessageId = await loadGeneratedDocuments(
+      user.id,
+      conversationId,
+      parentMessageIds,
+    );
+
     const normalizedMessages = parentMessages.map((message) => {
       const sources = normalizeSources(message.sources);
 
@@ -524,6 +653,7 @@ export async function GET(req: NextRequest) {
         widget: normalizeWidget(message.widget),
         images: signedImagesByMessageId.get(message.id) ?? [],
         has_child_images: childMessageIds.has(message.id),
+        generatedDocuments: generatedDocumentsByMessageId.get(message.id) ?? [],
         ...(generatedImagesByMessageId.has(message.id)
           ? { generatedImage: generatedImagesByMessageId.get(message.id) }
           : {}),

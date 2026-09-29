@@ -8,9 +8,10 @@ describe("generated document chat integration", () => {
   it("handles generated binary responses as transient assistant attachments", () => {
     expect(clientSource).toContain('res.headers.get("x-lvtchat-document") === "generated"');
     expect(clientSource).toContain("filenameFromContentDisposition");
-    expect(clientSource).toContain("generatedDocument:");
+    expect(clientSource).toContain("generatedDocuments:");
     expect(clientSource).toContain("const generationRequestId = createId();");
     expect(clientSource).toContain("X-Generated-Document-Id");
+    expect(clientSource).toContain("getGeneratedDocumentDownloadUrl");
     expect(clientSource).toContain("<GeneratedDocumentCard");
     expect(clientSource).toContain('I created " + filename');
   });
@@ -20,6 +21,7 @@ describe("generated document chat integration", () => {
     expect(cardSource).toContain('Download');
     expect(clientSource).toContain("if (loading || downloadingGeneratedDocumentMessageId) return;");
     expect(clientSource).toContain("saveDocumentBlob");
+    expect(clientSource).toContain("generatedDocument.blob");
     expect(clientSource).toContain('Capacitor.getPlatform() === "android"');
   });
 });

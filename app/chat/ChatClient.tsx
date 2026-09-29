@@ -40,6 +40,7 @@ import {
   isAllowedDocumentMimeTypeForExtension,
 } from "@/lib/documents/config";
 import { validateFiles } from "@/lib/documents/validate-upload";
+import { isSupportedDocumentFormat } from "@/lib/documents/generation/mime";
 import {
   CHAT_THEMES,
   DEFAULT_CHAT_THEME_ID,
@@ -194,7 +195,9 @@ const NativeGeneratedImageDownload = registerPlugin<NativeGeneratedImageDownload
 );
 
 type GeneratedDocumentAttachment = GeneratedDocumentCardData & {
-  blob: Blob;
+  readonly blob?: Blob;
+  readonly templateId?: string | null;
+  readonly createdAt?: string;
 };
 
 type Message = {
@@ -213,7 +216,7 @@ type Message = {
   has_child_images?: boolean;
   documents?: UploadedDocument[];
   generatedImage?: GeneratedImage;
-  generatedDocument?: GeneratedDocumentAttachment;
+  generatedDocuments?: GeneratedDocumentAttachment[];
 };
 
 type ConversationItem = {
@@ -1534,6 +1537,7 @@ export function normalizeInitialMessages(messages: Message[]): Message[] {
     documents: Array.isArray(message.documents)
       ? cloneDocuments(message.documents)
       : [],
+    generatedDocuments: normalizeGeneratedDocumentAttachments(message.generatedDocuments),
   }));
 }
 
@@ -1708,6 +1712,72 @@ export function shouldApplyMessageLoad(
   currentGeneration: number
 ): boolean {
   return requestGeneration === currentGeneration;
+}
+
+const DOCUMENT_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isDocumentUuid(value: unknown): value is string {
+  return typeof value === "string" && DOCUMENT_UUID_PATTERN.test(value);
+}
+
+export function normalizeGeneratedDocumentAttachments(
+  input: unknown,
+): GeneratedDocumentAttachment[] {
+  if (!Array.isArray(input)) return [];
+
+  const seenIds = new Set<string>();
+
+  return input
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object",
+    )
+    .map((item): GeneratedDocumentAttachment | null => {
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const filename =
+        typeof item.filename === "string" ? item.filename.trim() : "";
+      const format = typeof item.format === "string" ? item.format : "";
+      const mimeType =
+        typeof item.mimeType === "string" ? item.mimeType.trim() : "";
+      const sizeBytes = item.sizeBytes;
+
+      if (
+        !isDocumentUuid(id) ||
+        !filename ||
+        !isSupportedDocumentFormat(format) ||
+        !mimeType ||
+        typeof sizeBytes !== "number" ||
+        !Number.isSafeInteger(sizeBytes) ||
+        sizeBytes <= 0
+      ) {
+        return null;
+      }
+
+      if (seenIds.has(id)) return null;
+      seenIds.add(id);
+
+      return {
+        id,
+        filename,
+        format,
+        mimeType,
+        sizeBytes,
+        templateId:
+          typeof item.templateId === "string" || item.templateId === null
+            ? item.templateId
+            : null,
+        createdAt:
+          typeof item.createdAt === "string" ? item.createdAt : undefined,
+      };
+    })
+    .filter(
+      (document): document is GeneratedDocumentAttachment => document !== null,
+    );
+}
+
+export function getGeneratedDocumentDownloadUrl(generatedDocumentId: string): string {
+  return "/api/generated-documents/" + encodeURIComponent(generatedDocumentId) + "/download";
 }
 
 function normalizeUploadedDocuments(input: unknown): UploadedDocument[] {
@@ -3671,6 +3741,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           documents: Array.isArray(message.documents)
             ? cloneDocuments(message.documents)
             : [],
+          generatedDocuments: normalizeGeneratedDocumentAttachments(message.generatedDocuments),
           image_url:
             typeof message.image_url === "string" && message.image_url.trim()
               ? message.image_url
@@ -4442,14 +4513,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         updateAssistantMessage(assistantId, (msg) => ({
           ...msg,
           content: "I created " + filename + ". Use the download button below to save it.",
-          generatedDocument: {
+          generatedDocuments: [{
             id: getSafeUuidHeader(res, "X-Generated-Document-Id"),
             filename,
             format,
             mimeType: res.headers.get("content-type") ?? "",
             sizeBytes: blob.size,
             blob,
-          },
+          }],
         }));
       } else if (useWebSearch) {
         const data = (await res.json()) as ChatWebResponse;
@@ -4587,16 +4658,43 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
   }
 
-  async function handleDownloadGeneratedDocument(messageId: string): Promise<void> {
+  async function handleDownloadGeneratedDocument(
+    messageId: string,
+    generatedDocumentId?: string,
+  ): Promise<void> {
     if (loading || downloadingGeneratedDocumentMessageId) return;
 
     const message = messages.find((item) => item.id === messageId);
-    const generatedDocument = message?.generatedDocument;
+    const generatedDocument = generatedDocumentId
+      ? message?.generatedDocuments?.find((document) => document.id === generatedDocumentId)
+      : message?.generatedDocuments?.[0];
     if (!generatedDocument) return;
 
     setDownloadingGeneratedDocumentMessageId(messageId);
     try {
-      await saveDocumentBlob(generatedDocument.blob, generatedDocument.filename, generatedDocument.format, {
+      let blob = generatedDocument.blob;
+
+      if (!blob) {
+        if (!generatedDocument.id) {
+          throw new DocumentDownloadError("This document is no longer available.");
+        }
+
+        const response = await fetch(getGeneratedDocumentDownloadUrl(generatedDocument.id), {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          const errorData = (await response.json().catch(() => null)) as { error?: unknown } | null;
+          throw new DocumentDownloadError(
+            typeof errorData?.error === "string"
+              ? errorData.error
+              : "Could not download the document. Please try again.",
+          );
+        }
+
+        blob = await response.blob();
+      }
+
+      await saveDocumentBlob(blob, generatedDocument.filename, generatedDocument.format, {
         nativeSave:
           Capacitor.getPlatform() === "android"
             ? (options) => NativeGeneratedImageDownload.save(options)
@@ -5394,14 +5492,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                             />
                           </div>
 
-                          {message.role === "assistant" && message.generatedDocument ? (
+                          {message.role === "assistant" && message.generatedDocuments?.map((document, index) => (
                             <GeneratedDocumentCard
-                              document={message.generatedDocument}
+                              key={document.id ?? message.id + "-generated-document-" + index}
+                              document={document}
                               theme={activeTheme}
-                              onDownload={() => void handleDownloadGeneratedDocument(message.id)}
+                              onDownload={() => void handleDownloadGeneratedDocument(message.id, document.id)}
                               downloading={downloadingGeneratedDocumentMessageId === message.id}
                             />
-                          ) : null}
+                          ))}
 
                           {message.generatedImage ? (
                             <div className="mt-3 flex w-fit min-w-0 max-w-full flex-col items-start">
