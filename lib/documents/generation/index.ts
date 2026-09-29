@@ -12,3 +12,4 @@ export * from "./validation";
 export * from "./templates/types";
 export * from "./templates/registry";
 export * from "./templates/render";
+export * from "./generate";

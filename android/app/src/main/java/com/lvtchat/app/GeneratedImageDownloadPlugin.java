@@ -22,7 +22,14 @@ public class GeneratedImageDownloadPlugin extends Plugin {
     private static final String[] ALLOWED_MIME_TYPES = {
         "image/webp",
         "image/png",
-        "image/jpeg"
+        "image/jpeg",
+        "text/plain",
+        "text/markdown",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/zip"
     };
 
     @PluginMethod
@@ -36,8 +43,8 @@ public class GeneratedImageDownloadPlugin extends Plugin {
         String fileName = sanitizeFileName(call.getString("fileName"));
         String mimeType = call.getString("mimeType");
 
-        if (base64 == null || base64.isEmpty() || fileName == null || !isAllowedMimeType(mimeType)) {
-            call.reject("The generated image could not be saved safely.");
+        if (base64 == null || base64.isEmpty() || fileName == null || !isAllowedMimeType(mimeType) || !hasSafeExtension(fileName, mimeType)) {
+            call.reject("The file could not be saved safely.");
             return;
         }
 
@@ -45,12 +52,12 @@ public class GeneratedImageDownloadPlugin extends Plugin {
         try {
             imageBytes = Base64.decode(base64.getBytes(StandardCharsets.US_ASCII), Base64.DEFAULT);
         } catch (IllegalArgumentException error) {
-            call.reject("The generated image could not be saved safely.");
+            call.reject("The file could not be saved safely.");
             return;
         }
 
         if (imageBytes.length == 0) {
-            call.reject("The generated image could not be saved safely.");
+            call.reject("The file could not be saved safely.");
             return;
         }
 
@@ -89,11 +96,11 @@ public class GeneratedImageDownloadPlugin extends Plugin {
             if (itemUri != null) {
                 resolver.delete(itemUri, null, null);
             }
-            call.reject("Could not save the generated image. Please try again.");
+            call.reject("Could not save the file. Please try again.");
         }
     }
 
-    private static boolean isAllowedMimeType(String mimeType) {
+    static boolean isAllowedMimeType(String mimeType) {
         if (mimeType == null) {
             return false;
         }
@@ -107,7 +114,23 @@ public class GeneratedImageDownloadPlugin extends Plugin {
         return false;
     }
 
-    private static String sanitizeFileName(String fileName) {
+    static boolean hasSafeExtension(String fileName, String mimeType) {
+        String lowerName = fileName.toLowerCase(java.util.Locale.ROOT);
+        if (mimeType == null) return false;
+        if (mimeType.equals("image/webp")) return lowerName.endsWith(".webp");
+        if (mimeType.equals("image/png")) return lowerName.endsWith(".png");
+        if (mimeType.equals("image/jpeg")) return lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg");
+        if (mimeType.equals("text/plain")) return lowerName.endsWith(".txt");
+        if (mimeType.equals("text/markdown")) return lowerName.endsWith(".md");
+        if (mimeType.equals("application/vnd.openxmlformats-officedocument.wordprocessingml.document")) return lowerName.endsWith(".docx");
+        if (mimeType.equals("application/pdf")) return lowerName.endsWith(".pdf");
+        if (mimeType.equals("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) return lowerName.endsWith(".xlsx");
+        if (mimeType.equals("application/vnd.openxmlformats-officedocument.presentationml.presentation")) return lowerName.endsWith(".pptx");
+        if (mimeType.equals("application/zip")) return lowerName.endsWith(".zip");
+        return false;
+    }
+
+    static String sanitizeFileName(String fileName) {
         if (fileName == null || fileName.isEmpty()) {
             return null;
         }

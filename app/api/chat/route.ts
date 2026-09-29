@@ -15,6 +15,10 @@ import {
   type NormalizedChatImageInput,
   type StoredImageReference,
 } from "@/lib/chat/chat-image-attachments";
+import { generateTemplateOutput } from "@/lib/documents/generation";
+import { resolveDocumentGenerationIntent } from "@/lib/documents/generation/intent";
+import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
+import { TemplateValidationError } from "@/lib/documents/generation/templates/types";
 
 export const runtime = "nodejs";
 
@@ -161,6 +165,20 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
+    },
+  });
+}
+
+function generatedDocumentResponse(artifact: { readonly bytes: Uint8Array; readonly filename: string; readonly mimeType: string; readonly format: string }) {
+  return new Response(new Blob([artifact.bytes as unknown as ArrayBuffer], { type: artifact.mimeType }), {
+    status: 200,
+    headers: {
+      "Cache-Control": "private, no-store",
+      "Content-Disposition": "attachment; filename=\"" + artifact.filename + "\"",
+      "Content-Type": artifact.mimeType,
+      "X-Content-Type-Options": "nosniff",
+      "X-LVTChat-Document": "generated",
+      "X-LVTChat-Document-Format": artifact.format,
     },
   });
 }
@@ -956,6 +974,41 @@ export async function POST(req: Request) {
     const latestUserMessage = regenerate
       ? recentHistory[recentHistory.length - 1]?.content ?? ""
       : message || recentHistory[recentHistory.length - 1]?.content || "";
+
+    const documentIntent = await resolveDocumentGenerationIntent({
+      latestMessage: latestUserMessage,
+      history: recentHistory,
+      documentContext,
+    });
+
+    if (documentIntent) {
+      try {
+        const artifact = await generateTemplateOutput({
+          templateId: documentIntent.templateId,
+          formats: documentIntent.formats,
+          variables: documentIntent.variables,
+          packageAsZip: documentIntent.packageAsZip,
+        });
+        const persistedReply = "I created " + artifact.filename + ". Use the download button below to save it.";
+
+        await persistAssistantMessage({
+          supabase,
+          conversationId,
+          userId: user.id,
+          content: persistedReply,
+        });
+        await touchConversation({ supabase, conversationId, userId: user.id });
+
+        return generatedDocumentResponse(artifact);
+      } catch (error) {
+        if (error instanceof TemplateValidationError || error instanceof DocumentGenerationValidationError) {
+          return jsonResponse({ error: "The requested document could not be generated." }, 400);
+        }
+
+        console.error("/api/chat document generation error:", error);
+        return jsonResponse({ error: "The document could not be generated. Please try again." }, 500);
+      }
+    }
 
     const input = buildResponsesInput({
       history: recentHistory,

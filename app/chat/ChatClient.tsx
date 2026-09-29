@@ -62,6 +62,8 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor
 import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
 import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
 import ReadAloudButton from "@/components/chat/ReadAloudButton";
+import { GeneratedDocumentCard, type GeneratedDocumentCardData } from "@/components/chat/GeneratedDocumentCard";
+import { documentFormatFromMimeType, filenameFromContentDisposition, saveDocumentBlob, DocumentDownloadError } from "@/lib/documents/download";
 import { stopReadAloud } from "@/lib/read-aloud";
 
 type AppSpeechRecognitionResultAlternative = {
@@ -191,6 +193,10 @@ const NativeGeneratedImageDownload = registerPlugin<NativeGeneratedImageDownload
   "GeneratedImageDownload"
 );
 
+type GeneratedDocumentAttachment = GeneratedDocumentCardData & {
+  blob: Blob;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -207,6 +213,7 @@ type Message = {
   has_child_images?: boolean;
   documents?: UploadedDocument[];
   generatedImage?: GeneratedImage;
+  generatedDocument?: GeneratedDocumentAttachment;
 };
 
 type ConversationItem = {
@@ -2306,6 +2313,7 @@ export default function ChatClient({
     width: 0,
   });
   const [downloadingGeneratedImageId, setDownloadingGeneratedImageId] = useState<string | null>(null);
+  const [downloadingGeneratedDocumentMessageId, setDownloadingGeneratedDocumentMessageId] = useState<string | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [deletingGeneratedImageId, setDeletingGeneratedImageId] = useState<string | null>(null);
   const [plan, setPlan] = useState<Plan>("free");
@@ -4418,7 +4426,29 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         clearSubmittedPendingImages(pendingImageSnapshot.map((image) => image.id));
       }
 
-      if (useWebSearch) {
+      const isGeneratedDocumentResponse = res.headers.get("x-lvtchat-document") === "generated";
+
+      if (isGeneratedDocumentResponse) {
+        const format = documentFormatFromMimeType(res.headers.get("content-type"));
+        const filename = filenameFromContentDisposition(res.headers.get("content-disposition"));
+        const blob = await res.blob();
+
+        if (!format || !filename || blob.size === 0) {
+          throw new Error("The generated document response was invalid.");
+        }
+
+        updateAssistantMessage(assistantId, (msg) => ({
+          ...msg,
+          content: "I created " + filename + ". Use the download button below to save it.",
+          generatedDocument: {
+            filename,
+            format,
+            mimeType: res.headers.get("content-type") ?? "",
+            sizeBytes: blob.size,
+            blob,
+          },
+        }));
+      } else if (useWebSearch) {
         const data = (await res.json()) as ChatWebResponse;
         const reply =
           typeof data.reply === "string" && data.reply.trim().length > 0
@@ -4551,6 +4581,32 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       );
     } finally {
       setDownloadingGeneratedImageId(null);
+    }
+  }
+
+  async function handleDownloadGeneratedDocument(messageId: string): Promise<void> {
+    if (loading || downloadingGeneratedDocumentMessageId) return;
+
+    const message = messages.find((item) => item.id === messageId);
+    const generatedDocument = message?.generatedDocument;
+    if (!generatedDocument) return;
+
+    setDownloadingGeneratedDocumentMessageId(messageId);
+    try {
+      await saveDocumentBlob(generatedDocument.blob, generatedDocument.filename, generatedDocument.format, {
+        nativeSave:
+          Capacitor.getPlatform() === "android"
+            ? (options) => NativeGeneratedImageDownload.save(options)
+            : undefined,
+      });
+    } catch (error) {
+      setUiError(
+        error instanceof DocumentDownloadError
+          ? error.message
+          : "Could not download the document. Please try again.",
+      );
+    } finally {
+      setDownloadingGeneratedDocumentMessageId(null);
     }
   }
 
@@ -5334,6 +5390,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               }
                             />
                           </div>
+
+                          {message.role === "assistant" && message.generatedDocument ? (
+                            <GeneratedDocumentCard
+                              document={message.generatedDocument}
+                              theme={activeTheme}
+                              onDownload={() => void handleDownloadGeneratedDocument(message.id)}
+                              downloading={downloadingGeneratedDocumentMessageId === message.id}
+                            />
+                          ) : null}
 
                           {message.generatedImage ? (
                             <div className="mt-3 flex w-fit min-w-0 max-w-full flex-col items-start">
