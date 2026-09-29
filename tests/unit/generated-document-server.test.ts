@@ -21,7 +21,10 @@ vi.mock("@/lib/supabase/admin", () => ({
 import {
   downloadGeneratedDocument,
   findGeneratedDocumentByRequest,
+  listGeneratedDocumentsForConversation,
   removeGeneratedDocumentObject,
+  removeGeneratedDocumentObjects,
+  deleteGeneratedDocumentMetadata,
   uploadGeneratedDocumentArtifact,
 } from "@/lib/documents/generated-document-server";
 
@@ -48,9 +51,14 @@ function configureLookup(data: unknown, error: unknown = null) {
     select: vi.fn(),
     eq: vi.fn(),
     maybeSingle: vi.fn(async () => ({ data, error })),
+    order: vi.fn(),
+    delete: vi.fn(),
+    then: (resolve: (value: { data: unknown; error: unknown }) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve({ data, error }).then(resolve, reject),
   };
   query.select.mockReturnValue(query);
   query.eq.mockReturnValue(query);
+  query.order.mockReturnValue(query);
+  query.delete.mockReturnValue(query);
   mocks.admin.from.mockReturnValue(query);
   return query;
 }
@@ -79,6 +87,26 @@ describe("generated document server persistence boundary", () => {
       conversationId: CONVERSATION_ID,
       generationRequestId: REQUEST_ID,
     })).resolves.toBeNull();
+  });
+
+
+  it("lists only fully validated documents for one owner and conversation", async () => {
+    const query = configureLookup([metadataRow()], null);
+    await expect(listGeneratedDocumentsForConversation({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+    })).resolves.toHaveLength(1);
+    expect(query.eq).toHaveBeenCalledWith("user_id", USER_ID);
+    expect(query.eq).toHaveBeenCalledWith("conversation_id", CONVERSATION_ID);
+    expect(query.order).toHaveBeenCalledWith("created_at", { ascending: true });
+  });
+
+  it("fails closed when conversation cleanup sees malformed metadata", async () => {
+    configureLookup([metadataRow({ storage_path: USER_ID + "/" + CONVERSATION_ID + "/generated/" + DOCUMENT_ID + "/../secret.pdf" })], null);
+    await expect(listGeneratedDocumentsForConversation({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+    })).rejects.toThrow("validation");
   });
 
   it("uploads with canonical MIME and upsert disabled", async () => {
@@ -115,6 +143,64 @@ describe("generated document server persistence boundary", () => {
       },
     })).rejects.toThrow("storage path");
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("removes multiple validated objects in one bounded Storage call", async () => {
+    const remove = vi.fn(async () => ({ error: null }));
+    mocks.admin.storage.from.mockReturnValue({ remove });
+    const second = {
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      id: "40000000-0000-4000-8000-000000000002",
+      filename: "second.pdf",
+      format: "pdf" as const,
+      storagePath: USER_ID + "/" + CONVERSATION_ID + "/generated/40000000-0000-4000-8000-000000000002/second.pdf",
+    };
+    await expect(removeGeneratedDocumentObjects([
+      {
+        userId: USER_ID,
+        conversationId: CONVERSATION_ID,
+        id: DOCUMENT_ID,
+        filename: "report.pdf",
+        format: "pdf",
+        storagePath: PDF_PATH,
+      },
+      second,
+    ])).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledWith([PDF_PATH, second.storagePath]);
+  });
+
+  it("treats an already-missing Storage object as cleanup success", async () => {
+    const remove = vi.fn(async () => ({
+      error: { statusCode: "404", message: "Object not found." },
+    }));
+    mocks.admin.storage.from.mockReturnValue({ remove });
+    await expect(removeGeneratedDocumentObject({
+      record: {
+        userId: USER_ID,
+        conversationId: CONVERSATION_ID,
+        id: DOCUMENT_ID,
+        filename: "report.pdf",
+        format: "pdf",
+        storagePath: PDF_PATH,
+      },
+    })).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledWith([PDF_PATH]);
+  });
+
+  it("removes metadata with all owner and linkage filters", async () => {
+    const query = configureLookup({ id: DOCUMENT_ID }, null);
+    await expect(deleteGeneratedDocumentMetadata({
+      id: DOCUMENT_ID,
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      messageId: MESSAGE_ID,
+    })).resolves.toBe(true);
+    expect(query.delete).toHaveBeenCalledTimes(1);
+    expect(query.eq).toHaveBeenCalledWith("id", DOCUMENT_ID);
+    expect(query.eq).toHaveBeenCalledWith("user_id", USER_ID);
+    expect(query.eq).toHaveBeenCalledWith("conversation_id", CONVERSATION_ID);
+    expect(query.eq).toHaveBeenCalledWith("message_id", MESSAGE_ID);
   });
 
   it("rejects downloaded bytes whose size differs from persisted metadata", async () => {

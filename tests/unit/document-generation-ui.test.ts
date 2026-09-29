@@ -12,6 +12,8 @@ describe("generated document chat integration", () => {
     expect(clientSource).toContain("const generationRequestId = createId();");
     expect(clientSource).toContain("X-Generated-Document-Id");
     expect(clientSource).toContain("getGeneratedDocumentDownloadUrl");
+    expect(clientSource).toContain("removeGeneratedDocumentAttachment");
+    expect(clientSource).toContain("handleDeleteGeneratedDocument");
     expect(clientSource).toContain("<GeneratedDocumentCard");
     expect(clientSource).toContain('I created " + filename');
   });
@@ -19,7 +21,10 @@ describe("generated document chat integration", () => {
   it("provides a clear download card and prevents duplicate saves while pending", () => {
     expect(cardSource).toContain('aria-label={`Download ${generatedDocument.filename}`}');
     expect(cardSource).toContain('Download');
-    expect(clientSource).toContain("if (loading || downloadingGeneratedDocumentMessageId) return;");
+    expect(cardSource).toContain("onDelete");
+    expect(cardSource).toContain("generatedDocument.id");
+    expect(cardSource).toContain("Delete");
+    expect(clientSource).toContain("if (loading || downloadingGeneratedDocumentMessageId || deletingGeneratedDocumentId) return;");
     expect(clientSource).toContain("saveDocumentBlob");
     expect(clientSource).toContain("generatedDocument.blob");
     expect(clientSource).toContain('Capacitor.getPlatform() === "android"');

@@ -136,19 +136,88 @@ export async function uploadGeneratedDocumentArtifact(params: {
   return storagePath;
 }
 
+export async function listGeneratedDocumentsForConversation(params: {
+  userId: string;
+  conversationId: string;
+}): Promise<GeneratedDocumentPersistenceRecord[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("generated_documents")
+    .select(SELECT_COLUMNS)
+    .eq("user_id", params.userId)
+    .eq("conversation_id", params.conversationId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw new Error("Generated document metadata lookup failed.");
+
+  const records: GeneratedDocumentPersistenceRecord[] = [];
+  for (const row of (Array.isArray(data) ? data : [])) {
+    const record = rowToRecord(row);
+    if (!record || record.userId !== params.userId || record.conversationId !== params.conversationId) {
+      throw new Error("Generated document metadata validation failed.");
+    }
+    records.push(record);
+  }
+  return records;
+}
+
+function isMissingStorageObjectError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { status?: unknown; statusCode?: unknown; message?: unknown };
+  return (
+    value.status === 404 ||
+    String(value.statusCode ?? "") === "404" ||
+    (typeof value.message === "string" && /(?:not found|does not exist)/i.test(value.message))
+  );
+}
+
+export async function removeGeneratedDocumentObjects(
+  records: ReadonlyArray<Pick<GeneratedDocumentPersistenceRecord, "userId" | "conversationId" | "id" | "filename" | "format" | "storagePath">>,
+): Promise<void> {
+  const storagePaths = records.map((record) => {
+    if (!validateGeneratedDocumentStoragePath(record.storagePath, {
+      userId: record.userId,
+      conversationId: record.conversationId,
+      generatedDocumentId: record.id,
+      filename: record.filename,
+      format: record.format,
+    })) {
+      throw new Error("Generated document storage path validation failed.");
+    }
+    return record.storagePath;
+  });
+
+  if (storagePaths.length === 0) return;
+
+  const admin = createAdminClient();
+  const { error } = await admin.storage.from(DOCUMENT_BUCKET).remove(storagePaths);
+  if (error && !isMissingStorageObjectError(error)) {
+    throw new Error("Generated document cleanup failed.");
+  }
+}
+
 export async function removeGeneratedDocumentObject(params: {
   record: Pick<GeneratedDocumentPersistenceRecord, "userId" | "conversationId" | "id" | "filename" | "format" | "storagePath">;
 }): Promise<void> {
-  if (!validateGeneratedDocumentStoragePath(params.record.storagePath, {
-    userId: params.record.userId,
-    conversationId: params.record.conversationId,
-    generatedDocumentId: params.record.id,
-    filename: params.record.filename,
-    format: params.record.format,
-  })) throw new Error("Generated document storage path validation failed.");
+  await removeGeneratedDocumentObjects([params.record]);
+}
+
+export async function deleteGeneratedDocumentMetadata(
+  record: Pick<GeneratedDocumentPersistenceRecord, "userId" | "conversationId" | "messageId" | "id">,
+): Promise<boolean> {
   const admin = createAdminClient();
-  const { error } = await admin.storage.from(DOCUMENT_BUCKET).remove([params.record.storagePath]);
-  if (error) throw new Error("Generated document cleanup failed.");
+  const { data, error } = await admin
+    .from("generated_documents")
+    .delete()
+    .eq("id", record.id)
+    .eq("user_id", record.userId)
+    .eq("conversation_id", record.conversationId)
+    .eq("message_id", record.messageId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw new Error("Generated document metadata deletion failed.");
+  return Boolean(data);
 }
 
 export async function removeGeneratedDocumentObjectByPath(params: {

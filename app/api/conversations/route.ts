@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isValidGeneratedImagePath } from "@/lib/chat/generated-image-history";
+import {
+  listGeneratedDocumentsForConversation,
+  removeGeneratedDocumentObjects,
+} from "@/lib/documents/generated-document-server";
 
 const MAX_TITLE_LENGTH = 120;
 
@@ -162,6 +166,17 @@ export async function DELETE(req: NextRequest) {
       return jsonError("Conversation id is required.", 400);
     }
 
+    let generatedDocuments;
+    try {
+      generatedDocuments = await listGeneratedDocumentsForConversation({
+        userId: user.id,
+        conversationId: id,
+      });
+    } catch (error) {
+      console.error("DELETE /api/conversations generated document lookup error:", error);
+      return jsonError("Failed to prepare conversation deletion.", 500);
+    }
+
     const { data: generatedImages, error: generatedImagesError } = await supabase
       .from("message_generated_images")
       .select("storage_path")
@@ -180,6 +195,13 @@ export async function DELETE(req: NextRequest) {
           typeof path === "string" &&
           isValidGeneratedImagePath(path, user.id, id),
       );
+
+    try {
+      await removeGeneratedDocumentObjects(generatedDocuments);
+    } catch (error) {
+      console.error("DELETE /api/conversations generated document cleanup error:", error);
+      return jsonError("Failed to prepare conversation deletion.", 500);
+    }
 
     if (generatedStoragePaths.length > 0) {
       try {

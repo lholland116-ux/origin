@@ -1551,6 +1551,24 @@ export function removeGeneratedImageMessage(
   );
 }
 
+export function removeGeneratedDocumentAttachment(
+  messages: Message[],
+  generatedDocumentId: string,
+): Message[] {
+  return messages.map((message) => {
+    if (!message.generatedDocuments?.some((document) => document.id === generatedDocumentId)) {
+      return message;
+    }
+
+    return {
+      ...message,
+      generatedDocuments: message.generatedDocuments.filter(
+        (document) => document.id !== generatedDocumentId,
+      ),
+    };
+  });
+}
+
 export function createOptimisticUserMessage(
   id: string,
   content: string,
@@ -2384,6 +2402,7 @@ export default function ChatClient({
   });
   const [downloadingGeneratedImageId, setDownloadingGeneratedImageId] = useState<string | null>(null);
   const [downloadingGeneratedDocumentMessageId, setDownloadingGeneratedDocumentMessageId] = useState<string | null>(null);
+  const [deletingGeneratedDocumentId, setDeletingGeneratedDocumentId] = useState<string | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [deletingGeneratedImageId, setDeletingGeneratedImageId] = useState<string | null>(null);
   const [plan, setPlan] = useState<Plan>("free");
@@ -4662,7 +4681,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     messageId: string,
     generatedDocumentId?: string,
   ): Promise<void> {
-    if (loading || downloadingGeneratedDocumentMessageId) return;
+    if (loading || downloadingGeneratedDocumentMessageId || deletingGeneratedDocumentId) return;
 
     const message = messages.find((item) => item.id === messageId);
     const generatedDocument = generatedDocumentId
@@ -4708,6 +4727,40 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       );
     } finally {
       setDownloadingGeneratedDocumentMessageId(null);
+    }
+  }
+
+  async function handleDeleteGeneratedDocument(
+    generatedDocumentId?: string,
+  ): Promise<void> {
+    if (loading || deletingGeneratedDocumentId || downloadingGeneratedDocumentMessageId || !generatedDocumentId) return;
+
+    const confirmed = window.confirm("Delete this generated document? This cannot be undone.");
+    if (!confirmed) return;
+
+    setDeletingGeneratedDocumentId(generatedDocumentId);
+    setUiError("");
+
+    try {
+      const response = await fetch(
+        `/api/generated-documents/${encodeURIComponent(generatedDocumentId)}`,
+        { method: "DELETE", cache: "no-store" },
+      );
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+
+      if (!response.ok) {
+        throw new Error(data?.error || "The generated document could not be deleted.");
+      }
+
+      setMessages((prev) => removeGeneratedDocumentAttachment(prev, generatedDocumentId));
+    } catch (error) {
+      setUiError(
+        error instanceof Error
+          ? error.message
+          : "The generated document could not be deleted.",
+      );
+    } finally {
+      setDeletingGeneratedDocumentId(null);
     }
   }
 
@@ -5498,7 +5551,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               document={document}
                               theme={activeTheme}
                               onDownload={() => void handleDownloadGeneratedDocument(message.id, document.id)}
+                              onDelete={() => void handleDeleteGeneratedDocument(document.id)}
                               downloading={downloadingGeneratedDocumentMessageId === message.id}
+                              deleting={deletingGeneratedDocumentId === document.id}
                             />
                           ))}
 

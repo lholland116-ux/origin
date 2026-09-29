@@ -3,6 +3,7 @@ import {
   getGeneratedDocumentDownloadUrl,
   normalizeGeneratedDocumentAttachments,
   normalizeInitialMessages,
+  removeGeneratedDocumentAttachment,
 } from "@/app/chat/ChatClient";
 
 const DOCUMENT_ID = "50000000-0000-4000-8000-000000000001";
@@ -94,6 +95,41 @@ describe("generated-document history hydration", () => {
       filename: "report.pdf",
     });
     expect(messages[1]?.generatedDocuments?.[0]).not.toHaveProperty("blob");
+  });
+
+  it("removes only the deleted generated-document card and preserves uploaded documents", () => {
+    const messages = normalizeInitialMessages([
+      {
+        id: MESSAGE_ID,
+        role: "assistant",
+        content: "Created two files.",
+        documents: [],
+        generatedDocuments: [
+          durableDocument(),
+          durableDocument({ id: "50000000-0000-4000-8000-000000000002", filename: "second.pdf" }),
+        ],
+      },
+      {
+        id: "30000000-0000-4000-8000-000000000002",
+        role: "user",
+        content: "Source.",
+        documents: [{
+          id: "60000000-0000-4000-8000-000000000001",
+          file_name: "source.md",
+          mime_type: "text/markdown",
+          size_bytes: 42,
+          extraction_status: "ready",
+          extraction_error: null,
+          conversation_id: CONVERSATION_ID,
+        }],
+        generatedDocuments: [],
+      },
+    ]);
+
+    const updated = removeGeneratedDocumentAttachment(messages, DOCUMENT_ID);
+    expect(updated[0]?.generatedDocuments).toHaveLength(1);
+    expect(updated[0]?.generatedDocuments?.[0]?.filename).toBe("second.pdf");
+    expect(updated[1]?.documents?.[0]?.file_name).toBe("source.md");
   });
 
   it("uses the authenticated durable download route for historical artifacts", () => {

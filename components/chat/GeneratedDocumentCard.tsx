@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, FileText, RefreshCw } from "lucide-react";
+import { Download, FileText, RefreshCw, Trash2 } from "lucide-react";
 import type { DocumentFormat } from "@/lib/documents/generation/contracts";
 import { formatDocumentSize } from "@/lib/documents/download";
 import type { ChatTheme } from "@/lib/chat-themes";
@@ -17,7 +17,9 @@ type GeneratedDocumentCardProps = {
   readonly document: GeneratedDocumentCardData;
   readonly theme: ChatTheme;
   readonly onDownload: () => void;
+  readonly onDelete?: () => void;
   readonly downloading?: boolean;
+  readonly deleting?: boolean;
 };
 
 const FORMAT_LABELS: Readonly<Record<DocumentFormat, string>> = {
@@ -38,7 +40,9 @@ export function GeneratedDocumentCard({
   document: generatedDocument,
   theme,
   onDownload,
+  onDelete,
   downloading = false,
+  deleting = false,
 }: GeneratedDocumentCardProps) {
   return (
     <div
@@ -60,7 +64,7 @@ export function GeneratedDocumentCard({
       <button
         type="button"
         onClick={onDownload}
-        disabled={downloading}
+        disabled={downloading || deleting}
         className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-60 ${theme.buttonSecondary}`}
         aria-label={`Download ${generatedDocument.filename}`}
       >
@@ -71,6 +75,23 @@ export function GeneratedDocumentCard({
         )}
         <span>{downloading ? "Saving…" : "Download"}</span>
       </button>
+      {generatedDocument.id && onDelete ? (
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={downloading || deleting}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-red-600 transition hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-300 dark:hover:bg-red-950/40"
+          aria-label={deleting ? `Deleting ${generatedDocument.filename}` : `Delete ${generatedDocument.filename}`}
+          aria-busy={deleting}
+        >
+          {deleting ? (
+            <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+          )}
+          <span className="sr-only">{deleting ? "Deleting" : "Delete"}</span>
+        </button>
+      ) : null}
     </div>
   );
 }
