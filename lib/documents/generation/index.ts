@@ -9,3 +9,6 @@ export * from "./generators/xlsx";
 export * from "./generators/zip";
 export * from "./mime";
 export * from "./validation";
+export * from "./templates/types";
+export * from "./templates/registry";
+export * from "./templates/render";
