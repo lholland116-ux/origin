@@ -3,6 +3,7 @@ export * from "./filenames";
 export * from "./generators/docx";
 export * from "./generators/markdown";
 export * from "./generators/pdf";
+export * from "./generators/pptx";
 export * from "./generators/text";
 export * from "./generators/xlsx";
 export * from "./mime";

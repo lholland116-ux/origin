@@ -140,7 +140,7 @@ function readArchiveEntryNames(buffer: Buffer): string[] {
     }
 
     if (
-      /^ppt\/(?:embeddings|activeX)\//i.test(name) ||
+      /^ppt\/(?:embeddings|activeX)\/.+/i.test(name) ||
       name.toLowerCase().endsWith("vbaproject.bin")    ) {
       throw new Error("Unsupported embedded PPTX content.");
     }

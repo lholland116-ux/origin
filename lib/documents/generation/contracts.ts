@@ -69,11 +69,54 @@ export type WorkbookDocumentRequest = BaseDocumentRequest & {
   readonly sheets: readonly WorkbookSheet[];
 };
 
+export type PresentationSlideBase = {
+  readonly notes?: string;
+};
+
+export type PresentationSlide =
+  | (PresentationSlideBase & {
+      readonly type: "title";
+      readonly title: string;
+      readonly subtitle?: string;
+    })
+  | (PresentationSlideBase & {
+      readonly type: "section";
+      readonly title: string;
+      readonly supportingText?: string;
+    })
+  | (PresentationSlideBase & {
+      readonly type: "body";
+      readonly title: string;
+      readonly paragraphs: readonly string[];
+    })
+  | (PresentationSlideBase & {
+      readonly type: "bullets";
+      readonly title: string;
+      readonly items: readonly string[];
+    })
+  | (PresentationSlideBase & {
+      readonly type: "numbered";
+      readonly title: string;
+      readonly items: readonly string[];
+    })
+  | (PresentationSlideBase & {
+      readonly type: "table";
+      readonly title: string;
+      readonly columns: readonly string[];
+      readonly rows: readonly (readonly string[])[];
+    });
+
+export type PresentationDocumentRequest = BaseDocumentRequest & {
+  readonly format: "pptx";
+  readonly slides: readonly PresentationSlide[];
+};
+
 export type DocumentGenerationRequest =
   | TextDocumentRequest
   | MarkdownDocumentRequest
   | StructuredDocumentRequest
-  | WorkbookDocumentRequest;
+  | WorkbookDocumentRequest
+  | PresentationDocumentRequest;
 
 export type GeneratedArtifact = {
   readonly filename: string;

@@ -2,6 +2,7 @@ import type {
   DocumentGenerationRequest,
   DocumentSection,
   GeneratedArtifact,
+  PresentationSlide,
   WorkbookCell,
   WorkbookSheet,
   ZipPackageRequest,
@@ -25,6 +26,17 @@ export const MAX_TABLE_COLUMNS = 100;
 export const MAX_TABLE_ROWS = 2_000;
 export const MAX_SHEETS = 50;
 export const MAX_WORKSHEET_NAME_LENGTH = 31;
+export const MAX_PRESENTATION_SLIDES = 100;
+export const MAX_PRESENTATION_TITLE_LENGTH = 160;
+export const MAX_PRESENTATION_SUBTITLE_LENGTH = 400;
+export const MAX_PRESENTATION_BODY_PARAGRAPHS = 50;
+export const MAX_PRESENTATION_BODY_LENGTH = 2_000;
+export const MAX_PRESENTATION_LIST_ITEMS = 200;
+export const MAX_PRESENTATION_LIST_ITEM_LENGTH = 1_000;
+export const MAX_PRESENTATION_TABLE_COLUMNS = 8;
+export const MAX_PRESENTATION_TABLE_ROWS = 100;
+export const MAX_PRESENTATION_TABLE_CELL_LENGTH = 400;
+export const MAX_PRESENTATION_NOTES_LENGTH = 5_000;
 
 const INVALID_WORKSHEET_NAME = /[\\/*?:\[\]]/;
 const FORMULA_PREFIXES = new Set(["=", "+", "-", "@"]) satisfies ReadonlySet<string>;
@@ -202,6 +214,60 @@ export function validateZipPackage(request: ZipPackageRequest): string[] {
   return issues;
 }
 
+function validatePresentationText(value: unknown, label: string, maxLength: number): string[] {
+  if (typeof value !== "string") return [label + " must be a string."];
+  if (value.length > maxLength) return [label + " is too long."];
+  return [];
+}
+
+function validatePresentationSlide(slide: PresentationSlide, index: number): string[] {
+  const issues: string[] = [];
+  const prefix = "Slide " + (index + 1);
+  if (!slide || typeof slide !== "object" || typeof slide.type !== "string") {
+    return [prefix + " is invalid."];
+  }
+  issues.push(...validatePresentationText(slide.title, prefix + " title", MAX_PRESENTATION_TITLE_LENGTH));
+  if (slide.notes !== undefined) {
+    issues.push(...validatePresentationText(slide.notes, prefix + " notes", MAX_PRESENTATION_NOTES_LENGTH));
+  }
+
+  if (slide.type === "title") {
+    if (slide.subtitle !== undefined) issues.push(...validatePresentationText(slide.subtitle, prefix + " subtitle", MAX_PRESENTATION_SUBTITLE_LENGTH));
+  } else if (slide.type === "section") {
+    if (slide.supportingText !== undefined) issues.push(...validatePresentationText(slide.supportingText, prefix + " supporting text", MAX_PRESENTATION_SUBTITLE_LENGTH));
+  } else if (slide.type === "body") {
+    if (!Array.isArray(slide.paragraphs) || slide.paragraphs.length === 0) issues.push(prefix + " paragraphs are required.");
+    else if (slide.paragraphs.length > MAX_PRESENTATION_BODY_PARAGRAPHS) issues.push(prefix + " has too many paragraphs.");
+    else slide.paragraphs.forEach((paragraph, paragraphIndex) => {
+      issues.push(...validatePresentationText(paragraph, prefix + " paragraph " + (paragraphIndex + 1), MAX_PRESENTATION_BODY_LENGTH));
+    });
+  } else if (slide.type === "bullets" || slide.type === "numbered") {
+    if (!Array.isArray(slide.items) || slide.items.length === 0) issues.push(prefix + " list items are required.");
+    else if (slide.items.length > MAX_PRESENTATION_LIST_ITEMS) issues.push(prefix + " has too many list items.");
+    else slide.items.forEach((item, itemIndex) => {
+      issues.push(...validatePresentationText(item, prefix + " item " + (itemIndex + 1), MAX_PRESENTATION_LIST_ITEM_LENGTH));
+    });
+  } else if (slide.type === "table") {
+    if (!Array.isArray(slide.columns) || slide.columns.length === 0) issues.push(prefix + " table columns are required.");
+    else if (slide.columns.length > MAX_PRESENTATION_TABLE_COLUMNS) issues.push(prefix + " has too many table columns.");
+    else slide.columns.forEach((column, columnIndex) => {
+      issues.push(...validatePresentationText(column, prefix + " column " + (columnIndex + 1), MAX_PRESENTATION_TABLE_CELL_LENGTH));
+    });
+    const columns = Array.isArray(slide.columns) ? slide.columns : [];
+    if (!Array.isArray(slide.rows)) issues.push(prefix + " table rows are required.");
+    else if (slide.rows.length > MAX_PRESENTATION_TABLE_ROWS) issues.push(prefix + " has too many table rows.");
+    else slide.rows.forEach((row, rowIndex) => {
+      if (!Array.isArray(row) || row.length !== columns.length) issues.push(prefix + " row " + (rowIndex + 1) + " does not match the columns.");
+      else row.forEach((cell, cellIndex) => {
+        issues.push(...validatePresentationText(cell, prefix + " row " + (rowIndex + 1) + " cell " + (cellIndex + 1), MAX_PRESENTATION_TABLE_CELL_LENGTH));
+      });
+    });
+  } else {
+    issues.push(prefix + " has an unsupported type.");
+  }
+  return issues;
+}
+
 export function validateGenerationRequest(
   request: DocumentGenerationRequest,
 ): string[] {
@@ -217,6 +283,10 @@ export function validateGenerationRequest(
   } else if (request.format === "docx" || request.format === "pdf") {
     if (request.sections.length > MAX_SECTION_COUNT) issues.push("Document has too many sections.");
     request.sections.forEach((section, index) => issues.push(...validateSection(section, index)));
+  } else if (request.format === "pptx") {
+    if (!Array.isArray(request.slides) || request.slides.length === 0) issues.push("Presentation must contain a slide.");
+    else if (request.slides.length > MAX_PRESENTATION_SLIDES) issues.push("Presentation has too many slides.");
+    else request.slides.forEach((slide, index) => issues.push(...validatePresentationSlide(slide, index)));
   } else if (request.format === "xlsx") {
     if (request.sheets.length === 0) issues.push("Workbook must contain a sheet.");
     if (request.sheets.length > MAX_SHEETS) issues.push("Workbook has too many sheets.");
