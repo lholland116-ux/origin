@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   createTemplateRegistry,
@@ -251,5 +252,29 @@ describe("document generation templates", () => {
     expect(content).toContain("All focused tests passed");
     expect(content).toContain("Complete human review");
     expect(content).toContain("Review the release package.");
+  });
+
+  it("keeps general-report tables and lists structured through DOCX", async () => {
+    const request = renderTemplate({
+      templateId: "general-report",
+      format: "docx",
+      variables: generalVariables,
+    });
+
+    expect(request.format).toBe("docx");
+    if (request.format !== "docx") return;
+    expect(request.sections).toEqual(expect.arrayContaining([
+      { type: "list", ordered: false, items: ["Delivery improved", "Risk remained controlled"] },
+      { type: "table", columns: ["Metric", "Result"], rows: [["Quality", "Strong"]] },
+    ]));
+
+    const artifact = await generateDocxArtifact(request as Parameters<typeof generateDocxArtifact>[0]);
+    const archive = await JSZip.loadAsync(Buffer.from(artifact.bytes));
+    const documentXml = await archive.file("word/document.xml")?.async("text");
+
+    expect(documentXml).toContain("<w:tbl");
+    expect(documentXml).toContain("Delivery improved");
+    expect(documentXml).toContain("w:numPr");
+    expect(documentXml).not.toContain("| Metric | Result |");
   });
 });

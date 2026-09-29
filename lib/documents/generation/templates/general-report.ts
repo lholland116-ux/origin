@@ -171,7 +171,7 @@ export const generalReportTemplate: DocumentTemplate = {
   requiredVariables: [
     { name: "title", kind: "string", description: "Report title." },
     { name: "summary", kind: "string", description: "Report summary or introduction." },
-    { name: "sections", kind: "object[]", description: "Report sections with headings and bodies." },
+    { name: "sections", kind: "object[]", description: "Report sections shaped as { heading, body, optional bullets: string[], optional table: { columns: string[], rows: string[][] } }. Keep lists and tables structured, not embedded in body text." },
   ],
   optionalVariables: [
     { name: "subtitle", kind: "string", description: "Optional subtitle." },

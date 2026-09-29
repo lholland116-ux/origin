@@ -1,5 +1,5 @@
 import { openai } from "@/lib/openai";
-import { getTemplate } from "./templates/registry";
+import { getTemplate, listTemplates } from "./templates/registry";
 import type {
   TemplateInputValue,
   TemplateOutputFormat,
@@ -112,13 +112,22 @@ export async function resolveDocumentGenerationIntent(params: {
     ? `\n\nDOCUMENT CONTEXT:\n${params.documentContext.slice(0, 40_000)}`
     : "";
 
+  const templateSchemas = listTemplates().map((template) => ({
+    id: template.id,
+    supportedFormats: template.supportedFormats,
+    requiredVariables: template.requiredVariables,
+    optionalVariables: template.optionalVariables,
+  }));
+
   const instructions = [
     "You are LVTChat's document-intent planner.",
     "Return action=none unless the latest user message explicitly requests creating, exporting, downloading, or packaging a document.",
     "Do not treat a question about a file format as a generation request.",
     "For generate_document, choose exactly one registered template: general-report, executive-summary, comparison-report, or general-presentation.",
     "Choose only supported formats. If more than one format is requested, set packageAsZip=true.",
-    "Build variables using only the selected template's documented variable names. Preserve supplied content and do not invent factual findings.",
+    "For general-report sections, keep body as paragraph text only. Put unordered list items in bullets and tables in table with columns and rows. Never encode tables or lists as Markdown inside body.",
+    `Use this exact template schema when building variables: ${JSON.stringify(templateSchemas)}. Include every required variable with the correct shape, including at least one section/item where required. Use only the selected template's documented variable names.`,
+    "Preserve supplied content and do not invent factual findings.",
     "Use the current conversation and document context only as source content. Never return paths, code, MIME overrides, or library options.",
     `Return only JSON matching ${JSON.stringify(DOCUMENT_INTENT_SCHEMA)}.`,
     `CONVERSATION:\n${history}${context}`,

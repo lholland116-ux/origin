@@ -12,8 +12,10 @@ type MockQuery = {
   maybeSingle: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   insert: ReturnType<typeof vi.fn>;
+  upsert: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
+  then: ReturnType<typeof vi.fn>;
 };
 
 type MockSupabase = {
@@ -65,8 +67,10 @@ function queryResult(data: unknown, error: unknown = null) {
   query.maybeSingle = vi.fn(async () => ({ data, error }));
   query.single = vi.fn(async () => ({ data, error }));
   query.insert = vi.fn(async () => ({ data: null, error }));
+  query.upsert = vi.fn(async () => ({ data: null, error }));
   query.update = vi.fn(() => query);
   query.delete = vi.fn(() => query);
+  query.then = vi.fn((resolve) => Promise.resolve({ data, error }).then(resolve));
 
   return query;
 }
@@ -84,6 +88,20 @@ function setupSupabase(params: {
     }),
     profiles: queryResult({ plan: params.plan ?? "free" }),
     usage: queryResult({ message_count: 0 }),
+    messages: queryResult([
+      {
+        id: "30000000-0000-4000-8000-000000000001",
+        role: "user",
+        content: "We reviewed the release evidence and identified two follow-up actions.",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "30000000-0000-4000-8000-000000000002",
+        role: "assistant",
+        content: "The release is ready for the remaining review.",
+        created_at: "2026-01-01T00:01:00.000Z",
+      },
+    ]),
   };
 
   const storageCreateSignedUrl = vi.fn(async () => ({
@@ -199,5 +217,70 @@ describe("POST /api/chat stored image validation", () => {
     expect(fromCalls).toEqual([]);
     expect(mocks.supabase.rpc).not.toHaveBeenCalled();
     expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("POST /api/chat document generation integration", () => {
+  it("generates a TXT summary from an existing conversation", async () => {
+    setupSupabase({});
+    mocks.openai.responses.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        templateId: "general-report",
+        formats: ["txt"],
+        packageAsZip: false,
+        title: "Conversation Summary",
+        variables: {
+          title: "Conversation Summary",
+          summary: "The conversation reviewed release evidence and identified two follow-up actions.",
+          sections: [
+            {
+              heading: "Key points",
+              body: "The release evidence was reviewed and two follow-up actions were identified.",
+            },
+          ],
+        },
+      }),
+    });
+
+    const response = await request({
+      message: "Create a TXT summary of the key points from this conversation.",
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/plain");
+    expect(response.headers.get("content-disposition")).toBe(
+      "attachment; filename=\"Conversation-Summary.txt\"",
+    );
+    expect(await response.text()).toContain("The conversation reviewed release evidence");
+
+    const plannerInput = mocks.openai.responses.create.mock.calls[0]?.[0]?.input as string;
+    expect(plannerInput).toContain("We reviewed the release evidence");
+    expect(plannerInput).toContain("requiredVariables");
+    expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+  });
+
+  it("keeps malformed generation variables as a safe 400", async () => {
+    setupSupabase({});
+    mocks.openai.responses.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        templateId: "general-report",
+        formats: ["txt"],
+        packageAsZip: false,
+        title: "Missing fields",
+        variables: { title: "Missing required report fields" },
+      }),
+    });
+
+    const response = await request({
+      message: "Create a TXT summary of the key points from this conversation.",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "The requested document could not be generated.",
+    });
   });
 });

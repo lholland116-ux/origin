@@ -1001,7 +1001,17 @@ export async function POST(req: Request) {
 
         return generatedDocumentResponse(artifact);
       } catch (error) {
-        if (error instanceof TemplateValidationError || error instanceof DocumentGenerationValidationError) {
+        if (error instanceof TemplateValidationError) {
+          console.error("/api/chat document template validation error:", {
+            issues: error.issues,
+          });
+          return jsonResponse({ error: "The requested document could not be generated." }, 400);
+        }
+
+        if (error instanceof DocumentGenerationValidationError) {
+          console.error("/api/chat document generation validation error:", {
+            issues: error.issues,
+          });
           return jsonResponse({ error: "The requested document could not be generated." }, 400);
         }
 

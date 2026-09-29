@@ -88,4 +88,30 @@ describe("document generation intent", () => {
       }),
     ).resolves.toBeNull();
   });
+  it("provides exact template schemas to the planner for conversation summaries", async () => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "none",
+        templateId: "",
+        formats: [],
+        packageAsZip: false,
+        title: "",
+        variables: {},
+      }),
+    });
+
+    await resolveDocumentGenerationIntent({
+      latestMessage: "Create a TXT summary of the key points from this conversation.",
+      history: [
+        { role: "user", content: "We reviewed the release evidence." },
+        { role: "assistant", content: "Two follow-up actions remain." },
+      ],
+    });
+
+    const plannerInput = mocks.create.mock.calls[0]?.[0]?.input as string;
+    expect(plannerInput).toContain('"id":"general-report"');
+    expect(plannerInput).toContain('"name":"sections"');
+    expect(plannerInput).toContain('"kind":"object[]"');
+    expect(plannerInput).toContain("We reviewed the release evidence.");
+  });
 });
