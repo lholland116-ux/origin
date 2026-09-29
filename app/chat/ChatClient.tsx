@@ -4326,6 +4326,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     const payloadImages = buildStoredImagePayload(pendingImageSnapshot);
     const payloadDocumentIds = [...readyDocumentIds];
+    const generationRequestId = createId();
 
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
@@ -4384,6 +4385,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         body: JSON.stringify({
           conversationId,
           message: effectiveMessage,
+          generationRequestId,
           documentIds: payloadDocumentIds,
           ...(useWebSearch || !hasImages ? {} : { images: payloadImages }),
         }),
@@ -4441,6 +4443,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           ...msg,
           content: "I created " + filename + ". Use the download button below to save it.",
           generatedDocument: {
+            id: getSafeUuidHeader(res, "X-Generated-Document-Id"),
             filename,
             format,
             mimeType: res.headers.get("content-type") ?? "",

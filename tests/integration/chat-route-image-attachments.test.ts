@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GeneratedDocumentPersistenceRecord } from "../../lib/documents/generated-document-contracts";
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
 const CONVERSATION_ID = "20000000-0000-4000-8000-000000000001";
+
+type GeneratedDocumentLookup = (params: {
+  userId: string;
+  conversationId: string;
+  generationRequestId: string;
+}) => Promise<GeneratedDocumentPersistenceRecord | null>;
 
 type MockQuery = {
   select: ReturnType<typeof vi.fn>;
@@ -31,6 +38,13 @@ type MockSupabase = {
 
 const mocks = vi.hoisted(() => ({
   supabase: null as unknown as MockSupabase,
+  generatedDocumentServer: {
+    findGeneratedDocumentByRequest: vi.fn<GeneratedDocumentLookup>(async () => null),
+    findGeneratedDocumentById: vi.fn(async () => null),
+    uploadGeneratedDocumentArtifact: vi.fn(async () => "uploaded/path"),
+    removeGeneratedDocumentObjectByPath: vi.fn(async () => undefined),
+    downloadGeneratedDocument: vi.fn(async () => new Uint8Array([1, 2, 3])),
+  },
   openai: {
     responses: {
       stream: vi.fn(),
@@ -44,6 +58,8 @@ vi.mock("../../lib/supabase/server", () => ({
 }));
 
 vi.mock("../../lib/openai", () => ({ openai: mocks.openai }));
+
+vi.mock("../../lib/documents/generated-document-server", () => mocks.generatedDocumentServer);
 
 vi.mock("../../lib/documents/prepare-context", () => ({
   buildDocumentContext: vi.fn(() => ""),
@@ -120,7 +136,14 @@ function setupSupabase(params: {
     storage: {
       from: vi.fn(() => ({ createSignedUrl: storageCreateSignedUrl })),
     },
-    rpc: vi.fn(async () => ({ data: null, error: null })),
+    rpc: vi.fn(async () => ({
+      data: [{
+        assistant_message_id: "350e8400-e29b-41d4-a716-446655440000",
+        generated_document_id: "450e8400-e29b-41d4-a716-446655440000",
+        was_existing: false,
+      }],
+      error: null,
+    })),
   };
 
   return { fromCalls, storageCreateSignedUrl };
@@ -134,6 +157,7 @@ function request(body: Record<string, unknown>) {
       body: JSON.stringify({
         conversationId: CONVERSATION_ID,
         message: "Review these images.",
+        generationRequestId: "750e8400-e29b-41d4-a716-446655440000",
         ...body,
       }),
     })
@@ -147,10 +171,37 @@ function image(name: string) {
   };
 }
 
+
+function configureDocumentPlanner(format = "txt") {
+  mocks.openai.responses.create.mockResolvedValue({
+    output_text: JSON.stringify({
+      action: "generate_document",
+      templateId: "general-report",
+      formats: [format],
+      packageAsZip: false,
+      title: "Conversation Summary",
+      variables: {
+        title: "Conversation Summary",
+        summary: "The conversation reviewed release evidence and identified two follow-up actions.",
+        sections: [{
+          heading: "Key points",
+          body: "The release evidence was reviewed and two follow-up actions were identified.",
+        }],
+      },
+    }),
+  });
+}
+
 describe("POST /api/chat stored image validation", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mocks.openai.responses.stream.mockReset();
     mocks.openai.responses.create.mockReset();
+    mocks.generatedDocumentServer.findGeneratedDocumentByRequest.mockImplementation(async () => null);
+    mocks.generatedDocumentServer.findGeneratedDocumentById.mockImplementation(async () => null);
+    mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact.mockImplementation(async () => "uploaded/path");
+    mocks.generatedDocumentServer.removeGeneratedDocumentObjectByPath.mockImplementation(async () => undefined);
+    mocks.generatedDocumentServer.downloadGeneratedDocument.mockImplementation(async () => new Uint8Array([1, 2, 3]));
   });
 
   it("rejects mixed legacy and stored image inputs before database work", async () => {
@@ -254,6 +305,11 @@ describe("POST /api/chat document generation integration", () => {
       "attachment; filename=\"Conversation-Summary.txt\"",
     );
     expect(await response.text()).toContain("The conversation reviewed release evidence");
+    expect(response.headers.get("x-generated-document-id")).toBe("450e8400-e29b-41d4-a716-446655440000");
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc).toHaveBeenCalledWith("persist_generated_document_chat", expect.objectContaining({
+      p_generation_request_id: "750e8400-e29b-41d4-a716-446655440000",
+    }));
 
     const plannerInput = mocks.openai.responses.create.mock.calls[0]?.[0]?.input as string;
     expect(plannerInput).toContain("We reviewed the release evidence");
@@ -282,5 +338,63 @@ describe("POST /api/chat document generation integration", () => {
     expect(await response.json()).toEqual({
       error: "The requested document could not be generated.",
     });
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed generation request UUIDs before persistence", async () => {
+    setupSupabase({});
+    const response = await request({ generationRequestId: "not-a-uuid" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "generationRequestId is invalid." });
+    expect(mocks.generatedDocumentServer.findGeneratedDocumentByRequest).not.toHaveBeenCalled();
+  });
+  it("reuses a durable artifact on the same request UUID without regenerating", async () => {
+    setupSupabase({});
+    const existing = {
+      id: "450e8400-e29b-41d4-a716-446655440000",
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      messageId: "350e8400-e29b-41d4-a716-446655440000",
+      generationRequestId: "750e8400-e29b-41d4-a716-446655440000",
+      storagePath: USER_ID + "/" + CONVERSATION_ID + "/generated/450e8400-e29b-41d4-a716-446655440000/Conversation-Summary.txt",
+      filename: "Conversation-Summary.txt",
+      format: "txt" as const,
+      mimeType: "text/plain",
+      sizeBytes: 3,
+      templateId: "general-report",
+      createdAt: "2026-09-29T00:00:00.000Z",
+    };
+    mocks.generatedDocumentServer.findGeneratedDocumentByRequest.mockResolvedValue(existing);
+    mocks.generatedDocumentServer.downloadGeneratedDocument.mockResolvedValue(new Uint8Array([7, 8, 9]));
+
+    const response = await request({ message: "Create the report again." });
+
+    expect(response.status).toBe(200);
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([7, 8, 9]);
+    expect(response.headers.get("x-generated-document-id")).toBe(existing.id);
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).not.toHaveBeenCalled();
+  });
+
+  it("removes an uploaded object when atomic metadata persistence fails", async () => {
+    setupSupabase({});
+    configureDocumentPlanner();
+    mocks.supabase.rpc.mockResolvedValue({ data: null, error: { message: "db failure" } });
+    const response = await request({ message: "Create a TXT summary." });
+
+    expect(response.status).toBe(500);
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).toHaveBeenCalledOnce();
+    expect(mocks.generatedDocumentServer.removeGeneratedDocumentObjectByPath).toHaveBeenCalledOnce();
+  });
+
+  it("supports binary persistence metadata using PDF", async () => {
+    setupSupabase({});
+    configureDocumentPlanner("pdf");
+    const response = await request({ message: "Create a PDF summary." });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/pdf");
+    expect(response.headers.get("x-generated-document-id")).toBe("450e8400-e29b-41d4-a716-446655440000");
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).toHaveBeenCalledOnce();
   });
 });

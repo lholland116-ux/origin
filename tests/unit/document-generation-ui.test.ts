@@ -9,6 +9,8 @@ describe("generated document chat integration", () => {
     expect(clientSource).toContain('res.headers.get("x-lvtchat-document") === "generated"');
     expect(clientSource).toContain("filenameFromContentDisposition");
     expect(clientSource).toContain("generatedDocument:");
+    expect(clientSource).toContain("const generationRequestId = createId();");
+    expect(clientSource).toContain("X-Generated-Document-Id");
     expect(clientSource).toContain("<GeneratedDocumentCard");
     expect(clientSource).toContain('I created " + filename');
   });

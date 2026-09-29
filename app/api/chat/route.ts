@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
@@ -16,9 +17,17 @@ import {
   type StoredImageReference,
 } from "@/lib/chat/chat-image-attachments";
 import { generateTemplateOutput } from "@/lib/documents/generation";
+import type { DocumentFormat } from "@/lib/documents/generation/contracts";
 import { resolveDocumentGenerationIntent } from "@/lib/documents/generation/intent";
 import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
 import { TemplateValidationError } from "@/lib/documents/generation/templates/types";
+import {
+  downloadGeneratedDocument,
+  findGeneratedDocumentById,
+  findGeneratedDocumentByRequest,
+  removeGeneratedDocumentObjectByPath,
+  uploadGeneratedDocumentArtifact,
+} from "@/lib/documents/generated-document-server";
 
 export const runtime = "nodejs";
 
@@ -35,6 +44,7 @@ const MAX_IMAGE_NAME_LENGTH = 255;
 const MODEL_IMAGE_URL_TTL_SECONDS = 5 * 60;
 const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MODEL = "gpt-5.6-luna";
 
@@ -116,6 +126,7 @@ type ChatRequestBody = {
   imageName?: string;
   images?: unknown;
   documentIds?: string[];
+  generationRequestId?: string;
 };
 
 type DbMessage = {
@@ -169,7 +180,10 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function generatedDocumentResponse(artifact: { readonly bytes: Uint8Array; readonly filename: string; readonly mimeType: string; readonly format: string }) {
+function generatedDocumentResponse(
+  artifact: { readonly bytes: Uint8Array; readonly filename: string; readonly mimeType: string; readonly format: string },
+  ids: { readonly generatedDocumentId?: string; readonly messageId?: string } = {},
+) {
   return new Response(new Blob([artifact.bytes as unknown as ArrayBuffer], { type: artifact.mimeType }), {
     status: 200,
     headers: {
@@ -179,8 +193,14 @@ function generatedDocumentResponse(artifact: { readonly bytes: Uint8Array; reado
       "X-Content-Type-Options": "nosniff",
       "X-LVTChat-Document": "generated",
       "X-LVTChat-Document-Format": artifact.format,
+      ...(ids.generatedDocumentId ? { "X-Generated-Document-Id": ids.generatedDocumentId } : {}),
+      ...(ids.messageId ? { "X-Generated-Document-Message-Id": ids.messageId } : {}),
     },
   });
+}
+
+function isValidUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
 function normalizeString(input: unknown): string {
@@ -609,6 +629,11 @@ export async function POST(req: Request) {
     const imagePath = normalizeString(body.imagePath);
     const imageName = normalizeString(body.imageName);
     const documentIds = normalizeDocumentIds(body.documentIds);
+    const generationRequestId = normalizeString(body.generationRequestId);
+
+    if (generationRequestId && !isValidUuid(generationRequestId)) {
+      return jsonResponse({ error: "generationRequestId is invalid." }, 400);
+    }
 
     let normalizedImageInput: NormalizedChatImageInput;
 
@@ -709,6 +734,37 @@ export async function POST(req: Request) {
 
     if (conversationError || !conversation) {
       return jsonResponse({ error: "Conversation not found." }, 404);
+    }
+
+    if (generationRequestId) {
+      try {
+        const existing = await findGeneratedDocumentByRequest({
+          userId: user.id,
+          conversationId,
+          generationRequestId,
+        });
+
+        if (existing) {
+          const bytes = await downloadGeneratedDocument(existing);
+          return generatedDocumentResponse(
+            {
+              bytes,
+              filename: existing.filename,
+              mimeType: existing.mimeType,
+              format: existing.format,
+            },
+            {
+              generatedDocumentId: existing.id,
+              messageId: existing.messageId,
+            },
+          );
+        }
+      } catch (error) {
+        console.error("Existing generated document lookup failed:", {
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+        return jsonResponse({ error: "The generated document could not be retrieved." }, 500);
+      }
     }
 
     let plan: Plan;
@@ -982,6 +1038,12 @@ export async function POST(req: Request) {
     });
 
     if (documentIntent) {
+      const effectiveGenerationRequestId = generationRequestId || randomUUID();
+      const generatedDocumentId = randomUUID();
+      let storagePath = "";
+      let uploadedFilename = "";
+      let uploadedFormat: DocumentFormat | null = null;
+
       try {
         const artifact = await generateTemplateOutput({
           templateId: documentIntent.templateId,
@@ -989,18 +1051,115 @@ export async function POST(req: Request) {
           variables: documentIntent.variables,
           packageAsZip: documentIntent.packageAsZip,
         });
-        const persistedReply = "I created " + artifact.filename + ". Use the download button below to save it.";
 
-        await persistAssistantMessage({
-          supabase,
-          conversationId,
+        uploadedFilename = artifact.filename;
+        uploadedFormat = artifact.format;
+        storagePath = await uploadGeneratedDocumentArtifact({
           userId: user.id,
-          content: persistedReply,
+          conversationId,
+          generatedDocumentId,
+          filename: artifact.filename,
+          format: artifact.format,
+          mimeType: artifact.mimeType.split(";", 1)[0] ?? artifact.mimeType,
+          bytes: artifact.bytes,
         });
-        await touchConversation({ supabase, conversationId, userId: user.id });
 
-        return generatedDocumentResponse(artifact);
+        const rpcClient = supabase as unknown as {
+          rpc: (
+            functionName: string,
+            params: Record<string, unknown>,
+          ) => Promise<{ data: unknown; error: unknown }>;
+        };
+        const { data, error } = await rpcClient.rpc("persist_generated_document_chat", {
+          p_conversation_id: conversationId,
+          p_generation_request_id: effectiveGenerationRequestId,
+          p_generated_document_id: generatedDocumentId,
+          p_storage_path: storagePath,
+          p_filename: artifact.filename,
+          p_format: artifact.format,
+          p_mime_type: artifact.mimeType.split(";", 1)[0] ?? artifact.mimeType,
+          p_size_bytes: artifact.sizeBytes,
+          p_template_id: documentIntent.templateId,
+          p_content: "I created " + artifact.filename + ". Use the download button below to save it.",
+        });
+
+        if (error || !Array.isArray(data) || !data[0] || typeof data[0] !== "object") {
+          throw new Error("Generated document persistence failed.");
+        }
+
+        const persisted = data[0] as {
+          assistant_message_id?: unknown;
+          generated_document_id?: unknown;
+          was_existing?: unknown;
+        };
+        const assistantMessageId =
+          typeof persisted.assistant_message_id === "string" ? persisted.assistant_message_id : "";
+        const persistedDocumentId =
+          typeof persisted.generated_document_id === "string"
+            ? persisted.generated_document_id
+            : "";
+        const wasExisting = persisted.was_existing === true;
+
+        if (!isValidUuid(assistantMessageId) || !isValidUuid(persistedDocumentId)) {
+          throw new Error("Generated document persistence response was invalid.");
+        }
+
+        if (wasExisting) {
+          await removeGeneratedDocumentObjectByPath({
+            userId: user.id,
+            conversationId,
+            generatedDocumentId,
+            filename: artifact.filename,
+            format: artifact.format,
+            storagePath,
+          });
+          storagePath = "";
+
+          const existing = await findGeneratedDocumentById({
+            userId: user.id,
+            generatedDocumentId: persistedDocumentId,
+          });
+          if (!existing) throw new Error("Existing generated document metadata was unavailable.");
+
+          const bytes = await downloadGeneratedDocument(existing);
+          await touchConversation({ supabase, conversationId, userId: user.id });
+          return generatedDocumentResponse(
+            {
+              bytes,
+              filename: existing.filename,
+              mimeType: existing.mimeType,
+              format: existing.format,
+            },
+            {
+              generatedDocumentId: existing.id,
+              messageId: existing.messageId,
+            },
+          );
+        }
+
+        await touchConversation({ supabase, conversationId, userId: user.id });
+        return generatedDocumentResponse(artifact, {
+          generatedDocumentId: persistedDocumentId,
+          messageId: assistantMessageId,
+        });
       } catch (error) {
+        if (storagePath && uploadedFilename && uploadedFormat) {
+          try {
+            await removeGeneratedDocumentObjectByPath({
+              userId: user.id,
+              conversationId,
+              generatedDocumentId,
+              filename: uploadedFilename,
+              format: uploadedFormat,
+              storagePath,
+            });
+          } catch (cleanupError) {
+            console.error("Generated document cleanup failed:", {
+              reason: cleanupError instanceof Error ? cleanupError.message : "unknown",
+            });
+          }
+        }
+
         if (error instanceof TemplateValidationError) {
           console.error("/api/chat document template validation error:", {
             issues: error.issues,
@@ -1015,7 +1174,9 @@ export async function POST(req: Request) {
           return jsonResponse({ error: "The requested document could not be generated." }, 400);
         }
 
-        console.error("/api/chat document generation error:", error);
+        console.error("/api/chat document persistence error:", {
+          reason: error instanceof Error ? error.message : "unknown",
+        });
         return jsonResponse({ error: "The document could not be generated. Please try again." }, 500);
       }
     }

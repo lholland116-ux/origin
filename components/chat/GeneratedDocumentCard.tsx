@@ -6,6 +6,7 @@ import { formatDocumentSize } from "@/lib/documents/download";
 import type { ChatTheme } from "@/lib/chat-themes";
 
 export type GeneratedDocumentCardData = {
+  readonly id?: string;
   readonly filename: string;
   readonly format: DocumentFormat;
   readonly mimeType: string;
