@@ -23,10 +23,11 @@ const SUPPORTED_DOCUMENT_OUTPUT_REFERENCE =
 const INFORMATIONAL_DOCUMENT_QUESTION =
   /\b(?:what\s+is|what\s+does|explain|how\s+(?:do|can)\s+i|can\s+.+\s+open)\b/i;
 
-const REQUIRED_STRING_SCHEMA = { type: "string" } as const;
+const REQUIRED_STRING_SCHEMA = { type: "string", minLength: 1 } as const;
 const OPTIONAL_STRING_SCHEMA = { type: ["string", "null"] } as const;
 const REQUIRED_STRING_ARRAY_SCHEMA = {
   type: "array",
+  minItems: 1,
   items: REQUIRED_STRING_SCHEMA,
 } as const;
 const OPTIONAL_STRING_ARRAY_SCHEMA = {
@@ -62,6 +63,7 @@ const GENERAL_REPORT_VARIABLES_SCHEMA = {
     summary: REQUIRED_STRING_SCHEMA,
     sections: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
@@ -124,6 +126,7 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
     title: REQUIRED_STRING_SCHEMA,
     items: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
@@ -138,6 +141,7 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
     summary: REQUIRED_STRING_SCHEMA,
     comparisons: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
@@ -172,6 +176,7 @@ const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
     summary: REQUIRED_STRING_SCHEMA,
     sections: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
@@ -213,6 +218,7 @@ function templateDocumentSchema(
       templateId: { type: "string" as const, enum: [templateId] },
       formats: {
         type: "array" as const,
+        minItems: 1,
         items: { type: "string" as const, enum: formats },
       },
       packageAsZip: { type: "boolean" as const },
