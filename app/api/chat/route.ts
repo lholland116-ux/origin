@@ -18,7 +18,7 @@ import {
 } from "@/lib/chat/chat-image-attachments";
 import { generateTemplateOutput } from "@/lib/documents/generation";
 import type { DocumentFormat } from "@/lib/documents/generation/contracts";
-import { resolveDocumentGenerationIntent } from "@/lib/documents/generation/intent";
+import { DocumentGenerationIntentValidationError, resolveDocumentGenerationIntent } from "@/lib/documents/generation/intent";
 import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
 import { TemplateValidationError } from "@/lib/documents/generation/templates/types";
 import {
@@ -1031,11 +1031,20 @@ export async function POST(req: Request) {
       ? recentHistory[recentHistory.length - 1]?.content ?? ""
       : message || recentHistory[recentHistory.length - 1]?.content || "";
 
-    const documentIntent = await resolveDocumentGenerationIntent({
-      latestMessage: latestUserMessage,
-      history: recentHistory,
-      documentContext,
-    });
+    let documentIntent: Awaited<ReturnType<typeof resolveDocumentGenerationIntent>>;
+    try {
+      documentIntent = await resolveDocumentGenerationIntent({
+        latestMessage: latestUserMessage,
+        history: recentHistory,
+        documentContext,
+      });
+    } catch (error) {
+      if (error instanceof DocumentGenerationIntentValidationError) {
+        console.error("/api/chat document intent validation error:", { issues: error.issues });
+        return jsonResponse({ error: "The requested document could not be generated." }, 400);
+      }
+      throw error;
+    }
 
     if (documentIntent) {
       const effectiveGenerationRequestId = generationRequestId || randomUUID();

@@ -9,6 +9,7 @@ vi.mock("@/lib/openai", () => ({
 }));
 
 import {
+  DocumentGenerationIntentValidationError,
   getRuntimeCurrentDate,
   isDocumentGenerationCandidate,
   resolveDocumentGenerationIntent,
@@ -178,7 +179,7 @@ describe("document generation intent", () => {
     await expect(resolveDocumentGenerationIntent({
       latestMessage: "Create a PDF report.",
       history: [{ role: "user", content: "Create a PDF report." }],
-    })).resolves.toBeNull();
+    })).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
   });
 
   it("rejects a selected-template and format mismatch before rendering", async () => {
@@ -192,7 +193,7 @@ describe("document generation intent", () => {
     await expect(resolveDocumentGenerationIntent({
       latestMessage: "Create a PDF presentation.",
       history: [{ role: "user", content: "Create a PDF presentation." }],
-    })).resolves.toBeNull();
+    })).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
   });
 
   it("preserves the exact requested bullets while retaining report structure", async () => {
@@ -323,7 +324,7 @@ describe("document generation intent", () => {
         latestMessage: "Export this as a PDF.",
         history: [{ role: "user", content: "Export this as a PDF." }],
       }),
-    ).resolves.toBeNull();
+    ).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
   });
   it("provides exact template schemas to the planner for conversation summaries", async () => {
     mocks.create.mockResolvedValue({

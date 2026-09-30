@@ -339,6 +339,8 @@ describe("POST /api/chat document generation integration", () => {
       error: "The requested document could not be generated.",
     });
     expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
   });
 
   it("rejects malformed generation request UUIDs before persistence", async () => {

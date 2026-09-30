@@ -1,6 +1,7 @@
 import { openai } from "@/lib/openai";
 import { getTemplate, listTemplates } from "./templates/registry";
 import { renderTemplate } from "./templates/render";
+import { TemplateValidationError } from "./templates/types";
 import type {
   TemplateInputValue,
   TemplateOutputFormat,
@@ -214,6 +215,16 @@ export type DocumentGenerationIntent = {
   readonly packageAsZip: boolean;
 };
 
+export class DocumentGenerationIntentValidationError extends Error {
+  readonly issues: readonly string[];
+
+  constructor(issues: readonly string[]) {
+    super("Invalid document generation intent.");
+    this.name = "DocumentGenerationIntentValidationError";
+    this.issues = issues;
+  }
+}
+
 export function getRuntimeCurrentDate(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
@@ -336,18 +347,20 @@ function normalizeAutomaticDatePlacement(
   return normalized;
 }
 
-function satisfiesTemplateContracts(
+function validateTemplateContracts(
   templateId: string,
   formats: readonly TemplateOutputFormat[],
   variables: TemplateVariablesRecord,
-): boolean {
+): readonly string[] {
   try {
     for (const format of formats) {
       renderTemplate({ templateId, format, variables });
     }
-    return true;
-  } catch {
-    return false;
+    return [];
+  } catch (error) {
+    return error instanceof TemplateValidationError
+      ? error.issues
+      : ["The selected document template could not be rendered."];
   }
 }
 
@@ -358,19 +371,28 @@ function parseModelIntent(
   if (!isRecord(value)) return null;
   const row = value as IntentModelRecord;
 
-  if (row.action !== "generate_document" || typeof row.templateId !== "string") {
+  if (row.action !== "generate_document") {
     return null;
   }
 
+  if (typeof row.templateId !== "string") {
+    throw new DocumentGenerationIntentValidationError(["The selected document template is invalid."]);
+  }
   const templateId = row.templateId.trim();
-  if (!templateId || !getTemplate(templateId)) return null;
+  if (!templateId || !getTemplate(templateId)) {
+    throw new DocumentGenerationIntentValidationError(["The selected document template is invalid."]);
+  }
 
   const rawFormats = Array.isArray(row.formats) ? row.formats : [];
   const formats = rawFormats.filter(isTemplateOutputFormat);
   const uniqueFormats = Array.from(new Set(formats));
-  if (uniqueFormats.length === 0 || uniqueFormats.length !== rawFormats.length || uniqueFormats.length !== formats.length) return null;
+  if (uniqueFormats.length === 0 || uniqueFormats.length !== rawFormats.length || uniqueFormats.length !== formats.length) {
+    throw new DocumentGenerationIntentValidationError(["The requested document formats are invalid."]);
+  }
 
-  if (!isRecord(row.variables) || !isTemplateInputValue(row.variables)) return null;
+  if (!isRecord(row.variables) || !isTemplateInputValue(row.variables)) {
+    throw new DocumentGenerationIntentValidationError(["The document template variables are invalid."]);
+  }
 
   const variables = {
     ...(row.variables as TemplateVariablesRecord),
@@ -383,7 +405,10 @@ function parseModelIntent(
       ? normalizeAutomaticDatePlacement(variables, context.latestMessage, context.currentDate)
       : variables;
 
-  if (!satisfiesTemplateContracts(templateId, uniqueFormats, normalizedVariables)) return null;
+  const contractIssues = validateTemplateContracts(templateId, uniqueFormats, normalizedVariables);
+  if (contractIssues.length > 0) {
+    throw new DocumentGenerationIntentValidationError(contractIssues);
+  }
   return {
     templateId,
     formats: uniqueFormats,
@@ -457,6 +482,7 @@ export async function resolveDocumentGenerationIntent(params: {
       currentDate,
     });
   } catch (error) {
+    if (error instanceof DocumentGenerationIntentValidationError) throw error;
     console.error("Document intent resolution failed:", error);
     return null;
   }
