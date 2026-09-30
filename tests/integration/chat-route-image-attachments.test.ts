@@ -343,6 +343,44 @@ describe("POST /api/chat document generation integration", () => {
     expect(mocks.supabase.rpc).not.toHaveBeenCalled();
   });
 
+  it("does not fall through to ordinary chat when an explicit planner result is none", async () => {
+    setupSupabase({});
+    mocks.openai.responses.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "none", templateId: "", formats: [], packageAsZip: false, title: "", variables: {},
+      }),
+    });
+
+    const response = await request({ message: "Create a PDF summary." });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "The requested document could not be generated.",
+    });
+    expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it("keeps informational format questions on ordinary chat", async () => {
+    setupSupabase({});
+    mocks.openai.responses.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "none", templateId: "", formats: [], packageAsZip: false, title: "", variables: {},
+      }),
+    });
+    mocks.openai.responses.stream.mockResolvedValue((async function* () {
+      yield { type: "response.output_text.delta", delta: "A PDF is a document format." };
+      yield { type: "response.completed" };
+    })());
+
+    const response = await request({ message: "What is a PDF?" });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("A PDF is a document format.");
+    expect(mocks.openai.responses.stream).toHaveBeenCalledOnce();
+  });
+
   it("rejects malformed generation request UUIDs before persistence", async () => {
     setupSupabase({});
     const response = await request({ generationRequestId: "not-a-uuid" });

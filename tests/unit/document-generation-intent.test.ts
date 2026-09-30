@@ -11,6 +11,7 @@ vi.mock("@/lib/openai", () => ({
 import {
   DocumentGenerationIntentValidationError,
   getRuntimeCurrentDate,
+  isExplicitDocumentGenerationRequest,
   isDocumentGenerationCandidate,
   resolveDocumentGenerationIntent,
 } from "@/lib/documents/generation/intent";
@@ -279,6 +280,62 @@ describe("document generation intent", () => {
     ).resolves.toBeNull();
   });
 
+  it.each([
+    "Create a TXT file from this conversation.",
+    "Create a Markdown document from this.",
+    "Generate a DOCX report.",
+    "Create a PDF summary.",
+    "Make an XLSX workbook.",
+    "Create a PPTX presentation.",
+    "Create a ZIP package.",
+  ])("recognizes explicit supported-format generation: %s", (message) => {
+    expect(isExplicitDocumentGenerationRequest(message)).toBe(true);
+  });
+
+  it.each([
+    "What is a PDF?",
+    "Explain DOCX files.",
+    "Can Excel open XLSX files?",
+    "What is Markdown?",
+    "What does ZIP compression do?",
+  ])("does not classify informational format questions as explicit generation: %s", (message) => {
+    expect(isExplicitDocumentGenerationRequest(message)).toBe(false);
+  });
+
+  it("fails explicitly when the planner returns action:none for a generation request", async () => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "none", templateId: "", formats: [], packageAsZip: false, title: "", variables: {},
+      }),
+    });
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF summary.",
+      history: [{ role: "user", content: "Create a PDF summary." }],
+    })).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
+  });
+
+  it.each([
+    ["empty planner output", { output_text: "" }],
+    ["malformed planner JSON", { output_text: "not-json" }],
+  ])("fails explicitly for %s", async (_label, response) => {
+    mocks.create.mockResolvedValue(response);
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF summary.",
+      history: [{ role: "user", content: "Create a PDF summary." }],
+    })).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
+  });
+
+  it("fails explicitly when the planner throws for a generation request", async () => {
+    mocks.create.mockRejectedValue(new Error("planner unavailable"));
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF summary.",
+      history: [{ role: "user", content: "Create a PDF summary." }],
+    })).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
+  });
+
   it("accepts only a validated structured generation action", async () => {
     mocks.create.mockResolvedValue({
       output_text: JSON.stringify({
@@ -338,13 +395,13 @@ describe("document generation intent", () => {
       }),
     });
 
-    await resolveDocumentGenerationIntent({
+    await expect(resolveDocumentGenerationIntent({
       latestMessage: "Create a TXT summary of the key points from this conversation.",
       history: [
         { role: "user", content: "We reviewed the release evidence." },
         { role: "assistant", content: "Two follow-up actions remain." },
       ],
-    });
+    })).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
 
     const plannerInput = mocks.create.mock.calls[0]?.[0]?.input as string;
     expect(plannerInput).toContain('"id":"general-report"');

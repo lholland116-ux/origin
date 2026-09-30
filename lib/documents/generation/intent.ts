@@ -14,6 +14,15 @@ const MODEL = "gpt-5.6-luna";
 const DOCUMENT_REQUEST_CANDIDATE =
   /\b(document|file|export|download|report|summary|presentation|powerpoint|pptx|word|docx|pdf|spreadsheet|excel|xlsx|markdown|zip|text file)\b/i;
 
+const EXPLICIT_DOCUMENT_GENERATION_VERB =
+  /\b(?:create|generate|make|produce|build|export|prepare|save\s+as)\b/i;
+
+const SUPPORTED_DOCUMENT_OUTPUT_REFERENCE =
+  /\b(?:txt|text\s+file|markdown|md|docx|word\s+document|pdf|xlsx|excel\s+(?:spreadsheet|workbook)|pptx|powerpoint|presentation|zip)\b/i;
+
+const INFORMATIONAL_DOCUMENT_QUESTION =
+  /\b(?:what\s+is|what\s+does|explain|how\s+(?:do|can)\s+i|can\s+.+\s+open)\b/i;
+
 const REQUIRED_STRING_SCHEMA = { type: "string", minLength: 1 } as const;
 const OPTIONAL_STRING_SCHEMA = { type: "string" } as const;
 const REQUIRED_STRING_ARRAY_SCHEMA = {
@@ -421,12 +430,21 @@ export function isDocumentGenerationCandidate(message: string): boolean {
   return DOCUMENT_REQUEST_CANDIDATE.test(message);
 }
 
+export function isExplicitDocumentGenerationRequest(message: string): boolean {
+  return (
+    EXPLICIT_DOCUMENT_GENERATION_VERB.test(message) &&
+    SUPPORTED_DOCUMENT_OUTPUT_REFERENCE.test(message) &&
+    !INFORMATIONAL_DOCUMENT_QUESTION.test(message)
+  );
+}
+
 export async function resolveDocumentGenerationIntent(params: {
   readonly latestMessage: string;
   readonly history: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
   readonly documentContext?: string;
 }): Promise<DocumentGenerationIntent | null> {
-  if (!isDocumentGenerationCandidate(params.latestMessage)) return null;
+  const explicitDocumentRequest = isExplicitDocumentGenerationRequest(params.latestMessage);
+  if (!isDocumentGenerationCandidate(params.latestMessage) && !explicitDocumentRequest) return null;
 
   const history = params.history
     .slice(-12)
@@ -476,14 +494,33 @@ export async function resolveDocumentGenerationIntent(params: {
     } as never);
 
     const output = response.output_text?.trim();
-    if (!output) return null;
-    return parseModelIntent(JSON.parse(output), {
+    if (!output) {
+      if (explicitDocumentRequest) {
+        throw new DocumentGenerationIntentValidationError([
+          "The document-generation planner returned no usable intent.",
+        ]);
+      }
+      return null;
+    }
+
+    const parsed = parseModelIntent(JSON.parse(output), {
       latestMessage: params.latestMessage,
       currentDate,
     });
+    if (!parsed && explicitDocumentRequest) {
+      throw new DocumentGenerationIntentValidationError([
+        "The document-generation planner did not produce a generation intent.",
+      ]);
+    }
+    return parsed;
   } catch (error) {
     if (error instanceof DocumentGenerationIntentValidationError) throw error;
     console.error("Document intent resolution failed:", error);
+    if (explicitDocumentRequest) {
+      throw new DocumentGenerationIntentValidationError([
+        "The document-generation planner failed to produce a usable intent.",
+      ]);
+    }
     return null;
   }
 }
