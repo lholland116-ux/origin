@@ -183,14 +183,16 @@ describe("document generation intent", () => {
       items?: SchemaNode;
       anyOf?: readonly SchemaNode[];
       enum?: readonly string[];
-      minLength?: number;
       minItems?: number;
+      pattern?: string;
     };
     const request = mocks.create.mock.calls[0]?.[0] as {
-      text?: { format?: { schema?: SchemaNode } };
+      text?: { format?: { schema?: SchemaNode; strict?: boolean } };
     };
+    expect(request.text?.format?.strict).toBe(true);
     const schema = request.text?.format?.schema;
     expect(schema?.type).toBe("object");
+    expect(JSON.stringify(schema)).not.toContain("minLength");
     expect(schema?.anyOf).toBeUndefined();
     expect((schema as SchemaNode & { allOf?: unknown }).allOf).toBeUndefined();
     expect((schema as SchemaNode & { oneOf?: unknown }).oneOf).toBeUndefined();
@@ -220,21 +222,21 @@ describe("document generation intent", () => {
     expect(generalReport.properties?.templateId?.enum).toEqual(["general-report"]);
     expect(generalReport.properties?.formats?.minItems).toBe(1);
     expect(generalReport.properties?.formats?.items?.enum).toEqual(["docx", "pdf", "md", "txt"]);
-    expect(generalReport.properties?.variables?.properties?.title?.minLength).toBe(1);
-    expect(generalReport.properties?.variables?.properties?.summary?.minLength).toBe(1);
+    expect(generalReport.properties?.variables?.properties?.title?.pattern).toBe("\\S");
+    expect(generalReport.properties?.variables?.properties?.summary?.pattern).toBe("\\S");
     expect(generalReport.properties?.variables?.properties?.sections?.minItems).toBe(1);
     expect(generalReport.properties?.variables?.properties?.sections?.items?.required).toEqual(["heading", "body", "bullets", "table"]);
-    expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.heading?.minLength).toBe(1);
-    expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.body?.minLength).toBe(1);
+    expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.heading?.pattern).toBe("\\S");
+    expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.body?.pattern).toBe("\\S");
     expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.bullets?.type).toEqual(["array", "null"]);
     expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.bullets?.minItems).toBeUndefined();
     expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.table?.anyOf).toHaveLength(2);
-    expect(generalReport.properties?.variables?.properties?.date?.minLength).toBeUndefined();
+    expect(generalReport.properties?.variables?.properties?.date?.pattern).toBeUndefined();
 
     const executiveSummary = templateBranches[1];
     expect(executiveSummary.properties?.templateId?.enum).toEqual(["executive-summary"]);
-    expect(executiveSummary.properties?.variables?.properties?.title?.minLength).toBe(1);
-    expect(executiveSummary.properties?.variables?.properties?.context?.minLength).toBe(1);
+    expect(executiveSummary.properties?.variables?.properties?.title?.pattern).toBe("\\S");
+    expect(executiveSummary.properties?.variables?.properties?.context?.pattern).toBe("\\S");
     expect(executiveSummary.properties?.variables?.properties?.keyFindings?.minItems).toBe(1);
     expect(executiveSummary.properties?.variables?.properties?.implications?.minItems).toBe(1);
     expect(executiveSummary.properties?.variables?.properties?.recommendedActions?.minItems).toBe(1);
@@ -242,24 +244,24 @@ describe("document generation intent", () => {
 
     const comparisonReport = templateBranches[2];
     expect(comparisonReport.properties?.templateId?.enum).toEqual(["comparison-report"]);
-    expect(comparisonReport.properties?.variables?.properties?.title?.minLength).toBe(1);
+    expect(comparisonReport.properties?.variables?.properties?.title?.pattern).toBe("\\S");
     expect(comparisonReport.properties?.variables?.properties?.items?.minItems).toBe(1);
-    expect(comparisonReport.properties?.variables?.properties?.items?.items?.properties?.name?.minLength).toBe(1);
+    expect(comparisonReport.properties?.variables?.properties?.items?.items?.properties?.name?.pattern).toBe("\\S");
     expect(comparisonReport.properties?.variables?.properties?.criteria?.minItems).toBe(1);
-    expect(comparisonReport.properties?.variables?.properties?.summary?.minLength).toBe(1);
+    expect(comparisonReport.properties?.variables?.properties?.summary?.pattern).toBe("\\S");
     expect(comparisonReport.properties?.variables?.properties?.comparisons?.minItems).toBe(1);
-    expect(comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.item?.minLength).toBe(1);
+    expect(comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.item?.pattern).toBe("\\S");
     expect(comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.values?.minItems).toBe(1);
     expect(comparisonReport.properties?.variables?.properties?.observations?.minItems).toBe(1);
     expect(comparisonReport.properties?.variables?.required).toContain("comparisons");
 
     const generalPresentation = templateBranches[3];
     expect(generalPresentation.properties?.templateId?.enum).toEqual(["general-presentation"]);
-    expect(generalPresentation.properties?.variables?.properties?.title?.minLength).toBe(1);
-    expect(generalPresentation.properties?.variables?.properties?.summary?.minLength).toBe(1);
+    expect(generalPresentation.properties?.variables?.properties?.title?.pattern).toBe("\\S");
+    expect(generalPresentation.properties?.variables?.properties?.summary?.pattern).toBe("\\S");
     expect(generalPresentation.properties?.variables?.properties?.sections?.minItems).toBe(1);
-    expect(generalPresentation.properties?.variables?.properties?.sections?.items?.properties?.heading?.minLength).toBe(1);
-    expect(generalPresentation.properties?.variables?.properties?.sections?.items?.properties?.body?.minLength).toBe(1);
+    expect(generalPresentation.properties?.variables?.properties?.sections?.items?.properties?.heading?.pattern).toBe("\\S");
+    expect(generalPresentation.properties?.variables?.properties?.sections?.items?.properties?.body?.pattern).toBe("\\S");
     expect(generalPresentation.properties?.variables?.required).toContain("sections");
   });
 
@@ -304,6 +306,8 @@ describe("document generation intent", () => {
     ["empty section heading", { title: "Sparse", summary: "Summary", sections: [{ heading: "", body: "Body" }] }],
     ["section body", { title: "Sparse", summary: "Summary", sections: [{ heading: "Section" }] }],
     ["empty section body", { title: "Sparse", summary: "Summary", sections: [{ heading: "Section", body: "" }] }],
+    ["whitespace-only section heading", { title: "Sparse", summary: "Summary", sections: [{ heading: " \t ", body: "Body" }] }],
+    ["whitespace-only section body", { title: "Sparse", summary: "Summary", sections: [{ heading: "Section", body: " \n " }] }],
   ])("rejects general-report output missing required %s at the planner boundary", async (_missing, variables) => {
     mocks.create.mockResolvedValue({
       output_text: JSON.stringify({

@@ -23,7 +23,7 @@ const SUPPORTED_DOCUMENT_OUTPUT_REFERENCE =
 const INFORMATIONAL_DOCUMENT_QUESTION =
   /\b(?:what\s+is|what\s+does|explain|how\s+(?:do|can)\s+i|can\s+.+\s+open)\b/i;
 
-const REQUIRED_STRING_SCHEMA = { type: "string", minLength: 1 } as const;
+const REQUIRED_STRING_SCHEMA = { type: "string", pattern: "\\S" } as const;
 const OPTIONAL_STRING_SCHEMA = { type: ["string", "null"] } as const;
 const REQUIRED_STRING_ARRAY_SCHEMA = {
   type: "array",
@@ -555,7 +555,7 @@ export async function resolveDocumentGenerationIntent(params: {
           type: "json_schema",
           name: "lvtchat_document_intent",
           schema: DOCUMENT_INTENT_SCHEMA,
-          strict: false,
+          strict: true,
         },
       },
     } as never);
