@@ -61,6 +61,40 @@ describe("document generation intent", () => {
     expect(plannerInput).not.toContain("June 16, 2025");
   });
 
+  it("normalizes nullable optional planner fields before template validation", async () => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        templateId: "general-report",
+        formats: ["pdf"],
+        packageAsZip: false,
+        title: "Nullable fields",
+        variables: {
+          title: "Nullable fields",
+          summary: "A summary.",
+          sections: [{ heading: "Section", body: "Body", bullets: null, table: null }],
+          subtitle: null,
+          author: null,
+          date: null,
+          recommendations: null,
+          conclusion: null,
+          filename: null,
+        },
+      }),
+    });
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF report.",
+      history: [{ role: "user", content: "Create a PDF report." }],
+    })).resolves.toMatchObject({
+      variables: {
+        title: "Nullable fields",
+        summary: "A summary.",
+        sections: [{ heading: "Section", body: "Body" }],
+      },
+    });
+  });
+
   it("keeps an automatic current date in the dedicated field across shared output formats", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-30T12:00:00.000Z"));
@@ -129,9 +163,11 @@ describe("document generation intent", () => {
     expect(result?.variables.conclusion).toBe("Today's date: 2031-01-02");
   });
 
-  it("publishes template-aware schema branches for every registered template", async () => {
+  it("publishes an OpenAI-compatible schema for every registered template", async () => {
     mocks.create.mockResolvedValue({
-      output_text: JSON.stringify({ action: "none", templateId: "", formats: [], packageAsZip: false, title: "", variables: {} }),
+      output_text: JSON.stringify({
+        action: "none", templateId: "", formats: [], packageAsZip: false, title: "", variables: null,
+      }),
     });
 
     await resolveDocumentGenerationIntent({
@@ -139,31 +175,55 @@ describe("document generation intent", () => {
       history: [{ role: "user", content: "What is a PDF file?" }],
     });
 
-    const request = mocks.create.mock.calls[0]?.[0] as {
-      text?: { format?: { schema?: { allOf?: readonly { anyOf?: readonly Record<string, unknown>[] }[] } } };
+    type SchemaNode = {
+      type?: string | readonly string[];
+      properties?: Record<string, SchemaNode>;
+      required?: readonly string[];
+      additionalProperties?: boolean;
+      items?: SchemaNode;
+      anyOf?: readonly SchemaNode[];
     };
-    const branches = request.text?.format?.schema?.allOf?.[0]?.anyOf ?? [];
+    const request = mocks.create.mock.calls[0]?.[0] as {
+      text?: { format?: { schema?: SchemaNode } };
+    };
+    const schema = request.text?.format?.schema;
+    expect(schema?.type).toBe("object");
+    expect(schema?.anyOf).toBeUndefined();
+    expect((schema as SchemaNode & { allOf?: unknown }).allOf).toBeUndefined();
+    expect((schema as SchemaNode & { oneOf?: unknown }).oneOf).toBeUndefined();
+
+    const visit = (node: SchemaNode | undefined) => {
+      if (!node) return;
+      if (node.type === "object") {
+        const properties = node.properties ?? {};
+        const required = node.required ?? [];
+        expect(node.additionalProperties).toBe(false);
+        expect(new Set(required)).toEqual(new Set(Object.keys(properties)));
+      }
+      Object.values(node.properties ?? {}).forEach(visit);
+      visit(node.items);
+      node.anyOf?.forEach(visit);
+    };
+    visit(schema);
+
+    const variables = schema?.properties?.variables;
+    const branches = variables?.anyOf ?? [];
     expect(branches).toHaveLength(5);
-    const templateBranches = branches.filter((branch) => {
-      const properties = branch.properties as Record<string, { enum?: readonly string[] }> | undefined;
-      return properties?.templateId?.enum?.[0] !== undefined;
-    });
-    expect(templateBranches.map((branch) => (branch.properties as Record<string, { enum?: readonly string[] }>).templateId?.enum?.[0])).toEqual([
-      "general-report",
-      "executive-summary",
-      "comparison-report",
-      "general-presentation",
-    ]);
-    const generalReport = templateBranches[0] as { properties: { variables: { required: readonly string[]; properties: { sections: { items: { required: readonly string[] } } } } } };
-    expect(generalReport.properties.variables.required).toEqual(["title", "summary", "sections"]);
-    expect(generalReport.properties.variables.properties.sections.items.required).toEqual(["heading", "body"]);
-    const executive = templateBranches[1] as { properties: { variables: { required: readonly string[] } } };
-    expect(executive.properties.variables.required).toEqual(["title", "context", "keyFindings", "implications", "recommendedActions"]);
-    const comparison = templateBranches[2] as { properties: { variables: { required: readonly string[] } } };
-    expect(comparison.properties.variables.required).toEqual(["title", "items", "criteria", "summary", "comparisons", "observations"]);
-    const presentation = templateBranches[3] as { properties: { variables: { required: readonly string[]; properties: { sections: { items: { required: readonly string[] } } } } } };
-    expect(presentation.properties.variables.required).toEqual(["title", "summary", "sections"]);
-    expect(presentation.properties.variables.properties.sections.items.required).toEqual(["heading", "body"]);
+    expect(branches[0]?.type).toBe("null");
+    const templateBranches = branches.filter((branch) => branch.type === "object");
+    expect(templateBranches).toHaveLength(4);
+
+    const generalReport = templateBranches[0];
+    expect(generalReport.properties?.sections?.items?.required).toEqual(["heading", "body", "bullets", "table"]);
+    expect(generalReport.properties?.sections?.items?.properties?.bullets?.type).toEqual(["array", "null"]);
+    expect(generalReport.properties?.sections?.items?.properties?.table?.anyOf).toHaveLength(2);
+
+    const executiveSummary = templateBranches[1];
+    expect(executiveSummary.required).toContain("recommendedActions");
+    const comparisonReport = templateBranches[2];
+    expect(comparisonReport.required).toContain("comparisons");
+    const generalPresentation = templateBranches[3];
+    expect(generalPresentation.required).toContain("sections");
   });
 
   it.each([

@@ -23,20 +23,35 @@ const SUPPORTED_DOCUMENT_OUTPUT_REFERENCE =
 const INFORMATIONAL_DOCUMENT_QUESTION =
   /\b(?:what\s+is|what\s+does|explain|how\s+(?:do|can)\s+i|can\s+.+\s+open)\b/i;
 
-const REQUIRED_STRING_SCHEMA = { type: "string", minLength: 1 } as const;
-const OPTIONAL_STRING_SCHEMA = { type: "string" } as const;
+const REQUIRED_STRING_SCHEMA = { type: "string" } as const;
+const OPTIONAL_STRING_SCHEMA = { type: ["string", "null"] } as const;
 const REQUIRED_STRING_ARRAY_SCHEMA = {
   type: "array",
-  minItems: 1,
   items: REQUIRED_STRING_SCHEMA,
 } as const;
 const OPTIONAL_STRING_ARRAY_SCHEMA = {
-  type: "array",
+  type: ["array", "null"],
   items: REQUIRED_STRING_SCHEMA,
 } as const;
-const REQUIRED_RECORD_ARRAY_SCHEMA = {
-  type: "array",
-  minItems: 1,
+
+const TABLE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    columns: REQUIRED_STRING_ARRAY_SCHEMA,
+    rows: {
+      type: "array",
+      items: {
+        type: "array",
+        items: { type: "string" },
+      },
+    },
+  },
+  required: ["columns", "rows"],
+} as const;
+
+const NULLABLE_TABLE_SCHEMA = {
+  anyOf: [TABLE_SCHEMA, { type: "null" }],
 } as const;
 
 const GENERAL_REPORT_VARIABLES_SCHEMA = {
@@ -46,7 +61,7 @@ const GENERAL_REPORT_VARIABLES_SCHEMA = {
     title: REQUIRED_STRING_SCHEMA,
     summary: REQUIRED_STRING_SCHEMA,
     sections: {
-      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      type: "array",
       items: {
         type: "object",
         additionalProperties: false,
@@ -54,17 +69,9 @@ const GENERAL_REPORT_VARIABLES_SCHEMA = {
           heading: REQUIRED_STRING_SCHEMA,
           body: REQUIRED_STRING_SCHEMA,
           bullets: OPTIONAL_STRING_ARRAY_SCHEMA,
-          table: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              columns: REQUIRED_STRING_ARRAY_SCHEMA,
-              rows: { type: "array", items: { type: "array", items: OPTIONAL_STRING_SCHEMA } },
-            },
-            required: ["columns", "rows"],
-          },
+          table: NULLABLE_TABLE_SCHEMA,
         },
-        required: ["heading", "body"],
+        required: ["heading", "body", "bullets", "table"],
       },
     },
     subtitle: OPTIONAL_STRING_SCHEMA,
@@ -74,7 +81,17 @@ const GENERAL_REPORT_VARIABLES_SCHEMA = {
     conclusion: OPTIONAL_STRING_SCHEMA,
     filename: OPTIONAL_STRING_SCHEMA,
   },
-  required: ["title", "summary", "sections"],
+  required: [
+    "title",
+    "summary",
+    "sections",
+    "subtitle",
+    "author",
+    "date",
+    "recommendations",
+    "conclusion",
+    "filename",
+  ],
 } as const;
 
 const EXECUTIVE_SUMMARY_VARIABLES_SCHEMA = {
@@ -89,7 +106,15 @@ const EXECUTIVE_SUMMARY_VARIABLES_SCHEMA = {
     conclusion: OPTIONAL_STRING_SCHEMA,
     filename: OPTIONAL_STRING_SCHEMA,
   },
-  required: ["title", "context", "keyFindings", "implications", "recommendedActions"],
+  required: [
+    "title",
+    "context",
+    "keyFindings",
+    "implications",
+    "recommendedActions",
+    "conclusion",
+    "filename",
+  ],
 } as const;
 
 const COMPARISON_REPORT_VARIABLES_SCHEMA = {
@@ -98,22 +123,28 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
   properties: {
     title: REQUIRED_STRING_SCHEMA,
     items: {
-      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        properties: { name: REQUIRED_STRING_SCHEMA, description: OPTIONAL_STRING_SCHEMA },
-        required: ["name"],
+        properties: {
+          name: REQUIRED_STRING_SCHEMA,
+          description: OPTIONAL_STRING_SCHEMA,
+        },
+        required: ["name", "description"],
       },
     },
     criteria: REQUIRED_STRING_ARRAY_SCHEMA,
     summary: REQUIRED_STRING_SCHEMA,
     comparisons: {
-      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        properties: { item: REQUIRED_STRING_SCHEMA, values: REQUIRED_STRING_ARRAY_SCHEMA },
+        properties: {
+          item: REQUIRED_STRING_SCHEMA,
+          values: REQUIRED_STRING_ARRAY_SCHEMA,
+        },
         required: ["item", "values"],
       },
     },
@@ -121,7 +152,16 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
     conclusion: OPTIONAL_STRING_SCHEMA,
     filename: OPTIONAL_STRING_SCHEMA,
   },
-  required: ["title", "items", "criteria", "summary", "comparisons", "observations"],
+  required: [
+    "title",
+    "items",
+    "criteria",
+    "summary",
+    "comparisons",
+    "observations",
+    "conclusion",
+    "filename",
+  ],
 } as const;
 
 const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
@@ -131,7 +171,7 @@ const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
     title: REQUIRED_STRING_SCHEMA,
     summary: REQUIRED_STRING_SCHEMA,
     sections: {
-      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      type: "array",
       items: {
         type: "object",
         additionalProperties: false,
@@ -140,72 +180,52 @@ const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
           body: REQUIRED_STRING_SCHEMA,
           findings: OPTIONAL_STRING_ARRAY_SCHEMA,
         },
-        required: ["heading", "body"],
+        required: ["heading", "body", "findings"],
       },
     },
     recommendations: OPTIONAL_STRING_ARRAY_SCHEMA,
-    comparison: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        columns: REQUIRED_STRING_ARRAY_SCHEMA,
-        rows: { type: "array", items: { type: "array", items: OPTIONAL_STRING_SCHEMA } },
-      },
-      required: ["columns", "rows"],
-    },
+    comparison: NULLABLE_TABLE_SCHEMA,
     subtitle: OPTIONAL_STRING_SCHEMA,
     notes: OPTIONAL_STRING_SCHEMA,
     filename: OPTIONAL_STRING_SCHEMA,
   },
-  required: ["title", "summary", "sections"],
+  required: [
+    "title",
+    "summary",
+    "sections",
+    "recommendations",
+    "comparison",
+    "subtitle",
+    "notes",
+    "filename",
+  ],
 } as const;
 
-function templateIntentBranch(
-  templateId: string,
-  formats: readonly string[],
-  variables: object,
-) {
-  return {
-    type: "object",
-    properties: {
-      action: { type: "string", enum: ["generate_document"] },
-      templateId: { type: "string", enum: [templateId] },
-      formats: { type: "array", minItems: 1, maxItems: 7, items: { type: "string", enum: formats } },
-      variables,
-    },
-    required: ["action", "templateId", "formats", "variables"],
-  };
-}
-
-const TEMPLATE_INTENT_BRANCHES = [
-  {
-    type: "object",
-    properties: { action: { type: "string", enum: ["none"] } },
-    required: ["action"],
-  },
-  templateIntentBranch("general-report", ["txt", "md", "docx", "pdf"], GENERAL_REPORT_VARIABLES_SCHEMA),
-  templateIntentBranch("executive-summary", ["txt", "md", "docx", "pdf"], EXECUTIVE_SUMMARY_VARIABLES_SCHEMA),
-  templateIntentBranch("comparison-report", ["txt", "md", "docx", "pdf", "xlsx"], COMPARISON_REPORT_VARIABLES_SCHEMA),
-  templateIntentBranch("general-presentation", ["pptx"], GENERAL_PRESENTATION_VARIABLES_SCHEMA),
-] as const;
+const TEMPLATE_VARIABLES_SCHEMA = {
+  anyOf: [
+    { type: "null" },
+    GENERAL_REPORT_VARIABLES_SCHEMA,
+    EXECUTIVE_SUMMARY_VARIABLES_SCHEMA,
+    COMPARISON_REPORT_VARIABLES_SCHEMA,
+    GENERAL_PRESENTATION_VARIABLES_SCHEMA,
+  ],
+} as const;
 
 const DOCUMENT_INTENT_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
     action: { type: "string", enum: ["none", "generate_document"] },
-    templateId: { type: "string" },
+    templateId: { type: ["string", "null"] },
     formats: {
       type: "array",
       items: { type: "string", enum: ["txt", "md", "docx", "pdf", "xlsx", "pptx"] },
-      maxItems: 7,
     },
     packageAsZip: { type: "boolean" },
-    title: { type: "string" },
-    variables: { type: "object", additionalProperties: true },
+    title: { type: ["string", "null"] },
+    variables: TEMPLATE_VARIABLES_SCHEMA,
   },
   required: ["action", "templateId", "formats", "packageAsZip", "title", "variables"],
-  allOf: [{ anyOf: TEMPLATE_INTENT_BRANCHES }],
 } as const;
 
 type IntentModelRecord = {
@@ -250,6 +270,19 @@ function isTemplateInputValue(value: unknown, depth = 0): value is TemplateInput
   if (Array.isArray(value)) return value.every((item) => isTemplateInputValue(item, depth + 1));
   if (!isRecord(value)) return false;
   return Object.values(value).every((item) => isTemplateInputValue(item, depth + 1));
+}
+
+function omitNullTemplateProperties(value: TemplateInputValue): TemplateInputValue {
+  if (Array.isArray(value)) {
+    return value.map(omitNullTemplateProperties);
+  }
+  if (!isRecord(value)) return value;
+
+  const normalized: Record<string, TemplateInputValue> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item !== null) normalized[key] = omitNullTemplateProperties(item);
+  }
+  return normalized;
 }
 
 function isRelativeDateRequest(message: string): boolean {
@@ -403,12 +436,12 @@ function parseModelIntent(
     throw new DocumentGenerationIntentValidationError(["The document template variables are invalid."]);
   }
 
-  const variables = {
+  const variables = omitNullTemplateProperties({
     ...(row.variables as TemplateVariablesRecord),
     ...(typeof row.title === "string" && row.title.trim() && row.variables.title === undefined
       ? { title: row.title.trim() }
       : {}),
-  };
+  }) as TemplateVariablesRecord;
   const normalizedVariables =
     templateId === "general-report"
       ? normalizeAutomaticDatePlacement(variables, context.latestMessage, context.currentDate)
