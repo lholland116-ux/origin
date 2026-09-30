@@ -252,6 +252,14 @@ describe("document generation intent", () => {
     expect(comparisonReport.properties?.variables?.properties?.comparisons?.minItems).toBe(1);
     expect(comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.item?.pattern).toBe("\\S");
     expect(comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.values?.minItems).toBe(1);
+    expect(
+      comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.values?.items?.anyOf?.map(
+        (branch) => branch.type,
+      ),
+    ).toEqual(["string", "number", "boolean", "null"]);
+    expect(
+      comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.values?.items?.anyOf?.[0]?.pattern,
+    ).toBe("\\S");
     expect(comparisonReport.properties?.variables?.properties?.observations?.minItems).toBe(1);
     expect(comparisonReport.properties?.variables?.required).toContain("comparisons");
 
@@ -521,6 +529,40 @@ describe("document generation intent", () => {
       }),
     ).rejects.toBeInstanceOf(DocumentGenerationIntentValidationError);
   });
+  it("preserves typed scalar values returned for comparison-report XLSX planning", async () => {
+    const values = [2, 899.99, true, null, "00123", "=SUM(A1:A2)"];
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        document: {
+          templateId: "comparison-report",
+          formats: ["xlsx"],
+          packageAsZip: false,
+          title: "Typed comparison",
+          variables: {
+            title: "Typed comparison",
+            items: [{ name: "Alpha", description: null }],
+            criteria: ["Quantity", "Unit Price", "Enabled", "Blank", "Reference", "Formula"],
+            summary: "A typed comparison.",
+            comparisons: [{ item: "Alpha", values }],
+            observations: ["Values retain their intended types."],
+            conclusion: null,
+            filename: null,
+          },
+        },
+      }),
+    });
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create an XLSX comparison workbook.",
+      history: [{ role: "user", content: "Create an XLSX comparison workbook." }],
+    })).resolves.toMatchObject({
+      templateId: "comparison-report",
+      formats: ["xlsx"],
+      variables: { comparisons: [{ item: "Alpha", values }] },
+    });
+  });
+
   it("provides exact template schemas to the planner for conversation summaries", async () => {
     mocks.create.mockResolvedValue({
       output_text: JSON.stringify({

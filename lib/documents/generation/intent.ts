@@ -54,6 +54,14 @@ const TABLE_SCHEMA = {
 const NULLABLE_TABLE_SCHEMA = {
   anyOf: [TABLE_SCHEMA, { type: "null" }],
 } as const;
+const COMPARISON_CELL_SCHEMA = {
+  anyOf: [
+    REQUIRED_STRING_SCHEMA,
+    { type: "number" },
+    { type: "boolean" },
+    { type: "null" },
+  ],
+} as const;
 
 const GENERAL_REPORT_VARIABLES_SCHEMA = {
   type: "object",
@@ -160,7 +168,11 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
         additionalProperties: false,
         properties: {
           item: REQUIRED_STRING_SCHEMA,
-          values: REQUIRED_STRING_ARRAY_SCHEMA,
+          values: {
+            type: "array",
+            minItems: 1,
+            items: COMPARISON_CELL_SCHEMA,
+          },
         },
         required: ["item", "values"],
       },

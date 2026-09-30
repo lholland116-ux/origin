@@ -1,6 +1,7 @@
 import type {
   DocumentGenerationRequest,
   DocumentSection,
+  WorkbookCell,
 } from "../contracts";
 import {
   assertTemplateIssues,
@@ -27,7 +28,7 @@ type ComparedItem = {
 
 type ComparisonRow = {
   readonly item: string;
-  readonly values: readonly string[];
+  readonly values: readonly WorkbookCell[];
 };
 
 export type ComparisonReportVariables = {
@@ -42,6 +43,41 @@ export type ComparisonReportVariables = {
 };
 
 const SUPPORTED_FORMATS = ["docx", "pdf", "md", "txt", "xlsx"] as const;
+
+function isComparisonCell(value: unknown): value is WorkbookCell {
+  return (
+    (typeof value === "string" && /\S/.test(value)) ||
+    (typeof value === "number" && Number.isFinite(value)) ||
+    typeof value === "boolean" ||
+    value === null
+  );
+}
+
+function requiredComparisonCellArray(
+  record: TemplateVariablesRecord,
+  key: string,
+  issues: string[],
+): readonly WorkbookCell[] {
+  const value = record[key];
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push(key + " is required and must be a non-empty array of strings, numbers, booleans, or null.");
+    return [];
+  }
+
+  const cells: WorkbookCell[] = [];
+  for (const cell of value) {
+    if (!isComparisonCell(cell)) {
+      issues.push(key + " is required and must be a non-empty array of strings, numbers, booleans, or null.");
+      return [];
+    }
+    cells.push(cell);
+  }
+  return cells;
+}
+
+function displayComparisonCell(value: WorkbookCell): string {
+  return value === null ? "" : String(value);
+}
 
 function parseVariables(record: TemplateVariablesRecord): ComparisonReportVariables {
   const issues: string[] = [];
@@ -64,7 +100,7 @@ function parseVariables(record: TemplateVariablesRecord): ComparisonReportVariab
   const comparisons = comparisonRecords.map((comparisonRecord, index) => {
     rejectUnexpectedKeys(comparisonRecord, ["item", "values"], issues);
     const item = requiredString(comparisonRecord, "item", issues);
-    const values = requiredStringArray(comparisonRecord, "values", issues);
+    const values = requiredComparisonCellArray(comparisonRecord, "values", issues);
     if (values.length !== criteria.length) {
       issues.push(`comparisons[${index}].values must match criteria.`);
     }
@@ -91,7 +127,7 @@ function parseVariables(record: TemplateVariablesRecord): ComparisonReportVariab
 
 function comparisonTable(variables: ComparisonReportVariables): {
   readonly columns: readonly string[];
-  readonly rows: readonly (readonly string[])[];
+  readonly rows: readonly (readonly WorkbookCell[])[];
 } {
   return {
     columns: ["Item", ...variables.criteria],
@@ -99,8 +135,19 @@ function comparisonTable(variables: ComparisonReportVariables): {
   };
 }
 
-function sections(variables: ComparisonReportVariables): readonly DocumentSection[] {
+function comparisonTextTable(variables: ComparisonReportVariables): {
+  readonly columns: readonly string[];
+  readonly rows: readonly (readonly string[])[];
+} {
   const table = comparisonTable(variables);
+  return {
+    columns: table.columns,
+    rows: table.rows.map((row) => row.map(displayComparisonCell)),
+  };
+}
+
+function sections(variables: ComparisonReportVariables): readonly DocumentSection[] {
+  const table = comparisonTextTable(variables);
   const itemDescriptions = variables.items.map((item) =>
     item.description ? `${item.name}: ${item.description}` : item.name,
   );
@@ -124,7 +171,7 @@ function sections(variables: ComparisonReportVariables): readonly DocumentSectio
 }
 
 function markdownContent(variables: ComparisonReportVariables): string {
-  const table = comparisonTable(variables);
+  const table = comparisonTextTable(variables);
   const lines = [
     `# ${variables.title}`,
     "",
@@ -149,7 +196,7 @@ function markdownContent(variables: ComparisonReportVariables): string {
 }
 
 function textContent(variables: ComparisonReportVariables): string {
-  const table = comparisonTable(variables);
+  const table = comparisonTextTable(variables);
   const lines = [
     variables.title,
     "",
@@ -181,7 +228,7 @@ export const comparisonReportTemplate: DocumentTemplate = {
     { name: "items", kind: "object[]", description: "Items or options being compared." },
     { name: "criteria", kind: "string[]", description: "Comparison criteria." },
     { name: "summary", kind: "string", description: "Comparison summary." },
-    { name: "comparisons", kind: "object[]", description: "Rows of comparison values." },
+    { name: "comparisons", kind: "object[]", description: "Rows of string, numeric, boolean, or blank comparison values." },
     { name: "observations", kind: "string[]", description: "Narrative observations." },
   ],
   optionalVariables: [
