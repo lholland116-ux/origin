@@ -58,6 +58,74 @@ describe("document generation intent", () => {
     expect(plannerInput).not.toContain("June 16, 2025");
   });
 
+  it("keeps an automatic current date in the dedicated field across shared output formats", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T12:00:00.000Z"));
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        templateId: "general-report",
+        formats: ["txt", "pdf"],
+        packageAsZip: false,
+        title: "Qualification Report",
+        variables: {
+          title: "Qualification Report",
+          date: "2026-09-30",
+          summary: "A concise qualification summary.",
+          sections: [{
+            heading: "Key Points",
+            body: "Today's date: 2026-09-30",
+            bullets: ["Today's date: 2026-09-30", "First point", "Second point"],
+          }],
+        },
+      }),
+    });
+
+    const result = await resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF containing today's date and three bullet points.",
+      history: [{ role: "user", content: "Create a PDF containing today's date and three bullet points." }],
+    });
+
+    expect(result?.formats).toEqual(["txt", "pdf"]);
+    expect(result?.variables.date).toBe("2026-09-30");
+    expect(result?.variables.sections).toEqual([{
+      heading: "Key Points",
+      body: "See the document date above.",
+      bullets: ["First point", "Second point"],
+    }]);
+    const plannerInput = mocks.create.mock.calls[0]?.[0]?.input as string;
+    expect(plannerInput).toContain("dedicated date position");
+  });
+
+  it("preserves explicitly requested repeated date placement", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2031-01-02T12:00:00.000Z"));
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        templateId: "general-report",
+        formats: ["pdf"],
+        packageAsZip: false,
+        title: "Qualification Report",
+        variables: {
+          title: "Qualification Report",
+          date: "2031-01-02",
+          summary: "A concise qualification summary.",
+          sections: [{ heading: "Findings", body: "The result is ready." }],
+          conclusion: "Today's date: 2031-01-02",
+        },
+      }),
+    });
+
+    const result = await resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF. Put today's date under the title and also repeat it in the conclusion.",
+      history: [{ role: "user", content: "Create a PDF. Put today's date under the title and also repeat it in the conclusion." }],
+    });
+
+    expect(result?.variables.date).toBe("2031-01-02");
+    expect(result?.variables.conclusion).toBe("Today's date: 2031-01-02");
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
