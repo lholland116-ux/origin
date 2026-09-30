@@ -13,6 +13,7 @@ import {
   isDocumentGenerationCandidate,
   resolveDocumentGenerationIntent,
 } from "@/lib/documents/generation/intent";
+import { renderTemplate } from "@/lib/documents/generation";
 
 describe("document generation intent", () => {
   beforeEach(() => {
@@ -124,6 +125,130 @@ describe("document generation intent", () => {
 
     expect(result?.variables.date).toBe("2031-01-02");
     expect(result?.variables.conclusion).toBe("Today's date: 2031-01-02");
+  });
+
+  it("publishes template-aware schema branches for every registered template", async () => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({ action: "none", templateId: "", formats: [], packageAsZip: false, title: "", variables: {} }),
+    });
+
+    await resolveDocumentGenerationIntent({
+      latestMessage: "What is a PDF file?",
+      history: [{ role: "user", content: "What is a PDF file?" }],
+    });
+
+    const request = mocks.create.mock.calls[0]?.[0] as {
+      text?: { format?: { schema?: { allOf?: readonly { anyOf?: readonly Record<string, unknown>[] }[] } } };
+    };
+    const branches = request.text?.format?.schema?.allOf?.[0]?.anyOf ?? [];
+    expect(branches).toHaveLength(5);
+    const templateBranches = branches.filter((branch) => {
+      const properties = branch.properties as Record<string, { enum?: readonly string[] }> | undefined;
+      return properties?.templateId?.enum?.[0] !== undefined;
+    });
+    expect(templateBranches.map((branch) => (branch.properties as Record<string, { enum?: readonly string[] }>).templateId?.enum?.[0])).toEqual([
+      "general-report",
+      "executive-summary",
+      "comparison-report",
+      "general-presentation",
+    ]);
+    const generalReport = templateBranches[0] as { properties: { variables: { required: readonly string[]; properties: { sections: { items: { required: readonly string[] } } } } } };
+    expect(generalReport.properties.variables.required).toEqual(["title", "summary", "sections"]);
+    expect(generalReport.properties.variables.properties.sections.items.required).toEqual(["heading", "body"]);
+    const executive = templateBranches[1] as { properties: { variables: { required: readonly string[] } } };
+    expect(executive.properties.variables.required).toEqual(["title", "context", "keyFindings", "implications", "recommendedActions"]);
+    const comparison = templateBranches[2] as { properties: { variables: { required: readonly string[] } } };
+    expect(comparison.properties.variables.required).toEqual(["title", "items", "criteria", "summary", "comparisons", "observations"]);
+    const presentation = templateBranches[3] as { properties: { variables: { required: readonly string[]; properties: { sections: { items: { required: readonly string[] } } } } } };
+    expect(presentation.properties.variables.required).toEqual(["title", "summary", "sections"]);
+    expect(presentation.properties.variables.properties.sections.items.required).toEqual(["heading", "body"]);
+  });
+
+  it.each([
+    ["summary", { title: "Sparse", sections: [{ heading: "Section", body: "Body" }] }],
+    ["section heading", { title: "Sparse", summary: "Summary", sections: [{ body: "Body" }] }],
+    ["section body", { title: "Sparse", summary: "Summary", sections: [{ heading: "Section" }] }],
+  ])("rejects general-report output missing required %s at the planner boundary", async (_missing, variables) => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document", templateId: "general-report", formats: ["pdf"], packageAsZip: false, title: "Sparse", variables,
+      }),
+    });
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF report.",
+      history: [{ role: "user", content: "Create a PDF report." }],
+    })).resolves.toBeNull();
+  });
+
+  it("rejects a selected-template and format mismatch before rendering", async () => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document", templateId: "general-presentation", formats: ["pdf"], packageAsZip: false, title: "Mismatch",
+        variables: { title: "Mismatch", summary: "Summary", sections: [{ heading: "Section", body: "Body" }] },
+      }),
+    });
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF presentation.",
+      history: [{ role: "user", content: "Create a PDF presentation." }],
+    })).resolves.toBeNull();
+  });
+
+  it("preserves the exact requested bullets while retaining report structure", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T12:00:00.000Z"));
+    const bullets = [
+      "PDF generation works correctly.",
+      "Document persistence works correctly.",
+      "Historical downloads work correctly.",
+    ];
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document", templateId: "general-report", formats: ["pdf"], packageAsZip: false, title: "LVTChat PDF Exact Content Test.",
+        variables: {
+          title: "LVTChat PDF Exact Content Test.", date: "2026-09-30",
+          summary: "This document verifies LVTChat PDF generation in production.",
+          sections: [{ heading: "Key Points", body: "This document verifies LVTChat PDF generation in production.", bullets }],
+        },
+      }),
+    });
+
+    const result = await resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF titled LVTChat PDF Exact Content Test. Include today's date once beneath the title, include this introductory sentence exactly, include these three bullet points exactly, and do not add anything else.",
+      history: [{ role: "user", content: "Create the exact PDF." }],
+    });
+
+    expect(result?.templateId).toBe("general-report");
+    expect(result?.variables.date).toBe("2026-09-30");
+    expect(result?.variables.summary).toBe("This document verifies LVTChat PDF generation in production.");
+    expect(result?.variables.sections).toEqual([{ heading: "Key Points", body: "This document verifies LVTChat PDF generation in production.", bullets }]);
+    expect(() => renderTemplate({ templateId: "general-report", format: "pdf", variables: result?.variables ?? {} })).not.toThrow();
+  });
+
+  it("allows a no-bullet report while retaining required structure", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2031-01-02T12:00:00.000Z"));
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document", templateId: "general-report", formats: ["pdf"], packageAsZip: false, title: "LVTChat PDF No Bullet Test.",
+        variables: {
+          title: "LVTChat PDF No Bullet Test.", date: "2031-01-02",
+          summary: "This document verifies LVTChat PDF generation in production.",
+          sections: [{ heading: "Introduction", body: "This document verifies LVTChat PDF generation in production." }],
+        },
+      }),
+    });
+
+    const result = await resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF titled LVTChat PDF No Bullet Test. Include today's date once beneath the title and this sentence exactly. Do not include any bullet points.",
+      history: [{ role: "user", content: "Create the no-bullet PDF." }],
+    });
+
+    expect(result?.templateId).toBe("general-report");
+    expect(result?.variables.date).toBe("2031-01-02");
+    expect(result?.variables.sections).toEqual([{ heading: "Introduction", body: "This document verifies LVTChat PDF generation in production." }]);
+    expect(() => renderTemplate({ templateId: "general-report", format: "pdf", variables: result?.variables ?? {} })).not.toThrow();
   });
 
   afterEach(() => {

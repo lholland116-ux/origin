@@ -1,5 +1,6 @@
 import { openai } from "@/lib/openai";
 import { getTemplate, listTemplates } from "./templates/registry";
+import { renderTemplate } from "./templates/render";
 import type {
   TemplateInputValue,
   TemplateOutputFormat,
@@ -11,6 +12,172 @@ const MODEL = "gpt-5.6-luna";
 
 const DOCUMENT_REQUEST_CANDIDATE =
   /\b(document|file|export|download|report|summary|presentation|powerpoint|pptx|word|docx|pdf|spreadsheet|excel|xlsx|markdown|zip|text file)\b/i;
+
+const REQUIRED_STRING_SCHEMA = { type: "string", minLength: 1 } as const;
+const OPTIONAL_STRING_SCHEMA = { type: "string" } as const;
+const REQUIRED_STRING_ARRAY_SCHEMA = {
+  type: "array",
+  minItems: 1,
+  items: REQUIRED_STRING_SCHEMA,
+} as const;
+const OPTIONAL_STRING_ARRAY_SCHEMA = {
+  type: "array",
+  items: REQUIRED_STRING_SCHEMA,
+} as const;
+const REQUIRED_RECORD_ARRAY_SCHEMA = {
+  type: "array",
+  minItems: 1,
+} as const;
+
+const GENERAL_REPORT_VARIABLES_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: REQUIRED_STRING_SCHEMA,
+    summary: REQUIRED_STRING_SCHEMA,
+    sections: {
+      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          heading: REQUIRED_STRING_SCHEMA,
+          body: REQUIRED_STRING_SCHEMA,
+          bullets: OPTIONAL_STRING_ARRAY_SCHEMA,
+          table: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              columns: REQUIRED_STRING_ARRAY_SCHEMA,
+              rows: { type: "array", items: { type: "array", items: OPTIONAL_STRING_SCHEMA } },
+            },
+            required: ["columns", "rows"],
+          },
+        },
+        required: ["heading", "body"],
+      },
+    },
+    subtitle: OPTIONAL_STRING_SCHEMA,
+    author: OPTIONAL_STRING_SCHEMA,
+    date: OPTIONAL_STRING_SCHEMA,
+    recommendations: OPTIONAL_STRING_ARRAY_SCHEMA,
+    conclusion: OPTIONAL_STRING_SCHEMA,
+    filename: OPTIONAL_STRING_SCHEMA,
+  },
+  required: ["title", "summary", "sections"],
+} as const;
+
+const EXECUTIVE_SUMMARY_VARIABLES_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: REQUIRED_STRING_SCHEMA,
+    context: REQUIRED_STRING_SCHEMA,
+    keyFindings: REQUIRED_STRING_ARRAY_SCHEMA,
+    implications: REQUIRED_STRING_ARRAY_SCHEMA,
+    recommendedActions: REQUIRED_STRING_ARRAY_SCHEMA,
+    conclusion: OPTIONAL_STRING_SCHEMA,
+    filename: OPTIONAL_STRING_SCHEMA,
+  },
+  required: ["title", "context", "keyFindings", "implications", "recommendedActions"],
+} as const;
+
+const COMPARISON_REPORT_VARIABLES_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: REQUIRED_STRING_SCHEMA,
+    items: {
+      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { name: REQUIRED_STRING_SCHEMA, description: OPTIONAL_STRING_SCHEMA },
+        required: ["name"],
+      },
+    },
+    criteria: REQUIRED_STRING_ARRAY_SCHEMA,
+    summary: REQUIRED_STRING_SCHEMA,
+    comparisons: {
+      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { item: REQUIRED_STRING_SCHEMA, values: REQUIRED_STRING_ARRAY_SCHEMA },
+        required: ["item", "values"],
+      },
+    },
+    observations: REQUIRED_STRING_ARRAY_SCHEMA,
+    conclusion: OPTIONAL_STRING_SCHEMA,
+    filename: OPTIONAL_STRING_SCHEMA,
+  },
+  required: ["title", "items", "criteria", "summary", "comparisons", "observations"],
+} as const;
+
+const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: REQUIRED_STRING_SCHEMA,
+    summary: REQUIRED_STRING_SCHEMA,
+    sections: {
+      ...REQUIRED_RECORD_ARRAY_SCHEMA,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          heading: REQUIRED_STRING_SCHEMA,
+          body: REQUIRED_STRING_SCHEMA,
+          findings: OPTIONAL_STRING_ARRAY_SCHEMA,
+        },
+        required: ["heading", "body"],
+      },
+    },
+    recommendations: OPTIONAL_STRING_ARRAY_SCHEMA,
+    comparison: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        columns: REQUIRED_STRING_ARRAY_SCHEMA,
+        rows: { type: "array", items: { type: "array", items: OPTIONAL_STRING_SCHEMA } },
+      },
+      required: ["columns", "rows"],
+    },
+    subtitle: OPTIONAL_STRING_SCHEMA,
+    notes: OPTIONAL_STRING_SCHEMA,
+    filename: OPTIONAL_STRING_SCHEMA,
+  },
+  required: ["title", "summary", "sections"],
+} as const;
+
+function templateIntentBranch(
+  templateId: string,
+  formats: readonly string[],
+  variables: object,
+) {
+  return {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: ["generate_document"] },
+      templateId: { type: "string", enum: [templateId] },
+      formats: { type: "array", minItems: 1, maxItems: 7, items: { type: "string", enum: formats } },
+      variables,
+    },
+    required: ["action", "templateId", "formats", "variables"],
+  };
+}
+
+const TEMPLATE_INTENT_BRANCHES = [
+  {
+    type: "object",
+    properties: { action: { type: "string", enum: ["none"] } },
+    required: ["action"],
+  },
+  templateIntentBranch("general-report", ["txt", "md", "docx", "pdf"], GENERAL_REPORT_VARIABLES_SCHEMA),
+  templateIntentBranch("executive-summary", ["txt", "md", "docx", "pdf"], EXECUTIVE_SUMMARY_VARIABLES_SCHEMA),
+  templateIntentBranch("comparison-report", ["txt", "md", "docx", "pdf", "xlsx"], COMPARISON_REPORT_VARIABLES_SCHEMA),
+  templateIntentBranch("general-presentation", ["pptx"], GENERAL_PRESENTATION_VARIABLES_SCHEMA),
+] as const;
 
 const DOCUMENT_INTENT_SCHEMA = {
   type: "object",
@@ -28,6 +195,7 @@ const DOCUMENT_INTENT_SCHEMA = {
     variables: { type: "object", additionalProperties: true },
   },
   required: ["action", "templateId", "formats", "packageAsZip", "title", "variables"],
+  allOf: [{ anyOf: TEMPLATE_INTENT_BRANCHES }],
 } as const;
 
 type IntentModelRecord = {
@@ -168,6 +336,21 @@ function normalizeAutomaticDatePlacement(
   return normalized;
 }
 
+function satisfiesTemplateContracts(
+  templateId: string,
+  formats: readonly TemplateOutputFormat[],
+  variables: TemplateVariablesRecord,
+): boolean {
+  try {
+    for (const format of formats) {
+      renderTemplate({ templateId, format, variables });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseModelIntent(
   value: unknown,
   context: { readonly latestMessage: string; readonly currentDate: string },
@@ -200,6 +383,7 @@ function parseModelIntent(
       ? normalizeAutomaticDatePlacement(variables, context.latestMessage, context.currentDate)
       : variables;
 
+  if (!satisfiesTemplateContracts(templateId, uniqueFormats, normalizedVariables)) return null;
   return {
     templateId,
     formats: uniqueFormats,
