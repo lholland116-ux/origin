@@ -15,6 +15,7 @@ import {
   TemplateValidationError,
   type DocumentGenerationRequest,
   type GeneratedArtifact,
+  type StructuredDocumentRequest,
   type TemplateVariablesRecord,
 } from "@/lib/documents/generation";
 import { extractPptxPresentation } from "@/lib/documents/extract-pptx";
@@ -67,11 +68,20 @@ async function generateArtifact(
   return generatePptxArtifact(request as Parameters<typeof generatePptxArtifact>[0]);
 }
 
+function assertStructuredRequest(
+  request: DocumentGenerationRequest,
+): asserts request is StructuredDocumentRequest {
+  if (request.format !== "docx" && request.format !== "pdf") {
+    throw new Error("Expected structured document request.");
+  }
+}
+
 describe("document generation templates", () => {
   it("lists the versioned templates and rejects duplicate registry IDs", () => {
     const templates = listTemplates();
     expect(templates.map((template) => template.id)).toEqual([
       "general-report",
+      "simple-document",
       "executive-summary",
       "comparison-report",
       "general-presentation",
@@ -157,6 +167,75 @@ describe("document generation templates", () => {
     expect(pdf.sizeBytes).toBe(pdf.bytes.length);
   });
 
+  it.each(["txt", "md", "docx", "pdf"] as const)("renders minimal exact content as %s", async (format) => {
+    const title = "LVTChat PDF Exact Content Test";
+    const date = "2026-09-30";
+    const body = "This document verifies LVTChat PDF generation in production.";
+    const bullets = [
+      "PDF generation works correctly.",
+      "Document persistence works correctly.",
+      "Historical downloads work correctly.",
+    ];
+    const request = renderTemplate({
+      templateId: "simple-document",
+      format,
+      variables: { title, date, body, bullets },
+    });
+    expect(request.title).toBe(title);
+    const artifact = await generateArtifact(request);
+    expect(artifact.format).toBe(format);
+
+    if (request.format === "txt" || request.format === "md") {
+      const expected = (request.format === "md" ? "# " : "") + title + "\n\n" + date + "\n\n" + body + "\n\n" + bullets.map((bullet) => "- " + bullet).join("\n");
+      expect(request.content).toBe(expected);
+      expect(new TextDecoder().decode(artifact.bytes)).toBe(expected);
+      expect(request.content.split(body)).toHaveLength(2);
+      expect(request.content).not.toMatch(/Summary|Verification|Conclusion|filler/i);
+      return;
+    }
+
+    assertStructuredRequest(request);
+    expect(request.sections).toEqual([
+      { type: "paragraph", text: date },
+      { type: "paragraph", text: body },
+      { type: "list", ordered: false, items: bullets },
+    ]);
+    if (request.format === "docx") {
+      const archive = await JSZip.loadAsync(Buffer.from(artifact.bytes));
+      const xml = await archive.file("word/document.xml")?.async("text");
+      expect(xml).toContain(title);
+      expect(xml?.split(body)).toHaveLength(2);
+      for (const bullet of bullets) expect(xml).toContain(bullet);
+      expect(xml).not.toMatch(/Summary|Verification|Conclusion|filler/i);
+      return;
+    }
+    expect(new TextDecoder().decode(artifact.bytes, { stream: false })).toContain("%PDF-");
+    expect(JSON.stringify(request.sections)).not.toMatch(/Summary|Verification|Conclusion|filler/i);
+  });
+
+  it("omits bullets when simple-document bullets are omitted or null", () => {
+    const formats = ["txt", "md", "docx", "pdf"] as const;
+    const template = getTemplate("simple-document");
+    expect(template?.supportedFormats).toEqual(formats);
+    for (const format of formats) {
+      for (const bullets of [undefined, null]) {
+        const variables: TemplateVariablesRecord = {
+          title: "Minimal title",
+          body: "Exact body content.",
+          ...(bullets !== undefined ? { bullets } : {}),
+        };
+        const request = renderTemplate({ templateId: "simple-document", format, variables });
+        expect(request.title).toBe("Minimal title");
+        if (request.format === "txt" || request.format === "md") {
+          expect(request.content).toBe((format === "md" ? "# " : "") + "Minimal title\n\nExact body content.");
+          expect(request.content).not.toContain("- ");
+        } else {
+          assertStructuredRequest(request);
+          expect(request.sections).toEqual([{ type: "paragraph", text: "Exact body content." }]);
+        }
+      }
+    }
+  });
   it("renders an executive summary with deterministic decision-oriented sections", () => {
     const request = renderTemplate({
       templateId: "executive-summary",

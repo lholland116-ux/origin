@@ -213,10 +213,10 @@ describe("document generation intent", () => {
 
     const document = schema?.properties?.document;
     const branches = document?.anyOf ?? [];
-    expect(branches).toHaveLength(5);
+    expect(branches).toHaveLength(6);
     expect(branches[0]?.type).toBe("null");
     const templateBranches = branches.filter((branch) => branch.type === "object");
-    expect(templateBranches).toHaveLength(4);
+    expect(templateBranches).toHaveLength(5);
 
     const generalReport = templateBranches[0];
     expect(generalReport.properties?.templateId?.enum).toEqual(["general-report"]);

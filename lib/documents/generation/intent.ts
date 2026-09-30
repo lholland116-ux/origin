@@ -96,6 +96,19 @@ const GENERAL_REPORT_VARIABLES_SCHEMA = {
   ],
 } as const;
 
+const SIMPLE_DOCUMENT_VARIABLES_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: REQUIRED_STRING_SCHEMA,
+    date: OPTIONAL_STRING_SCHEMA,
+    body: REQUIRED_STRING_SCHEMA,
+    bullets: OPTIONAL_STRING_ARRAY_SCHEMA,
+    filename: OPTIONAL_STRING_SCHEMA,
+  },
+  required: ["title", "date", "body", "bullets", "filename"],
+} as const;
+
 const EXECUTIVE_SUMMARY_VARIABLES_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -241,6 +254,7 @@ const DOCUMENT_INTENT_SCHEMA = {
         templateDocumentSchema("executive-summary", ["docx", "pdf", "md", "txt"], EXECUTIVE_SUMMARY_VARIABLES_SCHEMA),
         templateDocumentSchema("comparison-report", ["docx", "pdf", "md", "txt", "xlsx"], COMPARISON_REPORT_VARIABLES_SCHEMA),
         templateDocumentSchema("general-presentation", ["pptx"], GENERAL_PRESENTATION_VARIABLES_SCHEMA),
+        templateDocumentSchema("simple-document", ["txt", "md", "docx", "pdf"], SIMPLE_DOCUMENT_VARIABLES_SCHEMA),
       ],
     },
   },
@@ -417,6 +431,39 @@ function normalizeAutomaticDatePlacement(
   return normalized;
 }
 
+function normalizeSimpleDocumentDate(
+  variables: TemplateVariablesRecord,
+  latestMessage: string,
+  currentDate: string,
+): TemplateVariablesRecord {
+  if (
+    !isRelativeDateRequest(latestMessage) ||
+    requestsExplicitDateRepetition(latestMessage) ||
+    /\b(?:in|inside|within|throughout|as part of)\b[\s\S]{0,48}\b(?:body|sentence|paragraph|bullet|bullets)\b/i.test(latestMessage) ||
+    variables.date !== currentDate
+  ) {
+    return variables;
+  }
+
+  const normalized: Record<string, TemplateInputValue> = { ...variables };
+  if (typeof normalized.body === "string") {
+    normalized.body = normalized.body
+      .split(/\r?\n/)
+      .filter((line) => !isAutomaticDateOnlyText(line, currentDate))
+      .join("\n")
+      .trim();
+  }
+  if (Array.isArray(normalized.bullets)) {
+    const bullets = normalized.bullets.filter(
+      (bullet): bullet is string =>
+        typeof bullet === "string" && !isAutomaticDateOnlyText(bullet, currentDate),
+    );
+    if (bullets.length > 0) normalized.bullets = bullets;
+    else delete normalized.bullets;
+  }
+  return normalized;
+}
+
 function validateTemplateContracts(
   templateId: string,
   formats: readonly TemplateOutputFormat[],
@@ -477,9 +524,11 @@ function parseModelIntent(
       : {}),
   }) as TemplateVariablesRecord;
   const normalizedVariables =
-    templateId === "general-report"
-      ? normalizeAutomaticDatePlacement(variables, context.latestMessage, context.currentDate)
-      : variables;
+    templateId === "simple-document"
+      ? normalizeSimpleDocumentDate(variables, context.latestMessage, context.currentDate)
+      : templateId === "general-report"
+        ? normalizeAutomaticDatePlacement(variables, context.latestMessage, context.currentDate)
+        : variables;
 
   const contractIssues = validateTemplateContracts(templateId, uniqueFormats, normalizedVariables);
   if (contractIssues.length > 0) {
@@ -533,10 +582,10 @@ export async function resolveDocumentGenerationIntent(params: {
     "You are LVTChat's document-intent planner.",
     "Return action=none unless the latest user message explicitly requests creating, exporting, downloading, or packaging a document.",
     "Do not treat a question about a file format as a generation request.",
-    "For generate_document, choose exactly one registered template: general-report, executive-summary, comparison-report, or general-presentation.",
+    "For generate_document, choose exactly one registered template. Use simple-document for explicitly minimal or exact-content requests such as include this sentence exactly, do not add anything else, do not include bullet points, create a simple PDF, or create a document containing only. It requires only a title and body, adds no summary, section headings, conclusion, or filler prose, and includes bullets only when requested. Use general-report for normal structured report requests; use executive-summary, comparison-report, or general-presentation when their structure fits better.",
     "Choose only supported formats. If more than one format is requested, set packageAsZip=true.",
     "For general-report sections, keep body as paragraph text only. Put unordered list items in bullets and tables in table with columns and rows. Never encode tables or lists as Markdown inside body.",
-    "For a relative current-date request, put the grounded date in general-report's optional date variable so it appears in the template's dedicated date position. Do not repeat that same automatic date in summary, section body, bullets, tables, recommendations, or conclusion. Preserve repeated placement only when the user explicitly asks for it or names a body location.",
+    "For a relative current-date request, put the grounded date in simple-document's optional date variable or general-report's optional date variable so it appears in the dedicated date position. Do not repeat that same automatic date in simple-document body or bullets, or in general-report summary, section body, bullets, tables, recommendations, or conclusion. Preserve repetition only when the user explicitly asks for it or names a body location.",
     `Use this exact template schema when building variables: ${JSON.stringify(templateSchemas)}. Include every required variable with the correct shape, including at least one section/item where required. Use only the selected template's documented variable names.`,
     "Preserve supplied content and do not invent factual findings.",
     "CURRENT RUNTIME DATE (UTC): " + currentDate + ". When the user requests today or the current date, use this exact date. Do not infer a different date from model knowledge or conversation content.",

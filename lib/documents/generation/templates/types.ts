@@ -34,7 +34,7 @@ export type TemplateMetadata = {
   readonly version: number;
   readonly name: string;
   readonly description: string;
-  readonly contentFamily: "report" | "presentation";
+  readonly contentFamily: "report" | "presentation" | "document";
   readonly supportedFormats: readonly TemplateOutputFormat[];
   readonly requiredVariables: readonly TemplateVariableSpec[];
   readonly optionalVariables: readonly TemplateVariableSpec[];
