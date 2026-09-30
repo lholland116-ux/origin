@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -9,6 +9,7 @@ vi.mock("@/lib/openai", () => ({
 }));
 
 import {
+  getRuntimeCurrentDate,
   isDocumentGenerationCandidate,
   resolveDocumentGenerationIntent,
 } from "@/lib/documents/generation/intent";
@@ -16,6 +17,49 @@ import {
 describe("document generation intent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([
+    ["2026-09-30T12:00:00.000Z", "2026-09-30"],
+    ["2031-01-02T00:15:00.000Z", "2031-01-02"],
+  ])("derives the runtime current date without a hard-coded calendar date", (timestamp, expected) => {
+    expect(getRuntimeCurrentDate(new Date(timestamp))).toBe(expected);
+  });
+
+  it("supplies the runtime current date as authoritative planner context for relative date requests", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T12:00:00.000Z"));
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        templateId: "general-report",
+        formats: ["txt"],
+        packageAsZip: false,
+        title: "Current date",
+        variables: {
+          summary: "Today is 2026-09-30.",
+          sections: [{ heading: "Date", body: "2026-09-30" }],
+        },
+      }),
+    });
+
+    await expect(
+      resolveDocumentGenerationIntent({
+        latestMessage: "Create a TXT document containing the current date.",
+        history: [{ role: "user", content: "Create a TXT document containing the current date." }],
+      }),
+    ).resolves.toMatchObject({
+      variables: { summary: "Today is 2026-09-30." },
+    });
+
+    const plannerInput = mocks.create.mock.calls[0]?.[0]?.input as string;
+    expect(plannerInput).toContain("CURRENT RUNTIME DATE (UTC): 2026-09-30");
+    expect(plannerInput).toContain("use this exact date");
+    expect(plannerInput).not.toContain("June 16, 2025");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("uses a semantic candidate gate without treating ordinary format questions as actions", async () => {

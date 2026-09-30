@@ -46,6 +46,10 @@ export type DocumentGenerationIntent = {
   readonly packageAsZip: boolean;
 };
 
+export function getRuntimeCurrentDate(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -118,6 +122,7 @@ export async function resolveDocumentGenerationIntent(params: {
     requiredVariables: template.requiredVariables,
     optionalVariables: template.optionalVariables,
   }));
+  const currentDate = getRuntimeCurrentDate();
 
   const instructions = [
     "You are LVTChat's document-intent planner.",
@@ -128,6 +133,7 @@ export async function resolveDocumentGenerationIntent(params: {
     "For general-report sections, keep body as paragraph text only. Put unordered list items in bullets and tables in table with columns and rows. Never encode tables or lists as Markdown inside body.",
     `Use this exact template schema when building variables: ${JSON.stringify(templateSchemas)}. Include every required variable with the correct shape, including at least one section/item where required. Use only the selected template's documented variable names.`,
     "Preserve supplied content and do not invent factual findings.",
+    "CURRENT RUNTIME DATE (UTC): " + currentDate + ". When the user requests today or the current date, use this exact date. Do not infer a different date from model knowledge or conversation content.",
     "Use the current conversation and document context only as source content. Never return paths, code, MIME overrides, or library options.",
     `Return only JSON matching ${JSON.stringify(DOCUMENT_INTENT_SCHEMA)}.`,
     `CONVERSATION:\n${history}${context}`,
