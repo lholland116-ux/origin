@@ -201,35 +201,57 @@ const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
   ],
 } as const;
 
-const TEMPLATE_VARIABLES_SCHEMA = {
-  anyOf: [
-    { type: "null" },
-    GENERAL_REPORT_VARIABLES_SCHEMA,
-    EXECUTIVE_SUMMARY_VARIABLES_SCHEMA,
-    COMPARISON_REPORT_VARIABLES_SCHEMA,
-    GENERAL_PRESENTATION_VARIABLES_SCHEMA,
-  ],
-} as const;
+function templateDocumentSchema(
+  templateId: string,
+  formats: readonly string[],
+  variables: unknown,
+) {
+  return {
+    type: "object" as const,
+    additionalProperties: false as const,
+    properties: {
+      templateId: { type: "string" as const, enum: [templateId] },
+      formats: {
+        type: "array" as const,
+        items: { type: "string" as const, enum: formats },
+      },
+      packageAsZip: { type: "boolean" as const },
+      title: REQUIRED_STRING_SCHEMA,
+      variables,
+    },
+    required: ["templateId", "formats", "packageAsZip", "title", "variables"],
+  };
+}
 
 const DOCUMENT_INTENT_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
     action: { type: "string", enum: ["none", "generate_document"] },
-    templateId: { type: ["string", "null"] },
-    formats: {
-      type: "array",
-      items: { type: "string", enum: ["txt", "md", "docx", "pdf", "xlsx", "pptx"] },
+    document: {
+      anyOf: [
+        { type: "null" },
+        templateDocumentSchema("general-report", ["docx", "pdf", "md", "txt"], GENERAL_REPORT_VARIABLES_SCHEMA),
+        templateDocumentSchema("executive-summary", ["docx", "pdf", "md", "txt"], EXECUTIVE_SUMMARY_VARIABLES_SCHEMA),
+        templateDocumentSchema("comparison-report", ["docx", "pdf", "md", "txt", "xlsx"], COMPARISON_REPORT_VARIABLES_SCHEMA),
+        templateDocumentSchema("general-presentation", ["pptx"], GENERAL_PRESENTATION_VARIABLES_SCHEMA),
+      ],
     },
-    packageAsZip: { type: "boolean" },
-    title: { type: ["string", "null"] },
-    variables: TEMPLATE_VARIABLES_SCHEMA,
   },
-  required: ["action", "templateId", "formats", "packageAsZip", "title", "variables"],
+  required: ["action", "document"],
 } as const;
 
 type IntentModelRecord = {
   readonly action?: unknown;
+  readonly document?: unknown;
+  readonly templateId?: unknown;
+  readonly formats?: unknown;
+  readonly packageAsZip?: unknown;
+  readonly title?: unknown;
+  readonly variables?: unknown;
+};
+
+type IntentDocumentRecord = {
   readonly templateId?: unknown;
   readonly formats?: unknown;
   readonly packageAsZip?: unknown;
@@ -417,29 +439,35 @@ function parseModelIntent(
     return null;
   }
 
-  if (typeof row.templateId !== "string") {
+  // The structured-output schema uses a coupled nested document branch. Keep
+  // accepting the former flat shape while older test doubles are retired; all
+  // values still pass the same template and format validation below.
+  const document = (isRecord(row.document) ? row.document : row) as IntentDocumentRecord;
+
+  if (typeof document.templateId !== "string") {
     throw new DocumentGenerationIntentValidationError(["The selected document template is invalid."]);
   }
-  const templateId = row.templateId.trim();
+  const templateId = document.templateId.trim();
   if (!templateId || !getTemplate(templateId)) {
     throw new DocumentGenerationIntentValidationError(["The selected document template is invalid."]);
   }
 
-  const rawFormats = Array.isArray(row.formats) ? row.formats : [];
+  const rawFormats = Array.isArray(document.formats) ? document.formats : [];
   const formats = rawFormats.filter(isTemplateOutputFormat);
   const uniqueFormats = Array.from(new Set(formats));
   if (uniqueFormats.length === 0 || uniqueFormats.length !== rawFormats.length || uniqueFormats.length !== formats.length) {
     throw new DocumentGenerationIntentValidationError(["The requested document formats are invalid."]);
   }
 
-  if (!isRecord(row.variables) || !isTemplateInputValue(row.variables)) {
+  const rawVariables = document.variables;
+  if (!isRecord(rawVariables) || !isTemplateInputValue(rawVariables)) {
     throw new DocumentGenerationIntentValidationError(["The document template variables are invalid."]);
   }
 
   const variables = omitNullTemplateProperties({
-    ...(row.variables as TemplateVariablesRecord),
-    ...(typeof row.title === "string" && row.title.trim() && row.variables.title === undefined
-      ? { title: row.title.trim() }
+    ...(rawVariables as TemplateVariablesRecord),
+    ...(typeof document.title === "string" && document.title.trim() && rawVariables.title === undefined
+      ? { title: document.title.trim() }
       : {}),
   }) as TemplateVariablesRecord;
   const normalizedVariables =
@@ -455,7 +483,7 @@ function parseModelIntent(
     templateId,
     formats: uniqueFormats,
     variables: normalizedVariables,
-    packageAsZip: row.packageAsZip === true || uniqueFormats.length > 1,
+    packageAsZip: document.packageAsZip === true || uniqueFormats.length > 1,
   };
 }
 

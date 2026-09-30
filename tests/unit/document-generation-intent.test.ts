@@ -166,7 +166,7 @@ describe("document generation intent", () => {
   it("publishes an OpenAI-compatible schema for every registered template", async () => {
     mocks.create.mockResolvedValue({
       output_text: JSON.stringify({
-        action: "none", templateId: "", formats: [], packageAsZip: false, title: "", variables: null,
+        action: "none", document: null,
       }),
     });
 
@@ -182,6 +182,7 @@ describe("document generation intent", () => {
       additionalProperties?: boolean;
       items?: SchemaNode;
       anyOf?: readonly SchemaNode[];
+      enum?: readonly string[];
     };
     const request = mocks.create.mock.calls[0]?.[0] as {
       text?: { format?: { schema?: SchemaNode } };
@@ -206,24 +207,63 @@ describe("document generation intent", () => {
     };
     visit(schema);
 
-    const variables = schema?.properties?.variables;
-    const branches = variables?.anyOf ?? [];
+    const document = schema?.properties?.document;
+    const branches = document?.anyOf ?? [];
     expect(branches).toHaveLength(5);
     expect(branches[0]?.type).toBe("null");
     const templateBranches = branches.filter((branch) => branch.type === "object");
     expect(templateBranches).toHaveLength(4);
 
     const generalReport = templateBranches[0];
-    expect(generalReport.properties?.sections?.items?.required).toEqual(["heading", "body", "bullets", "table"]);
-    expect(generalReport.properties?.sections?.items?.properties?.bullets?.type).toEqual(["array", "null"]);
-    expect(generalReport.properties?.sections?.items?.properties?.table?.anyOf).toHaveLength(2);
+    expect(generalReport.properties?.templateId?.enum).toEqual(["general-report"]);
+    expect(generalReport.properties?.formats?.items?.enum).toEqual(["docx", "pdf", "md", "txt"]);
+    expect(generalReport.properties?.variables?.properties?.sections?.items?.required).toEqual(["heading", "body", "bullets", "table"]);
+    expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.bullets?.type).toEqual(["array", "null"]);
+    expect(generalReport.properties?.variables?.properties?.sections?.items?.properties?.table?.anyOf).toHaveLength(2);
 
     const executiveSummary = templateBranches[1];
-    expect(executiveSummary.required).toContain("recommendedActions");
+    expect(executiveSummary.properties?.templateId?.enum).toEqual(["executive-summary"]);
+    expect(executiveSummary.properties?.variables?.required).toContain("recommendedActions");
     const comparisonReport = templateBranches[2];
-    expect(comparisonReport.required).toContain("comparisons");
+    expect(comparisonReport.properties?.templateId?.enum).toEqual(["comparison-report"]);
+    expect(comparisonReport.properties?.variables?.required).toContain("comparisons");
     const generalPresentation = templateBranches[3];
-    expect(generalPresentation.required).toContain("sections");
+    expect(generalPresentation.properties?.templateId?.enum).toEqual(["general-presentation"]);
+    expect(generalPresentation.properties?.variables?.required).toContain("sections");
+  });
+
+  it("accepts a coupled nested template branch and normalizes it to the internal intent", async () => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        document: {
+          templateId: "general-report",
+          formats: ["pdf"],
+          packageAsZip: false,
+          title: "Coupled report",
+          variables: {
+            title: "Coupled report",
+            summary: "A summary.",
+            sections: [{ heading: "Findings", body: "The result is ready." }],
+            subtitle: null,
+            author: null,
+            date: null,
+            recommendations: null,
+            conclusion: null,
+            filename: null,
+          },
+        },
+      }),
+    });
+
+    await expect(resolveDocumentGenerationIntent({
+      latestMessage: "Create a PDF report.",
+      history: [{ role: "user", content: "Create a PDF report." }],
+    })).resolves.toMatchObject({
+      templateId: "general-report",
+      formats: ["pdf"],
+      variables: { title: "Coupled report", summary: "A summary." },
+    });
   });
 
   it.each([
