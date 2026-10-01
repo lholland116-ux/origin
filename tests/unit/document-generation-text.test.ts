@@ -58,6 +58,17 @@ describe("TXT and Markdown generators", () => {
     expect(artifact.sizeBytes).toBe(new TextEncoder().encode(content).byteLength);
   });
 
+  it("preserves duplicate Markdown headings exactly as supplied", () => {
+    const content = "# Main Report\n\n# Main Report\n\nBody";
+    const artifact = generateMarkdownArtifact({
+      format: "md",
+      title: "Main Report",
+      content,
+    });
+
+    expect(decodeArtifact(artifact)).toBe(content);
+  });
+
   it("normalizes a requested Markdown filename", () => {
     const artifact = generateMarkdownArtifact({
       format: "md",

@@ -166,3 +166,29 @@ export function textTable(
     ...rows.map((row) => "| " + row.join(" | ") + " |"),
   ];
 }
+
+export type MarkdownTitleReconciliation = {
+  readonly content: string;
+  readonly foundHeading: boolean;
+};
+
+export function reconcileMarkdownTitleHeading(
+  title: string,
+  content: string,
+): MarkdownTitleReconciliation {
+  const lines = content.split("\n");
+  const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
+  if (firstContentLine === -1) return { content, foundHeading: false };
+
+  const match = /^ {0,3}#[\t ]+(.+?)(?:[\t ]+#+)?[\t ]*$/.exec(
+    lines[firstContentLine]?.replace(/\r$/, "") ?? "",
+  );
+  if (!match) return { content, foundHeading: false };
+  if (match[1]?.trim() !== title.trim()) return { content, foundHeading: true };
+
+  lines.splice(firstContentLine, 1);
+  if (/^[\t \r]*$/.test(lines[firstContentLine] ?? "not blank")) {
+    lines.splice(firstContentLine, 1);
+  }
+  return { content: lines.join("\n"), foundHeading: true };
+}

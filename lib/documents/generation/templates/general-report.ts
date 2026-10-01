@@ -7,6 +7,7 @@ import {
   optionalString,
   optionalStringArray,
   optionalRecord,
+  reconcileMarkdownTitleHeading,
   rejectUnexpectedKeys,
   requiredRecordArray,
   requiredStringArray,
@@ -132,17 +133,28 @@ function structuredSections(variables: GeneralReportVariables): readonly Documen
 }
 
 function markdownContent(variables: GeneralReportVariables): string {
+  let foundBodyHeading = false;
+  const reconcileProse = (content: string | undefined): string | undefined => {
+    if (content === undefined || foundBodyHeading) return content;
+    const reconciled = reconcileMarkdownTitleHeading(variables.title, content);
+    foundBodyHeading = reconciled.foundHeading;
+    return reconciled.content;
+  };
+  const subtitle = reconcileProse(variables.subtitle);
+  const summary = reconcileProse(variables.summary) ?? variables.summary;
+  const sectionBodies = variables.sections.map((section) => reconcileProse(section.body) ?? section.body);
+  const conclusion = reconcileProse(variables.conclusion);
   const lines = [`# ${variables.title}`];
-  if (variables.subtitle) lines.push("", variables.subtitle);
+  if (subtitle) lines.push("", subtitle);
   if (variables.author || variables.date) lines.push("", [variables.author, variables.date].filter(Boolean).join(" · "));
-  lines.push("", "## Summary", "", variables.summary);
-  for (const section of variables.sections) {
-    lines.push("", `## ${section.heading}`, "", section.body);
+  lines.push("", "## Summary", "", summary);
+  for (const [index, section] of variables.sections.entries()) {
+    lines.push("", `## ${section.heading}`, "", sectionBodies[index] ?? section.body);
     if (section.bullets) lines.push("", ...section.bullets.map((item) => `- ${item}`));
     if (section.table) lines.push("", ...textTable(section.table.columns, section.table.rows));
   }
   if (variables.recommendations) lines.push("", "## Recommendations", "", ...variables.recommendations.map((item) => `- ${item}`));
-  if (variables.conclusion) lines.push("", "## Conclusion", "", variables.conclusion);
+  if (conclusion) lines.push("", "## Conclusion", "", conclusion);
   return lines.join("\n");
 }
 

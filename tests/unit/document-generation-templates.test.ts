@@ -236,6 +236,148 @@ describe("document generation templates", () => {
       }
     }
   });
+
+  it("suppresses a leading body H1 that duplicates a simple-document Markdown title", () => {
+    const request = renderTemplate({
+      templateId: "simple-document",
+      format: "md",
+      variables: {
+        title: "Main Report",
+        body: "# Main Report\n\nBody content.",
+      },
+    });
+
+    expect(request.format).toBe("md");
+    if (request.format !== "md") return;
+    expect(request.content).toBe("# Main Report\n\nBody content.");
+    expect(request.content.split("\n").filter((line) => line === "# Main Report")).toHaveLength(1);
+  });
+
+  it("suppresses a leading raw H1 that duplicates a general-report Markdown title", () => {
+    const request = renderTemplate({
+      templateId: "general-report",
+      format: "md",
+      variables: {
+        title: "Main Report",
+        summary: "# Main Report\n\nSummary content.",
+        sections: [{ heading: "Details", body: "Details content." }],
+      },
+    });
+
+    expect(request.format).toBe("md");
+    if (request.format !== "md") return;
+    expect(request.content.split("\n").filter((line) => line === "# Main Report")).toHaveLength(1);
+    expect(request.content).toContain("## Summary\n\nSummary content.");
+  });
+
+  it("removes at most one matching H1 across general-report prose fields", () => {
+    const request = renderTemplate({
+      templateId: "general-report",
+      format: "md",
+      variables: {
+        title: "Main Report",
+        summary: "Summary content.",
+        sections: [
+          { heading: "First", body: "# Main Report\n\nFirst body." },
+          { heading: "Second", body: "# Main Report\n\nSecond body." },
+        ],
+        conclusion: "# Main Report\n\nConclusion body.",
+      },
+    });
+
+    expect(request.format).toBe("md");
+    if (request.format !== "md") return;
+    expect(request.content.split("\n").filter((line) => line === "# Main Report")).toHaveLength(3);
+    expect(request.content).toContain("## First\n\nFirst body.");
+    expect(request.content).toContain("## Second\n\n# Main Report\n\nSecond body.");
+    expect(request.content).toContain("## Conclusion\n\n# Main Report\n\nConclusion body.");
+  });
+
+  it("preserves mismatched and later body H1s in simple-document Markdown", () => {
+    const mismatched = renderTemplate({
+      templateId: "simple-document",
+      format: "md",
+      variables: { title: "Main Report", body: "# Different Heading\n\nBody content." },
+    });
+    const later = renderTemplate({
+      templateId: "simple-document",
+      format: "md",
+      variables: { title: "Main Report", body: "Intro text\n\n# Main Report" },
+    });
+
+    expect(mismatched.format === "md" ? mismatched.content : "").toBe(
+      "# Main Report\n\n# Different Heading\n\nBody content.",
+    );
+    expect(later.format === "md" ? later.content : "").toBe(
+      "# Main Report\n\nIntro text\n\n# Main Report",
+    );
+  });
+
+  it("preserves a matching title H1 inside a fenced code block", () => {
+    const request = renderTemplate({
+      templateId: "simple-document",
+      format: "md",
+      variables: {
+        title: "Main Report",
+        body: "```text\n# Main Report\n```",
+      },
+    });
+
+    expect(request.format === "md" ? request.content : "").toBe(
+      "# Main Report\n\n```text\n# Main Report\n```",
+    );
+  });
+
+  it("does not reconcile duplicate title syntax in non-Markdown simple documents", () => {
+    const body = "# Main Report\n\nBody content.";
+    const text = renderTemplate({
+      templateId: "simple-document",
+      format: "txt",
+      variables: { title: "Main Report", body },
+    });
+    expect(text.format === "txt" ? text.content : "").toBe("Main Report\n\n" + body);
+
+    for (const format of ["docx", "pdf"] as const) {
+      const request = renderTemplate({
+        templateId: "simple-document",
+        format,
+        variables: { title: "Main Report", body },
+      });
+      assertStructuredRequest(request);
+      expect(request.sections).toEqual([{ type: "paragraph", text: body }]);
+    }
+  });
+
+  it("renders the production Markdown regression fixture with exactly one title H1", () => {
+    const title = "LVTChat Markdown Production Regression";
+    const request = renderTemplate({
+      templateId: "simple-document",
+      format: "md",
+      variables: {
+        title,
+        body: [
+          "# " + title,
+          "",
+          "This file verifies Markdown generation in production.",
+          "",
+          "```python",
+          'print("LVTChat Markdown test")',
+          "```",
+          "",
+          "[LVTChat](https://lvtchat.com)",
+        ].join("\n"),
+        bullets: ["Document generation", "Image generation", "Web search"],
+      },
+    });
+
+    expect(request.format).toBe("md");
+    if (request.format !== "md") return;
+    expect(request.content.split("\n").filter((line) => line === "# " + title)).toHaveLength(1);
+    expect(request.content).toContain("This file verifies Markdown generation in production.");
+    expect(request.content).toContain("- Document generation\n- Image generation\n- Web search");
+    expect(request.content).toContain('```python\nprint("LVTChat Markdown test")\n```');
+    expect(request.content).toContain("[LVTChat](https://lvtchat.com)");
+  });
   it("renders an executive summary with deterministic decision-oriented sections", () => {
     const request = renderTemplate({
       templateId: "executive-summary",

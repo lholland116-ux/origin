@@ -3,6 +3,7 @@ import {
   assertTemplateIssues,
   optionalString,
   optionalStringArray,
+  reconcileMarkdownTitleHeading,
   rejectUnexpectedKeys,
   requiredString,
   supportedFormat,
@@ -55,7 +56,10 @@ function structuredSections(variables: SimpleDocumentVariables): readonly Docume
 function textContent(variables: SimpleDocumentVariables, markdown: boolean): string {
   const lines = [markdown ? "# " + variables.title : variables.title];
   if (variables.date) lines.push("", variables.date);
-  lines.push("", variables.body);
+  const body = markdown
+    ? reconcileMarkdownTitleHeading(variables.title, variables.body).content
+    : variables.body;
+  lines.push("", body);
   if (variables.bullets?.length) {
     lines.push("", ...variables.bullets.map((bullet) => "- " + bullet));
   }
