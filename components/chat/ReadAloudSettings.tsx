@@ -7,6 +7,7 @@ import {
   getAvailableReadAloudVoices,
   isReadAloudSupported,
   previewReadAloud,
+  refreshAvailableReadAloudVoices,
   subscribeToReadAloudVoices,
 } from "@/lib/read-aloud";
 import {
@@ -126,7 +127,10 @@ export default function ReadAloudSettings({ theme }: { theme: ChatTheme }) {
         onClick={() => {
           const nextOpen = !open;
           setOpen(nextOpen);
-          if (nextOpen) setVoices(getAvailableReadAloudVoices());
+          if (nextOpen) {
+            setVoices(getAvailableReadAloudVoices());
+            void refreshAvailableReadAloudVoices().then(setVoices);
+          }
         }}
         className={[
           "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium transition",
@@ -230,7 +234,7 @@ export default function ReadAloudSettings({ theme }: { theme: ChatTheme }) {
 
               <div aria-live="polite" className={`min-h-4 text-xs ${theme.mutedText}`}>
                 {voices.length === 0
-                  ? "Loading available voices…"
+                  ? "Loading available voices… If none appear, native voices may be unavailable."
                   : savedVoiceUnavailable
                     ? "Saved voice unavailable — using Device Default"
                     : previewFailed

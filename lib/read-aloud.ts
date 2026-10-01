@@ -1,8 +1,18 @@
 import {
   DEFAULT_READ_ALOUD_PREFERENCES,
   type ReadAloudPreferences,
-  type ReadAloudVoicePreference,
 } from "@/lib/read-aloud-preferences";
+import {
+  getCachedNativeReadAloudVoices,
+  isNativeAndroidReadAloudRuntime,
+  refreshNativeReadAloudVoices,
+  startNativeReadAloud,
+  stopNativeReadAloud,
+  subscribeToNativeReadAloudVoices,
+} from "@/lib/read-aloud-native";
+import { findMatchingReadAloudVoice } from "@/lib/read-aloud-voices";
+
+export { findMatchingReadAloudVoice } from "@/lib/read-aloud-voices";
 
 let activeReadAloudMessageId: string | null = null;
 const readAloudListeners = new Set<() => void>();
@@ -35,6 +45,8 @@ export function cleanTextForSpeech(markdown: string): string {
 }
 
 export function isReadAloudSupported(): boolean {
+  if (isNativeAndroidReadAloudRuntime()) return true;
+
   return (
     typeof window !== "undefined" &&
     "speechSynthesis" in window &&
@@ -52,6 +64,10 @@ export function subscribeToReadAloud(listener: () => void): () => void {
 }
 
 export function getAvailableReadAloudVoices(): SpeechSynthesisVoice[] {
+  if (isNativeAndroidReadAloudRuntime()) {
+    return getCachedNativeReadAloudVoices();
+  }
+
   if (!isReadAloudSupported()) return [];
 
   try {
@@ -61,9 +77,23 @@ export function getAvailableReadAloudVoices(): SpeechSynthesisVoice[] {
   }
 }
 
+export async function refreshAvailableReadAloudVoices(): Promise<
+  SpeechSynthesisVoice[]
+> {
+  if (isNativeAndroidReadAloudRuntime()) {
+    return refreshNativeReadAloudVoices();
+  }
+
+  return getAvailableReadAloudVoices();
+}
+
 export function subscribeToReadAloudVoices(
   listener: (voices: readonly SpeechSynthesisVoice[]) => void,
 ): () => void {
+  if (isNativeAndroidReadAloudRuntime()) {
+    return subscribeToNativeReadAloudVoices(listener);
+  }
+
   listener(getAvailableReadAloudVoices());
   if (!isReadAloudSupported()) return () => undefined;
 
@@ -71,24 +101,6 @@ export function subscribeToReadAloudVoices(
   const refresh = () => listener(getAvailableReadAloudVoices());
   synthesis.addEventListener("voiceschanged", refresh);
   return () => synthesis.removeEventListener("voiceschanged", refresh);
-}
-
-export function findMatchingReadAloudVoice(
-  preference: ReadAloudVoicePreference | null,
-  voices: readonly SpeechSynthesisVoice[],
-): SpeechSynthesisVoice | null {
-  if (preference === null) return null;
-
-  return (
-    voices.find(
-      (voice) =>
-        voice.voiceURI === preference.voiceURI &&
-        voice.name === preference.name &&
-        voice.lang === preference.lang,
-    ) ??
-    voices.find((voice) => voice.voiceURI === preference.voiceURI) ??
-    null
-  );
 }
 
 function createReadAloudUtterance(
@@ -106,7 +118,9 @@ function createReadAloudUtterance(
 }
 
 export function stopReadAloud(): void {
-  if (isReadAloudSupported()) {
+  if (isNativeAndroidReadAloudRuntime()) {
+    stopNativeReadAloud();
+  } else if (isReadAloudSupported()) {
     window.speechSynthesis.cancel();
   }
 
@@ -125,17 +139,25 @@ export function startReadAloud(
 
   if (!isReadAloudSupported() || !text) return false;
 
-  window.speechSynthesis.cancel();
-  activeReadAloudMessageId = messageId;
-  notifyReadAloudListeners();
-
-  const utterance = createReadAloudUtterance(text, preferences);
   const finish = () => {
     if (activeReadAloudMessageId !== messageId) return;
 
     activeReadAloudMessageId = null;
     notifyReadAloudListeners();
   };
+
+  if (isNativeAndroidReadAloudRuntime()) {
+    activeReadAloudMessageId = messageId;
+    notifyReadAloudListeners();
+    startNativeReadAloud(text, preferences, finish);
+    return true;
+  }
+
+  window.speechSynthesis.cancel();
+  activeReadAloudMessageId = messageId;
+  notifyReadAloudListeners();
+
+  const utterance = createReadAloudUtterance(text, preferences);
 
   utterance.onend = finish;
   utterance.onerror = finish;
@@ -154,6 +176,19 @@ export function previewReadAloud(
   preferences: ReadAloudPreferences = DEFAULT_READ_ALOUD_PREFERENCES,
 ): boolean {
   if (!isReadAloudSupported()) return false;
+
+  if (isNativeAndroidReadAloudRuntime()) {
+    if (activeReadAloudMessageId !== null) {
+      activeReadAloudMessageId = null;
+      notifyReadAloudListeners();
+    }
+    startNativeReadAloud(
+      READ_ALOUD_PREVIEW_TEXT,
+      preferences,
+      () => undefined,
+    );
+    return true;
+  }
 
   stopReadAloud();
   const utterance = createReadAloudUtterance(
