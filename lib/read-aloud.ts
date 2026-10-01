@@ -4,6 +4,7 @@ import {
 } from "@/lib/read-aloud-preferences";
 import {
   getCachedNativeReadAloudVoices,
+  isNativeAndroidReadAloudAvailable,
   isNativeAndroidReadAloudRuntime,
   refreshNativeReadAloudVoices,
   startNativeReadAloud,
@@ -45,7 +46,9 @@ export function cleanTextForSpeech(markdown: string): string {
 }
 
 export function isReadAloudSupported(): boolean {
-  if (isNativeAndroidReadAloudRuntime()) return true;
+  if (isNativeAndroidReadAloudRuntime()) {
+    return isNativeAndroidReadAloudAvailable();
+  }
 
   return (
     typeof window !== "undefined" &&
@@ -81,6 +84,7 @@ export async function refreshAvailableReadAloudVoices(): Promise<
   SpeechSynthesisVoice[]
 > {
   if (isNativeAndroidReadAloudRuntime()) {
+    if (!isNativeAndroidReadAloudAvailable()) return [];
     return refreshNativeReadAloudVoices();
   }
 
@@ -91,6 +95,10 @@ export function subscribeToReadAloudVoices(
   listener: (voices: readonly SpeechSynthesisVoice[]) => void,
 ): () => void {
   if (isNativeAndroidReadAloudRuntime()) {
+    if (!isNativeAndroidReadAloudAvailable()) {
+      listener([]);
+      return () => undefined;
+    }
     return subscribeToNativeReadAloudVoices(listener);
   }
 
@@ -119,7 +127,7 @@ function createReadAloudUtterance(
 
 export function stopReadAloud(): void {
   if (isNativeAndroidReadAloudRuntime()) {
-    stopNativeReadAloud();
+    if (isNativeAndroidReadAloudAvailable()) stopNativeReadAloud();
   } else if (isReadAloudSupported()) {
     window.speechSynthesis.cancel();
   }

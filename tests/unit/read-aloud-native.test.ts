@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const nativeMocks = vi.hoisted(() => ({
   getPlatform: vi.fn(),
   isNativePlatform: vi.fn(),
+  isPluginAvailable: vi.fn(),
   getSupportedVoices: vi.fn(),
   speak: vi.fn(),
   stop: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("@capacitor/core", () => ({
   Capacitor: {
     getPlatform: nativeMocks.getPlatform,
     isNativePlatform: nativeMocks.isNativePlatform,
+    isPluginAvailable: nativeMocks.isPluginAvailable,
   },
 }));
 
@@ -53,6 +55,7 @@ describe("Android native Read Aloud adapter", () => {
   beforeEach(async () => {
     nativeMocks.isNativePlatform.mockReturnValue(true);
     nativeMocks.getPlatform.mockReturnValue("android");
+    nativeMocks.isPluginAvailable.mockReturnValue(true);
     nativeMocks.stop.mockResolvedValue(undefined);
     nativeMocks.speak.mockResolvedValue(undefined);
     nativeMocks.getSupportedVoices.mockResolvedValue({ voices: [] });
@@ -89,6 +92,26 @@ describe("Android native Read Aloud adapter", () => {
     expect(synthesis.speak).toHaveBeenCalledOnce();
     expect(utterances[0]?.text).toBe("Browser speech");
     expect(nativeMocks.speak).not.toHaveBeenCalled();
+  });
+
+  it("disables Read Aloud safely in an older Android binary without the plugin", async () => {
+    nativeMocks.isPluginAvailable.mockReturnValue(false);
+
+    expect(isReadAloudSupported()).toBe(false);
+    await expect(refreshAvailableReadAloudVoices()).resolves.toEqual([]);
+    const voiceUpdates: SpeechSynthesisVoice[][] = [];
+    const unsubscribe = subscribeToReadAloudVoices((voices) => {
+      voiceUpdates.push([...voices]);
+    });
+    expect(startReadAloud("old-android", "No native plugin")).toBe(false);
+    expect(previewReadAloud()).toBe(false);
+    stopReadAloud();
+
+    expect(voiceUpdates).toEqual([[]]);
+    expect(nativeMocks.getSupportedVoices).not.toHaveBeenCalled();
+    expect(nativeMocks.speak).not.toHaveBeenCalled();
+    expect(nativeMocks.stop).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   it("selects native Android and maps getSupportedVoices results", async () => {

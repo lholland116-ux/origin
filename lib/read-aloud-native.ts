@@ -31,6 +31,13 @@ export function isNativeAndroidReadAloudRuntime(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
 }
 
+export function isNativeAndroidReadAloudAvailable(): boolean {
+  return (
+    isNativeAndroidReadAloudRuntime() &&
+    Capacitor.isPluginAvailable("TextToSpeech")
+  );
+}
+
 export function mapNativeReadAloudVoice(
   voice: NativeSpeechSynthesisVoice,
 ): SpeechSynthesisVoice {
