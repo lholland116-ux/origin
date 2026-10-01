@@ -185,6 +185,7 @@ describe("document generation intent", () => {
       enum?: readonly string[];
       minItems?: number;
       pattern?: string;
+      description?: string;
     };
     const request = mocks.create.mock.calls[0]?.[0] as {
       text?: { format?: { schema?: SchemaNode; strict?: boolean } };
@@ -263,6 +264,12 @@ describe("document generation intent", () => {
     expect(
       comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.values?.items?.anyOf?.[0]?.pattern,
     ).toBe("\\S");
+    const comparisonCellBranches =
+      comparisonReport.properties?.variables?.properties?.comparisons?.items?.properties?.values?.items?.anyOf ?? [];
+    expect(comparisonCellBranches[0]?.description).toContain("textual values and identifiers");
+    expect(comparisonCellBranches[1]?.description).toContain("genuine numeric source values");
+    expect(comparisonCellBranches[2]?.description).toContain("genuine true or false");
+    expect(comparisonCellBranches[3]?.description).toContain("missing or blank");
     expect(comparisonReport.properties?.variables?.properties?.observations?.minItems).toBe(1);
     expect(comparisonReport.properties?.variables?.required).toContain("comparisons");
 
@@ -653,6 +660,53 @@ describe("document generation intent", () => {
       formats: ["xlsx"],
       variables: { firstColumnHeader: "Name", comparisons: [{ item: "Alpha", values }] },
     });
+  });
+
+  it("preserves comparison scalar types for multi-format ZIP planning", async () => {
+    const values = [2, 899.99, true, null, "00123", "=SUM(A1:A2)"];
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        document: {
+          templateId: "comparison-report",
+          formats: ["txt", "pdf", "xlsx"],
+          packageAsZip: true,
+          title: "Packaged typed comparison",
+          variables: {
+            title: "Packaged typed comparison",
+            firstColumnHeader: "Name",
+            items: [{ name: "Alpha", description: null }],
+            criteria: ["Quantity", "Unit Price", "Enabled", "Blank", "Reference", "Formula"],
+            summary: "A packaged typed comparison.",
+            comparisons: [{ item: "Alpha", values }],
+            observations: ["Source scalar types remain independent of output format."],
+            conclusion: null,
+            filename: null,
+          },
+        },
+      }),
+    });
+
+    const result = await resolveDocumentGenerationIntent({
+      latestMessage: "Create TXT, PDF, and XLSX versions of this comparison and package them as a ZIP.",
+      history: [{
+        role: "user",
+        content: "Create TXT, PDF, and XLSX versions of this comparison and package them as a ZIP.",
+      }],
+    });
+
+    expect(result).toMatchObject({
+      templateId: "comparison-report",
+      formats: ["txt", "pdf", "xlsx"],
+      packageAsZip: true,
+      variables: { firstColumnHeader: "Name", comparisons: [{ item: "Alpha", values }] },
+    });
+    expect(result?.variables.comparisons).toEqual([{ item: "Alpha", values }]);
+
+    const plannerInput = mocks.create.mock.calls[0]?.[0]?.input as string;
+    expect(plannerInput).toContain("preserve source scalar types independently of requested output formats or ZIP packaging");
+    expect(plannerInput).toContain("must never stringify native numeric or boolean values");
+    expect(plannerInput).toContain("Output format is a rendering concern, not a source-data typing concern");
   });
 
   it("provides exact template schemas to the planner for conversation summaries", async () => {

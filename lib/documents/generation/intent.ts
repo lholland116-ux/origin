@@ -60,10 +60,22 @@ const NULLABLE_TABLE_SCHEMA = {
 } as const;
 const COMPARISON_CELL_SCHEMA = {
   anyOf: [
-    REQUIRED_STRING_SCHEMA,
-    { type: "number" },
-    { type: "boolean" },
-    { type: "null" },
+    {
+      ...REQUIRED_STRING_SCHEMA,
+      description: "Use for textual values and identifiers whose textual representation must be preserved.",
+    },
+    {
+      type: "number",
+      description: "Use for genuine numeric source values such as quantities, prices, counts, and measurements.",
+    },
+    {
+      type: "boolean",
+      description: "Use for genuine true or false source values.",
+    },
+    {
+      type: "null",
+      description: "Use for missing or blank source values when appropriate.",
+    },
   ],
 } as const;
 
@@ -644,6 +656,8 @@ export async function resolveDocumentGenerationIntent(params: {
     "For general-presentation, use mode=explicit_slides when the user specifies an exact slide count, numbered slide definitions, an explicit ordered slide sequence, or says not to add slides. Return exactly that many slides in the requested order, set exactSlideCount to the requested count, and preserve each supplied title, body, bullets, subtitle, and notes without inventing slides. Use type=body for a titled slide with body text, type=bullets for a titled bullet slide, and type=title only for a title slide. Otherwise use mode=report and the existing summary/sections structure.",
     "Choose only supported formats. If more than one format is requested, set packageAsZip=true.",
     "For comparison-report, when the user explicitly supplies table column names, preserve the first supplied name exactly in firstColumnHeader and put the remaining names in criteria. Use null when no first-column name was specified. Never rename or normalize supplied headers.",
+    "For comparison-report, preserve source scalar types independently of requested output formats or ZIP packaging. Emit explicit unquoted quantities, prices, counts, measurements, and other genuine numeric values as JSON numbers (for example 2, 899.99, -4, or 0.5); emit explicit true/false values as JSON booleans; and use null for blank or missing values when appropriate.",
+    "Use comparison-report strings only for textual values and identifiers whose textual form matters, including quoted text, leading-zero values such as 00123, ZIP/postal codes, phone numbers, account/reference numbers, SKU/product IDs, and formula-looking text such as =SUM(A1:A2). Requesting TXT, Markdown, DOCX, PDF, XLSX, or ZIP together must never stringify native numeric or boolean values. Output format is a rendering concern, not a source-data typing concern.",
     "For general-report sections, keep body as paragraph text only. Put unordered list items in bullets and tables in table with columns and rows. Never encode tables or lists as Markdown inside body.",
     "For a relative current-date request, put the grounded date in simple-document's optional date variable or general-report's optional date variable so it appears in the dedicated date position. Do not repeat that same automatic date in simple-document body or bullets, or in general-report summary, section body, bullets, tables, recommendations, or conclusion. Preserve repetition only when the user explicitly asks for it or names a body location.",
     `Use this exact template schema when building variables: ${JSON.stringify(templateSchemas)}. Include every required variable with the correct shape, including at least one section/item where required. Use only the selected template's documented variable names.`,
