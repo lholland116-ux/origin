@@ -404,6 +404,77 @@ describe("document generation templates", () => {
     }
   });
 
+  it("maps an explicit three-slide presentation one-to-one without report slides", async () => {
+    const request = renderTemplate({
+      templateId: "general-presentation",
+      format: "pptx",
+      variables: {
+        mode: "explicit_slides",
+        title: "LVTChat PowerPoint Production Qualification",
+        exactSlideCount: 3,
+        slides: [
+          {
+            type: "body",
+            title: "LVTChat PowerPoint Production Qualification",
+            body: "This presentation verifies PowerPoint generation in production.",
+          },
+          {
+            type: "bullets",
+            title: "Key Capabilities",
+            bullets: ["Document generation", "Image generation", "Web search"],
+          },
+          {
+            type: "body",
+            title: "Unicode Test",
+            body: "café — 日本語",
+          },
+        ],
+      },
+    });
+    expect(request.format).toBe("pptx");
+    if (request.format !== "pptx") throw new Error("Expected PPTX request.");
+    expect(request.exactSlideCount).toBe(3);
+    expect(request.slides).toEqual([
+      {
+        type: "body",
+        title: "LVTChat PowerPoint Production Qualification",
+        paragraphs: ["This presentation verifies PowerPoint generation in production."],
+      },
+      {
+        type: "bullets",
+        title: "Key Capabilities",
+        items: ["Document generation", "Image generation", "Web search"],
+      },
+      { type: "body", title: "Unicode Test", paragraphs: ["café — 日本語"] },
+    ]);
+
+    const artifact = await generateArtifact(request);
+    const presentation = await extractPptxPresentation(
+      Buffer.from(artifact.bytes) as unknown as Parameters<typeof extractPptxPresentation>[0],
+    );
+    const content = JSON.stringify(presentation);
+    expect(presentation.slides.map((slide) => slide.slideNumber)).toEqual([1, 2, 3]);
+    expect(content).toContain("This presentation verifies PowerPoint generation in production.");
+    expect(content).toContain("Document generation");
+    expect(content).toContain("café — 日本語");
+    expect(content).not.toContain("Executive Summary");
+  });
+
+  it("rejects an explicit presentation count mismatch", () => {
+    expect(() => renderTemplate({
+      templateId: "general-presentation",
+      format: "pptx",
+      variables: {
+        mode: "explicit_slides",
+        title: "Count mismatch",
+        exactSlideCount: 3,
+        slides: [
+          { type: "body", title: "Only slide", body: "Only body" },
+        ],
+      },
+    })).toThrow(/exactSlideCount must match slides\.length/);
+  });
+
   it("renders and reads a general presentation through the existing PPTX extractor", async () => {
     const request = renderTemplate({
       templateId: "general-presentation",

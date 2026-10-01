@@ -109,6 +109,7 @@ export type PresentationSlide =
 export type PresentationDocumentRequest = BaseDocumentRequest & {
   readonly format: "pptx";
   readonly slides: readonly PresentationSlide[];
+  readonly exactSlideCount?: number;
 };
 
 export type DocumentGenerationRequest =

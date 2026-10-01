@@ -282,6 +282,13 @@ export function validateGenerationRequest(
     if (request.sections.length > MAX_SECTION_COUNT) issues.push("Document has too many sections.");
     request.sections.forEach((section, index) => issues.push(...validateSection(section, index)));
   } else if (request.format === "pptx") {
+    if (request.exactSlideCount !== undefined && (
+      !Number.isInteger(request.exactSlideCount) ||
+      request.exactSlideCount <= 0 ||
+      request.exactSlideCount !== request.slides.length
+    )) {
+      issues.push("Exact presentation slide count must match slides.length.");
+    }
     if (!Array.isArray(request.slides) || request.slides.length === 0) issues.push("Presentation must contain a slide.");
     else if (request.slides.length > MAX_PRESENTATION_SLIDES) issues.push("Presentation has too many slides.");
     else request.slides.forEach((slide, index) => issues.push(...validatePresentationSlide(slide, index)));

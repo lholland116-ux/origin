@@ -199,10 +199,11 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
   ],
 } as const;
 
-const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
+const REPORT_PRESENTATION_VARIABLES_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
+    mode: { type: "string", enum: ["report"] },
     title: REQUIRED_STRING_SCHEMA,
     summary: REQUIRED_STRING_SCHEMA,
     sections: {
@@ -226,6 +227,7 @@ const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
     filename: OPTIONAL_STRING_SCHEMA,
   },
   required: [
+    "mode",
     "title",
     "summary",
     "sections",
@@ -234,6 +236,44 @@ const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
     "subtitle",
     "notes",
     "filename",
+  ],
+} as const;
+
+const EXPLICIT_PRESENTATION_SLIDE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", enum: ["title", "body", "bullets"] },
+    title: REQUIRED_STRING_SCHEMA,
+    body: OPTIONAL_STRING_SCHEMA,
+    bullets: OPTIONAL_STRING_ARRAY_SCHEMA,
+    subtitle: OPTIONAL_STRING_SCHEMA,
+    notes: OPTIONAL_STRING_SCHEMA,
+  },
+  required: ["type", "title", "body", "bullets", "subtitle", "notes"],
+} as const;
+
+const EXPLICIT_PRESENTATION_VARIABLES_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    mode: { type: "string", enum: ["explicit_slides"] },
+    title: REQUIRED_STRING_SCHEMA,
+    exactSlideCount: { type: "integer" },
+    slides: {
+      type: "array",
+      minItems: 1,
+      items: EXPLICIT_PRESENTATION_SLIDE_SCHEMA,
+    },
+    filename: OPTIONAL_STRING_SCHEMA,
+  },
+  required: ["mode", "title", "exactSlideCount", "slides", "filename"],
+} as const;
+
+const GENERAL_PRESENTATION_VARIABLES_SCHEMA = {
+  anyOf: [
+    REPORT_PRESENTATION_VARIABLES_SCHEMA,
+    EXPLICIT_PRESENTATION_VARIABLES_SCHEMA,
   ],
 } as const;
 
@@ -601,6 +641,7 @@ export async function resolveDocumentGenerationIntent(params: {
     "Return action=none unless the latest user message explicitly requests creating, exporting, downloading, or packaging a document.",
     "Do not treat a question about a file format as a generation request.",
     "For generate_document, choose exactly one registered template. Use simple-document for explicitly minimal or exact-content requests such as include this sentence exactly, do not add anything else, do not include bullet points, create a simple PDF, or create a document containing only. It requires only a title and body, adds no summary, section headings, conclusion, or filler prose, and includes bullets only when requested. Use general-report for normal structured report requests; use executive-summary, comparison-report, or general-presentation when their structure fits better.",
+    "For general-presentation, use mode=explicit_slides when the user specifies an exact slide count, numbered slide definitions, an explicit ordered slide sequence, or says not to add slides. Return exactly that many slides in the requested order, set exactSlideCount to the requested count, and preserve each supplied title, body, bullets, subtitle, and notes without inventing slides. Use type=body for a titled slide with body text, type=bullets for a titled bullet slide, and type=title only for a title slide. Otherwise use mode=report and the existing summary/sections structure.",
     "Choose only supported formats. If more than one format is requested, set packageAsZip=true.",
     "For comparison-report, when the user explicitly supplies table column names, preserve the first supplied name exactly in firstColumnHeader and put the remaining names in criteria. Use null when no first-column name was specified. Never rename or normalize supplied headers.",
     "For general-report sections, keep body as paragraph text only. Put unordered list items in bullets and tables in table with columns and rows. Never encode tables or lists as Markdown inside body.",

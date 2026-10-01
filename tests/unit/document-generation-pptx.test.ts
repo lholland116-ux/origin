@@ -134,6 +134,29 @@ describe("PPTX generator", () => {
     expect(allText).toContain("continued");
   });
 
+  it("rejects continuation splitting for exact-count presentations", async () => {
+    const longBody = {
+      type: "body" as const,
+      title: "Long exact slide",
+      paragraphs: Array.from(
+        { length: 25 },
+        (_, index) =>
+          "Paragraph " +
+          (index + 1) +
+          " contains enough text to require deterministic wrapping and continuation.",
+      ),
+    };
+
+    await expect(generatePptxArtifact(
+      representativeRequest({
+        exactSlideCount: 1,
+        slides: [longBody],
+      }),
+    )).rejects.toThrow(
+      "Explicit slide content is too large to fit without changing the requested slide count.",
+    );
+  });
+
   it("uses shared filename and artifact validation behavior", async () => {
     const cases = [
       [undefined, "lvtchat-document.pptx"],

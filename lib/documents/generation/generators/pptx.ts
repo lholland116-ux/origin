@@ -221,12 +221,18 @@ function renderSectionSlide(
 function renderBodySlides(
   pptx: PptxPresentation,
   slide: Extract<PresentationSlide, { type: "body" }>,
+  allowContinuation: boolean,
 ): void {
   const lineGroups = slide.paragraphs.flatMap((paragraph) => [
     ...wrapText(paragraph, BODY_CHARS_PER_LINE),
     "",
   ]);
   const groups = chunks(lineGroups, BODY_MAX_LINES);
+  if (!allowContinuation && groups.length > 1) {
+    throw new DocumentGenerationValidationError([
+      "Explicit slide content is too large to fit without changing the requested slide count.",
+    ]);
+  }
   groups.forEach((group, index) => {
     const page = addSlideBase(pptx);
     addSlideTitle(page, pptx, slide.title, index > 0);
@@ -238,6 +244,7 @@ function renderBodySlides(
 function renderListSlides(
   pptx: PptxPresentation,
   slide: Extract<PresentationSlide, { type: "bullets" | "numbered" }>,
+  allowContinuation: boolean,
 ): void {
   const lines: string[] = [];
   slide.items.forEach((item, index) => {
@@ -249,7 +256,13 @@ function renderListSlides(
     });
     lines.push("");
   });
-  chunks(lines, LIST_MAX_LINES).forEach((group, index) => {
+  const groups = chunks(lines, LIST_MAX_LINES);
+  if (!allowContinuation && groups.length > 1) {
+    throw new DocumentGenerationValidationError([
+      "Explicit slide content is too large to fit without changing the requested slide count.",
+    ]);
+  }
+  groups.forEach((group, index) => {
     const page = addSlideBase(pptx);
     addSlideTitle(page, pptx, slide.title, index > 0);
     addBodyText(page, group.join("\n").trim(), 1.45, 5.35, 17);
@@ -287,6 +300,7 @@ function tableRowsForSlide(
 function renderTableSlides(
   pptx: PptxPresentation,
   slide: Extract<PresentationSlide, { type: "table" }>,
+  allowContinuation: boolean,
 ): void {
   const rowGroups: (readonly (readonly string[])[])[] = [];
   let current: (readonly string[])[] = [];
@@ -307,6 +321,11 @@ function renderTableSlides(
     currentLines += rowLines;
   }
   if (current.length > 0 || rowGroups.length === 0) rowGroups.push(current);
+  if (!allowContinuation && rowGroups.length > 1) {
+    throw new DocumentGenerationValidationError([
+      "Explicit slide content is too large to fit without changing the requested slide count.",
+    ]);
+  }
 
   rowGroups.forEach((rows, index) => {
     const page = addSlideBase(pptx);
@@ -330,14 +349,18 @@ function renderTableSlides(
   });
 }
 
-function renderSlide(pptx: PptxPresentation, slide: PresentationSlide): void {
+function renderSlide(
+  pptx: PptxPresentation,
+  slide: PresentationSlide,
+  allowContinuation: boolean,
+): void {
   if (slide.type === "title") renderTitleSlide(pptx, slide);
   else if (slide.type === "section") renderSectionSlide(pptx, slide);
-  else if (slide.type === "body") renderBodySlides(pptx, slide);
+  else if (slide.type === "body") renderBodySlides(pptx, slide, allowContinuation);
   else if (slide.type === "bullets" || slide.type === "numbered") {
-    renderListSlides(pptx, slide);
+    renderListSlides(pptx, slide, allowContinuation);
   } else {
-    renderTableSlides(pptx, slide);
+    renderTableSlides(pptx, slide, allowContinuation);
   }
 }
 
@@ -354,7 +377,10 @@ export async function generatePptxArtifact(
   pptx.title = request.title ?? "LVTChat presentation";
   pptx.revision = "1";
 
-  for (const slide of request.slides) renderSlide(pptx, slide);
+  const allowContinuation = request.exactSlideCount === undefined;
+  for (const slide of request.slides) {
+    renderSlide(pptx, slide, allowContinuation);
+  }
 
   const output = await pptx.write({
     outputType: "uint8array",

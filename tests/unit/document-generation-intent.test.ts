@@ -268,12 +268,100 @@ describe("document generation intent", () => {
 
     const generalPresentation = templateBranches[3];
     expect(generalPresentation.properties?.templateId?.enum).toEqual(["general-presentation"]);
-    expect(generalPresentation.properties?.variables?.properties?.title?.pattern).toBe("\\S");
-    expect(generalPresentation.properties?.variables?.properties?.summary?.pattern).toBe("\\S");
-    expect(generalPresentation.properties?.variables?.properties?.sections?.minItems).toBe(1);
-    expect(generalPresentation.properties?.variables?.properties?.sections?.items?.properties?.heading?.pattern).toBe("\\S");
-    expect(generalPresentation.properties?.variables?.properties?.sections?.items?.properties?.body?.pattern).toBe("\\S");
-    expect(generalPresentation.properties?.variables?.required).toContain("sections");
+    const presentationModes = generalPresentation.properties?.variables?.anyOf ?? [];
+    expect(presentationModes).toHaveLength(2);
+    const reportMode = presentationModes[0];
+    expect(reportMode.properties?.mode?.enum).toEqual(["report"]);
+    expect(reportMode.properties?.title?.pattern).toBe("\\S");
+    expect(reportMode.properties?.summary?.pattern).toBe("\\S");
+    expect(reportMode.properties?.sections?.minItems).toBe(1);
+    expect(reportMode.properties?.sections?.items?.properties?.heading?.pattern).toBe("\\S");
+    expect(reportMode.properties?.sections?.items?.properties?.body?.pattern).toBe("\\S");
+    expect(reportMode.required).toContain("sections");
+    const explicitMode = presentationModes[1];
+    expect(explicitMode.properties?.mode?.enum).toEqual(["explicit_slides"]);
+    expect(explicitMode.properties?.exactSlideCount?.type).toBe("integer");
+    expect(explicitMode.properties?.slides?.minItems).toBe(1);
+    expect(explicitMode.properties?.slides?.items?.properties?.type?.enum).toEqual([
+      "title",
+      "body",
+      "bullets",
+    ]);
+    expect(explicitMode.properties?.slides?.items?.required).toEqual([
+      "type",
+      "title",
+      "body",
+      "bullets",
+      "subtitle",
+      "notes",
+    ]);
+  });
+
+  it("preserves an explicit ordered slide plan from planner intent", async () => {
+    mocks.create.mockResolvedValue({
+      output_text: JSON.stringify({
+        action: "generate_document",
+        document: {
+          templateId: "general-presentation",
+          formats: ["pptx"],
+          packageAsZip: false,
+          title: "LVTChat PowerPoint Production Qualification",
+          variables: {
+            mode: "explicit_slides",
+            title: "LVTChat PowerPoint Production Qualification",
+            exactSlideCount: 3,
+            slides: [
+              {
+                type: "body",
+                title: "LVTChat PowerPoint Production Qualification",
+                body: "This presentation verifies PowerPoint generation in production.",
+                bullets: null,
+                subtitle: null,
+                notes: null,
+              },
+              {
+                type: "bullets",
+                title: "Key Capabilities",
+                body: null,
+                bullets: ["Document generation", "Image generation", "Web search"],
+                subtitle: null,
+                notes: null,
+              },
+              {
+                type: "body",
+                title: "Unicode Test",
+                body: "café — 日本語",
+                bullets: null,
+                subtitle: null,
+                notes: null,
+              },
+            ],
+            filename: null,
+          },
+        },
+      }),
+    });
+
+    const result = await resolveDocumentGenerationIntent({
+      latestMessage: "Create exactly 3 PowerPoint slides with the following numbered slide definitions. Do not add additional slides.",
+      history: [{ role: "user", content: "Create exactly 3 PowerPoint slides." }],
+    });
+    expect(result?.variables).toMatchObject({
+      mode: "explicit_slides",
+      exactSlideCount: 3,
+    });
+    const request = renderTemplate({
+      templateId: "general-presentation",
+      format: "pptx",
+      variables: result?.variables ?? {},
+    });
+    expect(request.format).toBe("pptx");
+    if (request.format !== "pptx") throw new Error("Expected PPTX request.");
+    expect(request.exactSlideCount).toBe(3);
+    expect(request.slides).toHaveLength(3);
+    const plannerInput = mocks.create.mock.calls[0]?.[0]?.input as string;
+    expect(plannerInput).toContain("mode=explicit_slides");
+    expect(plannerInput).toContain("says not to add slides");
   });
 
   it("accepts a coupled nested template branch and normalizes it to the internal intent", async () => {

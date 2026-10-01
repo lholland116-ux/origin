@@ -32,7 +32,8 @@ type PresentationComparison = {
   readonly rows: readonly (readonly string[])[];
 };
 
-export type GeneralPresentationVariables = {
+type ReportPresentationVariables = {
+  readonly mode?: "report";
   readonly title: string;
   readonly summary: string;
   readonly sections: readonly PresentationSection[];
@@ -43,15 +44,139 @@ export type GeneralPresentationVariables = {
   readonly filename?: string;
 };
 
+type ExplicitPresentationVariables = {
+  readonly mode: "explicit_slides";
+  readonly title: string;
+  readonly exactSlideCount: number;
+  readonly slides: readonly PresentationSlide[];
+  readonly filename?: string;
+};
+
+export type GeneralPresentationVariables =
+  | ReportPresentationVariables
+  | ExplicitPresentationVariables;
+
 const SUPPORTED_FORMATS = ["pptx"] as const;
 
-function parseVariables(record: TemplateVariablesRecord): GeneralPresentationVariables {
+function preservedRequiredString(
+  record: TemplateVariablesRecord,
+  key: string,
+  issues: string[],
+): string {
+  const value = record[key];
+  if (typeof value !== "string" || !value.trim()) {
+    issues.push(key + " is required and must be a non-empty string.");
+    return "";
+  }
+  return value;
+}
+
+function preservedOptionalString(
+  record: TemplateVariablesRecord,
+  key: string,
+  issues: string[],
+): string | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    issues.push(key + " must be a non-empty string when provided.");
+    return undefined;
+  }
+  return value;
+}
+
+function preservedOptionalStringArray(
+  record: TemplateVariablesRecord,
+  key: string,
+  issues: string[],
+): readonly string[] | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "string" || !item.trim())
+  ) {
+    issues.push(key + " must be a non-empty string array when provided.");
+    return undefined;
+  }
+  return value as readonly string[];
+}
+
+function parseExplicitVariables(
+  record: TemplateVariablesRecord,
+): ExplicitPresentationVariables {
   const issues: string[] = [];
   rejectUnexpectedKeys(
     record,
-    ["title", "summary", "sections", "recommendations", "comparison", "subtitle", "notes", "filename"],
+    ["mode", "title", "exactSlideCount", "slides", "filename"],
     issues,
   );
+  const title = preservedRequiredString(record, "title", issues);
+  const countValue = record.exactSlideCount;
+  const exactSlideCount =
+    typeof countValue === "number" && Number.isInteger(countValue) && countValue > 0
+      ? countValue
+      : 0;
+  if (exactSlideCount === 0) {
+    issues.push("exactSlideCount is required and must be a positive integer.");
+  }
+  const slideRecords = requiredRecordArray(record, "slides", issues);
+  const explicitSlides = slideRecords.map((slideRecord, index): PresentationSlide => {
+    rejectUnexpectedKeys(
+      slideRecord,
+      ["type", "title", "body", "bullets", "subtitle", "notes"],
+      issues,
+    );
+    const type = preservedRequiredString(slideRecord, "type", issues);
+    const slideTitle = preservedRequiredString(slideRecord, "title", issues);
+    const body = preservedOptionalString(slideRecord, "body", issues);
+    const bullets = preservedOptionalStringArray(slideRecord, "bullets", issues);
+    const subtitle = preservedOptionalString(slideRecord, "subtitle", issues);
+    const notes = preservedOptionalString(slideRecord, "notes", issues);
+
+    if (type === "title") {
+      if (body || bullets) issues.push("Slide " + (index + 1) + " title slides cannot include body or bullets.");
+      return { type: "title", title: slideTitle, ...(subtitle ? { subtitle } : {}), ...(notes ? { notes } : {}) };
+    }
+    if (type === "bullets") {
+      if (!bullets) issues.push("Slide " + (index + 1) + " bullets are required.");
+      if (body || subtitle) issues.push("Slide " + (index + 1) + " bullet slides cannot include body or subtitle.");
+      return { type: "bullets", title: slideTitle, items: bullets ?? [], ...(notes ? { notes } : {}) };
+    }
+    if (type !== "body") {
+      issues.push("Slide " + (index + 1) + " has an unsupported explicit slide type.");
+    }
+    if (!body) issues.push("Slide " + (index + 1) + " body is required.");
+    if (bullets || subtitle) issues.push("Slide " + (index + 1) + " body slides cannot include bullets or subtitle.");
+    return { type: "body", title: slideTitle, paragraphs: body ? [body] : [], ...(notes ? { notes } : {}) };
+  });
+  if (exactSlideCount !== 0 && exactSlideCount !== explicitSlides.length) {
+    issues.push("exactSlideCount must match slides.length.");
+  }
+  const filename = optionalString(record, "filename", issues);
+  assertTemplateIssues(issues);
+  return {
+    mode: "explicit_slides",
+    title,
+    exactSlideCount,
+    slides: explicitSlides,
+    ...(filename ? { filename } : {}),
+  };
+}
+
+function parseReportVariables(
+  record: TemplateVariablesRecord,
+): ReportPresentationVariables {
+  const issues: string[] = [];
+  rejectUnexpectedKeys(
+    record,
+    ["mode", "title", "summary", "sections", "recommendations", "comparison", "subtitle", "notes", "filename"],
+    issues,
+  );
+  if (record.mode !== undefined && record.mode !== "report") {
+    issues.push("mode must be report for report-style presentations.");
+  }
   const title = requiredString(record, "title", issues);
   const summary = requiredString(record, "summary", issues);
   const sectionRecords = requiredRecordArray(record, "sections", issues);
@@ -79,6 +204,7 @@ function parseVariables(record: TemplateVariablesRecord): GeneralPresentationVar
   const filename = optionalString(record, "filename", issues);
   assertTemplateIssues(issues);
   return {
+    mode: "report",
     title,
     summary,
     sections,
@@ -90,7 +216,13 @@ function parseVariables(record: TemplateVariablesRecord): GeneralPresentationVar
   };
 }
 
-function slides(variables: GeneralPresentationVariables): readonly PresentationSlide[] {
+function parseVariables(record: TemplateVariablesRecord): GeneralPresentationVariables {
+  return record.mode === "explicit_slides"
+    ? parseExplicitVariables(record)
+    : parseReportVariables(record);
+}
+
+function reportSlides(variables: ReportPresentationVariables): readonly PresentationSlide[] {
   const result: PresentationSlide[] = [
     { type: "title", title: variables.title, subtitle: variables.subtitle, notes: variables.notes },
     { type: "section", title: "Executive Summary", supportingText: variables.summary },
@@ -142,7 +274,10 @@ export const generalPresentationTemplate: DocumentTemplate = {
     return {
       format: "pptx",
       filename: templateFilename(input.variables, variables.title, "pptx", []),
-      slides: slides(variables),
+      slides: variables.mode === "explicit_slides" ? variables.slides : reportSlides(variables),
+      ...(variables.mode === "explicit_slides"
+        ? { exactSlideCount: variables.exactSlideCount }
+        : {}),
       title: variables.title,
     };
   },
