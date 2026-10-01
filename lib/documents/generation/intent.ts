@@ -25,6 +25,10 @@ const INFORMATIONAL_DOCUMENT_QUESTION =
 
 const REQUIRED_STRING_SCHEMA = { type: "string", pattern: "\\S" } as const;
 const OPTIONAL_STRING_SCHEMA = { type: ["string", "null"] } as const;
+const OPTIONAL_NON_EMPTY_HEADER_SCHEMA = {
+  type: ["string", "null"],
+  pattern: "\\S",
+} as const;
 const REQUIRED_STRING_ARRAY_SCHEMA = {
   type: "array",
   minItems: 1,
@@ -145,6 +149,7 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
   additionalProperties: false,
   properties: {
     title: REQUIRED_STRING_SCHEMA,
+    firstColumnHeader: OPTIONAL_NON_EMPTY_HEADER_SCHEMA,
     items: {
       type: "array",
       minItems: 1,
@@ -183,6 +188,7 @@ const COMPARISON_REPORT_VARIABLES_SCHEMA = {
   },
   required: [
     "title",
+    "firstColumnHeader",
     "items",
     "criteria",
     "summary",
@@ -596,6 +602,7 @@ export async function resolveDocumentGenerationIntent(params: {
     "Do not treat a question about a file format as a generation request.",
     "For generate_document, choose exactly one registered template. Use simple-document for explicitly minimal or exact-content requests such as include this sentence exactly, do not add anything else, do not include bullet points, create a simple PDF, or create a document containing only. It requires only a title and body, adds no summary, section headings, conclusion, or filler prose, and includes bullets only when requested. Use general-report for normal structured report requests; use executive-summary, comparison-report, or general-presentation when their structure fits better.",
     "Choose only supported formats. If more than one format is requested, set packageAsZip=true.",
+    "For comparison-report, when the user explicitly supplies table column names, preserve the first supplied name exactly in firstColumnHeader and put the remaining names in criteria. Use null when no first-column name was specified. Never rename or normalize supplied headers.",
     "For general-report sections, keep body as paragraph text only. Put unordered list items in bullets and tables in table with columns and rows. Never encode tables or lists as Markdown inside body.",
     "For a relative current-date request, put the grounded date in simple-document's optional date variable or general-report's optional date variable so it appears in the dedicated date position. Do not repeat that same automatic date in simple-document body or bullets, or in general-report summary, section body, bullets, tables, recommendations, or conclusion. Preserve repetition only when the user explicitly asks for it or names a body location.",
     `Use this exact template schema when building variables: ${JSON.stringify(templateSchemas)}. Include every required variable with the correct shape, including at least one section/item where required. Use only the selected template's documented variable names.`,

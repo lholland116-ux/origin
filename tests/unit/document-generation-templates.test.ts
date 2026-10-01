@@ -275,6 +275,8 @@ describe("document generation templates", () => {
     });
     expect(documentRequest.format === "md" ? documentRequest.content : "").toContain("| Item | Cost | Risk |");
     expect(documentRequest.format === "md" ? documentRequest.content : "").toContain("| Beta | Low | Medium |");
+    const defaultTextRequest = renderTemplate({ templateId: "comparison-report", format: "txt", variables: { ...comparisonVariables, firstColumnHeader: null } });
+    expect(defaultTextRequest.format === "txt" ? defaultTextRequest.content : "").toContain("Item | Cost | Risk");
 
     const workbookRequest = renderTemplate({
       templateId: "comparison-report",
@@ -297,6 +299,57 @@ describe("document generation templates", () => {
       "Low",
       "Medium",
     ]);
+  });
+
+  it.each([
+    ["Name", ["Quantity", "Price"], ["2", "899.99"], "Laptop"],
+    ["Product", ["Units", "Cost"], ["4", "249.50"], "Monitor"],
+    ["Employee", ["Department", "Salary"], ["Engineering", "120000"], "Alex"],
+  ])("preserves the explicit %s first-column header across comparison formats", async (header, criteria, values, rowName) => {
+    const variables = {
+      ...comparisonVariables,
+      firstColumnHeader: header,
+      items: [{ name: rowName }],
+      criteria,
+      comparisons: [{ item: rowName, values }],
+    };
+    const expectedHeaders = [header, ...criteria];
+
+    const workbookRequest = renderTemplate({ templateId: "comparison-report", format: "xlsx", variables });
+    if (workbookRequest.format !== "xlsx") throw new Error("Expected XLSX request.");
+    const artifact = await generateArtifact(workbookRequest);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(artifact.bytes) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+    expect(workbook.worksheets[0]?.getRow(1).values).toEqual([undefined, ...expectedHeaders]);
+
+    for (const format of ["txt", "md", "docx", "pdf"] as const) {
+      const request = renderTemplate({ templateId: "comparison-report", format, variables });
+      if (request.format === "txt") {
+        expect(request.content).toContain(expectedHeaders.join(" | "));
+      } else if (request.format === "md") {
+        expect(request.content).toContain("| " + expectedHeaders.join(" | ") + " |");
+      } else if (request.format === "docx" || request.format === "pdf") {
+        const tableSection = request.sections.find((section) => section.type === "table");
+        expect(tableSection?.type === "table" ? tableSection.columns : undefined).toEqual(expectedHeaders);
+      } else {
+        throw new Error("Expected a comparison document format.");
+      }
+    }
+  });
+
+  it("rejects an empty explicit first-column header and defaults null to Item", () => {
+    expect(() => renderTemplate({
+      templateId: "comparison-report",
+      format: "xlsx",
+      variables: { ...comparisonVariables, firstColumnHeader: " \t " },
+    })).toThrow(/firstColumnHeader/);
+
+    const request = renderTemplate({
+      templateId: "comparison-report",
+      format: "xlsx",
+      variables: { ...comparisonVariables, firstColumnHeader: null },
+    });
+    expect(request.format === "xlsx" ? request.sheets[0]?.columns[0] : undefined).toBe("Item");
   });
 
   it("preserves comparison scalar types in XLSX and renders them as text elsewhere", async () => {

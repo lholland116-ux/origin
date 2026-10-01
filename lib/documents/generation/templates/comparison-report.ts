@@ -33,6 +33,7 @@ type ComparisonRow = {
 
 export type ComparisonReportVariables = {
   readonly title: string;
+  readonly firstColumnHeader?: string;
   readonly items: readonly ComparedItem[];
   readonly criteria: readonly string[];
   readonly summary: string;
@@ -79,14 +80,28 @@ function displayComparisonCell(value: WorkbookCell): string {
   return value === null ? "" : String(value);
 }
 
+function optionalFirstColumnHeader(
+  record: TemplateVariablesRecord,
+  issues: string[],
+): string | undefined {
+  const value = record.firstColumnHeader;
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !/\S/.test(value)) {
+    issues.push("firstColumnHeader must be null or a non-empty string.");
+    return undefined;
+  }
+  return value;
+}
+
 function parseVariables(record: TemplateVariablesRecord): ComparisonReportVariables {
   const issues: string[] = [];
   rejectUnexpectedKeys(
     record,
-    ["title", "items", "criteria", "summary", "comparisons", "observations", "conclusion", "filename"],
+    ["title", "firstColumnHeader", "items", "criteria", "summary", "comparisons", "observations", "conclusion", "filename"],
     issues,
   );
   const title = requiredString(record, "title", issues);
+  const firstColumnHeader = optionalFirstColumnHeader(record, issues);
   const itemRecords = requiredRecordArray(record, "items", issues);
   const items = itemRecords.map((itemRecord) => {
     rejectUnexpectedKeys(itemRecord, ["name", "description"], issues);
@@ -115,6 +130,7 @@ function parseVariables(record: TemplateVariablesRecord): ComparisonReportVariab
   assertTemplateIssues(issues);
   return {
     title,
+    ...(firstColumnHeader !== undefined ? { firstColumnHeader } : {}),
     items,
     criteria,
     summary,
@@ -130,7 +146,7 @@ function comparisonTable(variables: ComparisonReportVariables): {
   readonly rows: readonly (readonly WorkbookCell[])[];
 } {
   return {
-    columns: ["Item", ...variables.criteria],
+    columns: [variables.firstColumnHeader ?? "Item", ...variables.criteria],
     rows: variables.comparisons.map((row) => [row.item, ...row.values]),
   };
 }
@@ -207,6 +223,7 @@ function textContent(variables: ComparisonReportVariables): string {
     ...variables.items.map((item) => `- ${item.description ? `${item.name}: ${item.description}` : item.name}`),
     "",
     "COMPARISON",
+    table.columns.join(" | "),
     ...table.rows.map((row) => row.join(" | ")),
     "",
     "OBSERVATIONS",
@@ -232,6 +249,7 @@ export const comparisonReportTemplate: DocumentTemplate = {
     { name: "observations", kind: "string[]", description: "Narrative observations." },
   ],
   optionalVariables: [
+    { name: "firstColumnHeader", kind: "string", description: "Optional exact first-column heading; null uses Item." },
     { name: "conclusion", kind: "string", description: "Optional conclusion." },
     { name: "filename", kind: "string", description: "Optional output filename." },
   ],

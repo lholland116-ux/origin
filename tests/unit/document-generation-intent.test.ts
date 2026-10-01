@@ -245,6 +245,9 @@ describe("document generation intent", () => {
     const comparisonReport = templateBranches[2];
     expect(comparisonReport.properties?.templateId?.enum).toEqual(["comparison-report"]);
     expect(comparisonReport.properties?.variables?.properties?.title?.pattern).toBe("\\S");
+    expect(comparisonReport.properties?.variables?.properties?.firstColumnHeader?.type).toEqual(["string", "null"]);
+    expect(comparisonReport.properties?.variables?.properties?.firstColumnHeader?.pattern).toBe("\\S");
+    expect(comparisonReport.properties?.variables?.required).toContain("firstColumnHeader");
     expect(comparisonReport.properties?.variables?.properties?.items?.minItems).toBe(1);
     expect(comparisonReport.properties?.variables?.properties?.items?.items?.properties?.name?.pattern).toBe("\\S");
     expect(comparisonReport.properties?.variables?.properties?.criteria?.minItems).toBe(1);
@@ -541,6 +544,7 @@ describe("document generation intent", () => {
           title: "Typed comparison",
           variables: {
             title: "Typed comparison",
+            firstColumnHeader: "Name",
             items: [{ name: "Alpha", description: null }],
             criteria: ["Quantity", "Unit Price", "Enabled", "Blank", "Reference", "Formula"],
             summary: "A typed comparison.",
@@ -559,7 +563,7 @@ describe("document generation intent", () => {
     })).resolves.toMatchObject({
       templateId: "comparison-report",
       formats: ["xlsx"],
-      variables: { comparisons: [{ item: "Alpha", values }] },
+      variables: { firstColumnHeader: "Name", comparisons: [{ item: "Alpha", values }] },
     });
   });
 
