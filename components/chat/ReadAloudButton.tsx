@@ -11,6 +11,7 @@ import {
   stopReadAloud,
   subscribeToReadAloud,
 } from "@/lib/read-aloud";
+import { getStoredReadAloudPreferences } from "@/lib/read-aloud-preferences";
 import { getChatThemeHoverClass, type ChatTheme } from "@/lib/chat-themes";
 
 type ReadAloudButtonProps = {
@@ -65,7 +66,7 @@ export default function ReadAloudButton({
           if (isSpeaking) {
             stopReadAloud();
           } else {
-            startReadAloud(messageId, text);
+            startReadAloud(messageId, text, getStoredReadAloudPreferences());
           }
         }}
         className={[

@@ -1,5 +1,14 @@
+import {
+  DEFAULT_READ_ALOUD_PREFERENCES,
+  type ReadAloudPreferences,
+  type ReadAloudVoicePreference,
+} from "@/lib/read-aloud-preferences";
+
 let activeReadAloudMessageId: string | null = null;
 const readAloudListeners = new Set<() => void>();
+
+export const READ_ALOUD_PREVIEW_TEXT =
+  "Hello from LVTChat. This is a preview of your selected voice.";
 
 function notifyReadAloudListeners(): void {
   readAloudListeners.forEach((listener) => listener());
@@ -42,6 +51,60 @@ export function subscribeToReadAloud(listener: () => void): () => void {
   return () => readAloudListeners.delete(listener);
 }
 
+export function getAvailableReadAloudVoices(): SpeechSynthesisVoice[] {
+  if (!isReadAloudSupported()) return [];
+
+  try {
+    return Array.from(window.speechSynthesis.getVoices());
+  } catch {
+    return [];
+  }
+}
+
+export function subscribeToReadAloudVoices(
+  listener: (voices: readonly SpeechSynthesisVoice[]) => void,
+): () => void {
+  listener(getAvailableReadAloudVoices());
+  if (!isReadAloudSupported()) return () => undefined;
+
+  const synthesis = window.speechSynthesis;
+  const refresh = () => listener(getAvailableReadAloudVoices());
+  synthesis.addEventListener("voiceschanged", refresh);
+  return () => synthesis.removeEventListener("voiceschanged", refresh);
+}
+
+export function findMatchingReadAloudVoice(
+  preference: ReadAloudVoicePreference | null,
+  voices: readonly SpeechSynthesisVoice[],
+): SpeechSynthesisVoice | null {
+  if (preference === null) return null;
+
+  return (
+    voices.find(
+      (voice) =>
+        voice.voiceURI === preference.voiceURI &&
+        voice.name === preference.name &&
+        voice.lang === preference.lang,
+    ) ??
+    voices.find((voice) => voice.voiceURI === preference.voiceURI) ??
+    null
+  );
+}
+
+function createReadAloudUtterance(
+  text: string,
+  preferences: ReadAloudPreferences,
+): SpeechSynthesisUtterance {
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voice = findMatchingReadAloudVoice(
+    preferences.voice,
+    getAvailableReadAloudVoices(),
+  );
+  if (voice) utterance.voice = voice;
+  utterance.rate = preferences.rate;
+  return utterance;
+}
+
 export function stopReadAloud(): void {
   if (isReadAloudSupported()) {
     window.speechSynthesis.cancel();
@@ -53,7 +116,11 @@ export function stopReadAloud(): void {
   notifyReadAloudListeners();
 }
 
-export function startReadAloud(messageId: string, markdown: string): boolean {
+export function startReadAloud(
+  messageId: string,
+  markdown: string,
+  preferences: ReadAloudPreferences = DEFAULT_READ_ALOUD_PREFERENCES,
+): boolean {
   const text = cleanTextForSpeech(markdown);
 
   if (!isReadAloudSupported() || !text) return false;
@@ -62,7 +129,7 @@ export function startReadAloud(messageId: string, markdown: string): boolean {
   activeReadAloudMessageId = messageId;
   notifyReadAloudListeners();
 
-  const utterance = new SpeechSynthesisUtterance(text);
+  const utterance = createReadAloudUtterance(text, preferences);
   const finish = () => {
     if (activeReadAloudMessageId !== messageId) return;
 
@@ -77,6 +144,26 @@ export function startReadAloud(messageId: string, markdown: string): boolean {
     window.speechSynthesis.speak(utterance);
   } catch {
     finish();
+    return false;
+  }
+
+  return true;
+}
+
+export function previewReadAloud(
+  preferences: ReadAloudPreferences = DEFAULT_READ_ALOUD_PREFERENCES,
+): boolean {
+  if (!isReadAloudSupported()) return false;
+
+  stopReadAloud();
+  const utterance = createReadAloudUtterance(
+    READ_ALOUD_PREVIEW_TEXT,
+    preferences,
+  );
+
+  try {
+    window.speechSynthesis.speak(utterance);
+  } catch {
     return false;
   }
 

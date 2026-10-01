@@ -63,6 +63,7 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor
 import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
 import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
 import ReadAloudButton from "@/components/chat/ReadAloudButton";
+import ReadAloudSettings from "@/components/chat/ReadAloudSettings";
 import { GeneratedDocumentCard, type GeneratedDocumentCardData } from "@/components/chat/GeneratedDocumentCard";
 import { documentFormatFromMimeType, filenameFromContentDisposition, saveDocumentBlob, DocumentDownloadError } from "@/lib/documents/download";
 import { stopReadAloud } from "@/lib/read-aloud";
@@ -5098,6 +5099,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
               />
             </div>
           )}
+
+          <ReadAloudSettings theme={activeTheme} />
 
           <Link
             href="/help"
