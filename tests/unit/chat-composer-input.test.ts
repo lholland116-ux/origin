@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  canAttachLargePasteInMode,
+  canUploadDocumentInMode,
   createPastedTextAttachment,
   getComposerMessageLengthError,
   insertTextAtSelection,
@@ -21,6 +23,23 @@ describe("composer large-input handling", () => {
   it("keeps ordinary pastes inline and converts only oversized pastes", () => {
     expect(shouldConvertLargePasteToAttachment("x".repeat(2000))).toBe(false);
     expect(shouldConvertLargePasteToAttachment("x".repeat(2001))).toBe(true);
+  });
+
+  it("allows governed large-paste attachments in Standard and Web Search, but not Create Image", () => {
+    expect(canAttachLargePasteInMode("standard")).toBe(true);
+    expect(canAttachLargePasteInMode("web_search")).toBe(true);
+    expect(canAttachLargePasteInMode("create_image")).toBe(false);
+    expect(clientSource).toContain(
+      "!canAttachLargePasteInMode(composerPlusMenuMode)",
+    );
+  });
+
+  it("keeps manual document upload unavailable in Web Search", () => {
+    expect(canUploadDocumentInMode("standard", "manual")).toBe(true);
+    expect(canUploadDocumentInMode("web_search", "manual")).toBe(false);
+    expect(canUploadDocumentInMode("web_search", "pasted_text")).toBe(true);
+    expect(canUploadDocumentInMode("create_image", "pasted_text")).toBe(false);
+    expect(clientSource).toContain('handleFilesSelected([pastedFile], "pasted_text")');
   });
 
   it("preserves existing instructions, selection replacement, and exact newlines", () => {
@@ -52,7 +71,7 @@ describe("composer large-input handling", () => {
 
   it("removes browser maxLength truncation and wires the large-paste handler", () => {
     expect(clientSource).toContain("onPaste={handleComposerPaste}");
-    expect(clientSource).toContain("handleFilesSelected([pastedFile])");
+    expect(clientSource).toContain('handleFilesSelected([pastedFile], "pasted_text")');
     expect(clientSource).toContain("setComposerDocuments(sentDocuments)");
     expect(clientSource).not.toContain("maxLength={MAX_INPUT_LENGTH}");
     expect(clientSource).toContain("MAX_REQUEST_MESSAGE_LENGTH = 4000");
@@ -102,7 +121,7 @@ describe("composer large-input handling", () => {
     expect(chatRouteSource).toContain("const documentLimits = getDocumentLimits(plan)");
     expect(chatRouteSource).toContain("DOCUMENT_LIMIT_EXCEEDED");
     expect(chatRouteSource).toContain("FREE_DAILY_MESSAGE_LIMIT ?? 20");
-    expect(clientSource).toContain("Document upload is only available in Standard mode.");
+    expect(clientSource).toContain("Document upload is not available in Create Image mode.");
     expect(clientSource).toContain("Image generation mode does not support file upload.");
     expect(clientSource).toContain("disabled={composerDisabled}");
   });

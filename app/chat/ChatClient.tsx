@@ -311,6 +311,17 @@ export function getComposerPlusMenuActions(
   return ["camera", "photos", "files", "create_image", "web_search"];
 }
 
+export function canAttachLargePasteInMode(mode: ComposerPlusMenuMode): boolean {
+  return mode !== "create_image";
+}
+
+export function canUploadDocumentInMode(
+  mode: ComposerPlusMenuMode,
+  source: "manual" | "pasted_text",
+): boolean {
+  return mode === "standard" || (mode === "web_search" && source === "pasted_text");
+}
+
 export function isCameraCaptureSupported(
   userAgent: string,
   isNativeApp: boolean
@@ -3828,11 +3839,18 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     };
   }
 
-  async function handleFilesSelected(files: File[]): Promise<boolean> {
+  async function handleFilesSelected(
+    files: File[],
+    source: "manual" | "pasted_text" = "manual",
+  ): Promise<boolean> {
     if (isUploadingDocuments) return false;
 
-    if (useWebSearch || useImageGeneration) {
-      setDocumentError("Document upload is only available in Standard mode.");
+    if (!canUploadDocumentInMode(composerPlusMenuMode, source)) {
+      setDocumentError(
+        useImageGeneration
+          ? "Document upload is not available in Create Image mode."
+          : "Document upload is only available in Standard mode.",
+      );
       return false;
     }
 
@@ -3981,10 +3999,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     const documentLimitReached = composerDocuments.length >= pastedDocumentLimits.maxFilesPerMessage;
     const pastedFileTooLarge = pastedFile.size > pastedDocumentLimits.maxFileSizeBytes;
 
-    if (useWebSearch || useImageGeneration || documentLimitReached || pastedFileTooLarge) {
+    if (
+      !canAttachLargePasteInMode(composerPlusMenuMode) ||
+      documentLimitReached ||
+      pastedFileTooLarge
+    ) {
       setInput(nextInput);
       setUiError(
-        useWebSearch || useImageGeneration
+        !canAttachLargePasteInMode(composerPlusMenuMode)
           ? "Large pasted text cannot be attached in this mode. Your full paste remains in the composer; shorten it before sending."
           : documentLimitReached
             ? `You can upload up to ${formatMaxDocumentCount(pastedDocumentLimits.maxFilesPerMessage)} per message.`
@@ -3999,7 +4021,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
 
     pastedTextUploadInFlightRef.current = pastedText;
-    void handleFilesSelected([pastedFile])
+    void handleFilesSelected([pastedFile], "pasted_text")
       .then((accepted) => {
         if (!accepted) preservePastedText();
       })
@@ -4355,8 +4377,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (useWebSearch && (hasImages || composerDocuments.length > 0)) {
-      setUiError("Web Search mode does not support file upload.");
+    if (useWebSearch && hasImages) {
+      setUiError("Web Search mode does not support image upload.");
       return;
     }
 
@@ -5943,7 +5965,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   className="hidden"
                 />
 
-                {!useWebSearch && !useImageGeneration && composerDocuments.length > 0 && (
+                {!useImageGeneration && composerDocuments.length > 0 && (
                   <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="flex flex-wrap gap-2">
                       {composerDocuments.map((doc) => (

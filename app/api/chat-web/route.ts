@@ -2,6 +2,11 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
+import {
+  buildDocumentContext,
+  DocumentContextLimitError,
+} from "@/lib/documents/prepare-context";
+import { formatMaxDocumentCount, getDocumentLimits } from "@/lib/documents/config";
 
 export const runtime = "nodejs";
 
@@ -9,6 +14,10 @@ const FREE_DAILY_LIMIT = Number(process.env.FREE_DAILY_MESSAGE_LIMIT ?? 20);
 const PRO_DAILY_LIMIT = Number(process.env.PRO_DAILY_MESSAGE_LIMIT ?? 300);
 
 const MAX_MESSAGE_LENGTH = 4000;
+const MAX_DOCUMENT_IDS = 10;
+const PASTED_TEXT_FILE_NAME = "pasted-text.txt";
+const PASTED_TEXT_MIME_TYPE = "text/plain";
+const MIN_PASTED_TEXT_BYTES = 2001;
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_RETURNED_SOURCES = 5;
 const IS_DEV = process.env.NODE_ENV === "development";
@@ -106,7 +115,10 @@ type ChatRequestBody = {
   conversationId?: string;
   message?: string;
   regenerate?: boolean;
+  documentIds?: string[];
 };
+
+type Plan = "free" | "pro";
 
 type DbMessage = {
   id: string;
@@ -124,6 +136,23 @@ type ConversationRow = {
 type ProfileRow = {
   plan: "free" | "pro" | string | null;
 };
+
+type StoredDocument = {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  extraction_status: "ready";
+  extraction_error: string | null;
+  conversation_id: string | null;
+};
+
+class WebSearchDocumentAdmissionError extends Error {
+  constructor() {
+    super("Web Search only supports large pasted-text attachments.");
+    this.name = "WebSearchDocumentAdmissionError";
+  }
+}
 
 type ModelInputMessage = {
   role: "user" | "assistant";
@@ -170,6 +199,76 @@ function getPlanLimit(plan: ProfileRow["plan"]): number {
   return plan === "pro" ? PRO_DAILY_LIMIT : FREE_DAILY_LIMIT;
 }
 
+function normalizePlan(plan: ProfileRow["plan"]): Plan {
+  return plan === "pro" ? "pro" : "free";
+}
+
+function normalizeDocumentIds(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+
+  return Array.from(
+    new Set(
+      input
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, MAX_DOCUMENT_IDS);
+}
+
+function buildStoredUserContent(message: string, documents: StoredDocument[]): string {
+  if (documents.length === 0) return message;
+
+  const documentNames = documents.map((document) => document.file_name).join(", ");
+  return [message, `[Documents attached: ${documentNames}]`]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+async function loadDocumentArtifacts(params: {
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+  documentIds: string[];
+}): Promise<{ persistedDocuments: StoredDocument[]; documentContext: string }> {
+  const { supabase, userId, documentIds } = params;
+
+  if (documentIds.length === 0) {
+    return { persistedDocuments: [], documentContext: "" };
+  }
+
+  const { data, error } = await supabase
+    .from("documents")
+    .select(
+      "id, file_name, mime_type, size_bytes, extraction_status, extraction_error, conversation_id, extracted_text",
+    )
+    .eq("user_id", userId)
+    .in("id", documentIds)
+    .eq("extraction_status", "ready");
+
+  if (error) {
+    throw new Error(`Failed to load document context: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as Array<StoredDocument & { extracted_text: string | null }>;
+
+  if (
+    rows.length !== documentIds.length ||
+    rows.some(
+      (document) =>
+        document.file_name !== PASTED_TEXT_FILE_NAME ||
+        document.mime_type !== PASTED_TEXT_MIME_TYPE ||
+        document.size_bytes < MIN_PASTED_TEXT_BYTES,
+    )
+  ) {
+    throw new WebSearchDocumentAdmissionError();
+  }
+
+  return {
+    persistedDocuments: rows.map(({ extracted_text: _, ...document }) => document),
+    documentContext: buildDocumentContext(rows),
+  };
+}
+
 function sanitizeTitle(title: string, fallback: string): string {
   const cleaned = title.replace(/^["']|["']$/g, "").trim();
   return cleaned.length > 0 ? cleaned.slice(0, 80) : fallback;
@@ -183,6 +282,22 @@ function buildWebInstructions(): string {
     TONE_LAYER_WEB,
     MODEL_LAYER_WEB,
   ].join("\n\n");
+}
+
+function buildWebInput(
+  recentMessages: ModelInputMessage[],
+  message: string,
+  documentContext: string,
+): ModelInputMessage[] {
+  if (!documentContext) return recentMessages;
+
+  return [
+    ...recentMessages.slice(0, -1),
+    {
+      role: "user",
+      content: `${documentContext}\n\nUser question:\n${message}`,
+    },
+  ];
 }
 
 function safeLower(value: string): string {
@@ -339,12 +454,13 @@ async function generateConversationTitle(message: string): Promise<string> {
 
 async function buildAssistantResponse(
   recentMessages: ModelInputMessage[],
-  message: string
+  message: string,
+  documentContext: string,
 ): Promise<WebRouteSuccessResponse> {
   const response = await openai.responses.create({
     model: MODEL,
     instructions: buildWebInstructions(),
-    input: recentMessages,
+    input: buildWebInput(recentMessages, message, documentContext),
     tools: [{ type: "web_search_preview" }],
     include: ["web_search_call.action.sources"],
     store: false,
@@ -408,14 +524,15 @@ export async function POST(req: Request) {
 
     const message = normalizeMessage(body.message);
     const regenerate = Boolean(body.regenerate);
+    const documentIds = normalizeDocumentIds(body.documentIds);
 
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);
     }
 
-    if (!regenerate && !message) {
+    if (!regenerate && !message && documentIds.length === 0) {
       return jsonResponse(
-        { error: "message is required unless regenerate is true." },
+        { error: "message or documentIds is required unless regenerate is true." },
         400
       );
     }
@@ -452,8 +569,21 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Failed to read usage." }, 500);
     }
 
+    const plan = normalizePlan(profile.plan);
     const currentCount = usageRow?.message_count ?? 0;
-    const dailyLimit = getPlanLimit(profile.plan);
+    const dailyLimit = getPlanLimit(plan);
+    const documentLimits = getDocumentLimits(plan);
+
+    if (documentIds.length > documentLimits.maxFilesPerMessage) {
+      return jsonResponse(
+        {
+          error: `You can upload up to ${formatMaxDocumentCount(documentLimits.maxFilesPerMessage)} per message.`,
+          code: "DOCUMENT_LIMIT_EXCEEDED",
+          plan,
+        },
+        400,
+      );
+    }
 
     if (!IS_DEV && currentCount >= dailyLimit) {
       return jsonResponse(
@@ -468,6 +598,31 @@ export async function POST(req: Request) {
         },
         403
       );
+    }
+
+    let persistedDocuments: StoredDocument[] = [];
+    let documentContext = "";
+
+    try {
+      const artifacts = await loadDocumentArtifacts({
+        supabase,
+        userId: user.id,
+        documentIds,
+      });
+      persistedDocuments = artifacts.persistedDocuments;
+      documentContext = artifacts.documentContext;
+    } catch (error) {
+      console.error("Web Search document context load error:", error);
+      if (error instanceof WebSearchDocumentAdmissionError) {
+        return jsonResponse(
+          { error: error.message, code: "WEB_SEARCH_DOCUMENT_NOT_ALLOWED" },
+          400,
+        );
+      }
+      if (error instanceof DocumentContextLimitError) {
+        return jsonResponse({ error: error.message, code: "DOCUMENT_CONTEXT_TOO_LARGE" }, 413);
+      }
+      return jsonResponse({ error: "Failed to load document context." }, 500);
     }
 
     const { error: usageWriteError } = await supabase.from("usage").upsert(
@@ -520,7 +675,8 @@ export async function POST(req: Request) {
         conversation_id: conversationId,
         user_id: user.id,
         role: "user",
-        content: message,
+        content: buildStoredUserContent(message, persistedDocuments),
+        documents: persistedDocuments,
       });
 
       if (insertUserError) {
@@ -560,7 +716,8 @@ export async function POST(req: Request) {
 
     const assistantResponse = await buildAssistantResponse(
       recentMessages,
-      message
+      message,
+      documentContext,
     );
 
     const { error: insertAssistantError } = await supabase

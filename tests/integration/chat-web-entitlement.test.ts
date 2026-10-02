@@ -11,6 +11,7 @@ type QueryResult = {
 type MockQuery = {
   select: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  in: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
@@ -46,7 +47,19 @@ vi.mock("../../lib/supabase/server", () => ({
 vi.mock("../../lib/openai", () => ({ openai: mocks.openai }));
 
 vi.mock("../../lib/documents/prepare-context", () => ({
-  buildDocumentContext: vi.fn(async () => ""),
+  buildDocumentContext: vi.fn((documents: Array<{
+    id: string;
+    file_name: string;
+    extracted_text: string | null;
+  }>) =>
+    documents
+      .filter((document) => document.extracted_text?.trim())
+      .map(
+        (document) =>
+          `Document ID: ${document.id}\nFile Name: ${document.file_name}\nContent:\n${document.extracted_text}`,
+      )
+      .join("\n\n---\n\n"),
+  ),
   DocumentContextLimitError: class DocumentContextLimitError extends Error {},
 }));
 
@@ -58,6 +71,10 @@ vi.mock("../../lib/utils", () => ({
 
 import { POST as postStandard } from "../../app/api/chat/route";
 import { POST as postWebSearch } from "../../app/api/chat-web/route";
+import {
+  buildDocumentContext,
+  DocumentContextLimitError,
+} from "../../lib/documents/prepare-context";
 
 function query(config: {
   awaitResult: QueryResult;
@@ -69,6 +86,7 @@ function query(config: {
 
   queryBuilder.select = vi.fn(() => queryBuilder);
   queryBuilder.eq = vi.fn(() => queryBuilder);
+  queryBuilder.in = vi.fn(() => queryBuilder);
   queryBuilder.order = vi.fn(() => queryBuilder);
   queryBuilder.limit = vi.fn(() => queryBuilder);
   queryBuilder.maybeSingle = vi.fn(async () => config.maybeSingleResult ?? config.awaitResult);
@@ -87,6 +105,7 @@ function setup(params: {
   plan?: "free" | "pro";
   usageCount?: number;
   usageError?: unknown;
+  documentRows?: unknown[];
 }) {
   const messages = [
     {
@@ -120,6 +139,23 @@ function setup(params: {
     }),
     messages: query({
       awaitResult: { data: messages, error: null },
+    }),
+    documents: query({
+      awaitResult: {
+        data: params.documentRows ?? [
+          {
+            id: "document-1",
+            file_name: "pasted-text.txt",
+            mime_type: "text/plain",
+            size_bytes: 4001,
+            extraction_status: "ready",
+            extraction_error: null,
+            conversation_id: CONVERSATION_ID,
+            extracted_text: "Full pasted text for web-search context.",
+          },
+        ],
+        error: null,
+      },
     }),
   };
 
@@ -194,6 +230,94 @@ describe("Free Web Search entitlement", () => {
       expect.objectContaining({ model: "gpt-5.6-luna" }),
     );
     expect(JSON.stringify(body)).not.toContain("PRO_REQUIRED");
+  });
+
+  it("includes a ready pasted-text attachment in Web Search model context", async () => {
+    const { queries } = setup({ plan: "free", usageCount: 0 });
+
+    const response = await postWebSearch(
+      request({
+        message: "Use the attached text with current information.",
+        documentIds: ["document-1"],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(queries.documents.in).toHaveBeenCalledWith("id", ["document-1"]);
+    expect(queries.messages.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "user",
+        documents: [expect.objectContaining({ file_name: "pasted-text.txt" })],
+      }),
+    );
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("Full pasted text for web-search context."),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("rejects an ordinary manual document from Web Search without consuming quota", async () => {
+    const { queries } = setup({
+      plan: "free",
+      usageCount: 0,
+      documentRows: [
+        {
+          id: "manual-document-1",
+          file_name: "meeting-notes.txt",
+          mime_type: "text/plain",
+          size_bytes: 4001,
+          extraction_status: "ready",
+          extraction_error: null,
+          conversation_id: CONVERSATION_ID,
+          extracted_text: "Ordinary manually uploaded document content.",
+        },
+      ],
+    });
+
+    const response = await postWebSearch(
+      request({ documentIds: ["manual-document-1"] }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({ code: "WEB_SEARCH_DOCUMENT_NOT_ALLOWED" });
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+  });
+
+  it("does not consume quota when Web Search document context cannot be prepared", async () => {
+    const { queries } = setup({ plan: "free", usageCount: 0 });
+    vi.mocked(buildDocumentContext).mockImplementationOnce(() => {
+      throw new DocumentContextLimitError();
+    });
+
+    const response = await postWebSearch(
+      request({ documentIds: ["document-1"] }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(413);
+    expect(body).toMatchObject({ code: "DOCUMENT_CONTEXT_TOO_LARGE" });
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Web Search inline-message limit at 4,000 characters", async () => {
+    const { queries } = setup({ plan: "free", usageCount: 0 });
+
+    const response = await postWebSearch(request({ message: "x".repeat(4001) }));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ error: "Message exceeds 4000 characters." });
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
   });
 
   it("accepts Free Web Search at 19 of 20 messages", async () => {
