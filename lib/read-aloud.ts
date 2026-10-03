@@ -120,7 +120,10 @@ function createReadAloudUtterance(
     preferences.voice,
     getAvailableReadAloudVoices(),
   );
-  if (voice) utterance.voice = voice;
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang.replaceAll("_", "-");
+  }
   utterance.rate = preferences.rate;
   return utterance;
 }

@@ -24,6 +24,7 @@ class FakeUtterance {
   onend: (() => void) | null = null;
   onerror: (() => void) | null = null;
   voice: SpeechSynthesisVoice | null = null;
+  lang = "";
   rate = 1;
 
   constructor(public readonly text: string) {}
@@ -174,7 +175,31 @@ describe("read aloud", () => {
       startReadAloud("message-a", "Response", { voice: null, rate: 0.75 }),
     ).toBe(true);
     expect(utterances[0]?.voice).toBeNull();
+    expect(utterances[0]?.lang).toBe("");
     expect(utterances[0]?.rate).toBe(0.75);
+  });
+
+  it("binds and normalizes the selected voice language for browser speech", () => {
+    const voice = fakeVoice(
+      "voice:bg",
+      "Bulgarian Bulgaria",
+      "bg_BG",
+    );
+    const { utterances } = installSpeechMocks([voice]);
+
+    expect(
+      startReadAloud("message-bg", "Response", {
+        voice: {
+          voiceURI: voice.voiceURI,
+          name: voice.name,
+          lang: voice.lang,
+        },
+        rate: 1,
+      }),
+    ).toBe(true);
+
+    expect(utterances[0]?.voice).toBe(voice);
+    expect(utterances[0]?.lang).toBe("bg-BG");
   });
 
   it("restores exact and voiceURI-matched saved voices", () => {
