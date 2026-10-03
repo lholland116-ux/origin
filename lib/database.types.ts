@@ -34,6 +34,60 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_request_telemetry: {
+        Row: {
+          attempt_kind: string
+          cached_input_tokens: number | null
+          had_image: boolean
+          id: number
+          input_tokens: number | null
+          latency_ms: number
+          model: string
+          occurred_at: string
+          outcome: string
+          output_tokens: number | null
+          plan: string
+          reasoning_effort: string
+          reasoning_tokens: number | null
+          route: string
+          total_tokens: number | null
+        }
+        Insert: {
+          attempt_kind: string
+          cached_input_tokens?: number | null
+          had_image?: boolean
+          id?: never
+          input_tokens?: number | null
+          latency_ms: number
+          model: string
+          occurred_at?: string
+          outcome: string
+          output_tokens?: number | null
+          plan: string
+          reasoning_effort: string
+          reasoning_tokens?: number | null
+          route: string
+          total_tokens?: number | null
+        }
+        Update: {
+          attempt_kind?: string
+          cached_input_tokens?: number | null
+          had_image?: boolean
+          id?: never
+          input_tokens?: number | null
+          latency_ms?: number
+          model?: string
+          occurred_at?: string
+          outcome?: string
+          output_tokens?: number | null
+          plan?: string
+          reasoning_effort?: string
+          reasoning_tokens?: number | null
+          route?: string
+          total_tokens?: number | null
+        }
+        Relationships: []
+      }
       auth_events: {
         Row: {
           created_at: string
