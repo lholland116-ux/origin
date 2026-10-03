@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -9,6 +10,10 @@ const STRIPE_API_VERSION = "2026-04-22.dahlia";
 
 type ProfileRow = {
   plan: string | null;
+  stripe_customer_id: string | null;
+};
+
+type StripeCustomerProfileRow = {
   stripe_customer_id: string | null;
 };
 
@@ -92,15 +97,39 @@ export async function POST() {
       const customer = await findStripeCustomerByEmail(stripe, user.email);
 
       if (customer?.id) {
+        // Preserve the existing portal behavior for this request even if the
+        // best-effort durable backfill encounters a transient database error.
         stripeCustomerId = customer.id;
 
-        const { error: updateError } = await supabase
+        const admin = createAdminClient();
+        const { data: claimedProfile, error: updateError } = await admin
           .from("profiles")
-          .update({ stripe_customer_id: stripeCustomerId })
-          .eq("id", user.id);
+          .update({ stripe_customer_id: customer.id })
+          .eq("id", user.id)
+          .is("stripe_customer_id", null)
+          .select("stripe_customer_id")
+          .maybeSingle<StripeCustomerProfileRow>();
 
         if (updateError) {
           console.error("Failed to backfill Stripe customer ID:", updateError);
+        } else if (claimedProfile?.stripe_customer_id) {
+          stripeCustomerId = claimedProfile.stripe_customer_id;
+        } else {
+          const { data: currentProfile, error: currentProfileError } =
+            await admin
+              .from("profiles")
+              .select("stripe_customer_id")
+              .eq("id", user.id)
+              .maybeSingle<StripeCustomerProfileRow>();
+
+          if (currentProfileError) {
+            console.error(
+              "Failed to resolve the current Stripe customer ID:",
+              currentProfileError,
+            );
+          } else if (currentProfile?.stripe_customer_id) {
+            stripeCustomerId = currentProfile.stripe_customer_id;
+          }
         }
       }
     }
