@@ -26,6 +26,7 @@ function record(
     route: "standard",
     attemptKind: "primary",
     model: "gpt-5.6-luna",
+    webSearchCalls: 0,
     reasoningEffort: "high",
     plan: "pro",
     outcome: "success",
@@ -74,6 +75,7 @@ describe("writeAiRequestTelemetry", () => {
       route: "standard",
       attempt_kind: "primary",
       model: "gpt-5.6-luna",
+      web_search_calls: 0,
       reasoning_effort: "high",
       plan: "pro",
       outcome: "success",
@@ -118,6 +120,14 @@ describe("writeAiRequestTelemetry", () => {
         }),
       );
     }
+  });
+
+  it("persists each attempt's actual Web Search call count", async () => {
+    configureInsert();
+
+    await writeAiRequestTelemetry(record({ route: "web_search", webSearchCalls: 2 }));
+
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({ web_search_calls: 2 }));
   });
 
   it("clears the deadline after an insert completes before timeout", async () => {

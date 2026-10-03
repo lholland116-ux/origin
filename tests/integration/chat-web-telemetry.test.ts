@@ -169,6 +169,7 @@ describe("POST /api/chat-web telemetry", () => {
     expect(response.status).toBe(200);
     expect(telemetryCalls()).toEqual([expect.objectContaining({
       route: "web_search", attemptKind: "primary", model: "gpt-6-luna",
+      webSearchCalls: 0,
       reasoningEffort: "medium", plan: "free", outcome: "success", hadImage: false,
       inputTokens: 100, cachedInputTokens: 20, outputTokens: 80, reasoningTokens: 30, totalTokens: 180,
       latencyMs: expect.any(Number),
@@ -176,7 +177,7 @@ describe("POST /api/chat-web telemetry", () => {
     expect(telemetryCalls()[0]?.latencyMs).toBeGreaterThanOrEqual(0);
     expect(Number.isInteger(telemetryCalls()[0]?.latencyMs)).toBe(true);
     expect(Object.keys(telemetryCalls()[0] ?? {})).toEqual([
-      "route", "attemptKind", "model", "reasoningEffort", "plan", "outcome", "latencyMs", "hadImage",
+      "route", "attemptKind", "model", "webSearchCalls", "reasoningEffort", "plan", "outcome", "latencyMs", "hadImage",
       "inputTokens", "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens",
     ]);
     expect(JSON.stringify(telemetryCalls()[0])).not.toContain(USER_ID);
@@ -187,9 +188,51 @@ describe("POST /api/chat-web telemetry", () => {
   it("maps absent usage to null token fields", async () => {
     await POST(request());
     expect(telemetryCalls()[0]).toMatchObject({
-      outcome: "success", inputTokens: null, cachedInputTokens: null, outputTokens: null,
+      outcome: "success", webSearchCalls: 0, inputTokens: null, cachedInputTokens: null, outputTokens: null,
       reasoningTokens: null, totalTokens: null,
     });
+  });
+
+  it("counts only distinct chargeable search actions and ignores open/find actions", async () => {
+    const searchOne = { id: "search-1", type: "web_search_call", action: { type: "search" } };
+    mocks.openai.responses.create.mockResolvedValueOnce(primaryResponse({
+      output: [
+        searchOne,
+        { ...searchOne },
+        { id: "open-1", type: "web_search_call", action: { type: "open_page" } },
+        { id: "find-1", type: "web_search_call", action: { type: "find_in_page" } },
+        { id: "search-2", type: "web_search_call", action: { type: "search" } },
+      ],
+    }));
+
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(telemetryCalls()[0]).toMatchObject({ route: "web_search", webSearchCalls: 2 });
+  });
+
+  it.each([
+    ["open_page", { type: "open_page" }],
+    ["find_in_page", { type: "find_in_page" }],
+  ])("does not count a %s action as a chargeable search", async (_name, action) => {
+    mocks.openai.responses.create.mockResolvedValueOnce(primaryResponse({
+      output: [{ id: "non-search-1", type: "web_search_call", action }],
+    }));
+
+    await POST(request());
+    expect(telemetryCalls()[0]).toMatchObject({ webSearchCalls: 0 });
+  });
+
+  it("records each search action found in a failed or incomplete provider response", async () => {
+    mocks.openai.responses.create.mockResolvedValueOnce(primaryResponse({
+      status: "incomplete",
+      output_text: "",
+      output: [
+        { id: "search-1", type: "web_search_call", action: { type: "search" } },
+      ],
+    }));
+
+    await POST(request());
+    expect(telemetryCalls()[0]).toMatchObject({ outcome: "incomplete", webSearchCalls: 1 });
   });
 
   it("measures latency only from immediately before provider create until it settles", async () => {

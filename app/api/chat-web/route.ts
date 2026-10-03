@@ -398,6 +398,29 @@ function extractSources(response: unknown): SourceItem[] {
   return sources;
 }
 
+function countChargeableWebSearchCalls(output: readonly unknown[] | undefined): number {
+  const seenItemIds = new Set<string>();
+  let count = 0;
+
+  for (const item of output ?? []) {
+    const typedItem = item as {
+      id?: unknown;
+      type?: unknown;
+      action?: { type?: unknown };
+    };
+    if (typedItem?.type !== "web_search_call" || typedItem.action?.type !== "search") {
+      continue;
+    }
+
+    const itemId = typeof typedItem.id === "string" ? typedItem.id.trim() : "";
+    if (itemId && seenItemIds.has(itemId)) continue;
+    if (itemId) seenItemIds.add(itemId);
+    count += 1;
+  }
+
+  return count;
+}
+
 function compactSources(sources: SourceItem[]): {
   sources: SourceItem[];
   sourceCount: number;
@@ -493,6 +516,7 @@ async function buildAssistantResponse(
   onProviderSettled: (params: {
     outcome: AiTelemetryOutcome;
     startedAt: number;
+    webSearchCalls: number;
     usage?: OpenAIResponseUsage | null;
   }) => void,
 ): Promise<WebRouteSuccessResponse> {
@@ -515,13 +539,15 @@ async function buildAssistantResponse(
       store: false,
     });
   } catch (error) {
-    onProviderSettled({ outcome: "api_error", startedAt: providerStartedAt });
+    onProviderSettled({ outcome: "api_error", startedAt: providerStartedAt, webSearchCalls: 0 });
     throw error;
   }
 
+  const webSearchCalls = countChargeableWebSearchCalls(response.output);
   onProviderSettled({
     outcome: classifyPrimaryProviderOutcome(response),
     startedAt: providerStartedAt,
+    webSearchCalls,
     usage: response.usage,
   });
 
@@ -786,6 +812,7 @@ export async function POST(req: Request) {
     function schedulePrimaryTelemetry(params: {
       outcome: AiTelemetryOutcome;
       startedAt: number;
+      webSearchCalls: number;
       usage?: OpenAIResponseUsage | null;
     }): void {
       if (primaryTelemetryRecorded) return;
@@ -795,6 +822,7 @@ export async function POST(req: Request) {
         route: "web_search",
         attemptKind: "primary",
         model: chatConfig.model,
+        webSearchCalls: params.webSearchCalls,
         reasoningEffort,
         plan,
         outcome: params.outcome,

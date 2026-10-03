@@ -189,6 +189,7 @@ describe("POST /api/chat telemetry", () => {
         route: "standard",
         attemptKind: "primary",
         model: "gpt-6-luna",
+        webSearchCalls: 0,
         reasoningEffort: "medium",
         plan: "free",
         outcome: "success",
@@ -203,7 +204,7 @@ describe("POST /api/chat telemetry", () => {
     ]);
     expect(telemetryCalls()[0]?.latencyMs).toBeGreaterThanOrEqual(0);
     expect(Object.keys(telemetryCalls()[0] ?? {})).toEqual([
-      "route", "attemptKind", "model", "reasoningEffort", "plan", "outcome",
+      "route", "attemptKind", "model", "webSearchCalls", "reasoningEffort", "plan", "outcome",
       "latencyMs", "hadImage", "inputTokens", "cachedInputTokens", "outputTokens",
       "reasoningTokens", "totalTokens",
     ]);
@@ -375,11 +376,12 @@ describe("POST /api/chat telemetry", () => {
     expect(await response.text()).toContain("A complete image analysis.");
 
     expect(telemetryCalls()).toEqual([
-      expect.objectContaining({ attemptKind: "primary", outcome: "success", hadImage: true }),
+      expect.objectContaining({ attemptKind: "primary", outcome: "success", hadImage: true, webSearchCalls: 0 }),
       expect.objectContaining({
         attemptKind: "image_retry",
         outcome: "success",
         hadImage: true,
+        webSearchCalls: 0,
         inputTokens: 14,
         cachedInputTokens: 2,
         outputTokens: 30,
@@ -408,7 +410,7 @@ describe("POST /api/chat telemetry", () => {
     const [primary, retry] = telemetryCalls();
     expect(retry).toMatchObject({
       attemptKind: "image_retry", model: primary?.model, reasoningEffort: primary?.reasoningEffort,
-      hadImage: true, latencyMs: 29,
+      hadImage: true, webSearchCalls: 0, latencyMs: 29,
     });
     now.mockRestore();
   });

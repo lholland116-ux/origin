@@ -1238,6 +1238,7 @@ export async function POST(req: Request) {
         route: "standard",
         attemptKind: params.attemptKind,
         model: params.model,
+        webSearchCalls: 0,
         reasoningEffort,
         plan,
         outcome: params.outcome,

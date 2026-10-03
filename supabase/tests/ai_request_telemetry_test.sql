@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(55);
+select plan(62);
 
 select has_table(
   'public',
@@ -44,6 +44,23 @@ select has_column('public', 'ai_request_telemetry', 'cached_input_tokens', 'tele
 select has_column('public', 'ai_request_telemetry', 'output_tokens', 'telemetry records output tokens');
 select has_column('public', 'ai_request_telemetry', 'reasoning_tokens', 'telemetry records reasoning tokens');
 select has_column('public', 'ai_request_telemetry', 'total_tokens', 'telemetry records total tokens');
+select has_column('public', 'ai_request_telemetry', 'web_search_calls', 'telemetry records chargeable Web Search calls');
+select col_type_is('public', 'ai_request_telemetry', 'web_search_calls', 'integer', 'Web Search call counts use integers');
+select col_has_default('public', 'ai_request_telemetry', 'web_search_calls', 'Web Search call counts default to zero');
+select is(
+  (select is_nullable from information_schema.columns where table_schema = 'public' and table_name = 'ai_request_telemetry' and column_name = 'web_search_calls'),
+  'NO',
+  'Web Search call counts are not nullable'
+);
+select ok(
+  exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.ai_request_telemetry'::regclass
+      and conname = 'ai_request_telemetry_web_search_calls_check'
+      and pg_get_constraintdef(oid) ilike '%web_search_calls >= 0%'
+  ),
+  'Web Search call counts have a nonnegative constraint'
+);
 
 select is(
   (select is_nullable from information_schema.columns where table_schema = 'public' and table_name = 'ai_request_telemetry' and column_name = 'input_tokens'),
@@ -94,6 +111,11 @@ select is(
   (select count(*) from public.ai_request_telemetry),
   6::bigint,
   'all six frozen provider reasoning efforts are accepted'
+);
+select is(
+  (select min(web_search_calls) from public.ai_request_telemetry),
+  0,
+  'omitted Web Search call counts default to zero'
 );
 
 select ok(
@@ -169,6 +191,10 @@ select throws_ok(
   $$insert into public.ai_request_telemetry (route, attempt_kind, model, reasoning_effort, plan, outcome, latency_ms, total_tokens) values ('standard', 'primary', 'gpt-5.6-luna', 'medium', 'free', 'success', 1, -1)$$,
   '23514', null, 'total token check rejects negative values'
 );
+select throws_ok(
+  $$insert into public.ai_request_telemetry (route, attempt_kind, model, reasoning_effort, plan, outcome, latency_ms, web_search_calls) values ('web_search', 'primary', 'gpt-6-luna', 'medium', 'free', 'success', 1, -1)$$,
+  '23514', null, 'Web Search call check rejects negative values'
+);
 
 select ok(
   (select relrowsecurity from pg_catalog.pg_class where oid = 'public.ai_request_telemetry'::regclass),
@@ -231,7 +257,7 @@ select is(
     from information_schema.columns
     where table_schema = 'public' and table_name = 'ai_request_telemetry'
   ),
-  array['id', 'occurred_at', 'route', 'attempt_kind', 'model', 'reasoning_effort', 'plan', 'outcome', 'latency_ms', 'had_image', 'input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens', 'total_tokens']::text[],
+  array['id', 'occurred_at', 'route', 'attempt_kind', 'model', 'reasoning_effort', 'plan', 'outcome', 'latency_ms', 'had_image', 'input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens', 'total_tokens', 'web_search_calls']::text[],
   'telemetry table contains only the privacy-minimized contract columns'
 );
 

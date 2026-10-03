@@ -132,6 +132,7 @@ describe("AiRequestTelemetryRecord", () => {
       route: "standard",
       attemptKind: "primary",
       model: "gpt-5.6-luna",
+      webSearchCalls: 0,
       reasoningEffort: "max",
       plan: "free",
       outcome: "success",
@@ -154,6 +155,7 @@ describe("AiRequestTelemetryRecord", () => {
       "reasoningTokens",
       "route",
       "totalTokens",
+      "webSearchCalls",
     ]);
   });
 });

@@ -15,7 +15,7 @@ const FIRST = "2026-01-01T00:00:00.000Z";
 const SECOND = "2026-01-01T00:00:01.000Z";
 
 function telemetryRow(id: number, occurredAt = FIRST) {
-  return { id, occurred_at: occurredAt, route: "standard", attempt_kind: "primary", model: "model-a", reasoning_effort: "medium", plan: "free", outcome: "success", latency_ms: 1, had_image: false, input_tokens: null, cached_input_tokens: null, output_tokens: null, reasoning_tokens: null, total_tokens: null };
+  return { id, occurred_at: occurredAt, route: "standard", attempt_kind: "primary", model: "model-a", reasoning_effort: "medium", plan: "free", outcome: "success", latency_ms: 1, had_image: false, input_tokens: null, cached_input_tokens: null, output_tokens: null, reasoning_tokens: null, total_tokens: null, web_search_calls: 0 };
 }
 
 function configure() {
@@ -76,7 +76,7 @@ describe("AI telemetry operations", () => {
     ];
     const summary = await getAiTelemetrySummary({ from: new Date(FIRST), to: new Date("2026-01-02") });
     expect(summary.totalProviderInvocations).toBe(2_000);
-    expect(mocks.selectedColumns[1]).toBe("id,occurred_at,route,attempt_kind,model,reasoning_effort,plan,outcome,latency_ms,had_image,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens");
+    expect(mocks.selectedColumns[1]).toBe("id,occurred_at,route,attempt_kind,model,reasoning_effort,plan,outcome,latency_ms,had_image,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,web_search_calls");
     expect(mocks.selectedColumns).not.toContain("user_id");
     expect(mocks.or).toHaveBeenNthCalledWith(1, `occurred_at.lt.${SECOND},and(occurred_at.eq.${SECOND},id.lte.2000)`);
     expect(mocks.or).toHaveBeenNthCalledWith(2, expect.stringContaining(`occurred_at.eq.${FIRST},id.gt.1000`));

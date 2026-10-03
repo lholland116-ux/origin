@@ -12,7 +12,7 @@ export const AI_TELEMETRY_DEFAULT_RETENTION_DAYS = 90;
 export const AI_TELEMETRY_DEFAULT_RETENTION_BATCH_SIZE = 1000;
 export const AI_TELEMETRY_MAX_RETENTION_BATCH_SIZE = 5000;
 
-const ANALYTICS_COLUMNS = "id,occurred_at,route,attempt_kind,model,reasoning_effort,plan,outcome,latency_ms,had_image,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens";
+const ANALYTICS_COLUMNS = "id,occurred_at,route,attempt_kind,model,reasoning_effort,plan,outcome,latency_ms,had_image,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,web_search_calls";
 
 type AiTelemetryCursorRow = AiTelemetryAnalyticsRow & Readonly<{
   id: number;

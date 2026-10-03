@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { summarizeAiTelemetry, type AiTelemetryAnalyticsRow } from "@/lib/ai/telemetry-analytics";
-import type { AiTelemetryPricingEntry } from "@/lib/ai/telemetry-pricing";
+import type { AiTelemetryPricingEntry, AiTelemetryToolPricingEntry } from "@/lib/ai/telemetry-pricing";
 
 const PRICE: AiTelemetryPricingEntry = {
   provider: "openai", model: "model-a", version: "v1", effectiveFrom: "2026-01-01T00:00:00.000Z", effectiveTo: null,
   inputNanoUsdPerToken: BigInt(10), cachedInputNanoUsdPerToken: BigInt(2), outputNanoUsdPerToken: BigInt(20),
+};
+
+const WEB_SEARCH_PRICE: AiTelemetryToolPricingEntry = {
+  provider: "openai", tool: "web_search", version: "search-v1",
+  effectiveFrom: "2026-01-01T00:00:00.000Z", effectiveTo: null,
+  nanoUsdPerCall: BigInt(10_000_000),
 };
 
 function row(overrides: Partial<AiTelemetryAnalyticsRow> = {}): AiTelemetryAnalyticsRow {
@@ -12,6 +18,7 @@ function row(overrides: Partial<AiTelemetryAnalyticsRow> = {}): AiTelemetryAnaly
     occurred_at: "2026-01-15T00:00:00.000Z", route: "standard", attempt_kind: "primary", model: "model-a",
     reasoning_effort: "medium", plan: "free", outcome: "success", latency_ms: 10, had_image: false,
     input_tokens: 10, cached_input_tokens: 2, output_tokens: 3, reasoning_tokens: 1, total_tokens: 13,
+    web_search_calls: 0,
     ...overrides,
   };
 }
@@ -20,6 +27,7 @@ describe("summarizeAiTelemetry", () => {
   it("represents an empty dataset explicitly", () => {
     const summary = summarizeAiTelemetry([]);
     expect(summary.totalProviderInvocations).toBe(0);
+    expect(summary.totalWebSearchCalls).toBe(0);
     expect(summary.observedImageRetryRate).toBeNull();
     expect(summary.tokens.input.coverageRate).toBeNull();
     expect(summary.costs.costCoverageRate).toBeNull();
@@ -101,5 +109,23 @@ describe("summarizeAiTelemetry", () => {
     expect(changedBreakdowns.costs.calculableProviderCostNanoUsd).toBe(
       baseline.costs.calculableProviderCostNanoUsd,
     );
+  });
+
+  it("includes actual Web Search tool fees in route cost and exposes the observed call total", () => {
+    const summary = summarizeAiTelemetry([
+      row({
+        route: "web_search",
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        web_search_calls: 1,
+      }),
+    ], { pricingSchedule: [PRICE], toolPricingSchedule: [WEB_SEARCH_PRICE] });
+
+    expect(summary.totalWebSearchCalls).toBe(1);
+    expect(summary.costs.calculableProviderCostNanoUsd).toBe(BigInt(10_000_000));
+    expect(summary.costs.byRoute).toEqual({ web_search: BigInt(10_000_000) });
   });
 });

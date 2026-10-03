@@ -1,8 +1,10 @@
 import type { Database } from "@/lib/database.types";
 import {
   APPROVED_AI_TELEMETRY_PRICING,
+  APPROVED_AI_TELEMETRY_TOOL_PRICING,
   estimateAiTelemetryCost,
   type AiTelemetryPricingEntry,
+  type AiTelemetryToolPricingEntry,
 } from "@/lib/ai/telemetry-pricing";
 
 export type AiTelemetryAnalyticsRow = Pick<
@@ -21,6 +23,7 @@ export type AiTelemetryAnalyticsRow = Pick<
   | "output_tokens"
   | "reasoning_tokens"
   | "total_tokens"
+  | "web_search_calls"
 >;
 
 export type AiTelemetryLatencyStats = Readonly<{
@@ -39,6 +42,7 @@ export type AiTelemetryTokenStats = Readonly<{
 
 export type AiTelemetrySummary = Readonly<{
   totalProviderInvocations: number;
+  totalWebSearchCalls: number;
   observedPrimaryRequests: number;
   imageRetryInvocations: number;
   observedImageRetryRate: number | null;
@@ -126,6 +130,7 @@ export function summarizeAiTelemetry(
   rows: readonly AiTelemetryAnalyticsRow[],
   options: Readonly<{
     pricingSchedule?: readonly AiTelemetryPricingEntry[];
+    toolPricingSchedule?: readonly AiTelemetryToolPricingEntry[];
     provider?: string;
   }> = {},
 ): AiTelemetrySummary {
@@ -151,6 +156,7 @@ export function summarizeAiTelemetry(
   const reasoningValues: Array<number | null> = [];
   const totalValues: Array<number | null> = [];
   let primaryRequests = 0;
+  let totalWebSearchCalls = 0;
   let retries = 0;
   let imageBearingStandardPrimaries = 0;
   let nonSuccess = 0;
@@ -163,6 +169,7 @@ export function summarizeAiTelemetry(
   let calculablePrimaryCostNanoUsd = BigInt(0);
   let calculableRetryCostNanoUsd = BigInt(0);
   const pricingSchedule = options.pricingSchedule ?? APPROVED_AI_TELEMETRY_PRICING;
+  const toolPricingSchedule = options.toolPricingSchedule ?? APPROVED_AI_TELEMETRY_TOOL_PRICING;
   const provider = options.provider ?? "openai";
 
   for (const row of rows) {
@@ -172,6 +179,7 @@ export function summarizeAiTelemetry(
     increment(byPlan, row.plan);
     increment(byOutcome, row.outcome);
     increment(byModel, row.model);
+    totalWebSearchCalls += row.web_search_calls;
     incrementCross(byRouteAndEffort, row.route, row.reasoning_effort);
     incrementCross(byPlanAndRoute, row.plan, row.route);
     incrementCross(byPlanAndEffort, row.plan, row.reasoning_effort);
@@ -207,7 +215,8 @@ export function summarizeAiTelemetry(
       inputTokens: row.input_tokens,
       cachedInputTokens: row.cached_input_tokens,
       outputTokens: row.output_tokens,
-    }, pricingSchedule);
+      webSearchCalls: row.web_search_calls,
+    }, pricingSchedule, toolPricingSchedule);
     if (cost.available) {
       calculableCostRows += 1;
       calculableProviderCostNanoUsd += cost.nanoUsd;
@@ -233,6 +242,7 @@ export function summarizeAiTelemetry(
   const fullyCovered = totalRows > 0 && calculableCostRows === totalRows;
   return {
     totalProviderInvocations: totalRows,
+    totalWebSearchCalls,
     observedPrimaryRequests: primaryRequests,
     imageRetryInvocations: retries,
     observedImageRetryRate: imageBearingStandardPrimaries === 0 ? null : retries / imageBearingStandardPrimaries,

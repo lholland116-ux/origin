@@ -44,6 +44,7 @@ export type AiRequestTelemetryRecord = {
   route: AiTelemetryRoute;
   attemptKind: AiTelemetryAttemptKind;
   model: string;
+  webSearchCalls: number;
   reasoningEffort: ProviderReasoningEffort;
   plan: AiTelemetryPlan;
   outcome: AiTelemetryOutcome;

@@ -51,6 +51,7 @@ export type Database = {
           reasoning_tokens: number | null
           route: string
           total_tokens: number | null
+          web_search_calls: number
         }
         Insert: {
           attempt_kind: string
@@ -68,6 +69,7 @@ export type Database = {
           reasoning_tokens?: number | null
           route: string
           total_tokens?: number | null
+          web_search_calls?: number
         }
         Update: {
           attempt_kind?: string
@@ -85,6 +87,7 @@ export type Database = {
           reasoning_tokens?: number | null
           route?: string
           total_tokens?: number | null
+          web_search_calls?: number
         }
         Relationships: []
       }

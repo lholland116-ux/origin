@@ -28,6 +28,7 @@ function toInsertPayload(
     route: record.route,
     attempt_kind: record.attemptKind,
     model: record.model,
+    web_search_calls: record.webSearchCalls,
     reasoning_effort: record.reasoningEffort,
     plan: record.plan,
     outcome: record.outcome,

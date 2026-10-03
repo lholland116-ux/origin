@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   APPROVED_AI_TELEMETRY_PRICING,
+  APPROVED_AI_TELEMETRY_TOOL_PRICING,
   estimateAiTelemetryCost,
   type AiTelemetryPricingEntry,
+  type AiTelemetryToolPricingEntry,
 } from "@/lib/ai/telemetry-pricing";
 
 const PRICE: AiTelemetryPricingEntry = {
@@ -16,27 +18,37 @@ const PRICE: AiTelemetryPricingEntry = {
   outputNanoUsdPerToken: BigInt(20),
 };
 
+const WEB_SEARCH_PRICE: AiTelemetryToolPricingEntry = {
+  provider: "openai",
+  tool: "web_search",
+  version: "search-v1",
+  effectiveFrom: "2026-01-01T00:00:00.000Z",
+  effectiveTo: null,
+  nanoUsdPerCall: BigInt(10_000_000),
+};
+
 function estimate(
   overrides: Partial<Parameters<typeof estimateAiTelemetryCost>[0]> = {},
   schedule: readonly AiTelemetryPricingEntry[] = [PRICE],
+  toolPricingSchedule: readonly AiTelemetryToolPricingEntry[] = [WEB_SEARCH_PRICE],
 ) {
   return estimateAiTelemetryCost({
     provider: "openai", model: "model-a", occurredAt: new Date("2026-01-15T00:00:00.000Z"),
-    inputTokens: 10, cachedInputTokens: 2, outputTokens: 3, ...overrides,
-  }, schedule);
+    inputTokens: 10, cachedInputTokens: 2, outputTokens: 3, webSearchCalls: 0, ...overrides,
+  }, schedule, toolPricingSchedule);
 }
 
 describe("estimateAiTelemetryCost", () => {
   it("uses exact model matching, inclusive starts, and integer nano-USD arithmetic", () => {
     expect(estimate({ occurredAt: new Date(PRICE.effectiveFrom) })).toEqual({
-      available: true, nanoUsd: BigInt(144), pricingVersion: "v1",
+      available: true, nanoUsd: BigInt(144), pricingVersion: "v1", webSearchPricingVersion: null,
     });
   });
 
   it("uses an exclusive effective end and supports open-ended periods", () => {
     expect(estimate({ occurredAt: new Date(PRICE.effectiveTo!) })).toEqual({ available: false, reason: "no_applicable_price" });
     expect(estimate({ occurredAt: new Date("2026-03-01T00:00:00.000Z") }, [{ ...PRICE, effectiveTo: null }])).toEqual({
-      available: true, nanoUsd: BigInt(144), pricingVersion: "v1",
+      available: true, nanoUsd: BigInt(144), pricingVersion: "v1", webSearchPricingVersion: null,
     });
   });
 
@@ -58,9 +70,9 @@ describe("estimateAiTelemetryCost", () => {
 
   it("accepts reported zero usage and does not bill reasoning or total-token breakdowns", () => {
     expect(estimate({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 })).toEqual({
-      available: true, nanoUsd: BigInt(0), pricingVersion: "v1",
+      available: true, nanoUsd: BigInt(0), pricingVersion: "v1", webSearchPricingVersion: null,
     });
-    expect(estimate()).toEqual({ available: true, nanoUsd: BigInt(144), pricingVersion: "v1" });
+    expect(estimate()).toEqual({ available: true, nanoUsd: BigInt(144), pricingVersion: "v1", webSearchPricingVersion: null });
   });
 
   it("ships approved short-context prices for both the default and rollback models", () => {
@@ -87,11 +99,55 @@ describe("estimateAiTelemetryCost", () => {
       available: true,
       nanoUsd: BigInt(2_320),
       pricingVersion: "openai-gpt-6-luna-2026-10-03",
+      webSearchPricingVersion: null,
     });
     expect(estimate({ model: "gpt-5.6-luna", occurredAt: new Date("2026-10-03T00:00:00.000Z") }, APPROVED_AI_TELEMETRY_PRICING)).toEqual({
       available: true,
       nanoUsd: BigInt(5_240),
       pricingVersion: "openai-gpt-5.6-luna-2026-07-30",
+      webSearchPricingVersion: null,
     });
+  });
+
+  it("adds exact per-search fees while retaining independent model and tool versions", () => {
+    const zeroTokens = {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      occurredAt: new Date("2026-10-03T00:00:00.000Z"),
+    };
+    expect(estimate(
+      { ...zeroTokens, model: "gpt-6-luna", webSearchCalls: 1 },
+      APPROVED_AI_TELEMETRY_PRICING,
+      APPROVED_AI_TELEMETRY_TOOL_PRICING,
+    )).toEqual({
+      available: true,
+      nanoUsd: BigInt(10_000_000),
+      pricingVersion: "openai-gpt-6-luna-2026-10-03",
+      webSearchPricingVersion: "openai-web-search-2026-10-03",
+    });
+    expect(estimate(
+      { ...zeroTokens, model: "gpt-6-luna", webSearchCalls: 3 },
+      APPROVED_AI_TELEMETRY_PRICING,
+      APPROVED_AI_TELEMETRY_TOOL_PRICING,
+    )).toMatchObject({ available: true, nanoUsd: BigInt(30_000_000) });
+    expect(estimate(
+      { model: "gpt-6-luna", occurredAt: new Date("2026-10-03T00:00:00.000Z"), webSearchCalls: 1 },
+      APPROVED_AI_TELEMETRY_PRICING,
+      APPROVED_AI_TELEMETRY_TOOL_PRICING,
+    )).toMatchObject({ available: true, nanoUsd: BigInt(10_002_320) });
+  });
+
+  it("ships the approved Web Search rate and rejects invalid call counts", () => {
+    expect(APPROVED_AI_TELEMETRY_TOOL_PRICING).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        tool: "web_search",
+        nanoUsdPerCall: BigInt(10_000_000),
+      }),
+    ]);
+    expect(estimate({ webSearchCalls: -1 })).toEqual({ available: false, reason: "invalid_usage" });
+    expect(estimate({ webSearchCalls: 1.5 })).toEqual({ available: false, reason: "invalid_usage" });
+    expect(estimate({ webSearchCalls: 1 }, [PRICE], [])).toEqual({ available: false, reason: "unknown_tool" });
   });
 });

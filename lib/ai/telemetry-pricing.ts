@@ -14,16 +14,34 @@ export type AiTelemetryPricingEntry = Readonly<{
   outputNanoUsdPerToken: bigint;
 }>;
 
+export type AiTelemetryToolPricingEntry = Readonly<{
+  provider: string;
+  tool: string;
+  version: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  nanoUsdPerCall: bigint;
+}>;
+
 export type AiTelemetryCostUnavailableReason =
   | "usage_unavailable"
   | "invalid_usage"
   | "unknown_model"
   | "no_applicable_price"
   | "ambiguous_price"
-  | "invalid_pricing";
+  | "invalid_pricing"
+  | "unknown_tool"
+  | "no_applicable_tool_price"
+  | "ambiguous_tool_price"
+  | "invalid_tool_pricing";
 
 export type AiTelemetryCostResult =
-  | Readonly<{ available: true; nanoUsd: bigint; pricingVersion: string }>
+  | Readonly<{
+      available: true;
+      nanoUsd: bigint;
+      pricingVersion: string;
+      webSearchPricingVersion: string | null;
+    }>
   | Readonly<{ available: false; reason: AiTelemetryCostUnavailableReason }>;
 
 export type AiTelemetryCostInput = Readonly<{
@@ -33,6 +51,7 @@ export type AiTelemetryCostInput = Readonly<{
   inputTokens: number | null;
   cachedInputTokens: number | null;
   outputTokens: number | null;
+  webSearchCalls: number;
 }>;
 
 /**
@@ -67,6 +86,21 @@ export const APPROVED_AI_TELEMETRY_PRICING = [
   },
 ] as const satisfies readonly AiTelemetryPricingEntry[];
 
+/**
+ * Kept separate from per-token model rates because Web Search is billed per
+ * chargeable action. Retain old effective periods when provider pricing changes.
+ */
+export const APPROVED_AI_TELEMETRY_TOOL_PRICING = [
+  {
+    provider: "openai",
+    tool: "web_search",
+    version: "openai-web-search-2026-10-03",
+    effectiveFrom: "2026-10-03T00:00:00.000Z",
+    effectiveTo: null,
+    nanoUsdPerCall: BigInt(10_000_000),
+  },
+] as const satisfies readonly AiTelemetryToolPricingEntry[];
+
 function isValidDate(value: string): boolean {
   return Number.isFinite(Date.parse(value));
 }
@@ -91,6 +125,18 @@ function isValidPricingEntry(entry: AiTelemetryPricingEntry): boolean {
   ].every(isNonNegativeInteger);
 }
 
+function isValidToolPricingEntry(entry: AiTelemetryToolPricingEntry): boolean {
+  if (!entry.provider || !entry.tool || !entry.version || !isValidDate(entry.effectiveFrom)) {
+    return false;
+  }
+  if (entry.effectiveTo !== null) {
+    if (!isValidDate(entry.effectiveTo) || Date.parse(entry.effectiveFrom) >= Date.parse(entry.effectiveTo)) {
+      return false;
+    }
+  }
+  return entry.nanoUsdPerCall >= BigInt(0);
+}
+
 function unavailable(reason: AiTelemetryCostUnavailableReason): AiTelemetryCostResult {
   return { available: false, reason };
 }
@@ -106,7 +152,11 @@ function hasUsableTokens(input: AiTelemetryCostInput): input is AiTelemetryCostI
 export function estimateAiTelemetryCost(
   input: AiTelemetryCostInput,
   pricingSchedule: readonly AiTelemetryPricingEntry[] = APPROVED_AI_TELEMETRY_PRICING,
+  toolPricingSchedule: readonly AiTelemetryToolPricingEntry[] = APPROVED_AI_TELEMETRY_TOOL_PRICING,
 ): AiTelemetryCostResult {
+  if (!Number.isInteger(input.webSearchCalls) || input.webSearchCalls < 0) {
+    return unavailable("invalid_usage");
+  }
   if (!hasUsableTokens(input)) return unavailable("usage_unavailable");
   if (
     !Number.isInteger(input.inputTokens) ||
@@ -138,10 +188,38 @@ export function estimateAiTelemetryCost(
 
   const pricing = applicable[0]!;
   const nonCachedInputTokens = input.inputTokens - input.cachedInputTokens;
-  const nanoUsd =
+  let nanoUsd =
     BigInt(nonCachedInputTokens) * pricing.inputNanoUsdPerToken +
     BigInt(input.cachedInputTokens) * pricing.cachedInputNanoUsdPerToken +
     BigInt(input.outputTokens) * pricing.outputNanoUsdPerToken;
 
-  return { available: true, nanoUsd, pricingVersion: pricing.version };
+  let webSearchPricingVersion: string | null = null;
+  if (input.webSearchCalls > 0) {
+    const matchingTool = toolPricingSchedule.filter(
+      (entry) => entry.provider === input.provider && entry.tool === "web_search",
+    );
+    if (matchingTool.length === 0) return unavailable("unknown_tool");
+    if (matchingTool.some((entry) => !isValidToolPricingEntry(entry))) {
+      return unavailable("invalid_tool_pricing");
+    }
+
+    const applicableTool = matchingTool.filter((entry) => {
+      const from = Date.parse(entry.effectiveFrom);
+      const to = entry.effectiveTo === null ? null : Date.parse(entry.effectiveTo);
+      return occurredAt >= from && (to === null || occurredAt < to);
+    });
+    if (applicableTool.length === 0) return unavailable("no_applicable_tool_price");
+    if (applicableTool.length > 1) return unavailable("ambiguous_tool_price");
+
+    const toolPricing = applicableTool[0]!;
+    nanoUsd += BigInt(input.webSearchCalls) * toolPricing.nanoUsdPerCall;
+    webSearchPricingVersion = toolPricing.version;
+  }
+
+  return {
+    available: true,
+    nanoUsd,
+    pricingVersion: pricing.version,
+    webSearchPricingVersion,
+  };
 }
