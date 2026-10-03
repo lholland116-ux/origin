@@ -7,8 +7,14 @@ import {
 } from "@/lib/ai/general-chat-config";
 import {
   selectReasoningEffort,
-  type AdaptiveReasoningEffort,
 } from "@/lib/ai/reasoning-effort";
+import {
+  mapOpenAIResponseUsage,
+  type AiRequestTelemetryRecord,
+  type AiTelemetryOutcome,
+  type OpenAIResponseUsage,
+} from "@/lib/ai/request-telemetry";
+import { writeAiRequestTelemetry } from "@/lib/ai/request-telemetry-writer";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 import {
@@ -173,6 +179,9 @@ type ResponsesStreamEvent = {
   delta?: string;
   error?: {
     message?: string;
+  } | null;
+  response?: {
+    usage?: OpenAIResponseUsage | null;
   };
 };
 
@@ -356,12 +365,12 @@ function buildResponsesInput(params: {
 async function createRetryResponse(params: {
   input: ReturnType<typeof buildResponsesInput>;
   hasDocumentContext: boolean;
-  reasoningEffort: AdaptiveReasoningEffort;
+  chatConfig: ReturnType<typeof getGeneralChatConfig>;
 }) {
-  const { input, hasDocumentContext, reasoningEffort } = params;
+  const { input, hasDocumentContext, chatConfig } = params;
 
   return openai.responses.create({
-    ...getGeneralChatConfig(reasoningEffort),
+    ...chatConfig,
     instructions: buildSystemInstructions(hasDocumentContext),
     input,
     store: false,
@@ -1210,6 +1219,62 @@ export async function POST(req: Request) {
       hasDocuments: persistedDocuments.length > 0,
       hasImages: Boolean(imageBase64) || storedImageUrls.length > 0,
     });
+    const chatConfig = getGeneralChatConfig(reasoningEffort);
+    const primaryHadImage = Boolean(imageBase64) || storedImageUrls.length > 0;
+    const telemetryWrites: Promise<unknown>[] = [];
+    let primaryAttemptStartedAt: number | null = null;
+    let primaryAttemptStarted = false;
+    let primaryTelemetryRecorded = false;
+
+    function scheduleTelemetry(params: {
+      attemptKind: "primary" | "image_retry";
+      model: string;
+      outcome: AiTelemetryOutcome;
+      startedAt: number;
+      hadImage: boolean;
+      usage?: OpenAIResponseUsage | null;
+    }): void {
+      const record: AiRequestTelemetryRecord = {
+        route: "standard",
+        attemptKind: params.attemptKind,
+        model: params.model,
+        reasoningEffort,
+        plan,
+        outcome: params.outcome,
+        latencyMs: Math.max(0, Math.round(performance.now() - params.startedAt)),
+        hadImage: params.hadImage,
+        ...mapOpenAIResponseUsage(params.usage),
+      };
+
+      telemetryWrites.push(
+        Promise.resolve()
+          .then(() => writeAiRequestTelemetry(record))
+          .catch(() => undefined),
+      );
+    }
+
+    function schedulePrimaryTelemetry(
+      outcome: AiTelemetryOutcome,
+      usage?: OpenAIResponseUsage | null,
+    ): void {
+      if (
+        !primaryAttemptStarted ||
+        primaryAttemptStartedAt === null ||
+        primaryTelemetryRecorded
+      ) {
+        return;
+      }
+
+      primaryTelemetryRecorded = true;
+      scheduleTelemetry({
+        attemptKind: "primary",
+        model: chatConfig.model,
+        outcome,
+        startedAt: primaryAttemptStartedAt,
+        hadImage: primaryHadImage,
+        usage,
+      });
+    }
 
     const encoder = new TextEncoder();
     let fullReply = "";
@@ -1217,8 +1282,10 @@ export async function POST(req: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
+          primaryAttemptStarted = true;
+          primaryAttemptStartedAt = performance.now();
           const responseStream = (await openai.responses.stream({
-            ...getGeneralChatConfig(reasoningEffort),
+            ...chatConfig,
             instructions: buildSystemInstructions(Boolean(documentContext)),
             input,
             store: false,
@@ -1235,29 +1302,53 @@ export async function POST(req: Request) {
             }
 
             if (event.type === "response.failed") {
+              schedulePrimaryTelemetry("api_error", event.response?.usage);
               throw new Error(
                 event.error?.message ?? "OpenAI response failed."
               );
             }
 
             if (event.type === "error") {
+              schedulePrimaryTelemetry("api_error");
               throw new Error(event.error?.message ?? "OpenAI stream error.");
             }
 
             if (event.type === "response.completed") {
-              break;
+              schedulePrimaryTelemetry("success", event.response?.usage);
+            }
+
+            if (event.type === "response.incomplete") {
+              schedulePrimaryTelemetry("incomplete", event.response?.usage);
             }
           }
+
+          schedulePrimaryTelemetry("api_error");
 
           const streamedReply = fullReply.trim();
           let finalReply = streamedReply;
 
           if ((imageBase64 || storedImageUrls.length > 0) && isWeakReply(finalReply)) {
+            const retryStartedAt = performance.now();
             try {
               const retry = await createRetryResponse({
                 input,
                 hasDocumentContext: Boolean(documentContext),
-                reasoningEffort,
+                chatConfig,
+              });
+
+              const retryOutcome: AiTelemetryOutcome =
+                retry.status === "incomplete"
+                  ? "incomplete"
+                  : retry.status === "failed" || retry.status === "cancelled" || retry.error
+                    ? "api_error"
+                    : "success";
+              scheduleTelemetry({
+                attemptKind: "image_retry",
+                model: chatConfig.model,
+                outcome: retryOutcome,
+                startedAt: retryStartedAt,
+                hadImage: true,
+                usage: retry.usage,
               });
 
               const retryText = retry.output_text?.trim() ?? "";
@@ -1266,6 +1357,13 @@ export async function POST(req: Request) {
                 finalReply = retryText;
               }
             } catch (retryError) {
+              scheduleTelemetry({
+                attemptKind: "image_retry",
+                model: chatConfig.model,
+                outcome: "api_error",
+                startedAt: retryStartedAt,
+                hadImage: true,
+              });
               console.error("Retry failed:", retryError);
             }
           }
@@ -1302,8 +1400,10 @@ export async function POST(req: Request) {
             title,
           });
 
+          await Promise.allSettled(telemetryWrites);
           controller.close();
         } catch (error) {
+          schedulePrimaryTelemetry("api_error");
           console.error("/api/chat streaming error:", error);
 
           const fallback =
@@ -1327,12 +1427,15 @@ export async function POST(req: Request) {
             userId: user.id,
           });
 
+          await Promise.allSettled(telemetryWrites);
           controller.close();
         }
       },
 
       async cancel(reason) {
         console.warn("/api/chat stream cancelled:", reason);
+        schedulePrimaryTelemetry("cancelled");
+        await Promise.allSettled(telemetryWrites);
       },
     });
 
