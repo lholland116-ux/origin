@@ -48,8 +48,10 @@ function query(config: {
   awaitResult: QueryResult;
   singleResult?: QueryResult;
   maybeSingleResult?: QueryResult;
+  insertResults?: QueryResult[];
 }) {
   const builder = {} as MockQuery;
+  const insertResults = [...(config.insertResults ?? [])];
   builder.select = vi.fn(() => builder);
   builder.eq = vi.fn(() => builder);
   builder.in = vi.fn(() => builder);
@@ -57,7 +59,7 @@ function query(config: {
   builder.limit = vi.fn(() => builder);
   builder.single = vi.fn(async () => config.singleResult ?? config.awaitResult);
   builder.maybeSingle = vi.fn(async () => config.maybeSingleResult ?? config.awaitResult);
-  builder.insert = vi.fn(async () => ({ data: null, error: null }));
+  builder.insert = vi.fn(async () => insertResults.shift() ?? ({ data: null, error: null }));
   builder.update = vi.fn(() => builder);
   builder.delete = vi.fn(() => builder);
   builder.upsert = vi.fn(async () => ({ data: null, error: null }));
@@ -68,6 +70,7 @@ function query(config: {
 function setup(params: {
   plan?: "free" | "pro";
   conversationTitle?: string;
+  assistantInsertError?: unknown;
 } = {}) {
   const queries = {
     conversations: query({
@@ -100,6 +103,10 @@ function setup(params: {
         ],
         error: null,
       },
+      insertResults: [
+        { data: null, error: null },
+        { data: null, error: params.assistantInsertError ?? null },
+      ],
     }),
   };
 
@@ -221,6 +228,16 @@ describe("POST /api/chat telemetry", () => {
     ]);
   });
 
+  it("measures primary latency only across the provider attempt", async () => {
+    const now = vi.spyOn(performance, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_037);
+    const response = await POST(request());
+    await response.text();
+    expect(telemetryCalls()[0]).toMatchObject({ attemptKind: "primary", latencyMs: 37 });
+    now.mockRestore();
+  });
+
   it.each([
     [
       "response.failed",
@@ -320,6 +337,17 @@ describe("POST /api/chat telemetry", () => {
     ]);
   });
 
+  it("preserves provider success telemetry when downstream assistant persistence fails", async () => {
+    setup({ assistantInsertError: { message: "private assistant persistence failure" } });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const response = await POST(request());
+    await response.text();
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ attemptKind: "primary", outcome: "success" }),
+    ]);
+    error.mockRestore();
+  });
+
   it("records image-bearing weak-reply retry telemetry after the primary row", async () => {
     mocks.openai.responses.stream.mockReturnValueOnce(
       events(
@@ -358,6 +386,42 @@ describe("POST /api/chat telemetry", () => {
         reasoningTokens: 11,
         totalTokens: 44,
       }),
+    ]);
+  });
+
+  it("uses the primary model and effort while measuring retry latency from the retry attempt", async () => {
+    mocks.openai.responses.stream.mockReturnValueOnce(
+      events({ type: "response.output_text.delta", delta: "No." }, completed()),
+    );
+    mocks.openai.responses.create.mockResolvedValueOnce({
+      status: "completed", error: null, output_text: "A complete image analysis.", usage: undefined,
+    });
+    const now = vi.spyOn(performance, "now")
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(120)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_029);
+    const response = await POST(request({
+      message: "Rewrite this image caption.", imageBase64: `data:image/png;base64,${"a".repeat(1_000)}`,
+    }));
+    await response.text();
+    const [primary, retry] = telemetryCalls();
+    expect(retry).toMatchObject({
+      attemptKind: "image_retry", model: primary?.model, reasoningEffort: primary?.reasoningEffort,
+      hadImage: true, latencyMs: 29,
+    });
+    now.mockRestore();
+  });
+
+  it("does not invoke a retry for a non-weak image reply", async () => {
+    mocks.openai.responses.stream.mockReturnValueOnce(
+      events({ type: "response.output_text.delta", delta: "This is a complete image analysis response." }, completed()),
+    );
+    const response = await POST(request({ imageBase64: `data:image/png;base64,${"a".repeat(1_000)}` }));
+    await response.text();
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ attemptKind: "primary", hadImage: true }),
     ]);
   });
 

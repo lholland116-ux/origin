@@ -38,6 +38,9 @@ describe("summarizeAiTelemetry", () => {
     expect(summary.observedImageRetryRate).toBe(1);
     expect(summary.byRoute).toEqual({ standard: 2, web_search: 1 });
     expect(summary.byAttemptKind).toEqual({ primary: 2, image_retry: 1 });
+    expect(summary.byReasoningEffort).toEqual({ medium: 2, low: 1 });
+    expect(summary.byPlan).toEqual({ free: 2, pro: 1 });
+    expect(summary.byOutcome).toEqual({ success: 2, incomplete: 1 });
     expect(summary.byModel).toEqual({ "model-a": 3 });
     expect(summary.byRouteAndEffort.standard).toEqual({ medium: 1, low: 1 });
     expect(summary.byPlanAndRoute).toEqual({ free: { standard: 2 }, pro: { web_search: 1 } });
@@ -47,6 +50,14 @@ describe("summarizeAiTelemetry", () => {
     expect(summary.costs.calculableProviderCostNanoUsd).toBe(BigInt(226));
     expect(summary.costs.calculablePrimaryCostNanoUsd).toBe(BigInt(144));
     expect(summary.costs.calculableRetryCostNanoUsd).toBe(BigInt(82));
+    expect(summary.costs.calculableCostRows).toBe(3);
+    expect(summary.costs.uncalculableCostRows).toBe(0);
+    expect(summary.costs.costCoverageRate).toBe(1);
+    expect(summary.costs.byModel).toEqual({ "model-a": BigInt(226) });
+    expect(summary.costs.byRoute).toEqual({ standard: BigInt(226), web_search: BigInt(0) });
+    expect(summary.costs.byPlan).toEqual({ free: BigInt(226), pro: BigInt(0) });
+    expect(summary.costs.byReasoningEffort).toEqual({ medium: BigInt(144), low: BigInt(82) });
+    expect(summary.costs.byAttemptKind).toEqual({ primary: BigInt(144), image_retry: BigInt(82) });
     expect(summary.costs.estimatedProviderCostPerObservedPrimaryRequestNanoUsd).toBe(BigInt(113));
   });
 
@@ -65,7 +76,21 @@ describe("summarizeAiTelemetry", () => {
     expect(summary.tokens.reasoningOutputRate).toBe(3 / 8);
     expect(summary.observedImageRetryRate).toBeNull();
     expect(summary.costs.costCoverageRate).toBe(0);
+    expect(summary.costs.calculableCostRows).toBe(0);
+    expect(summary.costs.uncalculableCostRows).toBe(4);
     expect(summary.costs.estimatedProviderCostPerObservedPrimaryRequestNanoUsd).toBeNull();
+  });
+
+  it("returns null token ratios for zero denominators and is semantically deterministic across row order", () => {
+    const rows = [
+      row({ route: "web_search", plan: "pro", latency_ms: 30, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_tokens: 0 }),
+      row({ attempt_kind: "image_retry", reasoning_effort: "low", outcome: "incomplete", latency_ms: 5, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_tokens: 0 }),
+    ];
+    const forward = summarizeAiTelemetry(rows, { pricingSchedule: [PRICE] });
+    const reversed = summarizeAiTelemetry([...rows].reverse(), { pricingSchedule: [PRICE] });
+    expect(forward.tokens.cachedInputRate).toBeNull();
+    expect(forward.tokens.reasoningOutputRate).toBeNull();
+    expect(forward).toEqual(reversed);
   });
 
   it("does not charge reasoning or total-token breakdowns a second time", () => {

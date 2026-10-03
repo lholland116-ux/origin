@@ -192,6 +192,18 @@ describe("POST /api/chat-web telemetry", () => {
     });
   });
 
+  it("measures latency only from immediately before provider create until it settles", async () => {
+    const now = vi.spyOn(performance, "now")
+      .mockReturnValueOnce(2_000)
+      .mockReturnValueOnce(2_041);
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ attemptKind: "primary", latencyMs: 41 }),
+    ]);
+    now.mockRestore();
+  });
+
   it.each([
     ["incomplete", primaryResponse({ status: "incomplete", usage: { input_tokens: 7, total_tokens: 9 } }), "incomplete"],
     ["failed", primaryResponse({ status: "failed", output_text: "", usage: undefined }), "api_error"],

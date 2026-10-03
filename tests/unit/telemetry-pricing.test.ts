@@ -48,6 +48,9 @@ describe("estimateAiTelemetryCost", () => {
     expect(estimate({ inputTokens: null })).toEqual({ available: false, reason: "usage_unavailable" });
     expect(estimate({ cachedInputTokens: 11 })).toEqual({ available: false, reason: "invalid_usage" });
     expect(estimate({ outputTokens: -1 })).toEqual({ available: false, reason: "invalid_usage" });
+    expect(estimate({ inputTokens: 1.5 })).toEqual({ available: false, reason: "invalid_usage" });
+    expect(estimate({ cachedInputTokens: 0.5 })).toEqual({ available: false, reason: "invalid_usage" });
+    expect(estimate({ outputTokens: 1.5 })).toEqual({ available: false, reason: "invalid_usage" });
   });
 
   it("accepts reported zero usage and does not bill reasoning or total-token breakdowns", () => {

@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(46);
+select plan(55);
 
 select has_table(
   'public',
@@ -184,6 +184,43 @@ select ok(
 select table_privs_are('public', 'ai_request_telemetry', 'anon', array[]::text[], 'anonymous clients cannot select, insert, update, or delete telemetry');
 select table_privs_are('public', 'ai_request_telemetry', 'authenticated', array[]::text[], 'authenticated clients cannot select, insert, update, or delete telemetry');
 select table_privs_are('public', 'ai_request_telemetry', 'service_role', array['DELETE', 'INSERT', 'SELECT']::text[], 'service role can only select, insert, and delete telemetry');
+
+select throws_ok(
+  $$set local role anon; select * from public.ai_request_telemetry$$,
+  '42501', null, 'anon cannot select telemetry'
+);
+select throws_ok(
+  $$set local role anon; insert into public.ai_request_telemetry (route, attempt_kind, model, reasoning_effort, plan, outcome, latency_ms) values ('standard', 'primary', 'anon-test', 'medium', 'free', 'success', 1)$$,
+  '42501', null, 'anon cannot insert telemetry'
+);
+select throws_ok(
+  $$set local role anon; delete from public.ai_request_telemetry$$,
+  '42501', null, 'anon cannot delete telemetry'
+);
+select throws_ok(
+  $$set local role authenticated; select * from public.ai_request_telemetry$$,
+  '42501', null, 'authenticated cannot select telemetry'
+);
+select throws_ok(
+  $$set local role authenticated; insert into public.ai_request_telemetry (route, attempt_kind, model, reasoning_effort, plan, outcome, latency_ms) values ('standard', 'primary', 'authenticated-test', 'medium', 'free', 'success', 1)$$,
+  '42501', null, 'authenticated cannot insert telemetry'
+);
+select throws_ok(
+  $$set local role authenticated; delete from public.ai_request_telemetry$$,
+  '42501', null, 'authenticated cannot delete telemetry'
+);
+select lives_ok(
+  $$set local role service_role; insert into public.ai_request_telemetry (route, attempt_kind, model, reasoning_effort, plan, outcome, latency_ms) values ('standard', 'primary', 'service-role-test', 'medium', 'free', 'success', 1)$$,
+  'service role can insert telemetry'
+);
+select lives_ok(
+  $$set local role service_role; select * from public.ai_request_telemetry where model = 'service-role-test'$$,
+  'service role can select telemetry'
+);
+select lives_ok(
+  $$set local role service_role; delete from public.ai_request_telemetry where model = 'service-role-test'$$,
+  'service role can delete telemetry'
+);
 
 select has_index('public', 'ai_request_telemetry', 'ai_request_telemetry_occurred_at_idx', 'telemetry has a descending occurred-at index');
 select has_index('public', 'ai_request_telemetry', 'ai_request_telemetry_route_effort_occurred_at_idx', 'telemetry has a route-effort-time index');

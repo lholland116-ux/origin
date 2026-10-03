@@ -12,7 +12,16 @@ export const AI_TELEMETRY_DEFAULT_RETENTION_DAYS = 90;
 export const AI_TELEMETRY_DEFAULT_RETENTION_BATCH_SIZE = 1000;
 export const AI_TELEMETRY_MAX_RETENTION_BATCH_SIZE = 5000;
 
-const ANALYTICS_COLUMNS = "occurred_at,route,attempt_kind,model,reasoning_effort,plan,outcome,latency_ms,had_image,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens";
+const ANALYTICS_COLUMNS = "id,occurred_at,route,attempt_kind,model,reasoning_effort,plan,outcome,latency_ms,had_image,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens";
+
+type AiTelemetryCursorRow = AiTelemetryAnalyticsRow & Readonly<{
+  id: number;
+}>;
+
+type AiTelemetryCursor = Readonly<{
+  occurredAt: string;
+  id: number;
+}>;
 
 export class AiTelemetryOperationsError extends Error {
   constructor(readonly code: "invalid_range" | "dataset_limit" | "database_error" | "invalid_retention") {
@@ -25,6 +34,30 @@ function validDate(date: Date): boolean {
   return Number.isFinite(date.valueOf());
 }
 
+function cursorFenceFilter(
+  highWater: AiTelemetryCursor,
+  cursor: AiTelemetryCursor | null,
+): string {
+  const upper = highWater.occurredAt;
+  const upperId = highWater.id;
+
+  if (cursor === null) {
+    return [
+      `occurred_at.lt.${upper}`,
+      `and(occurred_at.eq.${upper},id.lte.${upperId})`,
+    ].join(",");
+  }
+
+  const lower = cursor.occurredAt;
+  const lowerId = cursor.id;
+  return [
+    `and(occurred_at.gt.${lower},occurred_at.lt.${upper})`,
+    `and(occurred_at.gt.${lower},occurred_at.eq.${upper},id.lte.${upperId})`,
+    `and(occurred_at.eq.${lower},id.gt.${lowerId},occurred_at.lt.${upper})`,
+    `and(occurred_at.eq.${lower},id.gt.${lowerId},occurred_at.eq.${upper},id.lte.${upperId})`,
+  ].join(",");
+}
+
 function safeAdminClient() {
   try {
     return createAdminClient();
@@ -33,6 +66,11 @@ function safeAdminClient() {
   }
 }
 
+/**
+ * Summaries represent recorded provider invocations. Request-time telemetry
+ * is intentionally best-effort, so writer timeouts or failures can omit rows;
+ * these are operational estimates, not billing-grade traffic counts.
+ */
 export async function getAiTelemetrySummary(params: Readonly<{
   from: Date;
   to: Date;
@@ -46,19 +84,42 @@ export async function getAiTelemetrySummary(params: Readonly<{
   const rows: AiTelemetryAnalyticsRow[] = [];
   const from = params.from.toISOString();
   const to = params.to.toISOString();
-  let offset = 0;
+  let highWaterResult: { data: Array<Pick<AiTelemetryCursorRow, "id" | "occurred_at">> | null; error: unknown };
+
+  try {
+    highWaterResult = await admin
+      .from("ai_request_telemetry")
+      .select("id,occurred_at")
+      .gte("occurred_at", from)
+      .lt("occurred_at", to)
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(1);
+  } catch {
+    throw new AiTelemetryOperationsError("database_error");
+  }
+  if (highWaterResult.error) throw new AiTelemetryOperationsError("database_error");
+  const highWaterRow = highWaterResult.data?.[0];
+  if (!highWaterRow) return summarizeAiTelemetry([], { pricingSchedule: params.pricingSchedule });
+
+  const highWater: AiTelemetryCursor = {
+    occurredAt: highWaterRow.occurred_at,
+    id: highWaterRow.id,
+  };
+  let cursor: AiTelemetryCursor | null = null;
 
   while (true) {
-    let result: { data: AiTelemetryAnalyticsRow[] | null; error: unknown };
+    let result: { data: AiTelemetryCursorRow[] | null; error: unknown };
     try {
       result = await admin
         .from("ai_request_telemetry")
         .select(ANALYTICS_COLUMNS)
         .gte("occurred_at", from)
         .lt("occurred_at", to)
+        .or(cursorFenceFilter(highWater, cursor))
         .order("occurred_at", { ascending: true })
         .order("id", { ascending: true })
-        .range(offset, offset + AI_TELEMETRY_QUERY_PAGE_SIZE - 1);
+        .limit(AI_TELEMETRY_QUERY_PAGE_SIZE);
     } catch {
       throw new AiTelemetryOperationsError("database_error");
     }
@@ -67,9 +128,10 @@ export async function getAiTelemetrySummary(params: Readonly<{
     if (rows.length + page.length > AI_TELEMETRY_MAX_ANALYTICS_ROWS) {
       throw new AiTelemetryOperationsError("dataset_limit");
     }
-    rows.push(...page);
+    rows.push(...page.map(({ id: _id, ...row }) => row));
     if (page.length < AI_TELEMETRY_QUERY_PAGE_SIZE) break;
-    offset += page.length;
+    const last = page[page.length - 1]!;
+    cursor = { occurredAt: last.occurred_at, id: last.id };
   }
 
   return summarizeAiTelemetry(rows, { pricingSchedule: params.pricingSchedule });
