@@ -16,7 +16,10 @@ const PRICE: AiTelemetryPricingEntry = {
   outputNanoUsdPerToken: BigInt(20),
 };
 
-function estimate(overrides: Partial<Parameters<typeof estimateAiTelemetryCost>[0]> = {}, schedule = [PRICE]) {
+function estimate(
+  overrides: Partial<Parameters<typeof estimateAiTelemetryCost>[0]> = {},
+  schedule: readonly AiTelemetryPricingEntry[] = [PRICE],
+) {
   return estimateAiTelemetryCost({
     provider: "openai", model: "model-a", occurredAt: new Date("2026-01-15T00:00:00.000Z"),
     inputTokens: 10, cachedInputTokens: 2, outputTokens: 3, ...overrides,
@@ -60,7 +63,35 @@ describe("estimateAiTelemetryCost", () => {
     expect(estimate()).toEqual({ available: true, nanoUsd: BigInt(144), pricingVersion: "v1" });
   });
 
-  it("ships with no guessed production prices", () => {
-    expect(APPROVED_AI_TELEMETRY_PRICING).toEqual([]);
+  it("ships approved short-context prices for both the default and rollback models", () => {
+    expect(APPROVED_AI_TELEMETRY_PRICING).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        inputNanoUsdPerToken: BigInt(200),
+        cachedInputNanoUsdPerToken: BigInt(20),
+        outputNanoUsdPerToken: BigInt(1_200),
+      }),
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-6-luna",
+        inputNanoUsdPerToken: BigInt(100),
+        cachedInputNanoUsdPerToken: BigInt(10),
+        outputNanoUsdPerToken: BigInt(500),
+      }),
+    ]);
+  });
+
+  it("selects pricing by model identity without cross-contamination", () => {
+    expect(estimate({ model: "gpt-6-luna", occurredAt: new Date("2026-10-03T00:00:00.000Z") }, APPROVED_AI_TELEMETRY_PRICING)).toEqual({
+      available: true,
+      nanoUsd: BigInt(2_320),
+      pricingVersion: "openai-gpt-6-luna-2026-10-03",
+    });
+    expect(estimate({ model: "gpt-5.6-luna", occurredAt: new Date("2026-10-03T00:00:00.000Z") }, APPROVED_AI_TELEMETRY_PRICING)).toEqual({
+      available: true,
+      nanoUsd: BigInt(5_240),
+      pricingVersion: "openai-gpt-5.6-luna-2026-07-30",
+    });
   });
 });

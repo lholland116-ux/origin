@@ -229,7 +229,7 @@ describe("Free Web Search entitlement", () => {
     expect(mocks.openai.responses.create).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoning: { effort: "medium" },
         tools: [{ type: "web_search_preview" }],
         include: ["web_search_call.action.sources"],
@@ -379,7 +379,7 @@ describe("Free Web Search entitlement", () => {
     expect(queries.usage.upsert).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.stream).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-5.6-luna" }),
+      expect.objectContaining({ model: "gpt-6-luna" }),
     );
   });
 
@@ -399,7 +399,7 @@ describe("Free Web Search entitlement", () => {
     expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
     expect(mocks.openai.responses.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoning: { effort },
       }),
     );
@@ -456,7 +456,7 @@ describe("Free Web Search entitlement", () => {
     const primaryRequest = mocks.openai.responses.create.mock.calls[0]?.[0];
     const titleRequest = mocks.openai.responses.create.mock.calls[1]?.[0];
     expect(primaryRequest).toMatchObject({ reasoning: { effort: "medium" } });
-    expect(titleRequest).toMatchObject({ model: "gpt-5.6-luna" });
+    expect(titleRequest).toMatchObject({ model: "gpt-6-luna" });
     expect(titleRequest).not.toHaveProperty("reasoning");
   });
 
@@ -473,7 +473,7 @@ describe("Free Web Search entitlement", () => {
     expect(mocks.openai.responses.stream).toHaveBeenCalledOnce();
     expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoning: { effort },
       }),
     );
@@ -500,14 +500,14 @@ describe("Free Web Search entitlement", () => {
 
     expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoning: { effort: "low" },
       }),
     );
     expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
     expect(mocks.openai.responses.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoning: { effort: "low" },
       }),
     );
@@ -527,7 +527,7 @@ describe("Free Web Search entitlement", () => {
 
     expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
     const titleRequest = mocks.openai.responses.create.mock.calls[0]?.[0];
-    expect(titleRequest).toMatchObject({ model: "gpt-5.6-luna" });
+    expect(titleRequest).toMatchObject({ model: "gpt-6-luna" });
     expect(titleRequest).not.toHaveProperty("reasoning");
   });
 

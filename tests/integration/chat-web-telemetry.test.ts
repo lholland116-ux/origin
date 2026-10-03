@@ -168,7 +168,7 @@ describe("POST /api/chat-web telemetry", () => {
     const response = await POST(request());
     expect(response.status).toBe(200);
     expect(telemetryCalls()).toEqual([expect.objectContaining({
-      route: "web_search", attemptKind: "primary", model: "gpt-5.6-luna",
+      route: "web_search", attemptKind: "primary", model: "gpt-6-luna",
       reasoningEffort: "medium", plan: "free", outcome: "success", hadImage: false,
       inputTokens: 100, cachedInputTokens: 20, outputTokens: 80, reasoningTokens: 30, totalTokens: 180,
       latencyMs: expect.any(Number),

@@ -188,7 +188,7 @@ describe("POST /api/chat telemetry", () => {
       expect.objectContaining({
         route: "standard",
         attemptKind: "primary",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoningEffort: "medium",
         plan: "free",
         outcome: "success",

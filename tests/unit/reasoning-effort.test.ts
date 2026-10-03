@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getGeneralChatConfig,
   GENERAL_CHAT_MODEL,
+  GENERAL_CHAT_ROLLBACK_MODEL,
 } from "@/lib/ai/general-chat-config";
 import {
   selectReasoningEffort,
@@ -100,7 +101,8 @@ describe("getGeneralChatConfig", () => {
     },
   );
 
-  it("keeps the shared model fixed at the current general-chat model", () => {
-    expect(GENERAL_CHAT_MODEL).toBe("gpt-5.6-luna");
+  it("uses GPT-6 Luna as the shared default while retaining GPT-5.6 for rollback", () => {
+    expect(GENERAL_CHAT_MODEL).toBe("gpt-6-luna");
+    expect(GENERAL_CHAT_ROLLBACK_MODEL).toBe("gpt-5.6-luna");
   });
 });

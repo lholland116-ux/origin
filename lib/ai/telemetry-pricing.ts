@@ -1,3 +1,8 @@
+import {
+  GPT_5_6_LUNA_MODEL,
+  GPT_6_LUNA_MODEL,
+} from "./general-chat-config";
+
 export type AiTelemetryPricingEntry = Readonly<{
   provider: string;
   model: string;
@@ -33,8 +38,34 @@ export type AiTelemetryCostInput = Readonly<{
 /**
  * Populate only from an approved provider pricing source. Keeping historical
  * entries preserves reproducible estimates after provider prices change.
+ *
+ * The telemetry schema currently records uncached input, cached input, and
+ * output tokens only. Cache writes and the >272K long-context premium are not
+ * represented, so this schedule deliberately covers the supported short-
+ * context dimensions without pretending to calculate the unsupported ones.
  */
-export const APPROVED_AI_TELEMETRY_PRICING = [] as const satisfies readonly AiTelemetryPricingEntry[];
+export const APPROVED_AI_TELEMETRY_PRICING = [
+  {
+    provider: "openai",
+    model: GPT_5_6_LUNA_MODEL,
+    version: "openai-gpt-5.6-luna-2026-07-30",
+    effectiveFrom: "2026-07-30T00:00:00.000Z",
+    effectiveTo: null,
+    inputNanoUsdPerToken: BigInt(200),
+    cachedInputNanoUsdPerToken: BigInt(20),
+    outputNanoUsdPerToken: BigInt(1_200),
+  },
+  {
+    provider: "openai",
+    model: GPT_6_LUNA_MODEL,
+    version: "openai-gpt-6-luna-2026-10-03",
+    effectiveFrom: "2026-10-03T00:00:00.000Z",
+    effectiveTo: null,
+    inputNanoUsdPerToken: BigInt(100),
+    cachedInputNanoUsdPerToken: BigInt(10),
+    outputNanoUsdPerToken: BigInt(500),
+  },
+] as const satisfies readonly AiTelemetryPricingEntry[];
 
 function isValidDate(value: string): boolean {
   return Number.isFinite(Date.parse(value));
