@@ -5,6 +5,7 @@ import {
   canUploadDocumentInMode,
   createPastedTextAttachment,
   getComposerMessageLengthError,
+  getClipboardImageFiles,
   insertTextAtSelection,
   shouldConvertLargePasteToAttachment,
 } from "@/app/chat/ChatClient";
@@ -17,6 +18,24 @@ const chatRouteSource = readFileSync("app/api/chat/route.ts", "utf8");
 
 function makeDocumentFile(name: string, sizeBytes: number, type: string): File {
   return new File([new Uint8Array(sizeBytes)], name, { type });
+}
+
+function clipboardItem(type: string, file: File | null) {
+  return {
+    kind: "file",
+    type,
+    getAsFile: () => file,
+  } as DataTransferItem;
+}
+
+function clipboardData(params: {
+  items?: DataTransferItem[];
+  files?: File[];
+} = {}): DataTransfer {
+  return {
+    items: params.items,
+    files: params.files,
+  } as unknown as DataTransfer;
 }
 
 describe("composer large-input handling", () => {
@@ -60,6 +79,69 @@ describe("composer large-input handling", () => {
     expect(attachment.name).toBe("pasted-text.txt");
     expect(attachment.type).toBe("text/plain");
     expect(await attachment.text()).toBe(pastedText);
+  });
+
+  it("detects image clipboard items by MIME type and preserves their bytes", async () => {
+    const imageFile = new File(["unchanged image bytes"], "", { type: "image/png" });
+    const images = getClipboardImageFiles(clipboardData({
+      items: [clipboardItem("image/png", imageFile)],
+    }));
+
+    expect(images).toHaveLength(1);
+    expect(images[0]?.name).toBe("pasted-image-1.png");
+    expect(images[0]?.type).toBe("image/png");
+    expect(await images[0]?.text()).toBe("unchanged image bytes");
+  });
+
+  it("uses image MIME rather than filenames and ignores non-image clipboard files", () => {
+    const imageNamedAsText = new File(["image"], "clipboard.txt", { type: "image/webp" });
+    const textNamedAsImage = new File(["text"], "picture.png", { type: "text/plain" });
+    const images = getClipboardImageFiles(clipboardData({
+      items: [
+        clipboardItem("image/webp", imageNamedAsText),
+        clipboardItem("text/plain", textNamedAsImage),
+      ],
+      files: [imageNamedAsText, textNamedAsImage],
+    }));
+
+    expect(images).toHaveLength(1);
+    expect(images[0]?.name).toBe("pasted-image-1.webp");
+    expect(images[0]?.type).toBe("image/webp");
+  });
+
+  it("falls back to image files when clipboard items are unavailable and handles missing data", () => {
+    const imageFile = new File(["image"], "capture.jpeg", { type: "image/jpeg" });
+    const textFile = new File(["text"], "capture.png", { type: "text/plain" });
+
+    const images = getClipboardImageFiles(clipboardData({ files: [imageFile, textFile] }));
+    expect(images).toHaveLength(1);
+    expect(images[0]?.name).toBe("pasted-image-1.jpg");
+    expect(images[0]?.type).toBe("image/jpeg");
+    expect(getClipboardImageFiles(undefined)).toEqual([]);
+  });
+
+  it("wires image paste to the shared manual-image intake without changing text paste", () => {
+    const pasteStart = clientSource.indexOf("function handleComposerPaste(");
+    const pasteEnd = clientSource.indexOf("function removeComposerDocument(", pasteStart);
+    const pasteHandler = clientSource.slice(pasteStart, pasteEnd);
+    const sharedStart = clientSource.indexOf("async function handleImageFilesSelected(");
+    const manualStart = clientSource.indexOf("async function handleImageChange(");
+    const manualEnd = clientSource.indexOf("async function handleSubmit(", manualStart);
+    const imageHandlers = clientSource.slice(sharedStart, manualEnd);
+
+    expect(pasteHandler.indexOf("getClipboardImageFiles(clipboardData)")).toBeGreaterThanOrEqual(0);
+    expect(pasteHandler.indexOf("getClipboardImageFiles(clipboardData)")).toBeLessThan(
+      pasteHandler.indexOf('clipboardData.getData("text/plain")'),
+    );
+    expect(pasteHandler).toContain("if (!clipboardData) return;");
+    expect(pasteHandler).toContain("event.preventDefault();\n      void handleImageFilesSelected(imageFiles);");
+    expect(pasteHandler).toContain('if (!shouldConvertLargePasteToAttachment(pastedText))');
+    expect(pasteHandler).toContain('event.preventDefault();');
+    expect(imageHandlers).toContain("async function handleImageFilesSelected(files: File[])");
+    expect(imageHandlers).toContain("await handleImageFilesSelected(files);");
+    expect(imageHandlers).toContain("canAddPendingImages(pendingImages.length, files.length, currentPlan)");
+    expect(imageHandlers).toContain("const validationError = validateImageBatch(files);");
+    expect(imageHandlers).toContain("if (useWebSearch || useImageGeneration)");
   });
 
   it("fails explicitly above the request boundary instead of truncating", () => {

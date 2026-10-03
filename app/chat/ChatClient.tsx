@@ -333,6 +333,71 @@ export function getSelectedImageFiles(files: FileList | null): File[] {
   return Array.from(files ?? []);
 }
 
+function getPastedImageExtension(mimeType: string): string {
+  const subtype = mimeType.toLowerCase().split("/")[1]?.split(/[;+]/, 1)[0] ?? "";
+  const safeSubtype = subtype.replace(/[^a-z0-9]/g, "");
+  if (safeSubtype === "jpeg") return "jpg";
+  return safeSubtype || "img";
+}
+
+function normalizeClipboardImageFile(
+  file: File,
+  index: number,
+  clipboardMimeType = "",
+): File {
+  const mimeType = file.type || clipboardMimeType;
+  const name = `pasted-image-${index + 1}.${getPastedImageExtension(mimeType)}`;
+
+  if (name === file.name && mimeType === file.type) return file;
+
+  return new File([file], name, {
+    type: mimeType,
+    lastModified: file.lastModified,
+  });
+}
+
+export function getClipboardImageFiles(
+  clipboardData: DataTransfer | null | undefined,
+): File[] {
+  if (!clipboardData) return [];
+
+  const imageItems: Array<{ file: File; mimeType: string }> = [];
+  let foundImageItem = false;
+
+  try {
+    for (const item of Array.from(clipboardData.items ?? [])) {
+      const mimeType = item.type.trim().toLowerCase();
+      if (item.kind !== "file" || !mimeType.startsWith("image/")) continue;
+
+      foundImageItem = true;
+      try {
+        const file = item.getAsFile();
+        if (file) imageItems.push({ file, mimeType });
+      } catch {
+        // Some browser clipboard implementations expose an item but no File.
+      }
+    }
+  } catch {
+    // Fall back to clipboardData.files when items are unavailable.
+  }
+
+  if (imageItems.length > 0) {
+    return imageItems.map(({ file, mimeType }, index) =>
+      normalizeClipboardImageFile(file, index, mimeType),
+    );
+  }
+
+  try {
+    const files = Array.from(clipboardData.files ?? []).filter((file) =>
+      file.type.trim().toLowerCase().startsWith("image/"),
+    );
+    if (foundImageItem && files.length === 0) return [];
+    return files.map((file, index) => normalizeClipboardImageFile(file, index));
+  } catch {
+    return [];
+  }
+}
+
 type ComposerPlusMenuProps = {
   open: boolean;
   mode: ComposerPlusMenuMode;
@@ -3970,7 +4035,17 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>): void {
-    const pastedText = event.clipboardData.getData("text/plain");
+    const clipboardData = event.clipboardData;
+    if (!clipboardData) return;
+
+    const imageFiles = getClipboardImageFiles(clipboardData);
+    if (imageFiles.length > 0) {
+      event.preventDefault();
+      void handleImageFilesSelected(imageFiles);
+      return;
+    }
+
+    const pastedText = clipboardData.getData("text/plain");
 
     if (!shouldConvertLargePasteToAttachment(pastedText)) {
       return;
@@ -4263,9 +4338,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
   }
 
-  async function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const files = getSelectedImageFiles(event.target.files);
-    event.target.value = "";
+  async function handleImageFilesSelected(files: File[]): Promise<void> {
     if (files.length === 0) return;
 
     if (useWebSearch || useImageGeneration) {
@@ -4323,6 +4396,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     } finally {
       setUploadingImages(false);
     }
+  }
+
+  async function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = getSelectedImageFiles(event.target.files);
+    event.target.value = "";
+    await handleImageFilesSelected(files);
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
