@@ -1,5 +1,13 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
+import {
+  GENERAL_CHAT_MODEL,
+  getGeneralChatConfig,
+} from "@/lib/ai/general-chat-config";
+import {
+  selectReasoningEffort,
+  type AdaptiveReasoningEffort,
+} from "@/lib/ai/reasoning-effort";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 import {
@@ -21,8 +29,6 @@ const MIN_PASTED_TEXT_BYTES = 2001;
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_RETURNED_SOURCES = 5;
 const IS_DEV = process.env.NODE_ENV === "development";
-
-const MODEL = "gpt-5.6-luna";
 
 const WEB_IDENTITY_GUARDRAIL = `
 Web search identity requirements:
@@ -429,7 +435,7 @@ function detectTimeWidget(
 async function generateConversationTitle(message: string): Promise<string> {
   try {
     const titleResponse = await openai.responses.create({
-      model: MODEL,
+      model: GENERAL_CHAT_MODEL,
       input: [
         {
           role: "system",
@@ -456,9 +462,10 @@ async function buildAssistantResponse(
   recentMessages: ModelInputMessage[],
   message: string,
   documentContext: string,
+  reasoningEffort: AdaptiveReasoningEffort,
 ): Promise<WebRouteSuccessResponse> {
   const response = await openai.responses.create({
-    model: MODEL,
+    ...getGeneralChatConfig(reasoningEffort),
     instructions: buildWebInstructions(),
     input: buildWebInput(recentMessages, message, documentContext),
     tools: [{ type: "web_search_preview" }],
@@ -709,15 +716,23 @@ export async function POST(req: Request) {
 
     if (IS_DEV) {
       console.log("🌐 WEB ROUTE ACTIVE");
-      console.log("MODEL IN USE:", MODEL);
+      console.log("MODEL IN USE:", GENERAL_CHAT_MODEL);
       console.log("PLAN:", profile.plan);
       console.log("USAGE:", `${currentCount + 1}/${dailyLimit}`);
     }
+
+    const reasoningEffort = selectReasoningEffort({
+      route: "web_search",
+      message,
+      hasDocuments: persistedDocuments.length > 0,
+      hasImages: false,
+    });
 
     const assistantResponse = await buildAssistantResponse(
       recentMessages,
       message,
       documentContext,
+      reasoningEffort,
     );
 
     const { error: insertAssistantError } = await supabase

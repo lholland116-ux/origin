@@ -312,8 +312,11 @@ describe("POST /api/chat document generation integration", () => {
     }));
 
     const plannerInput = mocks.openai.responses.create.mock.calls[0]?.[0]?.input as string;
+    const plannerRequest = mocks.openai.responses.create.mock.calls[0]?.[0];
     expect(plannerInput).toContain("We reviewed the release evidence");
     expect(plannerInput).toContain("requiredVariables");
+    expect(plannerRequest).toMatchObject({ model: "gpt-5.6-luna" });
+    expect(plannerRequest).not.toHaveProperty("reasoning");
     expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
   });
 

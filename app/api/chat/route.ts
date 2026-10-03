@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
+import {
+  GENERAL_CHAT_MODEL,
+  getGeneralChatConfig,
+} from "@/lib/ai/general-chat-config";
+import {
+  selectReasoningEffort,
+  type AdaptiveReasoningEffort,
+} from "@/lib/ai/reasoning-effort";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 import {
@@ -45,8 +53,6 @@ const MODEL_IMAGE_URL_TTL_SECONDS = 5 * 60;
 const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const MODEL = "gpt-5.6-luna";
 
 const TONE_LAYER = `
 Tone and style requirements:
@@ -350,11 +356,12 @@ function buildResponsesInput(params: {
 async function createRetryResponse(params: {
   input: ReturnType<typeof buildResponsesInput>;
   hasDocumentContext: boolean;
+  reasoningEffort: AdaptiveReasoningEffort;
 }) {
-  const { input, hasDocumentContext } = params;
+  const { input, hasDocumentContext, reasoningEffort } = params;
 
   return openai.responses.create({
-    model: MODEL,
+    ...getGeneralChatConfig(reasoningEffort),
     instructions: buildSystemInstructions(hasDocumentContext),
     input,
     store: false,
@@ -364,7 +371,7 @@ async function createRetryResponse(params: {
 async function generateConversationTitle(message: string): Promise<string> {
   try {
     const titleResponse = await openai.responses.create({
-      model: MODEL,
+      model: GENERAL_CHAT_MODEL,
       instructions: TITLE_INSTRUCTIONS,
       input: message,
       store: false,
@@ -1197,6 +1204,12 @@ export async function POST(req: Request) {
       imageUrls: storedImageUrls,
       documentContext,
     }) as never;
+    const reasoningEffort = selectReasoningEffort({
+      route: "standard",
+      message: latestUserMessage,
+      hasDocuments: persistedDocuments.length > 0,
+      hasImages: Boolean(imageBase64) || storedImageUrls.length > 0,
+    });
 
     const encoder = new TextEncoder();
     let fullReply = "";
@@ -1205,7 +1218,7 @@ export async function POST(req: Request) {
       async start(controller) {
         try {
           const responseStream = (await openai.responses.stream({
-            model: MODEL,
+            ...getGeneralChatConfig(reasoningEffort),
             instructions: buildSystemInstructions(Boolean(documentContext)),
             input,
             store: false,
@@ -1244,6 +1257,7 @@ export async function POST(req: Request) {
               const retry = await createRetryResponse({
                 input,
                 hasDocumentContext: Boolean(documentContext),
+                reasoningEffort,
               });
 
               const retryText = retry.output_text?.trim() ?? "";

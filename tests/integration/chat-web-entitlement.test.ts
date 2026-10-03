@@ -106,6 +106,7 @@ function setup(params: {
   usageCount?: number;
   usageError?: unknown;
   documentRows?: unknown[];
+  conversationTitle?: string;
 }) {
   const messages = [
     {
@@ -125,7 +126,7 @@ function setup(params: {
         data: {
           id: CONVERSATION_ID,
           user_id: USER_ID,
-          title: "Existing conversation",
+          title: params.conversationTitle ?? "Existing conversation",
         },
         error: null,
       },
@@ -227,7 +228,13 @@ describe("Free Web Search entitlement", () => {
     expect(queries.usage.upsert).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.create).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.create).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-5.6-luna" }),
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+        reasoning: { effort: "medium" },
+        tools: [{ type: "web_search_preview" }],
+        include: ["web_search_call.action.sources"],
+        store: false,
+      }),
     );
     expect(JSON.stringify(body)).not.toContain("PRO_REQUIRED");
   });
@@ -252,6 +259,7 @@ describe("Free Web Search entitlement", () => {
     );
     expect(mocks.openai.responses.create).toHaveBeenCalledWith(
       expect.objectContaining({
+        reasoning: { effort: "medium" },
         input: expect.arrayContaining([
           expect.objectContaining({
             role: "user",
@@ -373,6 +381,154 @@ describe("Free Web Search entitlement", () => {
     expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-5.6-luna" }),
     );
+  });
+
+  it.each([
+    ["Rewrite this paragraph more clearly.", "low"],
+    ["What is the latest Node.js version?", "medium"],
+    [
+      "Compare the current Node.js release with our production version and assess migration risks.",
+      "high",
+    ],
+  ] as const)("sends %s reasoning effort on the primary Web Search request", async (message, effort) => {
+    setup({ plan: "free", usageCount: 0 });
+
+    const response = await postWebSearch(request({ message }));
+    expect(response.status).toBe(200);
+
+    expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+        reasoning: { effort },
+      }),
+    );
+  });
+
+  it("keeps an ordinary question at medium in both Standard and Web Search", async () => {
+    const message = "What is photosynthesis?";
+    setup({ plan: "free", usageCount: 0 });
+
+    const standardResponse = await postStandard(standardRequest({ message }));
+    await standardResponse.text();
+    expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "medium" } }),
+    );
+
+    vi.clearAllMocks();
+    setup({ plan: "free", usageCount: 0 });
+    const webResponse = await postWebSearch(request({ message }));
+    expect(webResponse.status).toBe(200);
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "medium" } }),
+    );
+  });
+
+  it("does not let a valid pasted-text attachment elevate an ordinary Web Search question", async () => {
+    setup({ plan: "free", usageCount: 0 });
+
+    const response = await postWebSearch(
+      request({
+        message: "What does this text say?",
+        documentIds: ["document-1"],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "medium" } }),
+    );
+  });
+
+  it("keeps Web Search title generation outside adaptive reasoning", async () => {
+    setup({
+      plan: "free",
+      usageCount: 0,
+      conversationTitle: "New Chat",
+    });
+
+    const response = await postWebSearch(
+      request({ message: "What is the latest Node.js version?" }),
+    );
+    expect(response.status).toBe(200);
+
+    expect(mocks.openai.responses.create).toHaveBeenCalledTimes(2);
+    const primaryRequest = mocks.openai.responses.create.mock.calls[0]?.[0];
+    const titleRequest = mocks.openai.responses.create.mock.calls[1]?.[0];
+    expect(primaryRequest).toMatchObject({ reasoning: { effort: "medium" } });
+    expect(titleRequest).toMatchObject({ model: "gpt-5.6-luna" });
+    expect(titleRequest).not.toHaveProperty("reasoning");
+  });
+
+  it.each([
+    ["Rewrite this paragraph more clearly.", "low"],
+    ["What is photosynthesis?", "medium"],
+    ["Analyze the root cause of this validation failure.", "high"],
+  ] as const)("sends %s reasoning effort on the primary Standard request", async (message, effort) => {
+    setup({ plan: "free", usageCount: 0 });
+
+    const response = await postStandard(standardRequest({ message }));
+    await response.text();
+
+    expect(mocks.openai.responses.stream).toHaveBeenCalledOnce();
+    expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+        reasoning: { effort },
+      }),
+    );
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+  });
+
+  it("reuses the primary effort for a weak-image-response retry", async () => {
+    setup({ plan: "free", usageCount: 0 });
+    mocks.openai.responses.stream.mockResolvedValueOnce((async function* weakResponse() {
+      yield { type: "response.output_text.delta", delta: "No." };
+      yield { type: "response.completed" };
+    })());
+    mocks.openai.responses.create.mockResolvedValueOnce({
+      output_text: "A complete image analysis response.",
+    });
+
+    const response = await postStandard(
+      standardRequest({
+        message: "Rewrite this image caption.",
+        imageBase64: `data:image/png;base64,${"a".repeat(1_000)}`,
+      }),
+    );
+    await response.text();
+
+    expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+        reasoning: { effort: "low" },
+      }),
+    );
+    expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+        reasoning: { effort: "low" },
+      }),
+    );
+  });
+
+  it("keeps conversation-title generation outside adaptive reasoning", async () => {
+    setup({
+      plan: "free",
+      usageCount: 0,
+      conversationTitle: "New Chat",
+    });
+
+    const response = await postStandard(
+      standardRequest({ message: "What is photosynthesis?" }),
+    );
+    await response.text();
+
+    expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
+    const titleRequest = mocks.openai.responses.create.mock.calls[0]?.[0];
+    expect(titleRequest).toMatchObject({ model: "gpt-5.6-luna" });
+    expect(titleRequest).not.toHaveProperty("reasoning");
   });
 
   it("uses one shared pool across mixed Standard and Web Search usage", async () => {
