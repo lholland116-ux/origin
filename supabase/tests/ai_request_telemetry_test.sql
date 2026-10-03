@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(62);
+select plan(65);
 
 select has_table(
   'public',
@@ -210,6 +210,33 @@ select ok(
 select table_privs_are('public', 'ai_request_telemetry', 'anon', array[]::text[], 'anonymous clients cannot select, insert, update, or delete telemetry');
 select table_privs_are('public', 'ai_request_telemetry', 'authenticated', array[]::text[], 'authenticated clients cannot select, insert, update, or delete telemetry');
 select table_privs_are('public', 'ai_request_telemetry', 'service_role', array['DELETE', 'INSERT', 'SELECT']::text[], 'service role can only select, insert, and delete telemetry');
+
+select ok(
+  not has_sequence_privilege(
+    'anon',
+    'public.ai_request_telemetry_id_seq',
+    'USAGE'
+  ),
+  'anonymous clients cannot use the AI telemetry identity sequence'
+);
+
+select ok(
+  not has_sequence_privilege(
+    'authenticated',
+    'public.ai_request_telemetry_id_seq',
+    'USAGE'
+  ),
+  'authenticated clients cannot use the AI telemetry identity sequence'
+);
+
+select ok(
+  has_sequence_privilege(
+    'service_role',
+    'public.ai_request_telemetry_id_seq',
+    'USAGE'
+  ),
+  'service role can use the AI telemetry identity sequence'
+);
 
 select throws_ok(
   $$set local role anon; select * from public.ai_request_telemetry$$,
