@@ -6,8 +6,14 @@ import {
 } from "@/lib/ai/general-chat-config";
 import {
   selectReasoningEffort,
-  type AdaptiveReasoningEffort,
 } from "@/lib/ai/reasoning-effort";
+import {
+  mapOpenAIResponseUsage,
+  type AiRequestTelemetryRecord,
+  type AiTelemetryOutcome,
+  type OpenAIResponseUsage,
+} from "@/lib/ai/request-telemetry";
+import { writeAiRequestTelemetry } from "@/lib/ai/request-telemetry-writer";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 import {
@@ -328,6 +334,27 @@ function emptyWebResponse(message: string): WebRouteSuccessResponse {
   };
 }
 
+function classifyPrimaryProviderOutcome(response: {
+  status?: string | null;
+  error?: unknown | null;
+}): AiTelemetryOutcome {
+  if (response.error != null) return "api_error";
+
+  switch (response.status) {
+    case "completed":
+      return "success";
+    case "incomplete":
+      return "incomplete";
+    case "cancelled":
+      return "cancelled";
+    case "failed":
+    case "queued":
+    case "in_progress":
+    default:
+      return "api_error";
+  }
+}
+
 function extractSources(response: unknown): SourceItem[] {
   const seen = new Set<string>();
   const sources: SourceItem[] = [];
@@ -462,15 +489,40 @@ async function buildAssistantResponse(
   recentMessages: ModelInputMessage[],
   message: string,
   documentContext: string,
-  reasoningEffort: AdaptiveReasoningEffort,
+  chatConfig: ReturnType<typeof getGeneralChatConfig>,
+  onProviderSettled: (params: {
+    outcome: AiTelemetryOutcome;
+    startedAt: number;
+    usage?: OpenAIResponseUsage | null;
+  }) => void,
 ): Promise<WebRouteSuccessResponse> {
-  const response = await openai.responses.create({
-    ...getGeneralChatConfig(reasoningEffort),
-    instructions: buildWebInstructions(),
-    input: buildWebInput(recentMessages, message, documentContext),
-    tools: [{ type: "web_search_preview" }],
-    include: ["web_search_call.action.sources"],
-    store: false,
+  let response: {
+    output_text?: string | null;
+    output?: unknown[];
+    status?: string | null;
+    error?: unknown | null;
+    usage?: OpenAIResponseUsage | null;
+  };
+  const providerStartedAt = performance.now();
+
+  try {
+    response = await openai.responses.create({
+      ...chatConfig,
+      instructions: buildWebInstructions(),
+      input: buildWebInput(recentMessages, message, documentContext),
+      tools: [{ type: "web_search_preview" }],
+      include: ["web_search_call.action.sources"],
+      store: false,
+    });
+  } catch (error) {
+    onProviderSettled({ outcome: "api_error", startedAt: providerStartedAt });
+    throw error;
+  }
+
+  onProviderSettled({
+    outcome: classifyPrimaryProviderOutcome(response),
+    startedAt: providerStartedAt,
+    usage: response.usage,
   });
 
   const reply = response.output_text?.trim() || "";
@@ -496,6 +548,7 @@ async function buildAssistantResponse(
 
 export async function POST(req: Request) {
   const supabase = await createServerSupabaseClient();
+  const telemetryWrites: Promise<unknown>[] = [];
 
   try {
     const {
@@ -727,12 +780,42 @@ export async function POST(req: Request) {
       hasDocuments: persistedDocuments.length > 0,
       hasImages: false,
     });
+    const chatConfig = getGeneralChatConfig(reasoningEffort);
+    let primaryTelemetryRecorded = false;
+
+    function schedulePrimaryTelemetry(params: {
+      outcome: AiTelemetryOutcome;
+      startedAt: number;
+      usage?: OpenAIResponseUsage | null;
+    }): void {
+      if (primaryTelemetryRecorded) return;
+      primaryTelemetryRecorded = true;
+
+      const record: AiRequestTelemetryRecord = {
+        route: "web_search",
+        attemptKind: "primary",
+        model: chatConfig.model,
+        reasoningEffort,
+        plan,
+        outcome: params.outcome,
+        latencyMs: Math.max(0, Math.round(performance.now() - params.startedAt)),
+        hadImage: false,
+        ...mapOpenAIResponseUsage(params.usage),
+      };
+
+      telemetryWrites.push(
+        Promise.resolve()
+          .then(() => writeAiRequestTelemetry(record))
+          .catch(() => undefined),
+      );
+    }
 
     const assistantResponse = await buildAssistantResponse(
       recentMessages,
       message,
       documentContext,
-      reasoningEffort,
+      chatConfig,
+      schedulePrimaryTelemetry,
     );
 
     const { error: insertAssistantError } = await supabase
@@ -783,5 +866,7 @@ export async function POST(req: Request) {
       { error: "Something went wrong in /api/chat-web." },
       500
     );
+  } finally {
+    await Promise.allSettled(telemetryWrites);
   }
 }
