@@ -153,9 +153,13 @@ select is(
   'Free over-limit rejection creates no parent message'
 );
 
+set local role postgres;
+
 update public.profiles
 set plan = 'pro'
 where id = '10000000-0000-4000-8000-000000000001';
+
+set local role authenticated;
 
 select lives_ok(
   $$select public.create_chat_message_with_images(
@@ -188,9 +192,13 @@ select throws_ok(
   'Pro users cannot persist more than three stored images'
 );
 
+set local role postgres;
+
 update public.profiles
 set plan = 'unknown'
 where id = '10000000-0000-4000-8000-000000000001';
+
+set local role authenticated;
 
 select throws_ok(
   $$select public.create_chat_message_with_images(
@@ -204,9 +212,13 @@ select throws_ok(
   'Ambiguous plans fail closed for stored-image persistence'
 );
 
+set local role postgres;
+
 update public.profiles
 set plan = 'pro'
 where id = '10000000-0000-4000-8000-000000000001';
+
+set local role authenticated;
 
 select throws_ok(
   $$select public.create_chat_message_with_images(
