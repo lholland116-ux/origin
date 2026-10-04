@@ -313,6 +313,17 @@ export const CHAT_REASONING_MODE_LABELS: Record<ChatReasoningMode, string> = {
   high: "High",
 };
 
+const CHAT_REASONING_MODE_DESCRIPTIONS: Record<ChatReasoningMode, string> = {
+  instant: "Fastest responses for simple questions and routine tasks.",
+  medium: "Balanced speed and reasoning for most requests. Recommended.",
+  high: "More reasoning for complex problems, analysis, and multi-step tasks.",
+};
+
+const CHAT_REASONING_SELECTOR_HELP = {
+  title: "Thinking level",
+  description: "Controls how much reasoning LVTChat uses before answering.",
+};
+
 export function isChatReasoningModeLocked(
   mode: ChatReasoningMode,
   plan: string | null | undefined,
@@ -545,13 +556,14 @@ export function ReasoningModeSelector({
   containerRef,
 }: ReasoningModeSelectorProps) {
   return (
-    <div ref={containerRef} className="relative min-w-0 shrink-0">
+    <div ref={containerRef} className="group relative min-w-0 shrink-0">
       <button
         ref={buttonRef}
         type="button"
         onClick={onToggle}
         disabled={disabled}
         aria-label={`Reasoning mode: ${CHAT_REASONING_MODE_LABELS[mode]}`}
+        aria-describedby={open ? "composer-reasoning-menu-help" : "composer-reasoning-help"}
         aria-expanded={open}
         aria-controls="composer-reasoning-menu"
         className={cx(
@@ -567,48 +579,84 @@ export function ReasoningModeSelector({
         <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       </button>
 
+      {!open && (
+        <span
+          id="composer-reasoning-help"
+          role="tooltip"
+          className={cx(
+            "pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 max-w-[calc(100vw-5rem)] rounded-lg border px-3 py-2 text-left text-xs opacity-0 shadow-xl transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+            theme.panelBg,
+            theme.panelBorder,
+            theme.inputText,
+          )}
+        >
+          <span className="block font-medium">{CHAT_REASONING_SELECTOR_HELP.title}</span>
+          <span className="mt-0.5 block">{CHAT_REASONING_SELECTOR_HELP.description}</span>
+        </span>
+      )}
+
       {open && (
         <div
           id="composer-reasoning-menu"
           role="group"
           aria-label="Reasoning mode options"
           className={cx(
-            "absolute bottom-full left-0 z-40 mb-2 w-44 max-w-[calc(100vw-1.5rem)] rounded-xl border p-1.5 shadow-2xl backdrop-blur",
+            "absolute bottom-full left-0 z-40 mb-2 w-72 max-w-[calc(100vw-5rem)] rounded-xl border p-1.5 shadow-2xl backdrop-blur sm:max-w-[calc(100vw-1.5rem)]",
             theme.panelBg,
             theme.panelBorder,
           )}
         >
-          {(Object.keys(CHAT_REASONING_MODE_LABELS) as ChatReasoningMode[]).map((option) => {
-            const locked = isChatReasoningModeLocked(option, plan);
+          <div className="px-3 pb-2 pt-1">
+            <p className={cx("text-xs font-medium", theme.inputText)}>
+              {CHAT_REASONING_SELECTOR_HELP.title}
+            </p>
+            <p
+              id="composer-reasoning-menu-help"
+              className={cx("mt-0.5 text-xs opacity-75", theme.inputText)}
+            >
+              {CHAT_REASONING_SELECTOR_HELP.description}
+            </p>
+          </div>
+          <div className={cx("mx-2 border-t", theme.panelBorder)} />
+          <div id="composer-reasoning-options">
+            {(Object.keys(CHAT_REASONING_MODE_LABELS) as ChatReasoningMode[]).map((option) => {
+              const locked = isChatReasoningModeLocked(option, plan);
 
-            return (
-              <button
-                key={option}
-                type="button"
-                onClick={() => {
-                  if (!locked) onSelect(option);
-                }}
-                disabled={disabled || locked}
-                aria-pressed={mode === option}
-                title={locked ? "High reasoning is available with Pro." : undefined}
-                className={cx(
-                  "flex min-h-10 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
-                  theme.inputText,
-                  !locked && getChatThemeHoverClass(theme),
-                )}
-              >
-                <span className="flex-1">{CHAT_REASONING_MODE_LABELS[option]}</span>
-                {locked ? (
-                  <>
-                    <LockKeyhole className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span className="sr-only">Locked. Pro plan required.</span>
-                  </>
-                ) : mode === option ? (
-                  <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
-                ) : null}
-              </button>
-            );
-          })}
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => {
+                    if (!locked) onSelect(option);
+                  }}
+                  disabled={disabled || locked}
+                  aria-pressed={mode === option}
+                  title={locked ? "Pro only." : undefined}
+                  className={cx(
+                    "flex min-h-10 w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                    theme.inputText,
+                    !locked && getChatThemeHoverClass(theme),
+                  )}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">{CHAT_REASONING_MODE_LABELS[option]}</span>
+                    <span className="mt-0.5 block text-xs leading-snug opacity-75">
+                      {CHAT_REASONING_MODE_DESCRIPTIONS[option]}
+                    </span>
+                    {locked && (
+                      <span className="mt-0.5 block text-xs font-medium">Pro only.</span>
+                    )}
+                    {locked && <span className="sr-only">Locked. Pro plan required.</span>}
+                  </span>
+                  {locked ? (
+                    <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  ) : mode === option ? (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

@@ -22,7 +22,22 @@ type SelectorNode = ReactElement<{
   children?: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  id?: string;
 }>;
+
+function getReasoningMenu(selector: ReactElement): SelectorNode {
+  const children = (selector as SelectorNode).props.children as (SelectorNode | false | null)[];
+  return children.find(
+    (child): child is SelectorNode => child !== false && child !== null &&
+      child.props.id === "composer-reasoning-menu",
+  )!;
+}
+
+function getReasoningOptions(menu: SelectorNode): SelectorNode[] {
+  const children = menu.props.children as SelectorNode[];
+  const options = children.find((child) => child.props.id === "composer-reasoning-options")!;
+  return options.props.children as SelectorNode[];
+}
 
 function renderPlusMenu(
   mode: "standard" | "web_search" | "create_image",
@@ -40,12 +55,16 @@ function renderPlusMenu(
   );
 }
 
-function renderReasoningSelector(mode: "instant" | "medium" | "high", plan: "free" | "pro"): string {
+function renderReasoningSelector(
+  mode: "instant" | "medium" | "high",
+  plan: "free" | "pro",
+  open = true,
+): string {
   return renderToStaticMarkup(
     ReasoningModeSelector({
       mode,
       plan,
-      open: true,
+      open,
       disabled: false,
       onToggle: () => undefined,
       onSelect: () => undefined,
@@ -65,6 +84,10 @@ describe("chat image-generation presentation", () => {
     expect(markup).toContain('aria-label="Reasoning mode: Medium"');
     expect(markup).toContain('aria-controls="composer-reasoning-menu"');
     expect(markup).toContain('aria-label="Reasoning mode options"');
+    expect(markup).toContain("Fastest responses for simple questions and routine tasks.");
+    expect(markup).toContain("Balanced speed and reasoning for most requests. Recommended.");
+    expect(markup).toContain("More reasoning for complex problems, analysis, and multi-step tasks.");
+    expect(markup).not.toContain("Pro only.");
     expect(markup).toContain("Instant");
     expect(markup).toContain("Medium");
     expect(markup).toContain("High");
@@ -73,11 +96,22 @@ describe("chat image-generation presentation", () => {
     expect(markup).toContain("sm:w-[122px]");
   });
 
+  it("makes closed-selector help discoverable on hover and keyboard focus", () => {
+    const markup = renderReasoningSelector("medium", "pro", false);
+
+    expect(markup).toContain('aria-describedby="composer-reasoning-help"');
+    expect(markup).toContain('id="composer-reasoning-help" role="tooltip"');
+    expect(markup).toContain("Thinking level");
+    expect(markup).toContain("Controls how much reasoning LVTChat uses before answering.");
+    expect(markup).toContain("group-hover:opacity-100");
+    expect(markup).toContain("group-focus-within:opacity-100");
+  });
+
   it("keeps High visible but disabled and announced as Pro-locked for Free", () => {
     const markup = renderReasoningSelector("medium", "free");
 
     expect(markup).toContain(">High</span>");
-    expect(markup).toContain('title="High reasoning is available with Pro."');
+    expect(markup).toContain("Pro only.");
     expect(markup).toContain("Locked. Pro plan required.");
     expect(isChatReasoningModeLocked("high", "free")).toBe(true);
     expect(isChatReasoningModeLocked("high", "pro")).toBe(false);
@@ -94,8 +128,8 @@ describe("chat image-generation presentation", () => {
       onToggle: () => undefined,
       onSelect,
     });
-    const [, menu] = (selector as SelectorNode).props.children as SelectorNode[];
-    const options = menu!.props.children as SelectorNode[];
+    const menu = getReasoningMenu(selector as ReactElement);
+    const options = getReasoningOptions(menu);
     const instant = options.find((option) => option.key === "instant")!;
     const medium = options.find((option) => option.key === "medium")!;
     const high = options.find((option) => option.key === "high")!;
@@ -120,8 +154,8 @@ describe("chat image-generation presentation", () => {
       onToggle: () => undefined,
       onSelect,
     });
-    const [, menu] = (selector as SelectorNode).props.children as SelectorNode[];
-    const high = (menu!.props.children as SelectorNode[]).find((option) => option.key === "high")!;
+    const menu = getReasoningMenu(selector as ReactElement);
+    const high = getReasoningOptions(menu).find((option) => option.key === "high")!;
 
     expect(high.props.disabled).toBe(false);
     (high.props.onClick as () => void)();
@@ -143,6 +177,8 @@ describe("chat image-generation presentation", () => {
       "create_image",
       "web_search",
     ]);
+    expect(composerSource).toContain("TOOLTIP_TEXT.mic");
+    expect(composerSource).toContain('aria-label="Send your message"');
   });
 
   it("renders one compact conversation starter with the requested label", () => {
