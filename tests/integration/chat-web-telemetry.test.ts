@@ -193,6 +193,47 @@ describe("POST /api/chat-web telemetry", () => {
     });
   });
 
+  it("records zero search calls for Auto when the provider does not search", async () => {
+    const response = await POST(request({ webSearchMode: "auto" }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ tool_choice: "auto", tools: [{ type: "web_search_preview" }] }),
+    );
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ route: "web_search", webSearchCalls: 0 }),
+    ]);
+  });
+
+  it("records actual optional search calls for Auto", async () => {
+    mocks.openai.responses.create.mockResolvedValueOnce(primaryResponse({
+      output: [{ id: "auto-search-1", type: "web_search_call", action: { type: "search" } }],
+    }));
+
+    const response = await POST(request({ webSearchMode: "auto" }));
+
+    expect(response.status).toBe(200);
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ route: "web_search", webSearchCalls: 1 }),
+    ]);
+  });
+
+  it("records actual calls for forced Web Search", async () => {
+    mocks.openai.responses.create.mockResolvedValueOnce(primaryResponse({
+      output: [{ id: "forced-search-1", type: "web_search_call", action: { type: "search" } }],
+    }));
+
+    const response = await POST(request({ webSearchMode: "force" }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ tool_choice: "required" }),
+    );
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ route: "web_search", webSearchCalls: 1 }),
+    ]);
+  });
+
   it("counts only distinct chargeable search actions and ignores open/find actions", async () => {
     const searchOne = { id: "search-1", type: "web_search_call", action: { type: "search" } };
     mocks.openai.responses.create.mockResolvedValueOnce(primaryResponse({

@@ -416,17 +416,31 @@ describe("chat image-generation mode", () => {
   });
 
   it("keeps Standard and Web Search on their existing endpoints", () => {
-    expect(clientSource).toContain('const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat"');
+    expect(clientSource).toContain('endpoint: isStandard ? "/api/chat" : "/api/chat-web"');
     expect(clientSource).toContain('fetcher("/api/image-generation"');
     expect(clientSource).toContain('mode: useWebSearch ? "web_search" : "standard"');
   });
 
+  it("keeps Create Image on its existing request and provides an in-composer Auto-chat exit", () => {
+    const imageRequestStart = clientSource.indexOf("if (useImageGeneration) {");
+    const chatRequestStart = clientSource.indexOf("const chatRequest = buildChatRequest(", imageRequestStart);
+    expect(imageRequestStart).toBeGreaterThanOrEqual(0);
+    expect(chatRequestStart).toBeGreaterThan(imageRequestStart);
+
+    const exitStart = clientSource.indexOf("function handleReturnToAutoChat()");
+    const exitEnd = clientSource.indexOf("function handleComposerPlusMenuAction", exitStart);
+    const exitHandler = clientSource.slice(exitStart, exitEnd);
+    expect(exitHandler).toContain("setUseImageGeneration(false)");
+    expect(exitHandler).toContain('setRoutingMode("auto")');
+    expect(clientSource).toContain('aria-label="Return to Auto text chat"');
+  });
+
   it("allows Free users to select Web Search without a Pro entitlement gate", () => {
-    const modeHandlerStart = clientSource.indexOf("function handleModeChange");
+    const modeHandlerStart = clientSource.indexOf("function handleRoutingModeChange");
     const modeHandlerEnd = clientSource.indexOf("function handleImageModeChange", modeHandlerStart);
     const modeHandlerSource = clientSource.slice(modeHandlerStart, modeHandlerEnd);
 
-    expect(modeHandlerSource).toContain("setUseWebSearch(nextUseWebSearch)");
+    expect(modeHandlerSource).toContain('setRoutingMode(nextRoutingMode)');
     expect(modeHandlerSource).not.toContain('plan !== "pro"');
     expect(modeHandlerSource).not.toContain("PRO_REQUIRED");
   });

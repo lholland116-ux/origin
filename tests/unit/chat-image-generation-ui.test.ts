@@ -3,8 +3,10 @@ import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CHAT_ROUTING_MODE_LABELS,
   CHAT_REASONING_MODE_LABELS,
   COMPOSER_PLUS_MENU_LABELS,
+  ChatRoutingModeSelector,
   ComposerPlusMenu,
   ReasoningModeSelector,
   getComposerPlusMenuActions,
@@ -24,6 +26,31 @@ type SelectorNode = ReactElement<{
   disabled?: boolean;
   id?: string;
 }>;
+
+function getRoutingMenu(selector: ReactElement): SelectorNode {
+  const children = (selector as SelectorNode).props.children as (SelectorNode | false | null)[];
+  return children.find(
+    (child): child is SelectorNode => child !== false && child !== null &&
+      child.props.id === "composer-routing-menu",
+  )!;
+}
+
+function getRoutingOptions(menu: SelectorNode): SelectorNode[] {
+  const children = menu.props.children as SelectorNode[];
+  return (children[2]?.props.children as SelectorNode[]) ?? [];
+}
+
+function renderRoutingSelector(mode: "auto" | "standard" | "web_search", open = true): string {
+  return renderToStaticMarkup(
+    ChatRoutingModeSelector({
+      mode,
+      open,
+      disabled: false,
+      onToggle: () => undefined,
+      onSelect: () => undefined,
+    }),
+  );
+}
 
 function getReasoningMenu(selector: ReactElement): SelectorNode {
   const children = (selector as SelectorNode).props.children as (SelectorNode | false | null)[];
@@ -73,6 +100,65 @@ function renderReasoningSelector(
 }
 
 describe("chat image-generation presentation", () => {
+  it("renders Auto, Standard, and Web Search with accessible help and explanations", () => {
+    expect(CHAT_ROUTING_MODE_LABELS).toEqual({
+      auto: "Auto",
+      standard: "Standard",
+      web_search: "Web Search",
+    });
+
+    const markup = renderRoutingSelector("auto");
+    expect(markup).toContain('aria-label="Search mode: Auto"');
+    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain('aria-label="Search mode options"');
+    expect(markup).toContain("LVTChat decides when current web information is needed. Recommended.");
+    expect(markup).toContain("Answers without searching the web.");
+    expect(markup).toContain("Searches the web for current information.");
+    expect(markup).toContain("Auto");
+    expect(markup).toContain("Standard");
+    expect(markup).toContain("Web Search");
+    expect(markup).toContain("w-[60px]");
+    expect(markup).toContain("sm:w-[136px]");
+    expect(markup).toContain("sm:hidden");
+  });
+
+  it("makes closed routing help discoverable on hover and keyboard focus", () => {
+    const markup = renderRoutingSelector("auto", false);
+    expect(markup).toContain('aria-describedby="composer-routing-help"');
+    expect(markup).toContain('id="composer-routing-help" role="tooltip"');
+    expect(markup).toContain("Search mode");
+    expect(markup).toContain("group-hover:opacity-100");
+    expect(markup).toContain("group-focus-within:opacity-100");
+  });
+
+  it("dispatches each selected routing mode", () => {
+    const onSelect = vi.fn();
+    const selector = ChatRoutingModeSelector({
+      mode: "auto",
+      open: true,
+      disabled: false,
+      onToggle: () => undefined,
+      onSelect,
+    }) as ReactElement;
+    const options = getRoutingOptions(getRoutingMenu(selector));
+
+    for (const option of options) (option.props.onClick as () => void)();
+
+    expect(onSelect).toHaveBeenCalledTimes(3);
+    expect(onSelect).toHaveBeenNthCalledWith(1, "auto");
+    expect(onSelect).toHaveBeenNthCalledWith(2, "standard");
+    expect(onSelect).toHaveBeenNthCalledWith(3, "web_search");
+  });
+
+  it("does not show search activity merely because Auto is selected", () => {
+    const loadingStart = clientSource.indexOf("{loading && messages.length > 0 && (");
+    const loadingEnd = clientSource.indexOf("<div ref={endRef}", loadingStart);
+    const loadingStatus = clientSource.slice(loadingStart, loadingEnd);
+
+    expect(loadingStatus).toContain('routingMode === "web_search"');
+    expect(loadingStatus).not.toContain("useWebSearch\n");
+  });
+
   it("renders the compact accessible selector and all three user-facing options", () => {
     expect(CHAT_REASONING_MODE_LABELS).toEqual({
       instant: "Instant",
@@ -92,7 +178,7 @@ describe("chat image-generation presentation", () => {
     expect(markup).toContain("Medium");
     expect(markup).toContain("High");
     expect(markup).toContain('aria-pressed="true"');
-    expect(markup).toContain("w-[88px]");
+    expect(markup).toContain("w-[72px]");
     expect(markup).toContain("sm:w-[122px]");
   });
 
@@ -165,17 +251,19 @@ describe("chat image-generation presentation", () => {
     const composerEnd = clientSource.indexOf("</form>", composerStart);
     const composerSource = clientSource.slice(composerStart, composerEnd);
     expect(composerSource.indexOf("<ComposerPlusMenu")).toBeLessThan(
+      composerSource.indexOf("<ChatRoutingModeSelector"),
+    );
+    expect(composerSource.indexOf("<ChatRoutingModeSelector")).toBeLessThan(
       composerSource.indexOf("<ReasoningModeSelector"),
     );
     expect(composerSource.indexOf("<ReasoningModeSelector")).toBeLessThan(
       composerSource.indexOf("TOOLTIP_TEXT.mic"),
     );
-    expect(getComposerPlusMenuActions("standard")).toEqual([
+    expect(getComposerPlusMenuActions()).toEqual([
       "camera",
       "photos",
       "files",
       "create_image",
-      "web_search",
     ]);
     expect(composerSource).toContain("TOOLTIP_TEXT.mic");
     expect(composerSource).toContain('aria-label="Send your message"');
@@ -238,60 +326,47 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain("handleNewChat");
   });
 
-  it("renders the exact context-aware plus actions for every composer mode", () => {
-    expect(getComposerPlusMenuActions("standard")).toEqual([
+  it("keeps the plus menu dedicated to attachment and image actions", () => {
+    expect(getComposerPlusMenuActions()).toEqual([
       "camera",
       "photos",
       "files",
       "create_image",
-      "web_search",
-    ]);
-    expect(getComposerPlusMenuActions("web_search")).toEqual([
-      "standard",
-      "create_image",
-    ]);
-    expect(getComposerPlusMenuActions("create_image")).toEqual([
-      "standard",
-      "web_search",
     ]);
     expect(COMPOSER_PLUS_MENU_LABELS).toEqual({
       camera: "Camera",
       photos: "Photos",
       files: "Files",
       create_image: "Create image",
-      web_search: "Web search",
-      standard: "Standard",
     });
 
     const standardMarkup = renderPlusMenu("standard");
-    expect(standardMarkup.match(/role="menuitem"/g)).toHaveLength(5);
+    expect(standardMarkup.match(/role="menuitem"/g)).toHaveLength(4);
     expect(standardMarkup).toContain(">Camera</span>");
     expect(standardMarkup).toContain(">Photos</span>");
     expect(standardMarkup).toContain(">Files</span>");
     expect(standardMarkup).toContain(">Create image</span>");
-    expect(standardMarkup).toContain(">Web search</span>");
     expect(standardMarkup.match(/disabled=""/g)).toHaveLength(1);
 
     const mobileStandardMarkup = renderPlusMenu("standard", true);
-    expect(mobileStandardMarkup.match(/role="menuitem"/g)).toHaveLength(5);
+    expect(mobileStandardMarkup.match(/role="menuitem"/g)).toHaveLength(4);
     expect(mobileStandardMarkup).toContain(">Camera</span>");
     expect(mobileStandardMarkup).not.toContain('aria-disabled="true"');
 
     const webSearchMarkup = renderPlusMenu("web_search");
-    expect(webSearchMarkup.match(/role="menuitem"/g)).toHaveLength(2);
-    expect(webSearchMarkup).toContain(">Standard</span>");
+    expect(webSearchMarkup.match(/role="menuitem"/g)).toHaveLength(4);
     expect(webSearchMarkup).toContain(">Create image</span>");
-    expect(webSearchMarkup).not.toContain(">Camera</span>");
-    expect(webSearchMarkup).not.toContain(">Photos</span>");
-    expect(webSearchMarkup).not.toContain(">Files</span>");
+    expect(webSearchMarkup.match(/disabled=""/g)).toHaveLength(3);
+    expect(webSearchMarkup).not.toContain(">Standard</span>");
+    expect(webSearchMarkup).not.toContain(">Web Search</span>");
 
     const createImageMarkup = renderPlusMenu("create_image");
-    expect(createImageMarkup.match(/role="menuitem"/g)).toHaveLength(2);
-    expect(createImageMarkup).toContain(">Standard</span>");
-    expect(createImageMarkup).toContain(">Web search</span>");
-    expect(createImageMarkup).not.toContain(">Camera</span>");
-    expect(createImageMarkup).not.toContain(">Photos</span>");
-    expect(createImageMarkup).not.toContain(">Files</span>");
+    expect(createImageMarkup.match(/role="menuitem"/g)).toHaveLength(4);
+    expect(createImageMarkup).toContain(">Camera</span>");
+    expect(createImageMarkup).toContain(">Photos</span>");
+    expect(createImageMarkup).toContain(">Files</span>");
+    expect(createImageMarkup).not.toContain(">Standard</span>");
+    expect(createImageMarkup).not.toContain(">Web Search</span>");
 
     expect(clientSource).toContain('aria-label="Open composer actions"');
     expect(clientSource).toContain('aria-haspopup="menu"');
@@ -300,8 +375,8 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain("handleOpenImagePicker");
     expect(clientSource).toContain("handleOpenDocumentPicker");
     expect(clientSource).toContain("handleImageModeChange()");
-    expect(clientSource).toContain("handleModeChange(true)");
-    expect(clientSource).toContain("handleModeChange(false)");
+    expect(clientSource).toContain("handleReturnToAutoChat");
+    expect(clientSource).toContain('aria-label="Return to Auto text chat"');
     expect(clientSource).toContain("document.addEventListener(\"pointerdown\"");
     expect(clientSource).toContain('if (event.key !== "Escape") return;');
     expect(clientSource).toContain(
@@ -481,26 +556,24 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain(
       'message.role === "assistant" && message.generatedImage?.id',
     );
-    expect(clientSource).toContain('const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat"');
+    expect(clientSource).toContain('endpoint: isStandard ? "/api/chat" : "/api/chat-web"');
     expect(clientSource).toContain('aria-label="Download image"');
     expect(clientSource).toContain('aria-label="Regenerate image"');
     expect(clientSource).toContain('alt={image.image_name || "Uploaded image"}');
     expect(clientSource).toContain('alt={message.image_name || "Uploaded image"}');
   });
 
-  it("places mode controls in the sidebar and keeps mobile navigation minimal", () => {
-    const modeSourceStart = clientSource.indexOf("function renderSidebarModeActions");
-    const modeSourceEnd = clientSource.indexOf("function renderSidebarActions", modeSourceStart);
-    const modeSource = clientSource.slice(modeSourceStart, modeSourceEnd);
+  it("keeps mode and image actions out of the sidebar while preserving its core navigation", () => {
+    const sidebarStart = clientSource.indexOf("function renderSidebarActions()");
+    const sidebarEnd = clientSource.indexOf("function renderConversationRow", sidebarStart);
+    const sidebarActions = clientSource.slice(sidebarStart, sidebarEnd);
 
-    expect(modeSource).toContain("Standard");
-    expect(modeSource).toContain("Web Search");
-    expect(modeSource).toContain("Create image");
-    expect(modeSource).not.toContain(">Image</");
-    expect(modeSource).not.toContain('aria-label="Help"');
-    expect(modeSource).toContain("aria-pressed={standardActive}");
-    expect(modeSource).toContain("aria-pressed={useWebSearch}");
-    expect(modeSource).toContain("aria-pressed={useImageGeneration}");
+    expect(sidebarActions).toContain("renderNewChatAction()");
+    expect(sidebarActions).not.toContain("Standard");
+    expect(sidebarActions).not.toContain("Web Search");
+    expect(sidebarActions).not.toContain("Create image");
+    expect(clientSource).toContain("Chat History");
+    expect(clientSource).toContain('aria-label="Open profile and settings"');
     expect(clientSource).toContain("{renderSidebarActions()}");
     expect(clientSource).toContain("{renderSidebarUtilityActions(true)}");
     expect(clientSource).toContain('href="/help"');
@@ -533,11 +606,9 @@ describe("chat image-generation presentation", () => {
   });
 
   it("normalizes sidebar action labels to the Chat History typography", () => {
-    const sidebarModeStart = clientSource.indexOf("function renderSidebarModeActions");
-    const sidebarActionsStart = clientSource.indexOf("function renderSidebarActions");
     const profileMenuStart = clientSource.indexOf("function renderProfileSettingsMenu");
-    const sidebarModeSource = clientSource.slice(sidebarModeStart, sidebarActionsStart);
-    const profileMenuSource = clientSource.slice(profileMenuStart, sidebarModeStart);
+    const sidebarActionsStart = clientSource.indexOf("function renderSidebarActions");
+    const profileMenuSource = clientSource.slice(profileMenuStart, sidebarActionsStart);
     const newChatStart = clientSource.indexOf("function renderNewChatAction");
     const sidebarUtilityStart = clientSource.indexOf("function renderSidebarUtilityActions");
     const newChatSource = clientSource.slice(newChatStart, sidebarUtilityStart);
@@ -548,14 +619,7 @@ describe("chat image-generation presentation", () => {
     );
     expect(newChatSource).toContain("SIDEBAR_LABEL_CLASS");
     expect(newChatSource).toContain("min-h-12 w-full");
-    expect(sidebarModeSource).toContain("getModeButtonClass(activeTheme");
-    expect(sidebarModeSource).toContain("Standard");
-    expect(sidebarModeSource).toContain("Web Search");
-    expect(sidebarModeSource).toContain("Create image");
-    expect(sidebarModeSource).not.toContain("Help");
-    expect(clientSource).toContain(
-      "inline-flex h-10 items-center gap-1.5 rounded-full",
-    );
+    expect(clientSource).not.toContain("function renderSidebarModeActions");
     expect(profileMenuSource).toContain("SIDEBAR_LABEL_CLASS");
     expect(profileMenuSource).toContain("Theme");
     expect(profileMenuSource).toContain("Help");
@@ -630,7 +694,7 @@ describe("chat image-generation presentation", () => {
 
     const profileTriggerStart = clientSource.indexOf("function renderSidebarUtilityActions");
     const profileMenuStart = clientSource.indexOf("function renderProfileSettingsMenu");
-    const sidebarStart = clientSource.indexOf("function renderSidebarModeActions", profileMenuStart);
+    const sidebarStart = clientSource.indexOf("function renderSidebarActions", profileMenuStart);
     const profileTriggerSource = clientSource.slice(profileTriggerStart, profileMenuStart);
     const profileMenuSource = clientSource.slice(profileMenuStart, sidebarStart);
 
@@ -648,7 +712,7 @@ describe("chat image-generation presentation", () => {
 
   it("constrains the profile menu to the active sidebar or mobile drawer", () => {
     const profileMenuStart = clientSource.indexOf("function renderProfileSettingsMenu");
-    const profileMenuEnd = clientSource.indexOf("function renderSidebarModeActions", profileMenuStart);
+    const profileMenuEnd = clientSource.indexOf("function renderSidebarActions", profileMenuStart);
     const profileMenuSource = clientSource.slice(profileMenuStart, profileMenuEnd);
 
     expect(clientSource).toContain('trigger.closest<HTMLElement>("[data-profile-sidebar]")');

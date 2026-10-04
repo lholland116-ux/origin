@@ -87,8 +87,8 @@ describe("multi-image chat attachments", () => {
     expect(canSubmitWithPendingImages("", 1, 0)).toBe(true);
     expect(canSubmitWithPendingImages("", 0, 0)).toBe(false);
     expect(clientSource).toContain('"Web Search mode does not support image upload."');
-    expect(clientSource).toContain('params.useWebSearch || !params.hasImages ? {} : { images: params.images }');
-    expect(clientSource).toContain('const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat"');
+    expect(clientSource).toContain("...(isStandard && params.hasImages ? { images: params.images } : {})");
+    expect(clientSource).toContain('endpoint: isStandard ? "/api/chat" : "/api/chat-web"');
   });
 
   it("keeps batch cleanup and request rollback paths explicit", () => {

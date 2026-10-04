@@ -336,7 +336,46 @@ describe("Free Web Search entitlement", () => {
         store: false,
       }),
     );
+    expect(mocks.openai.responses.create.mock.calls[0]?.[0]).not.toHaveProperty("tool_choice");
     expect(JSON.stringify(body)).not.toContain("PRO_REQUIRED");
+  });
+
+  it.each([
+    ["auto", "auto"],
+    ["force", "required"],
+  ] as const)("configures explicit Web Search mode %s as provider tool choice %s", async (webSearchMode, toolChoice) => {
+    setup({ plan: "free", usageCount: 0 });
+
+    const response = await postWebSearch(request({ webSearchMode }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [{ type: "web_search_preview" }],
+        tool_choice: toolChoice,
+      }),
+    );
+  });
+
+  it.each([
+    null,
+    "",
+    "standard",
+    "web_search",
+    "required",
+    3,
+    {},
+    [],
+    "unknown",
+  ])("rejects malformed explicit webSearchMode %j before side effects", async (webSearchMode) => {
+    const { queries } = setup({ plan: "free", usageCount: 0 });
+
+    const response = await postWebSearch(request({ webSearchMode }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "INVALID_WEB_SEARCH_MODE" });
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
   });
 
   it("includes a ready pasted-text attachment in Web Search model context", async () => {

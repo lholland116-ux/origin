@@ -133,7 +133,10 @@ type ChatRequestBody = {
   regenerate?: boolean;
   documentIds?: string[];
   reasoningMode?: unknown;
+  webSearchMode?: unknown;
 };
+
+type WebSearchMode = "auto" | "force";
 
 type Plan = "free" | "pro";
 
@@ -518,6 +521,7 @@ async function buildAssistantResponse(
   message: string,
   documentContext: string,
   chatConfig: ReturnType<typeof getGeneralChatConfig>,
+  webSearchMode: WebSearchMode | undefined,
   onProviderSettled: (params: {
     outcome: AiTelemetryOutcome;
     startedAt: number;
@@ -540,6 +544,9 @@ async function buildAssistantResponse(
       instructions: buildWebInstructions(),
       input: buildWebInput(recentMessages, message, documentContext),
       tools: [{ type: "web_search_preview" }],
+      ...(webSearchMode === undefined
+        ? {}
+        : { tool_choice: webSearchMode === "force" ? "required" : "auto" }),
       include: ["web_search_call.action.sources"],
       store: false,
     });
@@ -619,6 +626,20 @@ export async function POST(req: Request) {
         },
         400,
       );
+    }
+
+    let webSearchMode: WebSearchMode | undefined;
+    if (Object.hasOwn(body, "webSearchMode")) {
+      if (body.webSearchMode !== "auto" && body.webSearchMode !== "force") {
+        return jsonResponse(
+          {
+            error: "webSearchMode must be one of: auto, force.",
+            code: "INVALID_WEB_SEARCH_MODE",
+          },
+          400,
+        );
+      }
+      webSearchMode = body.webSearchMode;
     }
 
     const conversationId =
@@ -876,6 +897,7 @@ export async function POST(req: Request) {
       message,
       documentContext,
       chatConfig,
+      webSearchMode,
       schedulePrimaryTelemetry,
     );
 

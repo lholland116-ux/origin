@@ -292,17 +292,32 @@ export type ComposerPlusMenuAction =
   | "camera"
   | "photos"
   | "files"
-  | "create_image"
-  | "web_search"
-  | "standard";
+  | "create_image";
 
 export const COMPOSER_PLUS_MENU_LABELS: Record<ComposerPlusMenuAction, string> = {
   camera: "Camera",
   photos: "Photos",
   files: "Files",
   create_image: "Create image",
-  web_search: "Web search",
+};
+
+export type ChatRoutingMode = "auto" | "standard" | "web_search";
+
+export const CHAT_ROUTING_MODE_LABELS: Record<ChatRoutingMode, string> = {
+  auto: "Auto",
   standard: "Standard",
+  web_search: "Web Search",
+};
+
+const CHAT_ROUTING_MODE_DESCRIPTIONS: Record<ChatRoutingMode, string> = {
+  auto: "LVTChat decides when current web information is needed. Recommended.",
+  standard: "Answers without searching the web.",
+  web_search: "Searches the web for current information.",
+};
+
+const CHAT_ROUTING_SELECTOR_HELP = {
+  title: "Search mode",
+  description: "Choose whether LVTChat can search the web for your answer.",
 };
 
 export type ChatReasoningMode = "instant" | "medium" | "high";
@@ -331,32 +346,36 @@ export function isChatReasoningModeLocked(
   return mode === "high" && plan !== "pro";
 }
 
-export function buildChatRequestBody(params: {
+export function buildChatRequest(params: {
   conversationId: string;
   message: string;
   generationRequestId: string;
   documentIds: string[];
   reasoningMode: ChatReasoningMode;
-  useWebSearch: boolean;
+  routingMode: ChatRoutingMode;
   hasImages: boolean;
   images: Array<{ imagePath: string; imageName: string }>;
 }) {
+  const isStandard = params.routingMode === "standard";
+
   return {
-    conversationId: params.conversationId,
-    message: params.message,
-    generationRequestId: params.generationRequestId,
-    documentIds: params.documentIds,
-    reasoningMode: params.reasoningMode,
-    ...(params.useWebSearch || !params.hasImages ? {} : { images: params.images }),
+    endpoint: isStandard ? "/api/chat" : "/api/chat-web",
+    body: {
+      conversationId: params.conversationId,
+      message: params.message,
+      generationRequestId: params.generationRequestId,
+      documentIds: params.documentIds,
+      reasoningMode: params.reasoningMode,
+      ...(!isStandard
+        ? { webSearchMode: params.routingMode === "auto" ? "auto" : "force" }
+        : {}),
+      ...(isStandard && params.hasImages ? { images: params.images } : {}),
+    },
   };
 }
 
-export function getComposerPlusMenuActions(
-  mode: ComposerPlusMenuMode
-): ComposerPlusMenuAction[] {
-  if (mode === "web_search") return ["standard", "create_image"];
-  if (mode === "create_image") return ["standard", "web_search"];
-  return ["camera", "photos", "files", "create_image", "web_search"];
+export function getComposerPlusMenuActions(): ComposerPlusMenuAction[] {
+  return ["camera", "photos", "files", "create_image"];
 }
 
 export function canAttachLargePasteInMode(mode: ComposerPlusMenuMode): boolean {
@@ -502,30 +521,34 @@ export function ComposerPlusMenu({
             theme.panelBorder
           )}
         >
-          {getComposerPlusMenuActions(mode).map((action) => (
-            <button
-              key={action}
-              type="button"
-              role="menuitem"
-              onClick={() => onAction(action)}
-              disabled={action === "camera" && !cameraEnabled}
-              aria-disabled={action === "camera" && !cameraEnabled}
-              className={cx(
-                "flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
-                theme.inputText,
-                getChatThemeHoverClass(theme),
-                theme.id === "light" ? "focus:bg-black/5" : "focus:bg-white/10"
-              )}
-            >
-              {action === "camera" && <Camera className="h-4 w-4" aria-hidden="true" />}
-              {action === "photos" && <ImageIcon className="h-4 w-4" aria-hidden="true" />}
-              {action === "files" && <FileText className="h-4 w-4" aria-hidden="true" />}
-              {action === "create_image" && <Palette className="h-4 w-4" aria-hidden="true" />}
-              {action === "web_search" && <Globe2 className="h-4 w-4" aria-hidden="true" />}
-              {action === "standard" && <MessageCircle className="h-4 w-4" aria-hidden="true" />}
-              <span>{COMPOSER_PLUS_MENU_LABELS[action]}</span>
-            </button>
-          ))}
+          {getComposerPlusMenuActions().map((action) => {
+            const attachmentUnavailable = mode !== "standard" && action !== "create_image";
+            const actionDisabled =
+              disabled || attachmentUnavailable || (action === "camera" && !cameraEnabled);
+
+            return (
+              <button
+                key={action}
+                type="button"
+                role="menuitem"
+                onClick={() => onAction(action)}
+                disabled={actionDisabled}
+                aria-disabled={actionDisabled}
+                className={cx(
+                  "flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+                  theme.inputText,
+                  getChatThemeHoverClass(theme),
+                  theme.id === "light" ? "focus:bg-black/5" : "focus:bg-white/10"
+                )}
+              >
+                {action === "camera" && <Camera className="h-4 w-4" aria-hidden="true" />}
+                {action === "photos" && <ImageIcon className="h-4 w-4" aria-hidden="true" />}
+                {action === "files" && <FileText className="h-4 w-4" aria-hidden="true" />}
+                {action === "create_image" && <Palette className="h-4 w-4" aria-hidden="true" />}
+                <span>{COMPOSER_PLUS_MENU_LABELS[action]}</span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -567,7 +590,7 @@ export function ReasoningModeSelector({
         aria-expanded={open}
         aria-controls="composer-reasoning-menu"
         className={cx(
-          "flex h-11 w-[88px] min-w-0 items-center justify-center gap-1 rounded-xl border px-2 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[122px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-11 w-[72px] min-w-0 items-center justify-center gap-1 rounded-xl border px-1.5 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[122px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
           theme.inputBg,
           theme.inputBorder,
           theme.inputText,
@@ -584,7 +607,7 @@ export function ReasoningModeSelector({
           id="composer-reasoning-help"
           role="tooltip"
           className={cx(
-            "pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 max-w-[calc(100vw-5rem)] rounded-lg border px-3 py-2 text-left text-xs opacity-0 shadow-xl transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+            "pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 max-w-[calc(100vw-9rem)] rounded-lg border px-3 py-2 text-left text-xs opacity-0 shadow-xl transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 sm:max-w-[calc(100vw-1.5rem)]",
             theme.panelBg,
             theme.panelBorder,
             theme.inputText,
@@ -601,7 +624,7 @@ export function ReasoningModeSelector({
           role="group"
           aria-label="Reasoning mode options"
           className={cx(
-            "absolute bottom-full left-0 z-40 mb-2 w-72 max-w-[calc(100vw-5rem)] rounded-xl border p-1.5 shadow-2xl backdrop-blur sm:max-w-[calc(100vw-1.5rem)]",
+            "absolute bottom-full left-0 z-40 mb-2 w-72 max-w-[calc(100vw-9rem)] rounded-xl border p-1.5 shadow-2xl backdrop-blur sm:max-w-[calc(100vw-1.5rem)]",
             theme.panelBg,
             theme.panelBorder,
           )}
@@ -656,6 +679,129 @@ export function ReasoningModeSelector({
                 </button>
               );
             })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ChatRoutingModeSelectorProps = {
+  mode: ChatRoutingMode;
+  open: boolean;
+  disabled: boolean;
+  theme?: ChatTheme;
+  onToggle: () => void;
+  onSelect: (mode: ChatRoutingMode) => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+  containerRef?: Ref<HTMLDivElement>;
+};
+
+export function ChatRoutingModeSelector({
+  mode,
+  open,
+  disabled,
+  theme = getChatThemeById(),
+  onToggle,
+  onSelect,
+  buttonRef,
+  containerRef,
+}: ChatRoutingModeSelectorProps) {
+  return (
+    <div ref={containerRef} className="group relative min-w-0 shrink-0">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        aria-label={`Search mode: ${CHAT_ROUTING_MODE_LABELS[mode]}`}
+        aria-describedby={open ? "composer-routing-menu-help" : "composer-routing-help"}
+        aria-expanded={open}
+        aria-controls="composer-routing-menu"
+        className={cx(
+          "flex h-11 w-[60px] min-w-0 items-center justify-center gap-1 rounded-xl border px-1.5 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[136px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
+          theme.inputBg,
+          theme.inputBorder,
+          theme.inputText,
+          getChatThemeHoverClass(theme),
+        )}
+      >
+        <Globe2 className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden="true" />
+        <span className="min-w-0 truncate sm:hidden">
+          {mode === "standard" ? "Std" : mode === "web_search" ? "Web" : "Auto"}
+        </span>
+        <span className="hidden min-w-0 truncate sm:block">
+          {CHAT_ROUTING_MODE_LABELS[mode]}
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      </button>
+
+      {!open && (
+        <span
+          id="composer-routing-help"
+          role="tooltip"
+          className={cx(
+            "pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 max-w-[calc(100vw-5rem)] rounded-lg border px-3 py-2 text-left text-xs opacity-0 shadow-xl transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+            theme.panelBg,
+            theme.panelBorder,
+            theme.inputText,
+          )}
+        >
+          <span className="block font-medium">{CHAT_ROUTING_SELECTOR_HELP.title}</span>
+          <span className="mt-0.5 block">{CHAT_ROUTING_SELECTOR_HELP.description}</span>
+        </span>
+      )}
+
+      {open && (
+        <div
+          id="composer-routing-menu"
+          role="group"
+          aria-label="Search mode options"
+          className={cx(
+            "absolute bottom-full left-0 z-40 mb-2 w-72 max-w-[calc(100vw-5rem)] rounded-xl border p-1.5 shadow-2xl backdrop-blur sm:max-w-[calc(100vw-1.5rem)]",
+            theme.panelBg,
+            theme.panelBorder,
+          )}
+        >
+          <div className="px-3 pb-2 pt-1">
+            <p className={cx("text-xs font-medium", theme.inputText)}>
+              {CHAT_ROUTING_SELECTOR_HELP.title}
+            </p>
+            <p
+              id="composer-routing-menu-help"
+              className={cx("mt-0.5 text-xs opacity-75", theme.inputText)}
+            >
+              {CHAT_ROUTING_SELECTOR_HELP.description}
+            </p>
+          </div>
+          <div className={cx("mx-2 border-t", theme.panelBorder)} />
+          <div>
+            {(Object.keys(CHAT_ROUTING_MODE_LABELS) as ChatRoutingMode[]).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => onSelect(option)}
+                disabled={disabled}
+                aria-pressed={mode === option}
+                className={cx(
+                  "flex min-h-10 w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                  theme.inputText,
+                  getChatThemeHoverClass(theme),
+                )}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium">
+                    {CHAT_ROUTING_MODE_LABELS[option]}
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-snug opacity-75">
+                    {CHAT_ROUTING_MODE_DESCRIPTIONS[option]}
+                  </span>
+                </span>
+                {mode === option && (
+                  <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                )}
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -2359,24 +2505,6 @@ function getMessageCopyActionClass(
     : "text-white/55 hover:bg-white/5 hover:text-white/90";
 }
 
-function getModeButtonClass(theme: ChatTheme, isActive: boolean): string {
-  return isActive
-    ? cx(
-        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
-        SIDEBAR_LABEL_CLASS,
-        "border-blue-500/70 bg-blue-600 text-white hover:bg-blue-500"
-      )
-    : cx(
-        "inline-flex h-10 items-center gap-1.5 rounded-full border px-3 transition focus:outline-none focus:ring-2 focus:ring-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50",
-        SIDEBAR_LABEL_CLASS,
-        theme.panelBorder,
-        "bg-transparent",
-        theme.inputText,
-        getChatThemeHoverClass(theme),
-        theme.titleText
-      );
-}
-
 function getBubbleClass(theme: ChatTheme, role: "user" | "assistant"): string {
   if (role === "user") {
     return cx(
@@ -2628,7 +2756,8 @@ export default function ChatClient({
   );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [useWebSearch, setUseWebSearch] = useState(false);
+  const [routingMode, setRoutingMode] = useState<ChatRoutingMode>("auto");
+  const useWebSearch = routingMode !== "standard";
   const [useImageGeneration, setUseImageGeneration] = useState(false);
   const [reasoningMode, setReasoningMode] = useState<ChatReasoningMode>("medium");
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -2652,6 +2781,7 @@ export default function ChatClient({
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [routingMenuOpen, setRoutingMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [profileMenuPosition, setProfileMenuPosition] = useState<ProfileMenuPosition>({
     top: 0,
@@ -2764,6 +2894,8 @@ export default function ChatClient({
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const plusMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const plusMenuRef = useRef<HTMLDivElement | null>(null);
+  const routingMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const routingMenuRef = useRef<HTMLDivElement | null>(null);
   const reasoningMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const reasoningMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
@@ -2847,6 +2979,14 @@ export default function ChatClient({
 
     if (restoreFocus) {
       window.requestAnimationFrame(() => plusMenuButtonRef.current?.focus());
+    }
+  }, []);
+
+  const closeRoutingMenu = useCallback((restoreFocus = false) => {
+    setRoutingMenuOpen(false);
+
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => routingMenuButtonRef.current?.focus());
     }
   }, []);
 
@@ -3017,6 +3157,31 @@ export default function ChatClient({
   }, [closePlusMenu, plusMenuOpen]);
 
   useEffect(() => {
+    if (!routingMenuOpen) return;
+
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && routingMenuRef.current?.contains(target)) return;
+      closeRoutingMenu();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      event.preventDefault();
+      closeRoutingMenu(true);
+    };
+
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+    document.addEventListener("keydown", handleEscape, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+      document.removeEventListener("keydown", handleEscape, true);
+    };
+  }, [closeRoutingMenu, routingMenuOpen]);
+
+  useEffect(() => {
     if (!reasoningMenuOpen) return;
 
     const handleOutsidePointerDown = (event: PointerEvent) => {
@@ -3060,19 +3225,6 @@ export default function ChatClient({
       ),
     [composerDocuments]
   );
-
-  const modeLabel = useMemo(() => {
-    if (useImageGeneration) return "Image generation";
-    if (useWebSearch) return "Using web search";
-    if (isListening) return "Voice input active";
-    if (pendingImages.length > 0) {
-      return pendingImages.length === 1
-        ? "Image attached"
-        : `${pendingImages.length} images attached`;
-    }
-    if (composerDocuments.length > 0) return "Documents attached";
-    return "Standard assistant";
-  }, [useImageGeneration, useWebSearch, isListening, pendingImages.length, composerDocuments.length]);
 
   const imageGenerationUsage = usage?.imageGeneration;
   const isImageLimitReached = Boolean(
@@ -4791,21 +4943,21 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         return;
       }
 
-      const endpoint = useWebSearch ? "/api/chat-web" : "/api/chat";
-      const res = await fetch(endpoint, {
+      const chatRequest = buildChatRequest({
+        conversationId,
+        message: effectiveMessage,
+        generationRequestId,
+        documentIds: payloadDocumentIds,
+        reasoningMode,
+        routingMode,
+        hasImages,
+        images: payloadImages,
+      });
+      const res = await fetch(chatRequest.endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildChatRequestBody({
-          conversationId,
-          message: effectiveMessage,
-          generationRequestId,
-          documentIds: payloadDocumentIds,
-          reasoningMode,
-          useWebSearch,
-          hasImages,
-          images: payloadImages,
-        })),
+        body: JSON.stringify(chatRequest.body),
       });
 
       if (!res.ok) {
@@ -5221,18 +5373,19 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     abortRef.current?.abort();
   }
 
-  function handleModeChange(nextUseWebSearch: boolean): void {
+  function handleRoutingModeChange(nextRoutingMode: ChatRoutingMode): void {
     if (loading) return;
 
     closePlusMenu();
+    closeRoutingMenu(true);
     closeReasoningMenu();
 
-    if (nextUseWebSearch) {
+    if (nextRoutingMode !== "standard") {
       discardPendingImages();
       clearComposerDocuments();
     }
 
-    setUseWebSearch(nextUseWebSearch);
+    setRoutingMode(nextRoutingMode);
     setUseImageGeneration(false);
     clearTransientErrors();
   }
@@ -5241,12 +5394,20 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     if (loading) return;
 
     closePlusMenu();
+    closeRoutingMenu();
     closeReasoningMenu();
 
     discardPendingImages();
     clearComposerDocuments();
-    setUseWebSearch(false);
     setUseImageGeneration(true);
+    clearTransientErrors();
+  }
+
+  function handleReturnToAutoChat(): void {
+    if (loading) return;
+
+    setUseImageGeneration(false);
+    setRoutingMode("auto");
     clearTransientErrors();
   }
 
@@ -5273,12 +5434,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (action === "web_search") {
-      handleModeChange(true);
-      return;
-    }
-
-    handleModeChange(false);
+    handleImageModeChange();
   }
 
   function renderStatusMessages() {
@@ -5502,75 +5658,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     );
   }
 
-  function renderSidebarModeActions() {
-    const standardActive = !useWebSearch && !useImageGeneration;
-
-    return (
-      <div className="flex flex-col gap-1" aria-label="Chat modes">
-        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.standard}>
-          <button
-            type="button"
-            onClick={() => handleModeChange(false)}
-            disabled={loading}
-            className={cx(
-              "w-full justify-start",
-              getModeButtonClass(activeTheme, standardActive)
-            )}
-            aria-pressed={standardActive}
-          >
-            Standard
-          </button>
-        </Tooltip>
-
-        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.webSearch}>
-          <button
-            type="button"
-            onClick={() => handleModeChange(true)}
-            disabled={loading}
-            className={cx(
-              "w-full justify-start",
-              getModeButtonClass(activeTheme, useWebSearch)
-            )}
-            aria-pressed={useWebSearch}
-          >
-            <Globe2 className="h-4 w-4" aria-hidden="true" />
-            Web Search
-          </button>
-        </Tooltip>
-
-        <Tooltip theme={activeTheme} content={TOOLTIP_TEXT.imageMode}>
-          <button
-            type="button"
-            onClick={handleImageModeChange}
-            disabled={loading}
-            className={cx(
-              "w-full justify-start",
-              getModeButtonClass(activeTheme, useImageGeneration)
-            )}
-            aria-pressed={useImageGeneration}
-          >
-            <ImageIcon className="h-4 w-4" aria-hidden="true" />
-            Create image
-          </button>
-        </Tooltip>
-
-        {modeLabel !== "Standard assistant" && (
-          <div className={cx("px-3 pt-1 text-xs", activeTheme.mutedText)} aria-live="polite">
-            {modeLabel}
-          </div>
-        )}
-
-      </div>
-    );
-  }
-
   function renderSidebarActions() {
     return (
       <div className="mt-3 flex flex-col gap-2">
         {renderNewChatAction()}
-        <div className={cx("border-t pt-3", activeTheme.panelBorder)}>
-          {renderSidebarModeActions()}
-        </div>
       </div>
     );
   }
@@ -6229,8 +6320,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs ${activeTheme.mutedText}`}>
                       {useImageGeneration
                         ? "Generating image…"
-                        : useWebSearch
-                        ? "Using web search..."
+                        : routingMode === "web_search"
+                        ? "Searching the web..."
                         : uploadingImages
                           ? "Processing images..."
                           : isUploadingDocuments || hasPendingDocuments
@@ -6384,10 +6475,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           ? isListening
                             ? "Listening… tap mic to stop."
                             : "Describe the image you want to generate..."
-                          : useWebSearch
+                          : routingMode === "web_search"
                           ? isListening
                             ? "Listening… tap mic to stop."
-                            : "Ask something with web search..."
+                            : "Ask a question to search the web..."
                           : pendingImages.length > 0
                             ? pendingImages.length === 1
                               ? "Add context for the image, or send without text..."
@@ -6413,35 +6504,79 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     />
                   </div>
 
-                  <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
+                  <div className="flex min-w-0 items-center gap-1 px-1 pb-2">
                     <ComposerPlusMenu
                       open={plusMenuOpen}
                       mode={composerPlusMenuMode}
                       disabled={composerDisabled}
                       cameraEnabled={cameraCaptureSupported}
                       theme={activeTheme}
-                      onToggle={() => setPlusMenuOpen((open) => !open)}
+                      onToggle={() => {
+                        closeRoutingMenu();
+                        closeReasoningMenu();
+                        setPlusMenuOpen((open) => !open);
+                      }}
                       onAction={handleComposerPlusMenuAction}
                       buttonRef={plusMenuButtonRef}
                       menuRef={plusMenuRef}
                     />
 
                     {!useImageGeneration && (
-                      <ReasoningModeSelector
-                        mode={reasoningMode}
-                        plan={plan}
-                        open={reasoningMenuOpen}
+                      <>
+                        <ChatRoutingModeSelector
+                          mode={routingMode}
+                          open={routingMenuOpen}
+                          disabled={composerDisabled}
+                          theme={activeTheme}
+                          onToggle={() => {
+                            closePlusMenu();
+                            closeReasoningMenu();
+                            setRoutingMenuOpen((open) => !open);
+                          }}
+                          onSelect={handleRoutingModeChange}
+                          buttonRef={routingMenuButtonRef}
+                          containerRef={routingMenuRef}
+                        />
+                        <ReasoningModeSelector
+                          mode={reasoningMode}
+                          plan={plan}
+                          open={reasoningMenuOpen}
+                          disabled={composerDisabled}
+                          theme={activeTheme}
+                          onToggle={() => {
+                            closePlusMenu();
+                            closeRoutingMenu();
+                            setReasoningMenuOpen((open) => !open);
+                          }}
+                          onSelect={(nextMode) => {
+                            if (isChatReasoningModeLocked(nextMode, plan)) return;
+                            setReasoningMode(nextMode);
+                            closeReasoningMenu(true);
+                          }}
+                          buttonRef={reasoningMenuButtonRef}
+                          containerRef={reasoningMenuRef}
+                        />
+                      </>
+                    )}
+
+                    {useImageGeneration && (
+                      <button
+                        type="button"
+                        onClick={handleReturnToAutoChat}
                         disabled={composerDisabled}
-                        theme={activeTheme}
-                        onToggle={() => setReasoningMenuOpen((open) => !open)}
-                        onSelect={(nextMode) => {
-                          if (isChatReasoningModeLocked(nextMode, plan)) return;
-                          setReasoningMode(nextMode);
-                          closeReasoningMenu(true);
-                        }}
-                        buttonRef={reasoningMenuButtonRef}
-                        containerRef={reasoningMenuRef}
-                      />
+                        aria-label="Return to Auto text chat"
+                        className={cx(
+                          "flex h-11 shrink-0 items-center gap-1.5 rounded-xl border px-2 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:px-3 sm:text-sm",
+                          activeTheme.inputBg,
+                          activeTheme.inputBorder,
+                          activeTheme.inputText,
+                          getChatThemeHoverClass(activeTheme),
+                          "disabled:cursor-not-allowed disabled:opacity-50",
+                        )}
+                      >
+                        <MessageCircle className="h-4 w-4" aria-hidden="true" />
+                        Back to chat
+                      </button>
                     )}
 
                     <div className="hidden">

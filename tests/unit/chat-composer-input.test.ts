@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canAttachLargePasteInMode,
   canUploadDocumentInMode,
-  buildChatRequestBody,
+  buildChatRequest,
   createPastedTextAttachment,
   getComposerMessageLengthError,
   getClipboardImageFiles,
@@ -41,53 +41,63 @@ function clipboardData(params: {
 
 describe("composer large-input handling", () => {
   it.each([
-    [false, "instant"],
-    [false, "medium"],
-    [false, "high"],
-    [true, "instant"],
-    [true, "medium"],
-    [true, "high"],
-  ] as const)("includes the exact %s-route reasoning mode in its chat request body", (useWebSearch, reasoningMode) => {
-    const body = buildChatRequestBody({
+    ["standard", "/api/chat", undefined],
+    ["auto", "/api/chat-web", "auto"],
+    ["web_search", "/api/chat-web", "force"],
+  ] as const)("builds the %s request using %s with %s search policy", (routingMode, endpoint, webSearchMode) => {
+    const chatRequest = buildChatRequest({
       conversationId: "conversation-1",
       message: "A user message",
       generationRequestId: "request-1",
       documentIds: ["document-1"],
-      reasoningMode,
-      useWebSearch,
-      hasImages: !useWebSearch,
+      reasoningMode: "high",
+      routingMode,
+      hasImages: true,
       images: [{ imagePath: "image/path", imageName: "photo.png" }],
     });
 
-    expect(body).toMatchObject({
-      conversationId: "conversation-1",
-      message: "A user message",
-      generationRequestId: "request-1",
-      documentIds: ["document-1"],
-      reasoningMode,
+    expect(chatRequest.endpoint).toBe(endpoint);
+    expect(chatRequest.body).toMatchObject({
+      conversationId: "conversation-1", message: "A user message",
+      generationRequestId: "request-1", documentIds: ["document-1"], reasoningMode: "high",
     });
-    if (useWebSearch) {
-      expect(body).not.toHaveProperty("images");
+    if (webSearchMode) {
+      expect(chatRequest.body).toHaveProperty("webSearchMode", webSearchMode);
+      expect(chatRequest.body).not.toHaveProperty("images");
     } else {
-      expect(body).toHaveProperty("images", [{
+      expect(chatRequest.body).not.toHaveProperty("webSearchMode");
+      expect(chatRequest.body).toHaveProperty("images", [{
         imagePath: "image/path",
         imageName: "photo.png",
       }]);
     }
   });
 
-  it("keeps the default Medium state and sends the current selected mode", () => {
+  it("defaults routing to Auto and reasoning to Medium, preserving both in the request", () => {
+    expect(clientSource).toContain('useState<ChatRoutingMode>("auto")');
     expect(clientSource).toContain('useState<ChatReasoningMode>("medium")');
-    expect(clientSource).toContain("reasoningMode,\n          useWebSearch,");
+    const requestStart = clientSource.indexOf("const chatRequest = buildChatRequest({");
+    const requestEnd = clientSource.indexOf("});", requestStart);
+    const requestSource = clientSource.slice(requestStart, requestEnd);
+    expect(requestSource).toContain("reasoningMode,");
+    expect(requestSource).toContain("routingMode,");
     expect(clientSource).toContain("setReasoningMode(nextMode)");
   });
 
-  it("does not reset reasoning mode when Standard and Web Search change", () => {
-    const modeStart = clientSource.indexOf("function handleModeChange(");
+  it("preserves routing and reasoning selections when starting a new chat", () => {
+    const newChatStart = clientSource.indexOf("async function handleNewChat()");
+    const newChatEnd = clientSource.indexOf("async function handleRenameConversation", newChatStart);
+    const newChatSource = clientSource.slice(newChatStart, newChatEnd);
+    expect(newChatSource).not.toContain("setRoutingMode(");
+    expect(newChatSource).not.toContain("setReasoningMode(");
+  });
+
+  it("keeps reasoning selection independent of routing selection", () => {
+    const modeStart = clientSource.indexOf("function handleRoutingModeChange(");
     const modeEnd = clientSource.indexOf("function handleImageModeChange(", modeStart);
     const modeHandler = clientSource.slice(modeStart, modeEnd);
 
-    expect(modeHandler).toContain("setUseWebSearch(nextUseWebSearch)");
+    expect(modeHandler).toContain("setRoutingMode(nextRoutingMode)");
     expect(modeHandler).not.toContain("setReasoningMode(");
   });
 
