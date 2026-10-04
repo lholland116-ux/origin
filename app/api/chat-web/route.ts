@@ -8,6 +8,10 @@ import {
   selectReasoningEffort,
 } from "@/lib/ai/reasoning-effort";
 import {
+  parseUserReasoningMode,
+  resolveProviderReasoningEffort,
+} from "@/lib/ai/reasoning-mode";
+import {
   mapOpenAIResponseUsage,
   type AiRequestTelemetryRecord,
   type AiTelemetryOutcome,
@@ -128,6 +132,7 @@ type ChatRequestBody = {
   message?: string;
   regenerate?: boolean;
   documentIds?: string[];
+  reasoningMode?: unknown;
 };
 
 type Plan = "free" | "pro";
@@ -605,12 +610,47 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Invalid JSON body." }, 400);
     }
 
+    const parsedReasoningMode = parseUserReasoningMode(body);
+    if (parsedReasoningMode.kind === "invalid") {
+      return jsonResponse(
+        {
+          error: "reasoningMode must be one of: instant, medium, high.",
+          code: "INVALID_REASONING_MODE",
+        },
+        400,
+      );
+    }
+
     const conversationId =
       typeof body.conversationId === "string" ? body.conversationId : "";
 
     const message = normalizeMessage(body.message);
     const regenerate = Boolean(body.regenerate);
     const documentIds = normalizeDocumentIds(body.documentIds);
+    const plan = normalizePlan(profile.plan);
+    const adaptiveEffort = parsedReasoningMode.kind === "absent"
+      ? selectReasoningEffort({
+          route: "web_search",
+          message,
+          hasDocuments: documentIds.length > 0,
+          hasImages: false,
+        })
+      : undefined;
+    const reasoningResolution = resolveProviderReasoningEffort({
+      parsedMode: parsedReasoningMode,
+      plan,
+      adaptiveEffort,
+    });
+    if (!reasoningResolution.ok) {
+      return jsonResponse(
+        {
+          error: "High reasoning is available with Pro.",
+          code: reasoningResolution.code,
+        },
+        403,
+      );
+    }
+    const reasoningEffort = reasoningResolution.effort;
 
     if (!conversationId) {
       return jsonResponse({ error: "conversationId is required." }, 400);
@@ -655,7 +695,6 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Failed to read usage." }, 500);
     }
 
-    const plan = normalizePlan(profile.plan);
     const currentCount = usageRow?.message_count ?? 0;
     const dailyLimit = getPlanLimit(plan);
     const documentLimits = getDocumentLimits(plan);
@@ -800,12 +839,6 @@ export async function POST(req: Request) {
       console.log("USAGE:", `${currentCount + 1}/${dailyLimit}`);
     }
 
-    const reasoningEffort = selectReasoningEffort({
-      route: "web_search",
-      message,
-      hasDocuments: persistedDocuments.length > 0,
-      hasImages: false,
-    });
     const chatConfig = getGeneralChatConfig(reasoningEffort);
     let primaryTelemetryRecorded = false;
 

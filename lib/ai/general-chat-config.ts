@@ -1,4 +1,4 @@
-import type { AdaptiveReasoningEffort } from "./reasoning-effort";
+import type { ProviderChatReasoningEffort } from "./reasoning-mode";
 
 /** The production default for Standard Chat and Web Search primary requests. */
 export const GPT_6_LUNA_MODEL = "gpt-6-luna";
@@ -13,7 +13,7 @@ export const GENERAL_CHAT_ROLLBACK_MODEL = GPT_5_6_LUNA_MODEL;
  * OpenAI request configuration for a primary general-chat response only.
  * Titles, CAPA, and document-intent planning intentionally do not use it.
  */
-export function getGeneralChatConfig(effort: AdaptiveReasoningEffort) {
+export function getGeneralChatConfig(effort: ProviderChatReasoningEffort) {
   return {
     model: GENERAL_CHAT_MODEL,
     reasoning: { effort },

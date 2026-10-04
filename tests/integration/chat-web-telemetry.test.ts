@@ -288,11 +288,37 @@ describe("POST /api/chat-web telemetry", () => {
   it.each([
     ["Rewrite this paragraph.", "low"],
     ["What is photosynthesis?", "medium"],
-    ["Analyze the root cause of this failure.", "high"],
+    ["Analyze the root cause of this failure.", "medium"],
   ] as const)("uses the selected %s effort for both provider and telemetry", async (message, effort) => {
     await POST(request({ message }));
     expect(mocks.openai.responses.create).toHaveBeenCalledWith(expect.objectContaining({ reasoning: { effort } }));
     expect(telemetryCalls()).toEqual([expect.objectContaining({ reasoningEffort: effort })]);
+  });
+
+  it.each([
+    ["instant", "none", "free"],
+    ["medium", "medium", "free"],
+    ["high", "high", "pro"],
+  ] as const)("records explicit %s as provider effort %s", async (reasoningMode, effort, plan) => {
+    setup({ plan });
+    const response = await POST(request({ reasoningMode }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort } }),
+    );
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ reasoningEffort: effort, attemptKind: "primary" }),
+    ]);
+  });
+
+  it("rejects explicit Free High without provider invocation telemetry", async () => {
+    setup({ plan: "free" });
+    const response = await POST(request({ reasoningMode: "high" }));
+
+    expect(response.status).toBe(403);
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    expect(telemetryCalls()).toEqual([]);
   });
 
   it("records the normalized Pro plan", async () => {
@@ -311,7 +337,7 @@ describe("POST /api/chat-web telemetry", () => {
     setup({ conversationTitle: "New Chat" });
     mocks.openai.responses.create.mockResolvedValueOnce(primaryResponse()).mockResolvedValueOnce({ output_text: "Generated title" });
 
-    const response = await POST(request());
+    const response = await POST(request({ reasoningMode: "medium" }));
     expect(response.status).toBe(200);
     expect(mocks.openai.responses.create).toHaveBeenCalledTimes(2);
     expect(telemetryCalls()).toEqual([expect.objectContaining({ attemptKind: "primary", route: "web_search" })]);

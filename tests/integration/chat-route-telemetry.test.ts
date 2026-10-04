@@ -71,6 +71,7 @@ function setup(params: {
   plan?: "free" | "pro";
   conversationTitle?: string;
   assistantInsertError?: unknown;
+  latestMessage?: string;
 } = {}) {
   const queries = {
     conversations: query({
@@ -97,7 +98,7 @@ function setup(params: {
           {
             id: "30000000-0000-4000-8000-000000000001",
             role: "user",
-            content: "What is photosynthesis?",
+            content: params.latestMessage ?? "What is photosynthesis?",
             created_at: "2026-10-03T00:00:00.000Z",
           },
         ],
@@ -502,7 +503,7 @@ describe("POST /api/chat telemetry", () => {
   it.each([
     ["Rewrite this paragraph.", "low"],
     ["What is photosynthesis?", "medium"],
-    ["Analyze the root cause of this failure.", "high"],
+    ["Analyze the root cause of this failure.", "medium"],
   ] as const)("records the same selected %s effort used by the provider", async (message, effort) => {
     const response = await POST(request({ message }));
     await response.text();
@@ -519,5 +520,74 @@ describe("POST /api/chat telemetry", () => {
     const response = await POST(request());
     expect(await response.text()).toContain("Photosynthesis uses light.");
     expect(mocks.writeAiRequestTelemetry).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["instant", "none", "free"],
+    ["medium", "medium", "free"],
+    ["high", "high", "pro"],
+  ] as const)("records explicit %s as provider effort %s", async (reasoningMode, effort, plan) => {
+    setup({ plan });
+    const response = await POST(request({ reasoningMode }));
+    await response.text();
+
+    expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort } }),
+    );
+    expect(telemetryCalls()).toEqual([
+      expect.objectContaining({ reasoningEffort: effort, attemptKind: "primary" }),
+    ]);
+  });
+
+  it("rejects explicit Free High without a provider call or invocation telemetry", async () => {
+    setup({ plan: "free" });
+    const response = await POST(request({ reasoningMode: "high" }));
+
+    expect(response.status).toBe(403);
+    expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+    expect(telemetryCalls()).toEqual([]);
+  });
+
+  it("preserves the historical adaptive input for omitted-mode regeneration", async () => {
+    setup({
+      plan: "pro",
+      latestMessage: "Analyze the root cause of this failure.",
+    });
+
+    const response = await POST(request({ regenerate: true, message: "" }));
+    await response.text();
+
+    expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "high" } }),
+    );
+  });
+
+  it("reuses explicit Instant for a weak-image retry", async () => {
+    setup({ plan: "free" });
+    mocks.openai.responses.stream.mockReturnValueOnce(events(
+      { type: "response.output_text.delta", delta: "No." },
+      completed({ input_tokens: 10, total_tokens: 12 }),
+    ));
+    mocks.openai.responses.create.mockResolvedValueOnce({
+      status: "completed",
+      output_text: "A complete image analysis response.",
+    });
+
+    const response = await POST(request({
+      reasoningMode: "instant",
+      imageBase64: `data:image/png;base64,${"a".repeat(1_000)}`,
+    }));
+    await response.text();
+
+    expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "none" } }),
+    );
+    expect(mocks.openai.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "none" } }),
+    );
+    expect(telemetryCalls()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attemptKind: "primary", reasoningEffort: "none" }),
+      expect.objectContaining({ attemptKind: "image_retry", reasoningEffort: "none" }),
+    ]));
   });
 });

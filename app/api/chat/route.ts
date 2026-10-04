@@ -9,6 +9,10 @@ import {
   selectReasoningEffort,
 } from "@/lib/ai/reasoning-effort";
 import {
+  parseUserReasoningMode,
+  resolveProviderReasoningEffort,
+} from "@/lib/ai/reasoning-mode";
+import {
   mapOpenAIResponseUsage,
   type AiRequestTelemetryRecord,
   type AiTelemetryOutcome,
@@ -139,6 +143,7 @@ type ChatRequestBody = {
   images?: unknown;
   documentIds?: string[];
   generationRequestId?: string;
+  reasoningMode?: unknown;
 };
 
 type DbMessage = {
@@ -638,6 +643,17 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Invalid JSON body." }, 400);
     }
 
+    const parsedReasoningMode = parseUserReasoningMode(body);
+    if (parsedReasoningMode.kind === "invalid") {
+      return jsonResponse(
+        {
+          error: "reasoningMode must be one of: instant, medium, high.",
+          code: "INVALID_REASONING_MODE",
+        },
+        400,
+      );
+    }
+
     const conversationId = normalizeString(body.conversationId);
     const message = normalizeString(body.message);
     const regenerate = Boolean(body.regenerate);
@@ -752,37 +768,6 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Conversation not found." }, 404);
     }
 
-    if (generationRequestId) {
-      try {
-        const existing = await findGeneratedDocumentByRequest({
-          userId: user.id,
-          conversationId,
-          generationRequestId,
-        });
-
-        if (existing) {
-          const bytes = await downloadGeneratedDocument(existing);
-          return generatedDocumentResponse(
-            {
-              bytes,
-              filename: existing.filename,
-              mimeType: existing.mimeType,
-              format: existing.format,
-            },
-            {
-              generatedDocumentId: existing.id,
-              messageId: existing.messageId,
-            },
-          );
-        }
-      } catch (error) {
-        console.error("Existing generated document lookup failed:", {
-          reason: error instanceof Error ? error.message : "unknown",
-        });
-        return jsonResponse({ error: "The generated document could not be retrieved." }, 500);
-      }
-    }
-
     let plan: Plan;
     let storedImageUrls: string[] = [];
     let persistedUserMessageId: string | null = null;
@@ -833,6 +818,81 @@ export async function POST(req: Request) {
       storedImageUrls = resolvedImages.urls;
     } else {
       plan = await getUserPlan({ supabase, userId: user.id });
+    }
+
+    let adaptiveMessage = message;
+    if (parsedReasoningMode.kind === "absent" && regenerate) {
+      const { data: regenerationHistory, error: regenerationHistoryError } = await supabase
+        .from("messages")
+        .select("id, role, content, created_at")
+        .eq("conversation_id", conversationId)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true });
+
+      if (regenerationHistoryError || !regenerationHistory) {
+        console.error("Regeneration reasoning history lookup error:", regenerationHistoryError);
+        return jsonResponse({ error: "Failed to prepare regeneration." }, 500);
+      }
+
+      const latestUserMessage = [...(regenerationHistory as DbMessage[])]
+        .reverse()
+        .find((historyMessage) => historyMessage.role === "user")?.content;
+      adaptiveMessage = latestUserMessage ?? "";
+    }
+
+    const adaptiveEffort = parsedReasoningMode.kind === "absent"
+      ? selectReasoningEffort({
+          route: "standard",
+          message: adaptiveMessage,
+          hasDocuments: documentIds.length > 0,
+          hasImages: Boolean(imageBase64) || hasStoredImages,
+        })
+      : undefined;
+    const reasoningResolution = resolveProviderReasoningEffort({
+      parsedMode: parsedReasoningMode,
+      plan,
+      adaptiveEffort,
+    });
+    if (!reasoningResolution.ok) {
+      return jsonResponse(
+        {
+          error: "High reasoning is available with Pro.",
+          code: reasoningResolution.code,
+        },
+        403,
+      );
+    }
+    const reasoningEffort = reasoningResolution.effort;
+
+    if (generationRequestId) {
+      try {
+        const existing = await findGeneratedDocumentByRequest({
+          userId: user.id,
+          conversationId,
+          generationRequestId,
+        });
+
+        if (existing) {
+          const bytes = await downloadGeneratedDocument(existing);
+          return generatedDocumentResponse(
+            {
+              bytes,
+              filename: existing.filename,
+              mimeType: existing.mimeType,
+              format: existing.format,
+            },
+            {
+              generatedDocumentId: existing.id,
+              messageId: existing.messageId,
+            },
+          );
+        }
+      } catch (error) {
+        console.error("Existing generated document lookup failed:", {
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+        return jsonResponse({ error: "The generated document could not be retrieved." }, 500);
+      }
     }
 
     const dailyLimit = getPlanLimit(plan);
@@ -1213,12 +1273,6 @@ export async function POST(req: Request) {
       imageUrls: storedImageUrls,
       documentContext,
     }) as never;
-    const reasoningEffort = selectReasoningEffort({
-      route: "standard",
-      message: latestUserMessage,
-      hasDocuments: persistedDocuments.length > 0,
-      hasImages: Boolean(imageBase64) || storedImageUrls.length > 0,
-    });
     const chatConfig = getGeneralChatConfig(reasoningEffort);
     const primaryHadImage = Boolean(imageBase64) || storedImageUrls.length > 0;
     const telemetryWrites: Promise<unknown>[] = [];

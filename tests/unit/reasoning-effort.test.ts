@@ -6,9 +6,14 @@ import {
 } from "@/lib/ai/general-chat-config";
 import {
   selectReasoningEffort,
-  type AdaptiveReasoningEffort,
   type AdaptiveReasoningInput,
 } from "@/lib/ai/reasoning-effort";
+import {
+  mapUserReasoningModeToProviderEffort,
+  parseUserReasoningMode,
+  resolveProviderReasoningEffort,
+  type UserReasoningMode,
+} from "@/lib/ai/reasoning-mode";
 
 function select(message: string, overrides: Partial<AdaptiveReasoningInput> = {}) {
   return selectReasoningEffort({ route: "standard", message, ...overrides });
@@ -90,9 +95,9 @@ describe("selectReasoningEffort", () => {
 });
 
 describe("getGeneralChatConfig", () => {
-  it.each(["low", "medium", "high"] as const)(
+  it.each(["none", "low", "medium", "high"] as const)(
     "returns only the shared primary general-chat configuration for %s effort",
-    (effort: AdaptiveReasoningEffort) => {
+    (effort) => {
       expect(getGeneralChatConfig(effort)).toEqual({
         model: GENERAL_CHAT_MODEL,
         reasoning: { effort },
@@ -104,5 +109,81 @@ describe("getGeneralChatConfig", () => {
   it("uses GPT-6 Luna as the shared default while retaining GPT-5.6 for rollback", () => {
     expect(GENERAL_CHAT_MODEL).toBe("gpt-6-luna");
     expect(GENERAL_CHAT_ROLLBACK_MODEL).toBe("gpt-5.6-luna");
+  });
+});
+
+describe("public reasoning mode contract", () => {
+  it.each(["instant", "medium", "high"] as const)(
+    "accepts the exact public mode %s",
+    (mode) => {
+      expect(parseUserReasoningMode({ reasoningMode: mode })).toEqual({ kind: "valid", mode });
+    },
+  );
+
+  it("distinguishes an omitted property from an explicitly invalid value", () => {
+    expect(parseUserReasoningMode({})).toEqual({ kind: "absent" });
+    expect(parseUserReasoningMode({ reasoningMode: undefined })).toEqual({ kind: "invalid" });
+    expect(parseUserReasoningMode({ reasoningMode: null })).toEqual({ kind: "invalid" });
+  });
+
+  it.each([
+    "",
+    "Instant",
+    "MEDIUM",
+    "low",
+    "none",
+    "minimal",
+    "xhigh",
+    "max",
+    1,
+    true,
+    [],
+    {},
+  ])("rejects invalid public mode value %s", (reasoningMode) => {
+    expect(parseUserReasoningMode({ reasoningMode })).toEqual({ kind: "invalid" });
+  });
+
+  it.each([
+    ["instant", "none"],
+    ["medium", "medium"],
+    ["high", "high"],
+  ] as const)("maps %s to provider effort %s", (mode, effort) => {
+    expect(mapUserReasoningModeToProviderEffort(mode)).toBe(effort);
+  });
+
+  it.each([
+    ["free", "instant", "none"],
+    ["free", "medium", "medium"],
+    ["pro", "instant", "none"],
+    ["pro", "medium", "medium"],
+    ["pro", "high", "high"],
+  ] as const)("resolves explicit %s/%s to %s", (plan, mode, effort) => {
+    expect(resolveProviderReasoningEffort({
+      parsedMode: { kind: "valid", mode: mode as UserReasoningMode },
+      plan,
+    })).toEqual({ ok: true, effort });
+  });
+
+  it("denies explicit High for Free without downgrading it", () => {
+    expect(resolveProviderReasoningEffort({
+      parsedMode: { kind: "valid", mode: "high" },
+      plan: "free",
+    })).toEqual({ ok: false, code: "REASONING_MODE_NOT_ENTITLED" });
+  });
+
+  it.each([
+    ["free", "low", "low"],
+    ["free", "medium", "medium"],
+    ["free", "high", "medium"],
+    ["pro", "low", "low"],
+    ["pro", "medium", "medium"],
+    ["pro", "high", "high"],
+    ["unknown", "high", "medium"],
+  ] as const)("applies the omitted-field compatibility ceiling for %s/%s", (plan, adaptiveEffort, effort) => {
+    expect(resolveProviderReasoningEffort({
+      parsedMode: { kind: "absent" },
+      plan,
+      adaptiveEffort,
+    })).toEqual({ ok: true, effort });
   });
 });

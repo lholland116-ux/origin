@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
       stream: vi.fn(),
     },
   },
+  writeAiRequestTelemetry: vi.fn(),
 }));
 
 vi.mock("../../lib/supabase/server", () => ({
@@ -45,6 +46,9 @@ vi.mock("../../lib/supabase/server", () => ({
 }));
 
 vi.mock("../../lib/openai", () => ({ openai: mocks.openai }));
+vi.mock("../../lib/ai/request-telemetry-writer", () => ({
+  writeAiRequestTelemetry: mocks.writeAiRequestTelemetry,
+}));
 
 vi.mock("../../lib/documents/prepare-context", () => ({
   buildDocumentContext: vi.fn((documents: Array<{
@@ -208,6 +212,102 @@ function standardRequest(body: Record<string, unknown> = {}) {
 describe("Free Web Search entitlement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.writeAiRequestTelemetry.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    ["standard", "free", "instant", "none"],
+    ["standard", "free", "medium", "medium"],
+    ["standard", "pro", "instant", "none"],
+    ["standard", "pro", "medium", "medium"],
+    ["standard", "pro", "high", "high"],
+    ["web_search", "free", "instant", "none"],
+    ["web_search", "free", "medium", "medium"],
+    ["web_search", "pro", "instant", "none"],
+    ["web_search", "pro", "medium", "medium"],
+    ["web_search", "pro", "high", "high"],
+  ] as const)("uses explicit %s reasoning mode %s for %s as provider effort %s", async (route, plan, reasoningMode, effort) => {
+    setup({ plan, usageCount: 0 });
+    const response = route === "standard"
+      ? await postStandard(standardRequest({ reasoningMode }))
+      : await postWebSearch(request({ reasoningMode }));
+    if (route === "standard") await response.text();
+
+    expect(response.status).toBe(200);
+    const providerCalls = route === "standard"
+      ? mocks.openai.responses.stream
+      : mocks.openai.responses.create;
+    expect(providerCalls).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort } }),
+    );
+  });
+
+  it.each(["standard", "web_search"] as const)("rejects explicit Free High on %s before side effects", async (route) => {
+    const { queries } = setup({ plan: "free", usageCount: 0 });
+    const response = route === "standard"
+      ? await postStandard(standardRequest({ reasoningMode: "high" }))
+      : await postWebSearch(request({ reasoningMode: "high" }));
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: "High reasoning is available with Pro.",
+      code: "REASONING_MODE_NOT_ENTITLED",
+    });
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(queries.messages.insert).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    expect(mocks.writeAiRequestTelemetry).not.toHaveBeenCalled();
+  });
+
+  it.each(["standard", "web_search"] as const)("rejects malformed explicit selector on %s before side effects", async (route) => {
+    const { queries } = setup({ plan: "pro", usageCount: 0 });
+    const response = route === "standard"
+      ? await postStandard(standardRequest({ reasoningMode: "xhigh" }))
+      : await postWebSearch(request({ reasoningMode: "xhigh" }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "INVALID_REASONING_MODE" });
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(queries.messages.insert).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    expect(mocks.writeAiRequestTelemetry).not.toHaveBeenCalled();
+  });
+
+  it.each(["standard", "web_search"] as const)("caps omitted adaptive High to medium for Free on %s", async (route) => {
+    setup({ plan: "free", usageCount: 0 });
+    const message = "Analyze the root cause of this validation failure.";
+    const response = route === "standard"
+      ? await postStandard(standardRequest({ message }))
+      : await postWebSearch(request({ message }));
+    if (route === "standard") await response.text();
+
+    const providerCalls = route === "standard"
+      ? mocks.openai.responses.stream
+      : mocks.openai.responses.create;
+    expect(providerCalls).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "medium" } }),
+    );
+    expect(providerCalls).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "high" } }),
+    );
+  });
+
+  it.each(["standard", "web_search"] as const)("preserves omitted adaptive High for Pro on %s", async (route) => {
+    setup({ plan: "pro", usageCount: 0 });
+    const message = "Analyze the root cause of this validation failure.";
+    const response = route === "standard"
+      ? await postStandard(standardRequest({ message }))
+      : await postWebSearch(request({ message }));
+    if (route === "standard") await response.text();
+
+    const providerCalls = route === "standard"
+      ? mocks.openai.responses.stream
+      : mocks.openai.responses.create;
+    expect(providerCalls).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: { effort: "high" } }),
+    );
   });
 
   it("allows an authenticated Free user to use Web Search and counts one shared message", async () => {
@@ -388,7 +488,7 @@ describe("Free Web Search entitlement", () => {
     ["What is the latest Node.js version?", "medium"],
     [
       "Compare the current Node.js release with our production version and assess migration risks.",
-      "high",
+      "medium",
     ],
   ] as const)("sends %s reasoning effort on the primary Web Search request", async (message, effort) => {
     setup({ plan: "free", usageCount: 0 });
@@ -463,7 +563,7 @@ describe("Free Web Search entitlement", () => {
   it.each([
     ["Rewrite this paragraph more clearly.", "low"],
     ["What is photosynthesis?", "medium"],
-    ["Analyze the root cause of this validation failure.", "high"],
+    ["Analyze the root cause of this validation failure.", "medium"],
   ] as const)("sends %s reasoning effort on the primary Standard request", async (message, effort) => {
     setup({ plan: "free", usageCount: 0 });
 
@@ -513,7 +613,7 @@ describe("Free Web Search entitlement", () => {
     );
   });
 
-  it("keeps conversation-title generation outside adaptive reasoning", async () => {
+  it("keeps conversation-title generation outside an explicit reasoning mode", async () => {
     setup({
       plan: "free",
       usageCount: 0,
@@ -521,7 +621,7 @@ describe("Free Web Search entitlement", () => {
     });
 
     const response = await postStandard(
-      standardRequest({ message: "What is photosynthesis?" }),
+      standardRequest({ message: "What is photosynthesis?", reasoningMode: "medium" }),
     );
     await response.text();
 

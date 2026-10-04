@@ -433,11 +433,16 @@ describe("POST /api/chat document generation integration", () => {
   it("supports binary persistence metadata using PDF", async () => {
     setupSupabase({});
     configureDocumentPlanner("pdf");
-    const response = await request({ message: "Create a PDF summary." });
+    const response = await request({
+      message: "Create a PDF summary.",
+      reasoningMode: "instant",
+    });
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/pdf");
     expect(response.headers.get("x-generated-document-id")).toBe("450e8400-e29b-41d4-a716-446655440000");
     expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).toHaveBeenCalledOnce();
+    expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
+    expect(mocks.openai.responses.create.mock.calls[0]?.[0]).not.toHaveProperty("reasoning");
   });
 });
