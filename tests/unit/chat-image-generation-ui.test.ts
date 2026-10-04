@@ -117,9 +117,13 @@ describe("chat image-generation presentation", () => {
     expect(markup).toContain("Auto");
     expect(markup).toContain("Standard");
     expect(markup).toContain("Web Search");
-    expect(markup).toContain("w-[60px]");
+    expect(markup).toContain("w-[78px]");
     expect(markup).toContain("sm:w-[136px]");
     expect(markup).toContain("sm:hidden");
+    expect(markup).toContain("whitespace-nowrap sm:hidden");
+    expect(markup).not.toContain("truncate");
+    expect(renderRoutingSelector("standard")).toContain(">Standard</span>");
+    expect(renderRoutingSelector("web_search")).toContain(">Web</span>");
   });
 
   it("makes closed routing help discoverable on hover and keyboard focus", () => {
@@ -178,8 +182,10 @@ describe("chat image-generation presentation", () => {
     expect(markup).toContain("Medium");
     expect(markup).toContain("High");
     expect(markup).toContain('aria-pressed="true"');
-    expect(markup).toContain("w-[72px]");
+    expect(markup).toContain("w-[78px]");
     expect(markup).toContain("sm:w-[122px]");
+    expect(markup).toContain("whitespace-nowrap");
+    expect(markup).not.toContain("truncate");
   });
 
   it("makes closed-selector help discoverable on hover and keyboard focus", () => {

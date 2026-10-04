@@ -590,7 +590,7 @@ export function ReasoningModeSelector({
         aria-expanded={open}
         aria-controls="composer-reasoning-menu"
         className={cx(
-          "flex h-11 w-[72px] min-w-0 items-center justify-center gap-1 rounded-xl border px-1.5 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[122px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-11 w-[78px] min-w-0 items-center justify-center gap-1 rounded-xl border px-1 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[122px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
           theme.inputBg,
           theme.inputBorder,
           theme.inputText,
@@ -598,7 +598,7 @@ export function ReasoningModeSelector({
         )}
       >
         <Brain className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden="true" />
-        <span className="min-w-0 truncate">{CHAT_REASONING_MODE_LABELS[mode]}</span>
+        <span className="min-w-0 whitespace-nowrap">{CHAT_REASONING_MODE_LABELS[mode]}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       </button>
 
@@ -719,7 +719,7 @@ export function ChatRoutingModeSelector({
         aria-expanded={open}
         aria-controls="composer-routing-menu"
         className={cx(
-          "flex h-11 w-[60px] min-w-0 items-center justify-center gap-1 rounded-xl border px-1.5 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[136px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-11 w-[78px] min-w-0 items-center justify-center gap-1 rounded-xl border px-1 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[136px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
           theme.inputBg,
           theme.inputBorder,
           theme.inputText,
@@ -727,10 +727,10 @@ export function ChatRoutingModeSelector({
         )}
       >
         <Globe2 className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden="true" />
-        <span className="min-w-0 truncate sm:hidden">
-          {mode === "standard" ? "Std" : mode === "web_search" ? "Web" : "Auto"}
+        <span className="min-w-0 whitespace-nowrap sm:hidden">
+          {mode === "web_search" ? "Web" : CHAT_ROUTING_MODE_LABELS[mode]}
         </span>
-        <span className="hidden min-w-0 truncate sm:block">
+        <span className="hidden min-w-0 whitespace-nowrap sm:block">
           {CHAT_ROUTING_MODE_LABELS[mode]}
         </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -6504,7 +6504,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     />
                   </div>
 
-                  <div className="flex min-w-0 items-center gap-1 px-1 pb-2">
+                  <div className="flex min-w-0 items-center gap-0 px-0 pb-2 sm:gap-1 sm:px-1">
                     <ComposerPlusMenu
                       open={plusMenuOpen}
                       mode={composerPlusMenuMode}
