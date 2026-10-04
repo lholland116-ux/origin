@@ -1,19 +1,28 @@
 import { readFileSync } from "node:fs";
+import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  CHAT_REASONING_MODE_LABELS,
   COMPOSER_PLUS_MENU_LABELS,
   ComposerPlusMenu,
+  ReasoningModeSelector,
   getComposerPlusMenuActions,
   GeneratedImageAttribution,
   getGeneratedImageActionClass,
   getSelectedImageFiles,
   getProfileDisplayName,
   getUploadedMessageImageGridClass,
+  isChatReasoningModeLocked,
   isCameraCaptureSupported,
 } from "@/app/chat/ChatClient";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
+type SelectorNode = ReactElement<{
+  children?: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+}>;
 
 function renderPlusMenu(
   mode: "standard" | "web_search" | "create_image",
@@ -31,7 +40,111 @@ function renderPlusMenu(
   );
 }
 
+function renderReasoningSelector(mode: "instant" | "medium" | "high", plan: "free" | "pro"): string {
+  return renderToStaticMarkup(
+    ReasoningModeSelector({
+      mode,
+      plan,
+      open: true,
+      disabled: false,
+      onToggle: () => undefined,
+      onSelect: () => undefined,
+    }),
+  );
+}
+
 describe("chat image-generation presentation", () => {
+  it("renders the compact accessible selector and all three user-facing options", () => {
+    expect(CHAT_REASONING_MODE_LABELS).toEqual({
+      instant: "Instant",
+      medium: "Medium",
+      high: "High",
+    });
+    const markup = renderReasoningSelector("medium", "pro");
+
+    expect(markup).toContain('aria-label="Reasoning mode: Medium"');
+    expect(markup).toContain('aria-controls="composer-reasoning-menu"');
+    expect(markup).toContain('aria-label="Reasoning mode options"');
+    expect(markup).toContain("Instant");
+    expect(markup).toContain("Medium");
+    expect(markup).toContain("High");
+    expect(markup).toContain('aria-pressed="true"');
+    expect(markup).toContain("w-[88px]");
+    expect(markup).toContain("sm:w-[122px]");
+  });
+
+  it("keeps High visible but disabled and announced as Pro-locked for Free", () => {
+    const markup = renderReasoningSelector("medium", "free");
+
+    expect(markup).toContain(">High</span>");
+    expect(markup).toContain('title="High reasoning is available with Pro."');
+    expect(markup).toContain("Locked. Pro plan required.");
+    expect(isChatReasoningModeLocked("high", "free")).toBe(true);
+    expect(isChatReasoningModeLocked("high", "pro")).toBe(false);
+    expect(isChatReasoningModeLocked("medium", "free")).toBe(false);
+  });
+
+  it("dispatches selectable modes and does not dispatch locked Free High", () => {
+    const onSelect = vi.fn();
+    const selector = ReasoningModeSelector({
+      mode: "medium",
+      plan: "free",
+      open: true,
+      disabled: false,
+      onToggle: () => undefined,
+      onSelect,
+    });
+    const [, menu] = (selector as SelectorNode).props.children as SelectorNode[];
+    const options = menu!.props.children as SelectorNode[];
+    const instant = options.find((option) => option.key === "instant")!;
+    const medium = options.find((option) => option.key === "medium")!;
+    const high = options.find((option) => option.key === "high")!;
+
+    (instant.props.onClick as () => void)();
+    (medium.props.onClick as () => void)();
+    (high.props.onClick as () => void)();
+
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    expect(onSelect).toHaveBeenCalledWith("instant");
+    expect(onSelect).toHaveBeenCalledWith("medium");
+    expect(high.props.disabled).toBe(true);
+  });
+
+  it("allows Pro High and keeps the selector separate from the existing plus menu", () => {
+    const onSelect = vi.fn();
+    const selector = ReasoningModeSelector({
+      mode: "medium",
+      plan: "pro",
+      open: true,
+      disabled: false,
+      onToggle: () => undefined,
+      onSelect,
+    });
+    const [, menu] = (selector as SelectorNode).props.children as SelectorNode[];
+    const high = (menu!.props.children as SelectorNode[]).find((option) => option.key === "high")!;
+
+    expect(high.props.disabled).toBe(false);
+    (high.props.onClick as () => void)();
+    expect(onSelect).toHaveBeenCalledWith("high");
+
+    const composerStart = clientSource.indexOf("<form");
+    const composerEnd = clientSource.indexOf("</form>", composerStart);
+    const composerSource = clientSource.slice(composerStart, composerEnd);
+    expect(composerSource.indexOf("<ComposerPlusMenu")).toBeLessThan(
+      composerSource.indexOf("<ReasoningModeSelector"),
+    );
+    expect(composerSource.indexOf("<ReasoningModeSelector")).toBeLessThan(
+      composerSource.indexOf("TOOLTIP_TEXT.mic"),
+    );
+    expect(getComposerPlusMenuActions("standard")).toEqual([
+      "camera",
+      "photos",
+      "files",
+      "create_image",
+      "web_search",
+    ]);
+  });
+
   it("renders one compact conversation starter with the requested label", () => {
     expect(clientSource).toContain(
       'const CONVERSATION_STARTER = "Explain something step by step";'

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canAttachLargePasteInMode,
   canUploadDocumentInMode,
+  buildChatRequestBody,
   createPastedTextAttachment,
   getComposerMessageLengthError,
   getClipboardImageFiles,
@@ -39,6 +40,57 @@ function clipboardData(params: {
 }
 
 describe("composer large-input handling", () => {
+  it.each([
+    [false, "instant"],
+    [false, "medium"],
+    [false, "high"],
+    [true, "instant"],
+    [true, "medium"],
+    [true, "high"],
+  ] as const)("includes the exact %s-route reasoning mode in its chat request body", (useWebSearch, reasoningMode) => {
+    const body = buildChatRequestBody({
+      conversationId: "conversation-1",
+      message: "A user message",
+      generationRequestId: "request-1",
+      documentIds: ["document-1"],
+      reasoningMode,
+      useWebSearch,
+      hasImages: !useWebSearch,
+      images: [{ imagePath: "image/path", imageName: "photo.png" }],
+    });
+
+    expect(body).toMatchObject({
+      conversationId: "conversation-1",
+      message: "A user message",
+      generationRequestId: "request-1",
+      documentIds: ["document-1"],
+      reasoningMode,
+    });
+    if (useWebSearch) {
+      expect(body).not.toHaveProperty("images");
+    } else {
+      expect(body).toHaveProperty("images", [{
+        imagePath: "image/path",
+        imageName: "photo.png",
+      }]);
+    }
+  });
+
+  it("keeps the default Medium state and sends the current selected mode", () => {
+    expect(clientSource).toContain('useState<ChatReasoningMode>("medium")');
+    expect(clientSource).toContain("reasoningMode,\n          useWebSearch,");
+    expect(clientSource).toContain("setReasoningMode(nextMode)");
+  });
+
+  it("does not reset reasoning mode when Standard and Web Search change", () => {
+    const modeStart = clientSource.indexOf("function handleModeChange(");
+    const modeEnd = clientSource.indexOf("function handleImageModeChange(", modeStart);
+    const modeHandler = clientSource.slice(modeStart, modeEnd);
+
+    expect(modeHandler).toContain("setUseWebSearch(nextUseWebSearch)");
+    expect(modeHandler).not.toContain("setReasoningMode(");
+  });
+
   it("keeps ordinary pastes inline and converts only oversized pastes", () => {
     expect(shouldConvertLargePasteToAttachment("x".repeat(2000))).toBe(false);
     expect(shouldConvertLargePasteToAttachment("x".repeat(2001))).toBe(true);

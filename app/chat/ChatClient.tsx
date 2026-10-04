@@ -5,6 +5,7 @@ import NextImage from "next/image";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Brain,
   Check,
   Camera,
   ChevronDown,
@@ -16,6 +17,7 @@ import {
   Globe2,
   HelpCircle,
   ImageIcon,
+  LockKeyhole,
   Mic,
   MicOff,
   MessageCircle,
@@ -303,6 +305,41 @@ export const COMPOSER_PLUS_MENU_LABELS: Record<ComposerPlusMenuAction, string> =
   standard: "Standard",
 };
 
+export type ChatReasoningMode = "instant" | "medium" | "high";
+
+export const CHAT_REASONING_MODE_LABELS: Record<ChatReasoningMode, string> = {
+  instant: "Instant",
+  medium: "Medium",
+  high: "High",
+};
+
+export function isChatReasoningModeLocked(
+  mode: ChatReasoningMode,
+  plan: string | null | undefined,
+): boolean {
+  return mode === "high" && plan !== "pro";
+}
+
+export function buildChatRequestBody(params: {
+  conversationId: string;
+  message: string;
+  generationRequestId: string;
+  documentIds: string[];
+  reasoningMode: ChatReasoningMode;
+  useWebSearch: boolean;
+  hasImages: boolean;
+  images: Array<{ imagePath: string; imageName: string }>;
+}) {
+  return {
+    conversationId: params.conversationId,
+    message: params.message,
+    generationRequestId: params.generationRequestId,
+    documentIds: params.documentIds,
+    reasoningMode: params.reasoningMode,
+    ...(params.useWebSearch || !params.hasImages ? {} : { images: params.images }),
+  };
+}
+
 export function getComposerPlusMenuActions(
   mode: ComposerPlusMenuMode
 ): ComposerPlusMenuAction[] {
@@ -478,6 +515,100 @@ export function ComposerPlusMenu({
               <span>{COMPOSER_PLUS_MENU_LABELS[action]}</span>
             </button>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ReasoningModeSelectorProps = {
+  mode: ChatReasoningMode;
+  plan: Plan;
+  open: boolean;
+  disabled: boolean;
+  theme?: ChatTheme;
+  onToggle: () => void;
+  onSelect: (mode: ChatReasoningMode) => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+  containerRef?: Ref<HTMLDivElement>;
+};
+
+export function ReasoningModeSelector({
+  mode,
+  plan,
+  open,
+  disabled,
+  theme = getChatThemeById(),
+  onToggle,
+  onSelect,
+  buttonRef,
+  containerRef,
+}: ReasoningModeSelectorProps) {
+  return (
+    <div ref={containerRef} className="relative min-w-0 shrink-0">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        aria-label={`Reasoning mode: ${CHAT_REASONING_MODE_LABELS[mode]}`}
+        aria-expanded={open}
+        aria-controls="composer-reasoning-menu"
+        className={cx(
+          "flex h-11 w-[88px] min-w-0 items-center justify-center gap-1 rounded-xl border px-2 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[122px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
+          theme.inputBg,
+          theme.inputBorder,
+          theme.inputText,
+          getChatThemeHoverClass(theme),
+        )}
+      >
+        <Brain className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden="true" />
+        <span className="min-w-0 truncate">{CHAT_REASONING_MODE_LABELS[mode]}</span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div
+          id="composer-reasoning-menu"
+          role="group"
+          aria-label="Reasoning mode options"
+          className={cx(
+            "absolute bottom-full left-0 z-40 mb-2 w-44 max-w-[calc(100vw-1.5rem)] rounded-xl border p-1.5 shadow-2xl backdrop-blur",
+            theme.panelBg,
+            theme.panelBorder,
+          )}
+        >
+          {(Object.keys(CHAT_REASONING_MODE_LABELS) as ChatReasoningMode[]).map((option) => {
+            const locked = isChatReasoningModeLocked(option, plan);
+
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => {
+                  if (!locked) onSelect(option);
+                }}
+                disabled={disabled || locked}
+                aria-pressed={mode === option}
+                title={locked ? "High reasoning is available with Pro." : undefined}
+                className={cx(
+                  "flex min-h-10 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                  theme.inputText,
+                  !locked && getChatThemeHoverClass(theme),
+                )}
+              >
+                <span className="flex-1">{CHAT_REASONING_MODE_LABELS[option]}</span>
+                {locked ? (
+                  <>
+                    <LockKeyhole className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="sr-only">Locked. Pro plan required.</span>
+                  </>
+                ) : mode === option ? (
+                  <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -2451,6 +2582,7 @@ export default function ChatClient({
   const [loading, setLoading] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [useImageGeneration, setUseImageGeneration] = useState(false);
+  const [reasoningMode, setReasoningMode] = useState<ChatReasoningMode>("medium");
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [uploadingImages, setUploadingImages] = useState(false);
   const [cameraCaptureSupported, setCameraCaptureSupported] = useState(false);
@@ -2472,6 +2604,7 @@ export default function ChatClient({
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [profileMenuPosition, setProfileMenuPosition] = useState<ProfileMenuPosition>({
     top: 0,
     left: 0,
@@ -2583,6 +2716,8 @@ export default function ChatClient({
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const plusMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const plusMenuRef = useRef<HTMLDivElement | null>(null);
+  const reasoningMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const reasoningMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
   const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration
@@ -2604,6 +2739,12 @@ export default function ChatClient({
   useEffect(() => {
     planRef.current = plan;
   }, [plan]);
+
+  useEffect(() => {
+    if (plan !== "pro" && reasoningMode === "high") {
+      setReasoningMode("medium");
+    }
+  }, [plan, reasoningMode]);
 
   useEffect(() => {
     return () => stopReadAloud();
@@ -2658,6 +2799,14 @@ export default function ChatClient({
 
     if (restoreFocus) {
       window.requestAnimationFrame(() => plusMenuButtonRef.current?.focus());
+    }
+  }, []);
+
+  const closeReasoningMenu = useCallback((restoreFocus = false) => {
+    setReasoningMenuOpen(false);
+
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => reasoningMenuButtonRef.current?.focus());
     }
   }, []);
 
@@ -2818,6 +2967,31 @@ export default function ChatClient({
       document.removeEventListener("keydown", handleEscape, true);
     };
   }, [closePlusMenu, plusMenuOpen]);
+
+  useEffect(() => {
+    if (!reasoningMenuOpen) return;
+
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && reasoningMenuRef.current?.contains(target)) return;
+      closeReasoningMenu();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      event.preventDefault();
+      closeReasoningMenu(true);
+    };
+
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+    document.addEventListener("keydown", handleEscape, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+      document.removeEventListener("keydown", handleEscape, true);
+    };
+  }, [closeReasoningMenu, reasoningMenuOpen]);
 
   const readyComposerDocuments = useMemo(
     () => composerDocuments.filter((doc) => doc.extraction_status === "ready"),
@@ -4574,13 +4748,16 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         method: "POST",
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(buildChatRequestBody({
           conversationId,
           message: effectiveMessage,
           generationRequestId,
           documentIds: payloadDocumentIds,
-          ...(useWebSearch || !hasImages ? {} : { images: payloadImages }),
-        }),
+          reasoningMode,
+          useWebSearch,
+          hasImages,
+          images: payloadImages,
+        })),
       });
 
       if (!res.ok) {
@@ -5000,6 +5177,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     if (loading) return;
 
     closePlusMenu();
+    closeReasoningMenu();
 
     if (nextUseWebSearch) {
       discardPendingImages();
@@ -5015,6 +5193,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     if (loading) return;
 
     closePlusMenu();
+    closeReasoningMenu();
 
     discardPendingImages();
     clearComposerDocuments();
@@ -6199,6 +6378,24 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       menuRef={plusMenuRef}
                     />
 
+                    {!useImageGeneration && (
+                      <ReasoningModeSelector
+                        mode={reasoningMode}
+                        plan={plan}
+                        open={reasoningMenuOpen}
+                        disabled={composerDisabled}
+                        theme={activeTheme}
+                        onToggle={() => setReasoningMenuOpen((open) => !open)}
+                        onSelect={(nextMode) => {
+                          if (isChatReasoningModeLocked(nextMode, plan)) return;
+                          setReasoningMode(nextMode);
+                          closeReasoningMenu(true);
+                        }}
+                        buttonRef={reasoningMenuButtonRef}
+                        containerRef={reasoningMenuRef}
+                      />
+                    )}
+
                     <div className="hidden">
                       <DocumentUploadButton
                         inputRef={documentInputRef}
@@ -6234,7 +6431,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       usage &&
                       usage.remaining > 0 &&
                       usage.remaining <= 5 && (
-                        <span className="text-xs text-yellow-400">
+                        <span
+                          className="min-w-0 max-w-[90px] flex-1 truncate text-xs text-yellow-400"
+                          title={`Only ${usage.remaining} messages remaining today`}
+                        >
                           Only {usage.remaining} messages remaining today
                         </span>
                       )}
