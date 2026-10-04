@@ -2,20 +2,14 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanTextForSpeech,
-  findMatchingReadAloudVoice,
-  getAvailableReadAloudVoices,
   getActiveReadAloudMessageId,
   isReadAloudSupported,
   previewReadAloud,
   READ_ALOUD_PREVIEW_TEXT,
   startReadAloud,
   stopReadAloud,
-  subscribeToReadAloudVoices,
 } from "@/lib/read-aloud";
-import type {
-  ReadAloudPreferences,
-  ReadAloudVoicePreference,
-} from "@/lib/read-aloud-preferences";
+import type { ReadAloudPreferences } from "@/lib/read-aloud-preferences";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
 const buttonSource = readFileSync("components/chat/ReadAloudButton.tsx", "utf8");
@@ -34,48 +28,20 @@ type FakeSpeechSynthesis = {
   cancel: ReturnType<typeof vi.fn>;
   speak: ReturnType<typeof vi.fn>;
   getVoices: ReturnType<typeof vi.fn>;
-  addEventListener: ReturnType<typeof vi.fn>;
-  removeEventListener: ReturnType<typeof vi.fn>;
 };
 
-function fakeVoice(
-  voiceURI: string,
-  name: string,
-  lang: string,
-  localService = true,
-): SpeechSynthesisVoice {
-  return { voiceURI, name, lang, localService, default: false };
-}
-
-function installSpeechMocks(initialVoices: SpeechSynthesisVoice[] = []) {
+function installSpeechMocks() {
   const utterances: FakeUtterance[] = [];
-  let voices = initialVoices;
-  const voiceListeners = new Set<EventListener>();
   const synthesis: FakeSpeechSynthesis = {
     cancel: vi.fn(),
     speak: vi.fn((utterance: FakeUtterance) => utterances.push(utterance)),
-    getVoices: vi.fn(() => voices),
-    addEventListener: vi.fn((event: string, listener: EventListener) => {
-      if (event === "voiceschanged") voiceListeners.add(listener);
-    }),
-    removeEventListener: vi.fn((event: string, listener: EventListener) => {
-      if (event === "voiceschanged") voiceListeners.delete(listener);
-    }),
+    getVoices: vi.fn(),
   };
 
   vi.stubGlobal("window", { speechSynthesis: synthesis });
   vi.stubGlobal("SpeechSynthesisUtterance", FakeUtterance);
 
-  return {
-    synthesis,
-    utterances,
-    setVoices(nextVoices: SpeechSynthesisVoice[]) {
-      voices = nextVoices;
-    },
-    emitVoicesChanged() {
-      voiceListeners.forEach((listener) => listener(new Event("voiceschanged")));
-    },
-  };
+  return { synthesis, utterances };
 }
 
 describe("read aloud", () => {
@@ -116,146 +82,28 @@ describe("read aloud", () => {
     ]);
   });
 
-  it("enumerates voices immediately, refreshes on voiceschanged, and cleans up", () => {
-    const voice = fakeVoice("voice:one", "Voice One", "en-US");
-    const { synthesis, setVoices, emitVoicesChanged } = installSpeechMocks();
-    const updates: SpeechSynthesisVoice[][] = [];
-    const unsubscribe = subscribeToReadAloudVoices((voices) => {
-      updates.push([...voices]);
-    });
+  it("uses the platform default voice and language while applying the saved rate", () => {
+    const { synthesis, utterances } = installSpeechMocks();
 
-    expect(updates).toEqual([[]]);
-    expect(getAvailableReadAloudVoices()).toEqual([]);
-    setVoices([voice]);
-    emitVoicesChanged();
-    expect(updates).toEqual([[], [voice]]);
-
-    unsubscribe();
-    setVoices([]);
-    emitVoicesChanged();
-    expect(updates).toEqual([[], [voice]]);
-    expect(synthesis.addEventListener).toHaveBeenCalledWith(
-      "voiceschanged",
-      expect.any(Function),
-    );
-    expect(synthesis.removeEventListener).toHaveBeenCalledWith(
-      "voiceschanged",
-      expect.any(Function),
-    );
-  });
-
-  it("matches a saved voice exactly before falling back to voiceURI", () => {
-    const original = fakeVoice("voice:one", "Original", "en-US");
-    const changed = fakeVoice("voice:one", "Renamed", "en-GB");
-    const exactPreference: ReadAloudVoicePreference = {
-      voiceURI: original.voiceURI,
-      name: original.name,
-      lang: original.lang,
-    };
-
-    expect(findMatchingReadAloudVoice(exactPreference, [changed, original])).toBe(
-      original,
-    );
-    expect(findMatchingReadAloudVoice(exactPreference, [changed])).toBe(changed);
-    expect(
-      findMatchingReadAloudVoice(
-        { ...exactPreference, voiceURI: "voice:missing" },
-        [original],
-      ),
-    ).toBeNull();
-    expect(findMatchingReadAloudVoice(null, [original])).toBeNull();
-  });
-
-  it("applies the selected rate and leaves Device Default voice unset", () => {
-    const { utterances } = installSpeechMocks([
-      fakeVoice("voice:one", "Voice One", "en-US"),
-    ]);
-
-    expect(
-      startReadAloud("message-a", "Response", { voice: null, rate: 0.75 }),
-    ).toBe(true);
+    expect(startReadAloud("message-a", "Response", { rate: 0.75 })).toBe(true);
     expect(utterances[0]?.voice).toBeNull();
     expect(utterances[0]?.lang).toBe("");
     expect(utterances[0]?.rate).toBe(0.75);
+    expect(synthesis.getVoices).not.toHaveBeenCalled();
   });
 
-  it("binds and normalizes the selected voice language for browser speech", () => {
-    const voice = fakeVoice(
-      "voice:bg",
-      "Bulgarian Bulgaria",
-      "bg_BG",
-    );
-    const { utterances } = installSpeechMocks([voice]);
-
-    expect(
-      startReadAloud("message-bg", "Response", {
-        voice: {
-          voiceURI: voice.voiceURI,
-          name: voice.name,
-          lang: voice.lang,
-        },
-        rate: 1,
-      }),
-    ).toBe(true);
-
-    expect(utterances[0]?.voice).toBe(voice);
-    expect(utterances[0]?.lang).toBe("bg-BG");
-  });
-
-  it("restores exact and voiceURI-matched saved voices", () => {
-    const exact = fakeVoice("voice:one", "Voice One", "en-US");
-    const renamed = fakeVoice("voice:two", "Renamed Voice", "en-GB");
-    const { utterances } = installSpeechMocks([exact, renamed]);
-
-    startReadAloud("message-a", "Exact", {
-      voice: { voiceURI: "voice:one", name: "Voice One", lang: "en-US" },
-      rate: 1,
-    });
-    startReadAloud("message-b", "URI fallback", {
-      voice: { voiceURI: "voice:two", name: "Old Name", lang: "en-US" },
-      rate: 1.25,
-    });
-
-    expect(utterances[0]?.voice).toBe(exact);
-    expect(utterances[1]?.voice).toBe(renamed);
-    expect(utterances[1]?.rate).toBe(1.25);
-  });
-
-  it("uses Device Default while a saved voice is missing and restores it later", () => {
-    const restored = fakeVoice("voice:saved", "Saved Voice", "en-US");
-    const preferences: ReadAloudPreferences = {
-      voice: {
-        voiceURI: restored.voiceURI,
-        name: restored.name,
-        lang: restored.lang,
-      },
-      rate: 1,
-    };
-    const { utterances, setVoices, emitVoicesChanged } = installSpeechMocks();
-
-    startReadAloud("message-a", "Before voices load", preferences);
-    expect(utterances[0]?.voice).toBeNull();
-
-    setVoices([restored]);
-    emitVoicesChanged();
-    startReadAloud("message-b", "After voices load", preferences);
-    expect(utterances[1]?.voice).toBe(restored);
-  });
-
-  it("previews with saved options, cancels active speech, and is replaced by normal speech", () => {
-    const voice = fakeVoice("voice:preview", "Preview Voice", "en-US");
-    const preferences: ReadAloudPreferences = {
-      voice: { voiceURI: voice.voiceURI, name: voice.name, lang: voice.lang },
-      rate: 1.5,
-    };
-    const { synthesis, utterances } = installSpeechMocks([voice]);
+  it("previews with the platform default at the saved rate and cancels active speech", () => {
+    const preferences: ReadAloudPreferences = { rate: 1.5 };
+    const { synthesis, utterances } = installSpeechMocks();
 
     startReadAloud("message-a", "Active response");
     expect(previewReadAloud(preferences)).toBe(true);
     expect(getActiveReadAloudMessageId()).toBeNull();
     expect(utterances[1]?.text).toBe(READ_ALOUD_PREVIEW_TEXT);
-    expect(utterances[1]?.voice).toBe(voice);
+    expect(utterances[1]?.voice).toBeNull();
+    expect(utterances[1]?.lang).toBe("");
     expect(utterances[1]?.rate).toBe(1.5);
+    expect(synthesis.getVoices).not.toHaveBeenCalled();
     expect(synthesis.cancel).toHaveBeenCalledTimes(2);
 
     startReadAloud("message-b", "New response", preferences);

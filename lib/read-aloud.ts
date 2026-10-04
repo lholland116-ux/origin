@@ -3,23 +3,17 @@ import {
   type ReadAloudPreferences,
 } from "@/lib/read-aloud-preferences";
 import {
-  getCachedNativeReadAloudVoices,
   isNativeAndroidReadAloudAvailable,
   isNativeAndroidReadAloudRuntime,
-  refreshNativeReadAloudVoices,
   startNativeReadAloud,
   stopNativeReadAloud,
-  subscribeToNativeReadAloudVoices,
 } from "@/lib/read-aloud-native";
-import { findMatchingReadAloudVoice } from "@/lib/read-aloud-voices";
-
-export { findMatchingReadAloudVoice } from "@/lib/read-aloud-voices";
 
 let activeReadAloudMessageId: string | null = null;
 const readAloudListeners = new Set<() => void>();
 
 export const READ_ALOUD_PREVIEW_TEXT =
-  "Hello from LVTChat. This is a preview of your selected voice.";
+  "Hello from LVTChat. This is a Read Aloud preview.";
 
 function notifyReadAloudListeners(): void {
   readAloudListeners.forEach((listener) => listener());
@@ -66,64 +60,11 @@ export function subscribeToReadAloud(listener: () => void): () => void {
   return () => readAloudListeners.delete(listener);
 }
 
-export function getAvailableReadAloudVoices(): SpeechSynthesisVoice[] {
-  if (isNativeAndroidReadAloudRuntime()) {
-    return getCachedNativeReadAloudVoices();
-  }
-
-  if (!isReadAloudSupported()) return [];
-
-  try {
-    return Array.from(window.speechSynthesis.getVoices());
-  } catch {
-    return [];
-  }
-}
-
-export async function refreshAvailableReadAloudVoices(): Promise<
-  SpeechSynthesisVoice[]
-> {
-  if (isNativeAndroidReadAloudRuntime()) {
-    if (!isNativeAndroidReadAloudAvailable()) return [];
-    return refreshNativeReadAloudVoices();
-  }
-
-  return getAvailableReadAloudVoices();
-}
-
-export function subscribeToReadAloudVoices(
-  listener: (voices: readonly SpeechSynthesisVoice[]) => void,
-): () => void {
-  if (isNativeAndroidReadAloudRuntime()) {
-    if (!isNativeAndroidReadAloudAvailable()) {
-      listener([]);
-      return () => undefined;
-    }
-    return subscribeToNativeReadAloudVoices(listener);
-  }
-
-  listener(getAvailableReadAloudVoices());
-  if (!isReadAloudSupported()) return () => undefined;
-
-  const synthesis = window.speechSynthesis;
-  const refresh = () => listener(getAvailableReadAloudVoices());
-  synthesis.addEventListener("voiceschanged", refresh);
-  return () => synthesis.removeEventListener("voiceschanged", refresh);
-}
-
 function createReadAloudUtterance(
   text: string,
   preferences: ReadAloudPreferences,
 ): SpeechSynthesisUtterance {
   const utterance = new SpeechSynthesisUtterance(text);
-  const voice = findMatchingReadAloudVoice(
-    preferences.voice,
-    getAvailableReadAloudVoices(),
-  );
-  if (voice) {
-    utterance.voice = voice;
-    utterance.lang = voice.lang.replaceAll("_", "-");
-  }
   utterance.rate = preferences.rate;
   return utterance;
 }

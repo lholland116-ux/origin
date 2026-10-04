@@ -5,19 +5,11 @@ export const READ_ALOUD_RATES = [0.75, 1, 1.25, 1.5] as const;
 
 export type ReadAloudRate = (typeof READ_ALOUD_RATES)[number];
 
-export type ReadAloudVoicePreference = {
-  readonly voiceURI: string;
-  readonly name: string;
-  readonly lang: string;
-};
-
 export type ReadAloudPreferences = {
-  readonly voice: ReadAloudVoicePreference | null;
   readonly rate: ReadAloudRate;
 };
 
 export const DEFAULT_READ_ALOUD_PREFERENCES: ReadAloudPreferences = {
-  voice: null,
   rate: 1,
 };
 
@@ -29,38 +21,13 @@ function isReadAloudRate(value: unknown): value is ReadAloudRate {
   return READ_ALOUD_RATES.some((rate) => rate === value);
 }
 
-function parseVoice(value: unknown): ReadAloudVoicePreference | null | undefined {
-  if (value === null) return null;
-  if (!isRecord(value)) return undefined;
-
-  const { voiceURI, name, lang } = value;
-  if (
-    typeof voiceURI !== "string" ||
-    !voiceURI.trim() ||
-    typeof name !== "string" ||
-    !name.trim() ||
-    typeof lang !== "string" ||
-    !lang.trim()
-  ) {
-    return undefined;
-  }
-
-  return {
-    voiceURI: voiceURI.trim(),
-    name: name.trim(),
-    lang: lang.trim(),
-  };
-}
-
 export function parseReadAloudPreferences(value: unknown): ReadAloudPreferences {
   if (!isRecord(value) || !isReadAloudRate(value.rate)) {
     return DEFAULT_READ_ALOUD_PREFERENCES;
   }
 
-  const voice = parseVoice(value.voice);
-  if (voice === undefined) return DEFAULT_READ_ALOUD_PREFERENCES;
-
-  return { voice, rate: value.rate };
+  // Ignore the legacy voice field so it can never override the platform default.
+  return { rate: value.rate };
 }
 
 export function getStoredReadAloudPreferences(): ReadAloudPreferences {
