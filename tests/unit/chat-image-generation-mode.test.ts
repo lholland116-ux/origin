@@ -422,7 +422,9 @@ describe("chat image-generation mode", () => {
   });
 
   it("keeps Create Image on its existing request and provides an in-composer Auto-chat exit", () => {
-    const imageRequestStart = clientSource.indexOf("if (useImageGeneration) {");
+    const imageRequestStart = clientSource.indexOf(
+      'if (routeDecision.route === "image_generation") {',
+    );
     const chatRequestStart = clientSource.indexOf("const chatRequest = buildChatRequest(", imageRequestStart);
     expect(imageRequestStart).toBeGreaterThanOrEqual(0);
     expect(chatRequestStart).toBeGreaterThan(imageRequestStart);

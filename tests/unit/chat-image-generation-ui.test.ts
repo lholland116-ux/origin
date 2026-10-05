@@ -867,7 +867,7 @@ describe("chat image-generation presentation", () => {
     expect(composerSource).toContain("!canSubmitWithPendingImages(");
     expect(clientSource).toContain("if (loading || uploadingImages || isUploadingDocuments) return;");
     expect(clientSource).toContain("if (pendingDocumentLimitExceeded) {");
-    expect(clientSource).toContain("if (isLimitReached) {");
+    expect(clientSource).toContain("if (requestLimitReached) {");
     expect(clientSource).toContain("if (!trimmed && !hasImages) {");
     expect(composerSource).toContain("onPaste={handleComposerPaste}");
     expect(composerSource).toContain("<DocumentUploadButton");

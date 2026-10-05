@@ -69,6 +69,7 @@ import ReadAloudSettings from "@/components/chat/ReadAloudSettings";
 import { GeneratedDocumentCard, type GeneratedDocumentCardData } from "@/components/chat/GeneratedDocumentCard";
 import { documentFormatFromMimeType, filenameFromContentDisposition, saveDocumentBlob, DocumentDownloadError } from "@/lib/documents/download";
 import { stopReadAloud } from "@/lib/read-aloud";
+import { selectIntelligenceRoute } from "@/lib/ai/intelligence-router";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -2118,6 +2119,49 @@ export function getUploadedImageEditSourceReference(
     messageId,
     ordinal: image.ordinal,
   };
+}
+
+export function getLatestEditableImageContext(
+  messages: Message[],
+): {
+  sourceReference: ImageEditSourceReference;
+  sourcePreview: string;
+  sourceLabel: string;
+} | null {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+
+    if (
+      message.role === "assistant" &&
+      message.generatedImage?.id &&
+      message.generatedImage.url
+    ) {
+      return {
+        sourceReference: {
+          kind: "generated_image",
+          generatedImageId: message.generatedImage.id,
+        },
+        sourcePreview: message.generatedImage.url,
+        sourceLabel: "Generated image",
+      };
+    }
+
+    if (message.role !== "user" || !Array.isArray(message.images)) continue;
+
+    for (let imageIndex = message.images.length - 1; imageIndex >= 0; imageIndex -= 1) {
+      const image = message.images[imageIndex];
+      const sourceReference = getUploadedImageEditSourceReference(message.id, image);
+      if (!sourceReference || !image.image_url) continue;
+
+      return {
+        sourceReference,
+        sourcePreview: image.image_url,
+        sourceLabel: image.image_name || "Uploaded image",
+      };
+    }
+  }
+
+  return null;
 }
 
 export function hasCanonicalChildImages(message: {
@@ -4814,26 +4858,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (isLimitReached) {
-      if (useImageGeneration && imageGenerationUsage) {
-        setUiError(imageQuotaLimitMessage ?? getImageGenerationQuotaMessage(
-          plan,
-          imageGenerationUsage.daily.remaining <= 0 ? "daily" : "monthly",
-        ));
-        return;
-      }
-
-      if (plan !== "pro") {
-        openUpgradeModal(
-          "You’ve reached today’s free limit",
-          "Upgrade to Pro to continue with a higher daily message limit."
-        );
-      } else {
-        setUiError("You’ve reached today’s Pro message limit. Please try again tomorrow.");
-      }
-      return;
-    }
-
     if (!conversationId) {
       setUiError("Missing conversationId.");
       return;
@@ -4876,6 +4900,61 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     const effectiveMessage =
       trimmed || (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
+
+    const editableImageContext = getLatestEditableImageContext(messages);
+    const routeDecision = selectIntelligenceRoute({
+      mode: useImageGeneration ? "create_image" : routingMode,
+      prompt: effectiveMessage,
+      hasImageContext: Boolean(editableImageContext),
+      hasOtherAttachments: hasImages || hasReadyDocuments || hasPendingDocuments,
+      // Auto's existing server-side classifier remains authoritative for non-visual prompts.
+      deferAutoWebSearch: routingMode === "auto" && !useImageGeneration,
+    });
+
+    if (routeDecision.route === "image_editing" && editableImageContext) {
+      clearTransientErrors();
+      if (isListening) handleStopListening();
+
+      handleOpenImageEdit(
+        editableImageContext.sourceReference,
+        editableImageContext.sourcePreview,
+        editableImageContext.sourceLabel,
+      );
+      handleImageEditInstructionChange(effectiveMessage);
+      setInput("");
+      void handleImageEditSubmit();
+      return;
+    }
+
+    const reachedImageGenerationLimit = Boolean(
+      imageGenerationUsage &&
+        (imageGenerationUsage.daily.remaining <= 0 ||
+          imageGenerationUsage.monthly.remaining <= 0),
+    );
+    const requestLimitReached =
+      routeDecision.route === "image_generation"
+        ? reachedImageGenerationLimit
+        : isTextLimitReached;
+
+    if (requestLimitReached) {
+      if (routeDecision.route === "image_generation" && imageGenerationUsage) {
+        setUiError(imageQuotaLimitMessage ?? getImageGenerationQuotaMessage(
+          plan,
+          imageGenerationUsage.daily.remaining <= 0 ? "daily" : "monthly",
+        ));
+        return;
+      }
+
+      if (plan !== "pro") {
+        openUpgradeModal(
+          "You’ve reached today’s free limit",
+          "Upgrade to Pro to continue with a higher daily message limit."
+        );
+      } else {
+        setUiError("You’ve reached today’s Pro message limit. Please try again tomorrow.");
+      }
+      return;
+    }
 
     const attachmentNotes = [
       hasImages
@@ -4922,7 +5001,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     let responseAccepted = false;
 
     try {
-      if (useImageGeneration) {
+      if (routeDecision.route === "image_generation") {
         const generatedImageResult = await fetchGeneratedImage(effectiveMessage, {
           conversationId,
           signal: controller.signal,
@@ -5090,7 +5169,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         has_documents: hasReadyDocuments,
       });
     } catch (error) {
-      if (useImageGeneration) {
+      if (routeDecision.route === "image_generation") {
         if (imageRequestGenerationRef.current !== requestGeneration) {
           return;
         }

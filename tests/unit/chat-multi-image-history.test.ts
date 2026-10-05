@@ -3,6 +3,7 @@ import {
   buildOptimisticImageAttachments,
   getMaxPendingImages,
   getMessageImageSource,
+  getLatestEditableImageContext,
   hasCanonicalChildImages,
   normalizeMessageImages,
   getUploadedImageEditSourceReference,
@@ -160,5 +161,46 @@ describe("durable multi-image chat history", () => {
       "user/one",
       "user/two",
     ]);
+  });
+
+  it("resolves the newest persisted editable image context without changing attachment metadata", () => {
+    expect(
+      getLatestEditableImageContext([
+        {
+          id: "older-user",
+          role: "user",
+          content: "Original image",
+          images: [durableImage("older", 1)],
+        },
+        {
+          id: "newer-assistant",
+          role: "assistant",
+          content: "Generated image",
+          generatedImage: {
+            id: "generated-image-id",
+            url: "https://signed.example/generated",
+            mimeType: "image/png",
+          },
+        },
+      ]),
+    ).toEqual({
+      sourceReference: {
+        kind: "generated_image",
+        generatedImageId: "generated-image-id",
+      },
+      sourcePreview: "https://signed.example/generated",
+      sourceLabel: "Generated image",
+    });
+
+    expect(
+      getLatestEditableImageContext([
+        {
+          id: "legacy-user",
+          role: "user",
+          content: "Legacy image without durable ordinal",
+          images: [durableImage("legacy")],
+        },
+      ]),
+    ).toBeNull();
   });
 });
