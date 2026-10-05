@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  buildWebSearchOverrideTelemetry,
   canAttachLargePasteInMode,
   canUploadDocumentInMode,
   buildChatRequest,
@@ -73,8 +74,30 @@ describe("composer large-input handling", () => {
     }
   });
 
-  it("defaults routing to Auto and reasoning to Medium, preserving both in the request", () => {
-    expect(clientSource).toContain('useState<ChatRoutingMode>("auto")');
+  it("forces Web Search for only the request that carries the explicit override", () => {
+    const forcedRequest = buildChatRequest({
+      conversationId: "conversation-1",
+      message: "Explain this current topic",
+      generationRequestId: "request-2",
+      documentIds: [],
+      reasoningMode: "medium",
+      routingMode: "auto",
+      route: "web_search",
+      forceWebSearch: true,
+      hasImages: false,
+      images: [],
+    });
+
+    expect(forcedRequest.endpoint).toBe("/api/chat-web");
+    expect(forcedRequest.body).toHaveProperty("webSearchMode", "force");
+    expect(buildWebSearchOverrideTelemetry(true)).toEqual({ web_search_mode: "forced" });
+    expect(buildWebSearchOverrideTelemetry(false)).toEqual({ web_search_mode: "automatic" });
+    expect(clientSource).toContain("!editableImageContext &&");
+  });
+
+  it("keeps Intelligence Routing implicit and reasoning at its existing Medium default", () => {
+    expect(clientSource).toContain('const routingMode: ChatRoutingMode = "auto";');
+    expect(clientSource).not.toContain("setRoutingMode");
     expect(clientSource).toContain('useState<ChatReasoningMode>("medium")');
     const requestStart = clientSource.indexOf("const chatRequest = buildChatRequest({");
     const requestEnd = clientSource.indexOf("});", requestStart);
@@ -84,21 +107,15 @@ describe("composer large-input handling", () => {
     expect(clientSource).toContain("setReasoningMode(nextMode)");
   });
 
-  it("preserves routing and reasoning selections when starting a new chat", () => {
+  it("clears one-shot Web Search when starting or switching chats", () => {
     const newChatStart = clientSource.indexOf("async function handleNewChat()");
     const newChatEnd = clientSource.indexOf("async function handleRenameConversation", newChatStart);
     const newChatSource = clientSource.slice(newChatStart, newChatEnd);
-    expect(newChatSource).not.toContain("setRoutingMode(");
+    expect(newChatSource).toContain("setWebSearchOverride(false)");
     expect(newChatSource).not.toContain("setReasoningMode(");
-  });
-
-  it("keeps reasoning selection independent of routing selection", () => {
-    const modeStart = clientSource.indexOf("function handleRoutingModeChange(");
-    const modeEnd = clientSource.indexOf("function handleImageModeChange(", modeStart);
-    const modeHandler = clientSource.slice(modeStart, modeEnd);
-
-    expect(modeHandler).toContain("setRoutingMode(nextRoutingMode)");
-    expect(modeHandler).not.toContain("setReasoningMode(");
+    const switchStart = clientSource.indexOf("async function loadConversation(");
+    const switchEnd = clientSource.indexOf("async function handleMobileConversationOpen", switchStart);
+    expect(clientSource.slice(switchStart, switchEnd)).toContain("setWebSearchOverride(false)");
   });
 
   it("keeps ordinary pastes inline and converts only oversized pastes", () => {
@@ -106,36 +123,30 @@ describe("composer large-input handling", () => {
     expect(shouldConvertLargePasteToAttachment("x".repeat(2001))).toBe(true);
   });
 
-  it("allows governed large-paste attachments in Standard and Web Search, but not Create Image", () => {
+  it("allows governed large-paste attachments in normal routing, but not Create Image", () => {
     expect(canAttachLargePasteInMode("auto")).toBe(true);
-    expect(canAttachLargePasteInMode("standard")).toBe(true);
-    expect(canAttachLargePasteInMode("web_search")).toBe(true);
     expect(canAttachLargePasteInMode("create_image")).toBe(false);
     expect(clientSource).toContain(
       "!canAttachLargePasteInMode(composerPlusMenuMode)",
     );
   });
 
-  it("keeps manual document upload unavailable in Web Search", () => {
+  it("keeps file attachment availability independent of the one-shot search override", () => {
     expect(canUploadDocumentInMode("auto", "manual")).toBe(true);
     expect(canUploadDocumentInMode("auto", "pasted_text")).toBe(true);
-    expect(canUploadDocumentInMode("standard", "manual")).toBe(true);
-    expect(canUploadDocumentInMode("web_search", "manual")).toBe(false);
-    expect(canUploadDocumentInMode("web_search", "pasted_text")).toBe(true);
     expect(canUploadDocumentInMode("create_image", "pasted_text")).toBe(false);
     expect(clientSource).toContain('handleFilesSelected([pastedFile], "pasted_text")');
   });
 
-  it("exposes the existing image and file controls in the default Auto composer", () => {
+  it("exposes the existing image and file controls in the default composer", () => {
     expect(clientSource).toContain("const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration");
-    expect(clientSource).toContain('mode !== "standard" && mode !== "auto"');
-    expect(clientSource).toContain('disabled={composerDisabled || routingMode === "web_search" || useImageGeneration}');
-    expect(clientSource).toContain("routingMode === \"web_search\" || useImageGeneration");
+    expect(clientSource).toContain('disabled={composerDisabled || useImageGeneration}');
+    expect(clientSource).toContain('role={isWebSearchAction ? "menuitemcheckbox" : "menuitem"}');
     expect(canUploadDocumentInMode("auto", "manual")).toBe(true);
     expect(canUploadDocumentInMode("auto", "pasted_text")).toBe(true);
   });
 
-  it("keeps Auto attachments on the existing Standard analysis capability when required", () => {
+  it("keeps attachments on their existing analysis and generation capabilities", () => {
     const imageRequest = buildChatRequest({
       conversationId: "conversation-1",
       message: "What is shown in this screenshot?",
@@ -166,7 +177,7 @@ describe("composer large-input handling", () => {
     expect(documentRequest.endpoint).toBe("/api/chat");
     expect(documentRequest.body).toHaveProperty("documentIds", ["document-1"]);
     expect(clientSource).toContain('const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration');
-    expect(clientSource).toContain('mode !== "standard" && mode !== "auto"');
+    expect(clientSource).toContain("{webSearchOverride && !useImageGeneration && (");
   });
 
   it("preserves existing instructions, selection replacement, and exact newlines", () => {
@@ -249,7 +260,7 @@ describe("composer large-input handling", () => {
     expect(imageHandlers).toContain("await handleImageFilesSelected(files);");
     expect(imageHandlers).toContain("canAddPendingImages(pendingImages.length, files.length, currentPlan)");
     expect(imageHandlers).toContain("const validationError = validateImageBatch(files);");
-    expect(imageHandlers).toContain('if (routingMode === "web_search" || useImageGeneration)');
+    expect(imageHandlers).toContain("if (useImageGeneration)");
   });
 
   it("fails explicitly above the request boundary instead of truncating", () => {

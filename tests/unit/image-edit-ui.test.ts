@@ -78,7 +78,7 @@ describe("image-edit UI contracts", () => {
     expect(clientSource).toContain("p_content: \"\"");
     expect(clientSource).toContain("p_images: images.map((image) => ({");
     expect(clientSource).toContain("if (hasImages && !canAddPendingImages(0, pendingImageSnapshot.length, plan))");
-    expect(clientSource).toContain('if (routeDecision.route === "image_editing")');
+    expect(clientSource).toContain('if (classifiedRouteDecision.route === "image_editing")');
     expect(clientSource).toContain('fetch("/api/image-edit"');
   });
 

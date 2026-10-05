@@ -3,12 +3,12 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode } fro
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CHAT_ROUTING_MODE_LABELS,
   CHAT_REASONING_MODE_LABELS,
   COMPOSER_PLUS_MENU_LABELS,
-  ChatRoutingModeSelector,
   ComposerPlusMenu,
   ReasoningModeSelector,
+  WebSearchOverrideChip,
+  canSelectWebSearchInMode,
   getComposerPlusMenuActions,
   GeneratedImageAttribution,
   getGeneratedImageActionClass,
@@ -28,31 +28,6 @@ type SelectorNode = ReactElement<{
   id?: string;
 }>;
 
-function getRoutingMenu(selector: ReactElement): SelectorNode {
-  const children = (selector as SelectorNode).props.children as (SelectorNode | false | null)[];
-  return children.find(
-    (child): child is SelectorNode => child !== false && child !== null &&
-      child.props.id === "composer-routing-menu",
-  )!;
-}
-
-function getRoutingOptions(menu: SelectorNode): SelectorNode[] {
-  const children = menu.props.children as SelectorNode[];
-  return (children[2]?.props.children as SelectorNode[]) ?? [];
-}
-
-function renderRoutingSelector(mode: "auto" | "standard" | "web_search", open = true): string {
-  return renderToStaticMarkup(
-    ChatRoutingModeSelector({
-      mode,
-      open,
-      disabled: false,
-      onToggle: () => undefined,
-      onSelect: () => undefined,
-    }),
-  );
-}
-
 function getReasoningMenu(selector: ReactElement): SelectorNode {
   const children = (selector as SelectorNode).props.children as (SelectorNode | false | null)[];
   return children.find(
@@ -68,13 +43,15 @@ function getReasoningOptions(menu: SelectorNode): SelectorNode[] {
 }
 
 function renderPlusMenu(
-  mode: "auto" | "standard" | "web_search" | "create_image",
+  mode: "auto" | "create_image",
   cameraEnabled = false,
+  webSearchOverride = false,
 ): string {
   return renderToStaticMarkup(
     ComposerPlusMenu({
       open: true,
       mode,
+      webSearchOverride,
       disabled: false,
       cameraEnabled,
       onToggle: () => undefined,
@@ -101,67 +78,18 @@ function renderReasoningSelector(
 }
 
 describe("chat image-generation presentation", () => {
-  it("renders Auto, Standard, and Web Search with accessible help and explanations", () => {
-    expect(CHAT_ROUTING_MODE_LABELS).toEqual({
-      auto: "Auto",
-      standard: "Standard",
-      web_search: "Web Search",
-    });
+  it("removes Auto and Standard mode choices and the old routing selector", () => {
+    const formStart = clientSource.indexOf("<form");
+    const formEnd = clientSource.indexOf("</form>", formStart);
+    const composerSource = clientSource.slice(formStart, formEnd);
 
-    const markup = renderRoutingSelector("auto");
-    expect(markup).toContain('aria-label="Search mode: Auto"');
-    expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain('aria-label="Search mode options"');
-    expect(markup).toContain("LVTChat decides when current web information is needed. Recommended.");
-    expect(markup).toContain("Answers without searching the web.");
-    expect(markup).toContain("Searches the web for current information.");
-    expect(markup).toContain("Auto");
-    expect(markup).toContain("Standard");
-    expect(markup).toContain("Web Search");
-    expect(markup).toContain("w-[78px]");
-    expect(markup).toContain("sm:w-[136px]");
-    expect(markup).toContain("sm:hidden");
-    expect(markup).toContain("whitespace-nowrap sm:hidden");
-    expect(markup).not.toContain("truncate");
-    expect(renderRoutingSelector("standard")).toContain(">Standard</span>");
-    expect(renderRoutingSelector("web_search")).toContain(">Web</span>");
-  });
-
-  it("makes closed routing help discoverable on hover and keyboard focus", () => {
-    const markup = renderRoutingSelector("auto", false);
-    expect(markup).toContain('aria-describedby="composer-routing-help"');
-    expect(markup).toContain('id="composer-routing-help" role="tooltip"');
-    expect(markup).toContain("Search mode");
-    expect(markup).toContain("group-hover:opacity-100");
-    expect(markup).toContain("group-focus-within:opacity-100");
-  });
-
-  it("dispatches each selected routing mode", () => {
-    const onSelect = vi.fn();
-    const selector = ChatRoutingModeSelector({
-      mode: "auto",
-      open: true,
-      disabled: false,
-      onToggle: () => undefined,
-      onSelect,
-    }) as ReactElement;
-    const options = getRoutingOptions(getRoutingMenu(selector));
-
-    for (const option of options) (option.props.onClick as () => void)();
-
-    expect(onSelect).toHaveBeenCalledTimes(3);
-    expect(onSelect).toHaveBeenNthCalledWith(1, "auto");
-    expect(onSelect).toHaveBeenNthCalledWith(2, "standard");
-    expect(onSelect).toHaveBeenNthCalledWith(3, "web_search");
-  });
-
-  it("does not show search activity merely because Auto is selected", () => {
-    const loadingStart = clientSource.indexOf("{loading && messages.length > 0 && (");
-    const loadingEnd = clientSource.indexOf("<div ref={endRef}", loadingStart);
-    const loadingStatus = clientSource.slice(loadingStart, loadingEnd);
-
-    expect(loadingStatus).toContain('routingMode === "web_search"');
-    expect(loadingStatus).not.toContain("useWebSearch\n");
+    expect(clientSource).not.toContain("ChatRoutingModeSelector");
+    expect(clientSource).not.toContain('"Search mode"');
+    expect(composerSource).not.toContain(">Auto</span>");
+    expect(composerSource).not.toContain(">Standard</span>");
+    expect(composerSource).not.toContain("routingMode ===");
+    expect(composerSource).toContain("<ReasoningModeSelector");
+    expect(composerSource).toContain('aria-label="Return to chat"');
   });
 
   it("renders the compact accessible selector and all three user-facing options", () => {
@@ -257,10 +185,8 @@ describe("chat image-generation presentation", () => {
     const composerStart = clientSource.indexOf("<form");
     const composerEnd = clientSource.indexOf("</form>", composerStart);
     const composerSource = clientSource.slice(composerStart, composerEnd);
+    expect(composerSource).not.toContain("ChatRoutingModeSelector");
     expect(composerSource.indexOf("<ComposerPlusMenu")).toBeLessThan(
-      composerSource.indexOf("<ChatRoutingModeSelector"),
-    );
-    expect(composerSource.indexOf("<ChatRoutingModeSelector")).toBeLessThan(
       composerSource.indexOf("<ReasoningModeSelector"),
     );
     expect(composerSource.indexOf("<ReasoningModeSelector")).toBeLessThan(
@@ -271,6 +197,7 @@ describe("chat image-generation presentation", () => {
       "photos",
       "files",
       "create_image",
+      "web_search",
     ]);
     expect(composerSource).toContain("TOOLTIP_TEXT.mic");
     expect(composerSource).toContain('aria-label="Send your message"');
@@ -333,54 +260,53 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain("handleNewChat");
   });
 
-  it("keeps the plus menu dedicated to attachment and image actions", () => {
+  it("places Web Search in the plus menu and preserves attachment actions", () => {
     expect(getComposerPlusMenuActions()).toEqual([
       "camera",
       "photos",
       "files",
       "create_image",
+      "web_search",
     ]);
     expect(COMPOSER_PLUS_MENU_LABELS).toEqual({
       camera: "Camera",
       photos: "Photos",
       files: "Files",
       create_image: "Create image",
+      web_search: "Search the web",
     });
-
-    const standardMarkup = renderPlusMenu("standard");
-    expect(standardMarkup.match(/role="menuitem"/g)).toHaveLength(4);
-    expect(standardMarkup).toContain(">Camera</span>");
-    expect(standardMarkup).toContain(">Photos</span>");
-    expect(standardMarkup).toContain(">Files</span>");
-    expect(standardMarkup).toContain(">Create image</span>");
-    expect(standardMarkup.match(/disabled=""/g)).toHaveLength(1);
 
     const autoMarkup = renderPlusMenu("auto");
     expect(autoMarkup.match(/role="menuitem"/g)).toHaveLength(4);
+    expect(autoMarkup).toContain('role="menuitemcheckbox"');
+    expect(autoMarkup).toContain('aria-checked="false"');
     expect(autoMarkup).toContain(">Camera</span>");
     expect(autoMarkup).toContain(">Photos</span>");
     expect(autoMarkup).toContain(">Files</span>");
+    expect(autoMarkup).toContain(">Search the web</span>");
     expect(autoMarkup.match(/disabled=""/g)).toHaveLength(1);
 
-    const mobileStandardMarkup = renderPlusMenu("standard", true);
-    expect(mobileStandardMarkup.match(/role="menuitem"/g)).toHaveLength(4);
-    expect(mobileStandardMarkup).toContain(">Camera</span>");
-    expect(mobileStandardMarkup).not.toContain('aria-disabled="true"');
-
-    const webSearchMarkup = renderPlusMenu("web_search");
-    expect(webSearchMarkup.match(/role="menuitem"/g)).toHaveLength(4);
-    expect(webSearchMarkup).toContain(">Create image</span>");
-    expect(webSearchMarkup.match(/disabled=""/g)).toHaveLength(3);
-    expect(webSearchMarkup).not.toContain(">Standard</span>");
-    expect(webSearchMarkup).not.toContain(">Web Search</span>");
+    const mobileMarkup = renderPlusMenu("auto", true, true);
+    expect(mobileMarkup).toContain(">Camera</span>");
+    expect(mobileMarkup).toContain(">Search the web</span>");
+    expect(mobileMarkup).not.toContain('aria-disabled="true"');
 
     const createImageMarkup = renderPlusMenu("create_image");
     expect(createImageMarkup.match(/role="menuitem"/g)).toHaveLength(4);
-    expect(createImageMarkup).toContain(">Camera</span>");
-    expect(createImageMarkup).toContain(">Photos</span>");
-    expect(createImageMarkup).toContain(">Files</span>");
-    expect(createImageMarkup).not.toContain(">Standard</span>");
-    expect(createImageMarkup).not.toContain(">Web Search</span>");
+    expect(createImageMarkup).toContain(">Create image</span>");
+    expect(createImageMarkup).toContain('aria-disabled="true"');
+    expect(canSelectWebSearchInMode("auto")).toBe(true);
+    expect(canSelectWebSearchInMode("create_image")).toBe(false);
+
+    const chipMarkup = renderToStaticMarkup(
+      WebSearchOverrideChip({ onRemove: () => undefined }),
+    );
+    expect(chipMarkup).toContain('role="status"');
+    expect(chipMarkup).toContain("Web Search");
+    expect(chipMarkup).toContain('aria-label="Web Search override active for the next message"');
+    expect(chipMarkup).toContain('aria-label="Remove Web Search override"');
+    expect(clientSource).toContain("setWebSearchOverride((active) => !active)");
+    expect(clientSource).toContain("setWebSearchOverride(false)");
 
     expect(clientSource).toContain('aria-label="Open composer actions"');
     expect(clientSource).toContain('aria-haspopup="menu"');
@@ -389,8 +315,8 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain("handleOpenImagePicker");
     expect(clientSource).toContain("handleOpenDocumentPicker");
     expect(clientSource).toContain("handleImageModeChange()");
-    expect(clientSource).toContain("handleReturnToAutoChat");
-    expect(clientSource).toContain('aria-label="Return to Auto text chat"');
+    expect(clientSource).toContain("handleReturnToChat");
+    expect(clientSource).toContain('aria-label="Return to chat"');
     expect(clientSource).toContain("document.addEventListener(\"pointerdown\"");
     expect(clientSource).toContain('if (event.key !== "Escape") return;');
     expect(clientSource).toContain(
@@ -403,6 +329,7 @@ describe("chat image-generation presentation", () => {
     const composerEnd = clientSource.indexOf("</form>", composerStart);
     const composerSource = clientSource.slice(composerStart, composerEnd);
     expect(composerSource).toContain("<ComposerPlusMenu");
+    expect(composerSource).toContain("<ReasoningModeSelector");
     expect(composerSource).toContain("overflow-visible rounded-2xl");
     expect(composerSource).not.toContain("overflow-hidden rounded-2xl");
 
@@ -570,7 +497,7 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain(
       'message.role === "assistant" && message.generatedImage?.id',
     );
-    expect(clientSource).toContain('endpoint: useStandardCapability ? "/api/chat" : "/api/chat-web"');
+    expect(clientSource).toContain("params.forceWebSearch || !useStandardCapability");
     expect(clientSource).toContain('aria-label="Download image"');
     expect(clientSource).toContain('aria-label="Regenerate image"');
     expect(clientSource).toContain('alt={image.image_name || "Uploaded image"}');
@@ -670,8 +597,11 @@ describe("chat image-generation presentation", () => {
       'aria-label={isListening ? "Stop voice input" : "Start voice input"}',
     );
     expect(composerSource).toContain("<div className=\"ml-auto\">");
-    expect(clientSource).toContain("Standard");
-    expect(clientSource).toContain("Web Search");
+    expect(composerSource).not.toContain("ChatRoutingModeSelector");
+    expect(composerSource).not.toContain(">Standard</span>");
+    expect(composerSource).not.toContain(">Auto</span>");
+    expect(clientSource).toContain("webSearchOverride && !useImageGeneration");
+    expect(clientSource).toContain("<WebSearchOverrideChip");
     expect(clientSource).toContain("Create image");
 
     const mobileTopStart = clientSource.indexOf("<div data-profile-sidebar");

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import NextImage from "next/image";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useRouter } from "next/navigation";
 import {
   Brain,
@@ -28,6 +28,7 @@ import {
   RefreshCw,
   Send,
   Trash2,
+  X,
 } from "lucide-react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { BRAND } from "@/lib/branding";
@@ -291,39 +292,24 @@ type DocumentsResponse = {
   error?: string;
 };
 
-export type ComposerPlusMenuMode = "auto" | "standard" | "web_search" | "create_image";
+export type ComposerPlusMenuMode = "auto" | "create_image";
 
 export type ComposerPlusMenuAction =
   | "camera"
   | "photos"
   | "files"
-  | "create_image";
+  | "create_image"
+  | "web_search";
 
 export const COMPOSER_PLUS_MENU_LABELS: Record<ComposerPlusMenuAction, string> = {
   camera: "Camera",
   photos: "Photos",
   files: "Files",
   create_image: "Create image",
+  web_search: "Search the web",
 };
 
 export type ChatRoutingMode = "auto" | "standard" | "web_search";
-
-export const CHAT_ROUTING_MODE_LABELS: Record<ChatRoutingMode, string> = {
-  auto: "Auto",
-  standard: "Standard",
-  web_search: "Web Search",
-};
-
-const CHAT_ROUTING_MODE_DESCRIPTIONS: Record<ChatRoutingMode, string> = {
-  auto: "LVTChat decides when current web information is needed. Recommended.",
-  standard: "Answers without searching the web.",
-  web_search: "Searches the web for current information.",
-};
-
-const CHAT_ROUTING_SELECTOR_HELP = {
-  title: "Search mode",
-  description: "Choose whether LVTChat can search the web for your answer.",
-};
 
 export type ChatReasoningMode = "instant" | "medium" | "high";
 
@@ -359,6 +345,7 @@ export function buildChatRequest(params: {
   reasoningMode: ChatReasoningMode;
   routingMode: ChatRoutingMode;
   route?: IntelligenceRoute;
+  forceWebSearch?: boolean;
   hasImages: boolean;
   images: Array<{ imagePath: string; imageName: string }>;
 }) {
@@ -372,15 +359,25 @@ export function buildChatRequest(params: {
         params.hasImages));
 
   return {
-    endpoint: useStandardCapability ? "/api/chat" : "/api/chat-web",
+    endpoint:
+      params.forceWebSearch || !useStandardCapability
+        ? "/api/chat-web"
+        : "/api/chat",
     body: {
       conversationId: params.conversationId,
       message: params.message,
       generationRequestId: params.generationRequestId,
       documentIds: params.documentIds,
       reasoningMode: params.reasoningMode,
-      ...(params.routingMode !== "standard" && !useStandardCapability
-        ? { webSearchMode: params.routingMode === "auto" ? "auto" : "force" }
+      ...((params.forceWebSearch ||
+        (params.routingMode !== "standard" && !useStandardCapability))
+        ? {
+            webSearchMode: params.forceWebSearch
+              ? "force"
+              : params.routingMode === "auto"
+                ? "auto"
+                : "force",
+          }
         : {}),
       ...(useStandardCapability && params.hasImages ? { images: params.images } : {}),
     },
@@ -388,7 +385,7 @@ export function buildChatRequest(params: {
 }
 
 export function getComposerPlusMenuActions(): ComposerPlusMenuAction[] {
-  return ["camera", "photos", "files", "create_image"];
+  return ["camera", "photos", "files", "create_image", "web_search"];
 }
 
 export function canAttachLargePasteInMode(mode: ComposerPlusMenuMode): boolean {
@@ -399,11 +396,18 @@ export function canUploadDocumentInMode(
   mode: ComposerPlusMenuMode,
   source: "manual" | "pasted_text",
 ): boolean {
-  return (
-    mode === "standard" ||
-    mode === "auto" ||
-    (mode === "web_search" && source === "pasted_text")
-  );
+  void source;
+  return mode === "auto";
+}
+
+export function canSelectWebSearchInMode(mode: ComposerPlusMenuMode): boolean {
+  return mode !== "create_image";
+}
+
+export function buildWebSearchOverrideTelemetry(
+  explicitlyForced: boolean,
+): { web_search_mode: "forced" | "automatic" } {
+  return { web_search_mode: explicitlyForced ? "forced" : "automatic" };
 }
 
 export function isCameraCaptureSupported(
@@ -485,6 +489,7 @@ export function getClipboardImageFiles(
 type ComposerPlusMenuProps = {
   open: boolean;
   mode: ComposerPlusMenuMode;
+  webSearchOverride: boolean;
   disabled: boolean;
   cameraEnabled: boolean;
   theme?: ChatTheme;
@@ -497,6 +502,7 @@ type ComposerPlusMenuProps = {
 export function ComposerPlusMenu({
   open,
   mode,
+  webSearchOverride,
   disabled,
   cameraEnabled,
   theme = getChatThemeById(),
@@ -538,33 +544,48 @@ export function ComposerPlusMenu({
             theme.panelBorder
           )}
         >
-          {getComposerPlusMenuActions().map((action) => {
+          {getComposerPlusMenuActions().map((action, index) => {
             const attachmentUnavailable =
-              mode !== "standard" && mode !== "auto" && action !== "create_image";
+              mode === "create_image" && action !== "create_image";
+            const webSearchUnavailable =
+              action === "web_search" && !canSelectWebSearchInMode(mode);
             const actionDisabled =
-              disabled || attachmentUnavailable || (action === "camera" && !cameraEnabled);
+              disabled ||
+              attachmentUnavailable ||
+              webSearchUnavailable ||
+              (action === "camera" && !cameraEnabled);
+            const isWebSearchAction = action === "web_search";
 
             return (
-              <button
-                key={action}
-                type="button"
-                role="menuitem"
-                onClick={() => onAction(action)}
-                disabled={actionDisabled}
-                aria-disabled={actionDisabled}
-                className={cx(
-                  "flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
-                  theme.inputText,
-                  getChatThemeHoverClass(theme),
-                  theme.id === "light" ? "focus:bg-black/5" : "focus:bg-white/10"
+              <Fragment key={action}>
+                {isWebSearchAction && index > 0 && (
+                  <div className={cx("my-1 border-t", theme.panelBorder)} role="separator" />
                 )}
-              >
-                {action === "camera" && <Camera className="h-4 w-4" aria-hidden="true" />}
-                {action === "photos" && <ImageIcon className="h-4 w-4" aria-hidden="true" />}
-                {action === "files" && <FileText className="h-4 w-4" aria-hidden="true" />}
-                {action === "create_image" && <Palette className="h-4 w-4" aria-hidden="true" />}
-                <span>{COMPOSER_PLUS_MENU_LABELS[action]}</span>
-              </button>
+                <button
+                  type="button"
+                  role={isWebSearchAction ? "menuitemcheckbox" : "menuitem"}
+                  onClick={() => onAction(action)}
+                  disabled={actionDisabled}
+                  aria-disabled={actionDisabled}
+                  aria-checked={isWebSearchAction ? webSearchOverride : undefined}
+                  className={cx(
+                    "flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+                    theme.inputText,
+                    getChatThemeHoverClass(theme),
+                    theme.id === "light" ? "focus:bg-black/5" : "focus:bg-white/10"
+                  )}
+                >
+                  {action === "camera" && <Camera className="h-4 w-4" aria-hidden="true" />}
+                  {action === "photos" && <ImageIcon className="h-4 w-4" aria-hidden="true" />}
+                  {action === "files" && <FileText className="h-4 w-4" aria-hidden="true" />}
+                  {action === "create_image" && <Palette className="h-4 w-4" aria-hidden="true" />}
+                  {isWebSearchAction && <Globe2 className="h-4 w-4" aria-hidden="true" />}
+                  <span>{COMPOSER_PLUS_MENU_LABELS[action]}</span>
+                  {isWebSearchAction && webSearchOverride && (
+                    <Check className="ml-auto h-4 w-4 shrink-0" aria-hidden="true" />
+                  )}
+                </button>
+              </Fragment>
             );
           })}
         </div>
@@ -704,125 +725,34 @@ export function ReasoningModeSelector({
   );
 }
 
-type ChatRoutingModeSelectorProps = {
-  mode: ChatRoutingMode;
-  open: boolean;
-  disabled: boolean;
-  theme?: ChatTheme;
-  onToggle: () => void;
-  onSelect: (mode: ChatRoutingMode) => void;
-  buttonRef?: Ref<HTMLButtonElement>;
-  containerRef?: Ref<HTMLDivElement>;
-};
-
-export function ChatRoutingModeSelector({
-  mode,
-  open,
-  disabled,
+export function WebSearchOverrideChip({
   theme = getChatThemeById(),
-  onToggle,
-  onSelect,
-  buttonRef,
-  containerRef,
-}: ChatRoutingModeSelectorProps) {
+  onRemove,
+}: {
+  theme?: ChatTheme;
+  onRemove: () => void;
+}) {
   return (
-    <div ref={containerRef} className="group relative min-w-0 shrink-0">
+    <div
+      role="status"
+      aria-label="Web Search override active for the next message"
+      className={cx(
+        "inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
+        theme.inputBg,
+        theme.inputBorder,
+        theme.inputText,
+      )}
+    >
+      <Globe2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">Web Search</span>
       <button
-        ref={buttonRef}
         type="button"
-        onClick={onToggle}
-        disabled={disabled}
-        aria-label={`Search mode: ${CHAT_ROUTING_MODE_LABELS[mode]}`}
-        aria-describedby={open ? "composer-routing-menu-help" : "composer-routing-help"}
-        aria-expanded={open}
-        aria-controls="composer-routing-menu"
-        className={cx(
-          "flex h-11 w-[78px] min-w-0 items-center justify-center gap-1 rounded-xl border px-1 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:w-[136px] sm:gap-1.5 sm:px-2.5 sm:text-sm disabled:cursor-not-allowed disabled:opacity-50",
-          theme.inputBg,
-          theme.inputBorder,
-          theme.inputText,
-          getChatThemeHoverClass(theme),
-        )}
+        onClick={onRemove}
+        aria-label="Remove Web Search override"
+        className="ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full focus:outline-none focus:ring-2 focus:ring-blue-400/50"
       >
-        <Globe2 className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden="true" />
-        <span className="min-w-0 whitespace-nowrap sm:hidden">
-          {mode === "web_search" ? "Web" : CHAT_ROUTING_MODE_LABELS[mode]}
-        </span>
-        <span className="hidden min-w-0 whitespace-nowrap sm:block">
-          {CHAT_ROUTING_MODE_LABELS[mode]}
-        </span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
-
-      {!open && (
-        <span
-          id="composer-routing-help"
-          role="tooltip"
-          className={cx(
-            "pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 max-w-[calc(100vw-5rem)] rounded-lg border px-3 py-2 text-left text-xs opacity-0 shadow-xl transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
-            theme.panelBg,
-            theme.panelBorder,
-            theme.inputText,
-          )}
-        >
-          <span className="block font-medium">{CHAT_ROUTING_SELECTOR_HELP.title}</span>
-          <span className="mt-0.5 block">{CHAT_ROUTING_SELECTOR_HELP.description}</span>
-        </span>
-      )}
-
-      {open && (
-        <div
-          id="composer-routing-menu"
-          role="group"
-          aria-label="Search mode options"
-          className={cx(
-            "absolute bottom-full left-0 z-40 mb-2 w-72 max-w-[calc(100vw-5rem)] rounded-xl border p-1.5 shadow-2xl backdrop-blur sm:max-w-[calc(100vw-1.5rem)]",
-            theme.panelBg,
-            theme.panelBorder,
-          )}
-        >
-          <div className="px-3 pb-2 pt-1">
-            <p className={cx("text-xs font-medium", theme.inputText)}>
-              {CHAT_ROUTING_SELECTOR_HELP.title}
-            </p>
-            <p
-              id="composer-routing-menu-help"
-              className={cx("mt-0.5 text-xs opacity-75", theme.inputText)}
-            >
-              {CHAT_ROUTING_SELECTOR_HELP.description}
-            </p>
-          </div>
-          <div className={cx("mx-2 border-t", theme.panelBorder)} />
-          <div>
-            {(Object.keys(CHAT_ROUTING_MODE_LABELS) as ChatRoutingMode[]).map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => onSelect(option)}
-                disabled={disabled}
-                aria-pressed={mode === option}
-                className={cx(
-                  "flex min-h-10 w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
-                  theme.inputText,
-                  getChatThemeHoverClass(theme),
-                )}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium">
-                    {CHAT_ROUTING_MODE_LABELS[option]}
-                  </span>
-                  <span className="mt-0.5 block text-xs leading-snug opacity-75">
-                    {CHAT_ROUTING_MODE_DESCRIPTIONS[option]}
-                  </span>
-                </span>
-                {mode === option && (
-                  <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1818,10 +1748,8 @@ export function handleComposerEnterKeyDown(
 const TOOLTIP_TEXT = {
   help: "Open help and frequently asked questions",
   newChat: "Start a new conversation",
-  standard: "General writing, brainstorming, and everyday help",
-  webSearch: "Use current online information when freshness matters",
   imageMode: "Generate an image from your prompt",
-  image: "Attach an image in Standard mode",
+  image: "Attach an image",
   mic: "Speak your message using your microphone",
   send: "Send your message",
   stop: "Stop generating the current response",
@@ -2873,8 +2801,8 @@ export default function ChatClient({
   );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [routingMode, setRoutingMode] = useState<ChatRoutingMode>("auto");
-  const useWebSearch = routingMode !== "standard";
+  const routingMode: ChatRoutingMode = "auto";
+  const [webSearchOverride, setWebSearchOverride] = useState(false);
   const [useImageGeneration, setUseImageGeneration] = useState(false);
   const [reasoningMode, setReasoningMode] = useState<ChatReasoningMode>("medium");
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -2898,7 +2826,6 @@ export default function ChatClient({
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
-  const [routingMenuOpen, setRoutingMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [profileMenuPosition, setProfileMenuPosition] = useState<ProfileMenuPosition>({
     top: 0,
@@ -3012,15 +2939,13 @@ export default function ChatClient({
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const plusMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const plusMenuRef = useRef<HTMLDivElement | null>(null);
-  const routingMenuButtonRef = useRef<HTMLButtonElement | null>(null);
-  const routingMenuRef = useRef<HTMLDivElement | null>(null);
   const reasoningMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const reasoningMenuRef = useRef<HTMLDivElement | null>(null);
   const isNativeApp = Capacitor.isNativePlatform();
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
   const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration
     ? "create_image"
-    : routingMode;
+    : "auto";
   const messageTimestamps = useMemo(
     () =>
       new Map(
@@ -3095,14 +3020,6 @@ export default function ChatClient({
 
     if (restoreFocus) {
       window.requestAnimationFrame(() => plusMenuButtonRef.current?.focus());
-    }
-  }, []);
-
-  const closeRoutingMenu = useCallback((restoreFocus = false) => {
-    setRoutingMenuOpen(false);
-
-    if (restoreFocus) {
-      window.requestAnimationFrame(() => routingMenuButtonRef.current?.focus());
     }
   }, []);
 
@@ -3271,31 +3188,6 @@ export default function ChatClient({
       document.removeEventListener("keydown", handleEscape, true);
     };
   }, [closePlusMenu, plusMenuOpen]);
-
-  useEffect(() => {
-    if (!routingMenuOpen) return;
-
-    const handleOutsidePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && routingMenuRef.current?.contains(target)) return;
-      closeRoutingMenu();
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-
-      event.preventDefault();
-      closeRoutingMenu(true);
-    };
-
-    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
-    document.addEventListener("keydown", handleEscape, true);
-
-    return () => {
-      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
-      document.removeEventListener("keydown", handleEscape, true);
-    };
-  }, [closeRoutingMenu, routingMenuOpen]);
 
   useEffect(() => {
     if (!reasoningMenuOpen) return;
@@ -3571,6 +3463,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
         await refreshConversations().catch(() => undefined);
         setImageEditOperationState(null);
+        setWebSearchOverride(false);
         return;
       }
 
@@ -4058,7 +3951,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       uploadingImages ||
       isUploadingDocuments ||
       isLimitReached ||
-      useWebSearch ||
       useImageGeneration
     ) {
       return;
@@ -4079,7 +3971,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       uploadingImages ||
       isUploadingDocuments ||
       isLimitReached ||
-      useWebSearch ||
       useImageGeneration
     ) {
       return;
@@ -4098,7 +3989,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       loading ||
       uploadingImages ||
       isUploadingDocuments ||
-      useWebSearch ||
       useImageGeneration
     ) {
       return;
@@ -4404,7 +4294,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       setDocumentError(
         useImageGeneration
           ? "Document upload is not available in Create Image mode."
-          : "Manual file upload is not available in Web Search mode.",
+          : "Manual file upload is unavailable in this composer mode.",
       );
       return false;
     }
@@ -4640,6 +4530,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
+    setWebSearchOverride(false);
+
     if (imageEditOperationRef.current) {
       setImageEditOperationState(null);
     }
@@ -4708,6 +4600,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
   async function handleNewChat() {
     if (loading || imageEditInFlightRef.current) return;
+
+    setWebSearchOverride(false);
 
     if (imageEditOperationRef.current) {
       setImageEditOperationState(null);
@@ -4831,12 +4725,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleImageFilesSelected(files: File[]): Promise<void> {
     if (files.length === 0) return;
 
-    if (routingMode === "web_search" || useImageGeneration) {
-      setUiError(
-        useImageGeneration
-          ? "Image upload is not available in Create Image mode."
-          : "Web Search mode does not support image upload.",
-      );
+    if (useImageGeneration) {
+      setUiError("Image upload is not available in Create Image mode.");
       return;
     }
 
@@ -4937,11 +4827,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (routingMode === "web_search" && hasImages) {
-      setUiError("Web Search mode does not support image upload.");
-      return;
-    }
-
     if (useImageGeneration && (hasImages || composerDocuments.length > 0)) {
       setUiError("Image generation mode does not support file upload.");
       return;
@@ -4978,26 +4863,25 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           document.mime_type === "text/plain" &&
           document.size_bytes >= 2001,
       );
-    const routeDecision = selectIntelligenceRoute({
-      mode: useImageGeneration ? "create_image" : routingMode,
+    const classifiedRouteDecision = selectIntelligenceRoute({
+      mode: useImageGeneration ? "create_image" : "auto",
       prompt: effectiveMessage,
       hasImageContext: Boolean(editableImageContext) && !hasImages,
       hasImageAttachment: hasImages,
       hasDocumentAttachment: hasReadyDocuments,
       autoWebSearchNeeded:
-        routingMode === "auto" &&
+        !useImageGeneration &&
         !hasImages &&
         webSearchCompatibleDocuments &&
         hasCurrentInformationIntent(effectiveMessage),
       // Auto's existing server-side classifier remains authoritative for non-visual prompts.
       deferAutoWebSearch:
-        routingMode === "auto" &&
         !useImageGeneration &&
         !hasImages &&
         !hasReadyDocuments,
     });
 
-    if (routeDecision.route === "image_editing") {
+    if (classifiedRouteDecision.route === "image_editing") {
       clearTransientErrors();
       if (isListening) handleStopListening();
 
@@ -5068,6 +4952,29 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       return;
     }
+
+    const incompatibleWebSearchAttachments =
+      webSearchOverride &&
+      hasReadyDocuments &&
+      !webSearchCompatibleDocuments &&
+      classifiedRouteDecision.route !== "document_generation";
+    if (incompatibleWebSearchAttachments) {
+      setUiError(
+        "Web Search cannot use these uploaded files yet. Remove Web Search to analyze them, or remove the files to search the web.",
+      );
+      return;
+    }
+
+    const explicitSearchCanUseRequest =
+      webSearchOverride &&
+      !hasImages &&
+      !editableImageContext &&
+      (!hasReadyDocuments || webSearchCompatibleDocuments) &&
+      classifiedRouteDecision.route !== "image_generation" &&
+      classifiedRouteDecision.route !== "document_generation";
+    const routeDecision = explicitSearchCanUseRequest
+      ? { route: "web_search" as const, reason: "auto_web_search_required" as const }
+      : classifiedRouteDecision;
 
     const reachedImageGenerationLimit = Boolean(
       imageGenerationUsage &&
@@ -5160,6 +5067,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         }
 
         responseAccepted = true;
+        setWebSearchOverride(false);
         registerGeneratedImageUrl(generatedImageResult.url);
         setMessages((prev) =>
           reconcileGeneratedImageMessages(
@@ -5188,6 +5096,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         reasoningMode,
         routingMode,
         route: routeDecision.route,
+        forceWebSearch: explicitSearchCanUseRequest,
         hasImages,
         images: payloadImages,
       });
@@ -5217,6 +5126,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       }
 
       responseAccepted = true;
+      setWebSearchOverride(false);
       const persistedUserMessageId = hasImages
         ? getSafeUuidHeader(res, "X-LVTChat-User-Message-Id")
         : undefined;
@@ -5310,6 +5220,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       trackGaEvent("chat_message_sent", {
         plan,
         mode: usesWebSearchResponse ? "web_search" : "standard",
+        ...(usesWebSearchResponse
+          ? buildWebSearchOverrideTelemetry(explicitSearchCanUseRequest)
+          : {}),
         has_image: hasImages,
         has_documents: hasReadyDocuments,
       });
@@ -5612,46 +5525,29 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     abortRef.current?.abort();
   }
 
-  function handleRoutingModeChange(nextRoutingMode: ChatRoutingMode): void {
-    if (loading) return;
-
-    closePlusMenu();
-    closeRoutingMenu(true);
-    closeReasoningMenu();
-
-    if (nextRoutingMode === "web_search") {
-      discardPendingImages();
-      clearComposerDocuments();
-    }
-
-    setRoutingMode(nextRoutingMode);
-    setUseImageGeneration(false);
-    clearTransientErrors();
-  }
-
   function handleImageModeChange(): void {
     if (loading) return;
 
     closePlusMenu();
-    closeRoutingMenu();
     closeReasoningMenu();
 
     discardPendingImages();
     clearComposerDocuments();
+    setWebSearchOverride(false);
     setUseImageGeneration(true);
     clearTransientErrors();
   }
 
-  function handleReturnToAutoChat(): void {
+  function handleReturnToChat(): void {
     if (loading) return;
 
     setUseImageGeneration(false);
-    setRoutingMode("auto");
+    setWebSearchOverride(false);
     clearTransientErrors();
   }
 
   function handleComposerPlusMenuAction(action: ComposerPlusMenuAction): void {
-    closePlusMenu();
+    closePlusMenu(action === "web_search");
 
     if (action === "camera") {
       handleOpenCameraPicker();
@@ -5673,7 +5569,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    handleImageModeChange();
+    if (action === "web_search") {
+      setWebSearchOverride((active) => !active);
+      clearTransientErrors();
+    }
   }
 
   function renderStatusMessages() {
@@ -6559,7 +6458,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs ${activeTheme.mutedText}`}>
                       {useImageGeneration
                         ? "Generating image…"
-                        : routingMode === "web_search"
+                        : webSearchOverride
                         ? "Searching the web..."
                         : uploadingImages
                           ? "Processing images..."
@@ -6582,7 +6481,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   accept="image/*"
                   multiple={plan === "pro"}
                   onChange={handleImageChange}
-                  disabled={composerDisabled || routingMode === "web_search" || useImageGeneration}
+                  disabled={composerDisabled || useImageGeneration}
                   className="hidden"
                 />
 
@@ -6595,7 +6494,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   disabled={
                     composerDisabled ||
                     !cameraCaptureSupported ||
-                    routingMode === "web_search" ||
                     useImageGeneration
                   }
                   className="hidden"
@@ -6634,7 +6532,16 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
                 )}
 
-                {routingMode !== "web_search" && !useImageGeneration && pendingImages.length > 0 && (
+                {webSearchOverride && !useImageGeneration && (
+                  <div className="flex min-w-0 items-center">
+                    <WebSearchOverrideChip
+                      theme={activeTheme}
+                      onRemove={() => setWebSearchOverride(false)}
+                    />
+                  </div>
+                )}
+
+                {!useImageGeneration && pendingImages.length > 0 && (
                   <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="grid max-w-full grid-cols-1 gap-2 sm:grid-cols-3">
                       {pendingImages.map((image) => (
@@ -6715,7 +6622,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                           ? isListening
                             ? "Listening… tap mic to stop."
                             : "Describe the image you want to generate..."
-                          : routingMode === "web_search"
+                          : webSearchOverride
                           ? isListening
                             ? "Listening… tap mic to stop."
                             : "Ask a question to search the web..."
@@ -6748,11 +6655,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <ComposerPlusMenu
                       open={plusMenuOpen}
                       mode={composerPlusMenuMode}
+                      webSearchOverride={webSearchOverride}
                       disabled={composerDisabled}
                       cameraEnabled={cameraCaptureSupported}
                       theme={activeTheme}
                       onToggle={() => {
-                        closeRoutingMenu();
                         closeReasoningMenu();
                         setPlusMenuOpen((open) => !open);
                       }}
@@ -6762,49 +6669,32 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     />
 
                     {!useImageGeneration && (
-                      <>
-                        <ChatRoutingModeSelector
-                          mode={routingMode}
-                          open={routingMenuOpen}
-                          disabled={composerDisabled}
-                          theme={activeTheme}
-                          onToggle={() => {
-                            closePlusMenu();
-                            closeReasoningMenu();
-                            setRoutingMenuOpen((open) => !open);
-                          }}
-                          onSelect={handleRoutingModeChange}
-                          buttonRef={routingMenuButtonRef}
-                          containerRef={routingMenuRef}
-                        />
-                        <ReasoningModeSelector
-                          mode={reasoningMode}
-                          plan={plan}
-                          open={reasoningMenuOpen}
-                          disabled={composerDisabled}
-                          theme={activeTheme}
-                          onToggle={() => {
-                            closePlusMenu();
-                            closeRoutingMenu();
-                            setReasoningMenuOpen((open) => !open);
-                          }}
-                          onSelect={(nextMode) => {
-                            if (isChatReasoningModeLocked(nextMode, plan)) return;
-                            setReasoningMode(nextMode);
-                            closeReasoningMenu(true);
-                          }}
-                          buttonRef={reasoningMenuButtonRef}
-                          containerRef={reasoningMenuRef}
-                        />
-                      </>
+                      <ReasoningModeSelector
+                        mode={reasoningMode}
+                        plan={plan}
+                        open={reasoningMenuOpen}
+                        disabled={composerDisabled}
+                        theme={activeTheme}
+                        onToggle={() => {
+                          closePlusMenu();
+                          setReasoningMenuOpen((open) => !open);
+                        }}
+                        onSelect={(nextMode) => {
+                          if (isChatReasoningModeLocked(nextMode, plan)) return;
+                          setReasoningMode(nextMode);
+                          closeReasoningMenu(true);
+                        }}
+                        buttonRef={reasoningMenuButtonRef}
+                        containerRef={reasoningMenuRef}
+                      />
                     )}
 
                     {useImageGeneration && (
                       <button
                         type="button"
-                        onClick={handleReturnToAutoChat}
+                        onClick={handleReturnToChat}
                         disabled={composerDisabled}
-                        aria-label="Return to Auto text chat"
+                        aria-label="Return to chat"
                         className={cx(
                           "flex h-11 shrink-0 items-center gap-1.5 rounded-xl border px-2 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:px-3 sm:text-sm",
                           activeTheme.inputBg,

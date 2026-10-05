@@ -416,12 +416,13 @@ describe("chat image-generation mode", () => {
   });
 
   it("keeps Standard and Web Search on their existing endpoints", () => {
-    expect(clientSource).toContain('endpoint: useStandardCapability ? "/api/chat" : "/api/chat-web"');
+    expect(clientSource).toContain('params.forceWebSearch || !useStandardCapability');
+    expect(clientSource).toContain('webSearchMode: params.forceWebSearch');
     expect(clientSource).toContain('fetcher("/api/image-generation"');
     expect(clientSource).toContain('mode: usesWebSearchResponse ? "web_search" : "standard"');
   });
 
-  it("keeps Create Image on its existing request and provides an in-composer Auto-chat exit", () => {
+  it("keeps Create Image on its existing request and provides an in-composer chat exit", () => {
     const imageRequestStart = clientSource.indexOf(
       'if (routeDecision.route === "image_generation") {',
     );
@@ -429,22 +430,23 @@ describe("chat image-generation mode", () => {
     expect(imageRequestStart).toBeGreaterThanOrEqual(0);
     expect(chatRequestStart).toBeGreaterThan(imageRequestStart);
 
-    const exitStart = clientSource.indexOf("function handleReturnToAutoChat()");
+    const exitStart = clientSource.indexOf("function handleReturnToChat()");
     const exitEnd = clientSource.indexOf("function handleComposerPlusMenuAction", exitStart);
     const exitHandler = clientSource.slice(exitStart, exitEnd);
     expect(exitHandler).toContain("setUseImageGeneration(false)");
-    expect(exitHandler).toContain('setRoutingMode("auto")');
-    expect(clientSource).toContain('aria-label="Return to Auto text chat"');
+    expect(exitHandler).toContain("setWebSearchOverride(false)");
+    expect(clientSource).toContain('aria-label="Return to chat"');
   });
 
-  it("allows Free users to select Web Search without a Pro entitlement gate", () => {
-    const modeHandlerStart = clientSource.indexOf("function handleRoutingModeChange");
-    const modeHandlerEnd = clientSource.indexOf("function handleImageModeChange", modeHandlerStart);
-    const modeHandlerSource = clientSource.slice(modeHandlerStart, modeHandlerEnd);
+  it("keeps Web Search as a request UI override while backend entitlement stays authoritative", () => {
+    const actionHandlerStart = clientSource.indexOf("function handleComposerPlusMenuAction");
+    const actionHandlerEnd = clientSource.indexOf("function renderStatusMessages", actionHandlerStart);
+    const actionHandlerSource = clientSource.slice(actionHandlerStart, actionHandlerEnd);
 
-    expect(modeHandlerSource).toContain('setRoutingMode(nextRoutingMode)');
-    expect(modeHandlerSource).not.toContain('plan !== "pro"');
-    expect(modeHandlerSource).not.toContain("PRO_REQUIRED");
+    expect(actionHandlerSource).toContain('if (action === "web_search")');
+    expect(actionHandlerSource).toContain("setWebSearchOverride((active) => !active)");
+    expect(actionHandlerSource).not.toContain('plan !== "pro"');
+    expect(clientSource).toContain('webSearchMode: params.forceWebSearch');
   });
 
   it("maps status codes through the same safe error table used by the request helper", () => {

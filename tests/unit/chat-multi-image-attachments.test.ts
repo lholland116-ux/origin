@@ -83,12 +83,13 @@ describe("multi-image chat attachments", () => {
     ]);
   });
 
-  it("supports image-only messages and rejects Web Search image submissions", () => {
+  it("supports image-only messages while keeping the request-level search override separate", () => {
     expect(canSubmitWithPendingImages("", 1, 0)).toBe(true);
     expect(canSubmitWithPendingImages("", 0, 0)).toBe(false);
-    expect(clientSource).toContain('"Web Search mode does not support image upload."');
+    expect(clientSource).toContain('disabled={composerDisabled || useImageGeneration}');
+    expect(clientSource).toContain("webSearchOverride &&\n      hasReadyDocuments &&");
     expect(clientSource).toContain("...(useStandardCapability && params.hasImages ? { images: params.images } : {})");
-    expect(clientSource).toContain('endpoint: useStandardCapability ? "/api/chat" : "/api/chat-web"');
+    expect(clientSource).toContain("params.forceWebSearch || !useStandardCapability");
   });
 
   it("keeps batch cleanup and request rollback paths explicit", () => {
