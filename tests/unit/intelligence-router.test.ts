@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   hasImageEditIntent,
   hasImageGenerationIntent,
+  hasDocumentGenerationIntent,
+  hasFileAnalysisIntent,
   selectIntelligenceRoute,
 } from "@/lib/ai/intelligence-router";
 
@@ -29,6 +31,114 @@ describe("Intelligence Router core", () => {
         autoWebSearchNeeded: true,
       }),
     ).toEqual({ route: "web_search", reason: "auto_web_search_required" });
+
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt: "What's the latest status?",
+        hasImageContext: false,
+        hasDocumentAttachment: true,
+        autoWebSearchNeeded: true,
+      }).route,
+    ).toBe("web_search");
+  });
+
+  it.each([
+    "Summarize this PDF.",
+    "Analyze this spreadsheet.",
+    "Review this presentation.",
+    "What are the major trends in this Excel file?",
+    "Read and summarize this file.",
+  ])("routes attachment analysis to file_analysis: %s", (prompt) => {
+    expect(hasFileAnalysisIntent(prompt)).toBe(true);
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt,
+        hasImageContext: false,
+        hasDocumentAttachment: true,
+      }).route,
+    ).toBe("file_analysis");
+  });
+
+  it("routes image questions to file_analysis and keeps editing ahead of analysis", () => {
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt: "What is shown in this screenshot?",
+        hasImageContext: false,
+        hasImageAttachment: true,
+      }).route,
+    ).toBe("file_analysis");
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt: "Change the walls to blue.",
+        hasImageContext: true,
+        hasImageAttachment: true,
+      }).route,
+    ).toBe("image_editing");
+  });
+
+  it.each([
+    "Make the walls blue.",
+    "Remove the background.",
+    "Replace the red mug with a plant.",
+  ])("routes a fresh image attachment and edit instruction to image_editing: %s", (prompt) => {
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt,
+        hasImageContext: false,
+        hasImageAttachment: true,
+      }),
+    ).toEqual({ route: "image_editing", reason: "image_edit_intent" });
+  });
+
+  it("routes supported artifact requests to document_generation", () => {
+    for (const prompt of [
+      "Create a PDF report about this.",
+      "Make a Word document from these notes.",
+      "Create an Excel risk matrix.",
+      "Turn this into a PowerPoint.",
+      "Export this as Markdown.",
+      "Create a TXT file.",
+      "Generate a report I can download.",
+      "Package these outputs in a ZIP.",
+    ]) {
+      expect(hasDocumentGenerationIntent(prompt)).toBe(true);
+      expect(
+        selectIntelligenceRoute({
+          mode: "auto",
+          prompt,
+          hasImageContext: false,
+          hasDocumentAttachment: true,
+        }).route,
+      ).toBe("document_generation");
+    }
+  });
+
+  it("does not route informational file-format questions to document generation", () => {
+    expect(hasDocumentGenerationIntent("What is a PDF file?")).toBe(false);
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt: "What is a PDF file?",
+        hasImageContext: false,
+      }).route,
+    ).toBe("standard");
+  });
+
+  it("keeps an attachment without analysis intent off the web route", () => {
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt: "Thanks, I will review it later.",
+        hasImageContext: false,
+        hasDocumentAttachment: true,
+        deferAutoWebSearch: true,
+      }),
+    ).toEqual({ route: "standard", reason: "attachment_safe_fallback" });
   });
 
   it("preserves explicit Standard and Web Search overrides", () => {

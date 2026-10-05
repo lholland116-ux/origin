@@ -68,7 +68,7 @@ function getReasoningOptions(menu: SelectorNode): SelectorNode[] {
 }
 
 function renderPlusMenu(
-  mode: "standard" | "web_search" | "create_image",
+  mode: "auto" | "standard" | "web_search" | "create_image",
   cameraEnabled = false,
 ): string {
   return renderToStaticMarkup(
@@ -355,6 +355,13 @@ describe("chat image-generation presentation", () => {
     expect(standardMarkup).toContain(">Create image</span>");
     expect(standardMarkup.match(/disabled=""/g)).toHaveLength(1);
 
+    const autoMarkup = renderPlusMenu("auto");
+    expect(autoMarkup.match(/role="menuitem"/g)).toHaveLength(4);
+    expect(autoMarkup).toContain(">Camera</span>");
+    expect(autoMarkup).toContain(">Photos</span>");
+    expect(autoMarkup).toContain(">Files</span>");
+    expect(autoMarkup.match(/disabled=""/g)).toHaveLength(1);
+
     const mobileStandardMarkup = renderPlusMenu("standard", true);
     expect(mobileStandardMarkup.match(/role="menuitem"/g)).toHaveLength(4);
     expect(mobileStandardMarkup).toContain(">Camera</span>");
@@ -563,7 +570,7 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).toContain(
       'message.role === "assistant" && message.generatedImage?.id',
     );
-    expect(clientSource).toContain('endpoint: isStandard ? "/api/chat" : "/api/chat-web"');
+    expect(clientSource).toContain('endpoint: useStandardCapability ? "/api/chat" : "/api/chat-web"');
     expect(clientSource).toContain('aria-label="Download image"');
     expect(clientSource).toContain('aria-label="Regenerate image"');
     expect(clientSource).toContain('alt={image.image_name || "Uploaded image"}');
@@ -865,7 +872,9 @@ describe("chat image-generation presentation", () => {
     expect(composerSource).toContain("composerDisabled ||");
     expect(composerSource).toContain("pendingImageLimitExceeded ||");
     expect(composerSource).toContain("!canSubmitWithPendingImages(");
-    expect(clientSource).toContain("if (loading || uploadingImages || isUploadingDocuments) return;");
+    expect(clientSource).toContain("uploadingImages ||");
+    expect(clientSource).toContain("isUploadingDocuments ||");
+    expect(clientSource).toContain("freshImageEditPreparationRef.current");
     expect(clientSource).toContain("if (pendingDocumentLimitExceeded) {");
     expect(clientSource).toContain("if (requestLimitReached) {");
     expect(clientSource).toContain("if (!trimmed && !hasImages) {");

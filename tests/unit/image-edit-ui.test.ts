@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildImageEditRequestBody,
+  executeFreshImageEdit,
   getImageEditErrorMessage,
   getUploadedImageEditSourceReference,
   isEligibleUploadedMessageImage,
@@ -39,6 +40,71 @@ function uploadedImage(ordinal?: number): MessageImage {
 }
 
 describe("image-edit UI contracts", () => {
+  it("persists a fresh image through the authenticated image-message RPC before invoking image editing", async () => {
+    const order: string[] = [];
+    let submittedSource: unknown;
+
+    await executeFreshImageEdit({
+      conversationId: CONVERSATION_ID,
+      images: [{
+        id: "pending-image-1",
+        name: "room.png",
+        path: "user/room.png",
+        previewUrl: "data:image/png;base64,room",
+      }],
+      persist: async ({ conversationId, images }) => {
+        order.push("persist");
+        expect(conversationId).toBe(CONVERSATION_ID);
+        expect(images[0]?.path).toBe("user/room.png");
+        return MESSAGE_ID;
+      },
+      edit: (source) => {
+        order.push("edit");
+        submittedSource = source;
+      },
+    });
+
+    expect(order).toEqual(["persist", "edit"]);
+    expect(submittedSource).toEqual({
+      sourceReference: {
+        kind: "uploaded_image",
+        messageId: MESSAGE_ID,
+        ordinal: 1,
+      },
+      sourcePreview: "data:image/png;base64,room",
+      sourceLabel: "room.png",
+    });
+    expect(clientSource).toContain('"create_chat_message_with_images"');
+    expect(clientSource).toContain("p_content: \"\"");
+    expect(clientSource).toContain("p_images: images.map((image) => ({");
+    expect(clientSource).toContain("if (hasImages && !canAddPendingImages(0, pendingImageSnapshot.length, plan))");
+    expect(clientSource).toContain('if (routeDecision.route === "image_editing")');
+    expect(clientSource).toContain('fetch("/api/image-edit"');
+  });
+
+  it("never invokes image editing when fresh-image persistence fails", async () => {
+    const edit = vi.fn();
+
+    await expect(
+      executeFreshImageEdit({
+        conversationId: CONVERSATION_ID,
+        images: [{
+          id: "pending-image-1",
+          name: "room.png",
+          path: "user/room.png",
+          previewUrl: "data:image/png;base64,room",
+        }],
+        persist: async () => {
+          throw new Error("persistence failed");
+        },
+        edit,
+      }),
+    ).rejects.toThrow("persistence failed");
+
+    expect(edit).not.toHaveBeenCalled();
+    expect(clientSource).toContain("Could not prepare the attached image for editing.");
+  });
+
   it("posts a generated-image identity and exact instruction without client-controlled storage data", () => {
     const body = buildImageEditRequestBody(operation, "50000000-0000-4000-8000-000000000001");
 

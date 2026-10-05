@@ -42,7 +42,7 @@ function clipboardData(params: {
 describe("composer large-input handling", () => {
   it.each([
     ["standard", "/api/chat", undefined],
-    ["auto", "/api/chat-web", "auto"],
+    ["auto", "/api/chat", undefined],
     ["web_search", "/api/chat-web", "force"],
   ] as const)("builds the %s request using %s with %s search policy", (routingMode, endpoint, webSearchMode) => {
     const chatRequest = buildChatRequest({
@@ -107,6 +107,7 @@ describe("composer large-input handling", () => {
   });
 
   it("allows governed large-paste attachments in Standard and Web Search, but not Create Image", () => {
+    expect(canAttachLargePasteInMode("auto")).toBe(true);
     expect(canAttachLargePasteInMode("standard")).toBe(true);
     expect(canAttachLargePasteInMode("web_search")).toBe(true);
     expect(canAttachLargePasteInMode("create_image")).toBe(false);
@@ -116,11 +117,56 @@ describe("composer large-input handling", () => {
   });
 
   it("keeps manual document upload unavailable in Web Search", () => {
+    expect(canUploadDocumentInMode("auto", "manual")).toBe(true);
+    expect(canUploadDocumentInMode("auto", "pasted_text")).toBe(true);
     expect(canUploadDocumentInMode("standard", "manual")).toBe(true);
     expect(canUploadDocumentInMode("web_search", "manual")).toBe(false);
     expect(canUploadDocumentInMode("web_search", "pasted_text")).toBe(true);
     expect(canUploadDocumentInMode("create_image", "pasted_text")).toBe(false);
     expect(clientSource).toContain('handleFilesSelected([pastedFile], "pasted_text")');
+  });
+
+  it("exposes the existing image and file controls in the default Auto composer", () => {
+    expect(clientSource).toContain("const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration");
+    expect(clientSource).toContain('mode !== "standard" && mode !== "auto"');
+    expect(clientSource).toContain('disabled={composerDisabled || routingMode === "web_search" || useImageGeneration}');
+    expect(clientSource).toContain("routingMode === \"web_search\" || useImageGeneration");
+    expect(canUploadDocumentInMode("auto", "manual")).toBe(true);
+    expect(canUploadDocumentInMode("auto", "pasted_text")).toBe(true);
+  });
+
+  it("keeps Auto attachments on the existing Standard analysis capability when required", () => {
+    const imageRequest = buildChatRequest({
+      conversationId: "conversation-1",
+      message: "What is shown in this screenshot?",
+      generationRequestId: "request-1",
+      documentIds: [],
+      reasoningMode: "medium",
+      routingMode: "auto",
+      route: "file_analysis",
+      hasImages: true,
+      images: [{ imagePath: "image/path", imageName: "screenshot.png" }],
+    });
+    const documentRequest = buildChatRequest({
+      conversationId: "conversation-1",
+      message: "Create a PDF summary of this spreadsheet.",
+      generationRequestId: "request-2",
+      documentIds: ["document-1"],
+      reasoningMode: "medium",
+      routingMode: "auto",
+      route: "document_generation",
+      hasImages: false,
+      images: [],
+    });
+
+    expect(imageRequest.endpoint).toBe("/api/chat");
+    expect(imageRequest.body).toHaveProperty("images", [
+      { imagePath: "image/path", imageName: "screenshot.png" },
+    ]);
+    expect(documentRequest.endpoint).toBe("/api/chat");
+    expect(documentRequest.body).toHaveProperty("documentIds", ["document-1"]);
+    expect(clientSource).toContain('const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration');
+    expect(clientSource).toContain('mode !== "standard" && mode !== "auto"');
   });
 
   it("preserves existing instructions, selection replacement, and exact newlines", () => {
@@ -203,7 +249,7 @@ describe("composer large-input handling", () => {
     expect(imageHandlers).toContain("await handleImageFilesSelected(files);");
     expect(imageHandlers).toContain("canAddPendingImages(pendingImages.length, files.length, currentPlan)");
     expect(imageHandlers).toContain("const validationError = validateImageBatch(files);");
-    expect(imageHandlers).toContain("if (useWebSearch || useImageGeneration)");
+    expect(imageHandlers).toContain('if (routingMode === "web_search" || useImageGeneration)');
   });
 
   it("fails explicitly above the request boundary instead of truncating", () => {

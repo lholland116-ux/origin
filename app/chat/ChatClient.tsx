@@ -69,7 +69,11 @@ import ReadAloudSettings from "@/components/chat/ReadAloudSettings";
 import { GeneratedDocumentCard, type GeneratedDocumentCardData } from "@/components/chat/GeneratedDocumentCard";
 import { documentFormatFromMimeType, filenameFromContentDisposition, saveDocumentBlob, DocumentDownloadError } from "@/lib/documents/download";
 import { stopReadAloud } from "@/lib/read-aloud";
-import { selectIntelligenceRoute } from "@/lib/ai/intelligence-router";
+import {
+  hasCurrentInformationIntent,
+  selectIntelligenceRoute,
+  type IntelligenceRoute,
+} from "@/lib/ai/intelligence-router";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -287,7 +291,7 @@ type DocumentsResponse = {
   error?: string;
 };
 
-export type ComposerPlusMenuMode = "standard" | "web_search" | "create_image";
+export type ComposerPlusMenuMode = "auto" | "standard" | "web_search" | "create_image";
 
 export type ComposerPlusMenuAction =
   | "camera"
@@ -354,23 +358,31 @@ export function buildChatRequest(params: {
   documentIds: string[];
   reasoningMode: ChatReasoningMode;
   routingMode: ChatRoutingMode;
+  route?: IntelligenceRoute;
   hasImages: boolean;
   images: Array<{ imagePath: string; imageName: string }>;
 }) {
   const isStandard = params.routingMode === "standard";
+  const useStandardCapability =
+    isStandard ||
+    (params.routingMode === "auto" &&
+      (params.route === "standard" ||
+        params.route === "file_analysis" ||
+        params.route === "document_generation" ||
+        params.hasImages));
 
   return {
-    endpoint: isStandard ? "/api/chat" : "/api/chat-web",
+    endpoint: useStandardCapability ? "/api/chat" : "/api/chat-web",
     body: {
       conversationId: params.conversationId,
       message: params.message,
       generationRequestId: params.generationRequestId,
       documentIds: params.documentIds,
       reasoningMode: params.reasoningMode,
-      ...(!isStandard
+      ...(params.routingMode !== "standard" && !useStandardCapability
         ? { webSearchMode: params.routingMode === "auto" ? "auto" : "force" }
         : {}),
-      ...(isStandard && params.hasImages ? { images: params.images } : {}),
+      ...(useStandardCapability && params.hasImages ? { images: params.images } : {}),
     },
   };
 }
@@ -387,7 +399,11 @@ export function canUploadDocumentInMode(
   mode: ComposerPlusMenuMode,
   source: "manual" | "pasted_text",
 ): boolean {
-  return mode === "standard" || (mode === "web_search" && source === "pasted_text");
+  return (
+    mode === "standard" ||
+    mode === "auto" ||
+    (mode === "web_search" && source === "pasted_text")
+  );
 }
 
 export function isCameraCaptureSupported(
@@ -523,7 +539,8 @@ export function ComposerPlusMenu({
           )}
         >
           {getComposerPlusMenuActions().map((action) => {
-            const attachmentUnavailable = mode !== "standard" && action !== "create_image";
+            const attachmentUnavailable =
+              mode !== "standard" && mode !== "auto" && action !== "create_image";
             const actionDisabled =
               disabled || attachmentUnavailable || (action === "camera" && !cameraEnabled);
 
@@ -2164,6 +2181,47 @@ export function getLatestEditableImageContext(
   return null;
 }
 
+export type FreshImageEditSource = {
+  sourceReference: ImageEditSourceReference;
+  sourcePreview: string;
+  sourceLabel: string;
+};
+
+export async function executeFreshImageEdit(params: {
+  conversationId: string;
+  images: PendingImage[];
+  persist: (input: {
+    conversationId: string;
+    images: PendingImage[];
+  }) => Promise<string>;
+  edit: (source: FreshImageEditSource) => Promise<void> | void;
+}): Promise<void> {
+  const firstImage = params.images[0];
+  if (!firstImage || params.images.length === 0) {
+    throw new Error("An image is required to start an edit.");
+  }
+
+  const messageId = await params.persist({
+    conversationId: params.conversationId,
+    images: params.images,
+  });
+  const sourceReference = getUploadedImageEditSourceReference(messageId, {
+    image_path: firstImage.path,
+    image_name: firstImage.name,
+    ordinal: 1,
+  });
+
+  if (!sourceReference) {
+    throw new Error("The persisted image source is unavailable.");
+  }
+
+  await params.edit({
+    sourceReference,
+    sourcePreview: firstImage.previewUrl,
+    sourceLabel: firstImage.name,
+  });
+}
+
 export function hasCanonicalChildImages(message: {
   images?: unknown;
   has_child_images?: boolean;
@@ -2869,6 +2927,7 @@ export default function ChatClient({
   const regenerationInFlightRef = useRef(false);
   const imageEditOperationRef = useRef<ImageEditOperation | null>(null);
   const imageEditInFlightRef = useRef(false);
+  const freshImageEditPreparationRef = useRef(false);
   const pastedTextUploadInFlightRef = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -2961,9 +3020,7 @@ export default function ChatClient({
   const activeTheme = useMemo(() => getChatThemeById(selectedThemeId), [selectedThemeId]);
   const composerPlusMenuMode: ComposerPlusMenuMode = useImageGeneration
     ? "create_image"
-    : useWebSearch
-      ? "web_search"
-      : "standard";
+    : routingMode;
   const messageTimestamps = useMemo(
     () =>
       new Map(
@@ -4347,7 +4404,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       setDocumentError(
         useImageGeneration
           ? "Document upload is not available in Create Image mode."
-          : "Document upload is only available in Standard mode.",
+          : "Manual file upload is not available in Web Search mode.",
       );
       return false;
     }
@@ -4774,8 +4831,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleImageFilesSelected(files: File[]): Promise<void> {
     if (files.length === 0) return;
 
-    if (useWebSearch || useImageGeneration) {
-      setUiError("Image upload is only available in Standard mode.");
+    if (routingMode === "web_search" || useImageGeneration) {
+      setUiError(
+        useImageGeneration
+          ? "Image upload is not available in Create Image mode."
+          : "Web Search mode does not support image upload.",
+      );
       return;
     }
 
@@ -4845,7 +4906,14 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     const hasImages = pendingImageSnapshot.length > 0;
     const hasReadyDocuments = readyDocumentIds.length > 0;
 
-    if (loading || uploadingImages || isUploadingDocuments) return;
+    if (
+      loading ||
+      uploadingImages ||
+      isUploadingDocuments ||
+      freshImageEditPreparationRef.current
+    ) {
+      return;
+    }
 
     if (pendingDocumentLimitExceeded) {
       const limits = getDocumentLimits(plan);
@@ -4869,7 +4937,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
-    if (useWebSearch && hasImages) {
+    if (routingMode === "web_search" && hasImages) {
       setUiError("Web Search mode does not support image upload.");
       return;
     }
@@ -4902,27 +4970,102 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       trimmed || (hasReadyDocuments ? "Please summarize the attached document(s)." : "");
 
     const editableImageContext = getLatestEditableImageContext(messages);
+    const webSearchCompatibleDocuments =
+      hasReadyDocuments &&
+      readyComposerDocuments.every(
+        (document) =>
+          document.file_name === "pasted-text.txt" &&
+          document.mime_type === "text/plain" &&
+          document.size_bytes >= 2001,
+      );
     const routeDecision = selectIntelligenceRoute({
       mode: useImageGeneration ? "create_image" : routingMode,
       prompt: effectiveMessage,
-      hasImageContext: Boolean(editableImageContext),
-      hasOtherAttachments: hasImages || hasReadyDocuments || hasPendingDocuments,
+      hasImageContext: Boolean(editableImageContext) && !hasImages,
+      hasImageAttachment: hasImages,
+      hasDocumentAttachment: hasReadyDocuments,
+      autoWebSearchNeeded:
+        routingMode === "auto" &&
+        !hasImages &&
+        webSearchCompatibleDocuments &&
+        hasCurrentInformationIntent(effectiveMessage),
       // Auto's existing server-side classifier remains authoritative for non-visual prompts.
-      deferAutoWebSearch: routingMode === "auto" && !useImageGeneration,
+      deferAutoWebSearch:
+        routingMode === "auto" &&
+        !useImageGeneration &&
+        !hasImages &&
+        !hasReadyDocuments,
     });
 
-    if (routeDecision.route === "image_editing" && editableImageContext) {
+    if (routeDecision.route === "image_editing") {
       clearTransientErrors();
       if (isListening) handleStopListening();
 
-      handleOpenImageEdit(
-        editableImageContext.sourceReference,
-        editableImageContext.sourcePreview,
-        editableImageContext.sourceLabel,
-      );
-      handleImageEditInstructionChange(effectiveMessage);
-      setInput("");
-      void handleImageEditSubmit();
+      if (editableImageContext && !hasImages) {
+        handleOpenImageEdit(
+          editableImageContext.sourceReference,
+          editableImageContext.sourcePreview,
+          editableImageContext.sourceLabel,
+        );
+        handleImageEditInstructionChange(effectiveMessage);
+        setInput("");
+        void handleImageEditSubmit();
+        return;
+      }
+
+      if (hasImages) {
+        if (freshImageEditPreparationRef.current) return;
+
+        freshImageEditPreparationRef.current = true;
+        setLoading(true);
+        const submittedImageIds = pendingImageSnapshot.map((image) => image.id);
+
+        void executeFreshImageEdit({
+          conversationId,
+          images: pendingImageSnapshot,
+          persist: async ({ conversationId: targetConversationId, images }) => {
+            const { data, error } = await supabase.rpc(
+              "create_chat_message_with_images",
+              {
+                p_conversation_id: targetConversationId,
+                p_content: "",
+                p_documents: [],
+                p_images: images.map((image) => ({
+                  storage_path: image.path,
+                  image_name: image.name,
+                })),
+              },
+            );
+
+            if (error || typeof data !== "string" || !data) {
+              throw new Error("Could not persist the selected image.");
+            }
+
+            return data;
+          },
+          edit: async (source) => {
+            clearSubmittedPendingImages(submittedImageIds);
+            setInput("");
+            handleOpenImageEdit(
+              source.sourceReference,
+              source.sourcePreview,
+              source.sourceLabel,
+            );
+            handleImageEditInstructionChange(effectiveMessage);
+            await handleImageEditSubmit();
+            await refreshMessagesForConversation(conversationId);
+          },
+        })
+          .catch(() => {
+            setUiError("Could not prepare the attached image for editing. Please try again.");
+          })
+          .finally(() => {
+            freshImageEditPreparationRef.current = false;
+            setLoading(false);
+          });
+        return;
+      }
+
       return;
     }
 
@@ -5044,9 +5187,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         documentIds: payloadDocumentIds,
         reasoningMode,
         routingMode,
+        route: routeDecision.route,
         hasImages,
         images: payloadImages,
       });
+      const usesWebSearchResponse = chatRequest.endpoint === "/api/chat-web";
       const res = await fetch(chatRequest.endpoint, {
         method: "POST",
         signal: controller.signal,
@@ -5114,7 +5259,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
             blob,
           }],
         }));
-      } else if (useWebSearch) {
+      } else if (usesWebSearchResponse) {
         const data = (await res.json()) as ChatWebResponse;
         const reply =
           typeof data.reply === "string" && data.reply.trim().length > 0
@@ -5164,7 +5309,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       trackGaEvent("chat_message_sent", {
         plan,
-        mode: useWebSearch ? "web_search" : "standard",
+        mode: usesWebSearchResponse ? "web_search" : "standard",
         has_image: hasImages,
         has_documents: hasReadyDocuments,
       });
@@ -5474,7 +5619,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     closeRoutingMenu(true);
     closeReasoningMenu();
 
-    if (nextRoutingMode !== "standard") {
+    if (nextRoutingMode === "web_search") {
       discardPendingImages();
       clearComposerDocuments();
     }
@@ -6437,7 +6582,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   accept="image/*"
                   multiple={plan === "pro"}
                   onChange={handleImageChange}
-                  disabled={composerDisabled || useWebSearch || useImageGeneration}
+                  disabled={composerDisabled || routingMode === "web_search" || useImageGeneration}
                   className="hidden"
                 />
 
@@ -6450,7 +6595,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   disabled={
                     composerDisabled ||
                     !cameraCaptureSupported ||
-                    useWebSearch ||
+                    routingMode === "web_search" ||
                     useImageGeneration
                   }
                   className="hidden"
@@ -6489,7 +6634,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                   </div>
                 )}
 
-                {!useWebSearch && !useImageGeneration && pendingImages.length > 0 && (
+                {routingMode !== "web_search" && !useImageGeneration && pendingImages.length > 0 && (
                   <div className={cx("rounded-xl border p-1.5", activeTheme.inputBg, activeTheme.inputBorder)}>
                     <div className="grid max-w-full grid-cols-1 gap-2 sm:grid-cols-3">
                       {pendingImages.map((image) => (

@@ -416,9 +416,9 @@ describe("chat image-generation mode", () => {
   });
 
   it("keeps Standard and Web Search on their existing endpoints", () => {
-    expect(clientSource).toContain('endpoint: isStandard ? "/api/chat" : "/api/chat-web"');
+    expect(clientSource).toContain('endpoint: useStandardCapability ? "/api/chat" : "/api/chat-web"');
     expect(clientSource).toContain('fetcher("/api/image-generation"');
-    expect(clientSource).toContain('mode: useWebSearch ? "web_search" : "standard"');
+    expect(clientSource).toContain('mode: usesWebSearchResponse ? "web_search" : "standard"');
   });
 
   it("keeps Create Image on its existing request and provides an in-composer Auto-chat exit", () => {
