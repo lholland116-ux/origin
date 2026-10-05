@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { ReactElement, ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -15,6 +15,7 @@ import {
   getSelectedImageFiles,
   getProfileDisplayName,
   getUploadedMessageImageGridClass,
+  handleComposerEnterKeyDown,
   isChatReasoningModeLocked,
   isCameraCaptureSupported,
 } from "@/app/chat/ChatClient";
@@ -797,5 +798,81 @@ describe("chat image-generation presentation", () => {
       "window.SpeechRecognition || window.webkitSpeechRecognition"
     );
     expect(clientSource).toContain("setSpeechSupported(false)");
+  });
+
+  it("submits the existing form on plain Enter", () => {
+    const requestSubmit = vi.fn();
+    const preventDefault = vi.fn();
+    const event = {
+      key: "Enter",
+      shiftKey: false,
+      nativeEvent: { isComposing: false },
+      currentTarget: { form: { requestSubmit } },
+      preventDefault,
+    } as unknown as ReactKeyboardEvent<HTMLTextAreaElement>;
+
+    handleComposerEnterKeyDown(event);
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(requestSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("leaves Shift+Enter to insert a newline", () => {
+    const requestSubmit = vi.fn();
+    const preventDefault = vi.fn();
+    const event = {
+      key: "Enter",
+      shiftKey: true,
+      nativeEvent: { isComposing: false },
+      currentTarget: { form: { requestSubmit } },
+      preventDefault,
+    } as unknown as ReactKeyboardEvent<HTMLTextAreaElement>;
+
+    handleComposerEnterKeyDown(event);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(requestSubmit).not.toHaveBeenCalled();
+  });
+
+  it("leaves Enter during IME composition to the input method", () => {
+    const requestSubmit = vi.fn();
+    const preventDefault = vi.fn();
+    const event = {
+      key: "Enter",
+      shiftKey: false,
+      nativeEvent: { isComposing: true },
+      currentTarget: { form: { requestSubmit } },
+      preventDefault,
+    } as unknown as ReactKeyboardEvent<HTMLTextAreaElement>;
+
+    handleComposerEnterKeyDown(event);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(requestSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps keyboard and Send button on the same safeguarded form path", () => {
+    const formStart = clientSource.indexOf("<form");
+    const formEnd = clientSource.indexOf("</form>", formStart);
+    const composerSource = clientSource.slice(formStart, formEnd);
+    const textareaStart = composerSource.indexOf("<textarea");
+    const textareaEnd = composerSource.indexOf("/>", textareaStart);
+    const textareaSource = composerSource.slice(textareaStart, textareaEnd);
+
+    expect(composerSource).toContain("onSubmit={handleSubmit}");
+    expect(textareaSource).toContain("onKeyDown={handleComposerEnterKeyDown}");
+    expect(composerSource).toMatch(/<button\s+type="submit"[\s\S]*?aria-label="Send your message"/);
+    expect(composerSource).toContain("composerDisabled ||");
+    expect(composerSource).toContain("pendingImageLimitExceeded ||");
+    expect(composerSource).toContain("!canSubmitWithPendingImages(");
+    expect(clientSource).toContain("if (loading || uploadingImages || isUploadingDocuments) return;");
+    expect(clientSource).toContain("if (pendingDocumentLimitExceeded) {");
+    expect(clientSource).toContain("if (isLimitReached) {");
+    expect(clientSource).toContain("if (!trimmed && !hasImages) {");
+    expect(composerSource).toContain("onPaste={handleComposerPaste}");
+    expect(composerSource).toContain("<DocumentUploadButton");
+    expect(composerSource).toContain("onFilesSelected={handleFilesSelected}");
+    expect(clientSource).toContain("form?.requestSubmit()");
+    expect(clientSource).toContain("event.nativeEvent.isComposing");
   });
 });

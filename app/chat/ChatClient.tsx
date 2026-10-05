@@ -1782,6 +1782,21 @@ export function canSubmitWithPendingImages(
   return Boolean(input.trim() || pendingImageCount > 0 || readyDocumentCount > 0);
 }
 
+export function handleComposerEnterKeyDown(
+  event: React.KeyboardEvent<HTMLTextAreaElement>
+): void {
+  if (
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.nativeEvent.isComposing
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  event.currentTarget.form?.requestSubmit();
+}
+
 const TOOLTIP_TEXT = {
   help: "Open help and frequently asked questions",
   newChat: "Start a new conversation",
@@ -6462,6 +6477,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     <textarea
                       ref={composerTextareaRef}
                       value={input}
+                      onKeyDown={handleComposerEnterKeyDown}
                       onPaste={handleComposerPaste}
                       onChange={(event) => {
                         setInput(event.target.value);
