@@ -25,6 +25,8 @@ export type ResolvedExecutionInput =
 export type CapabilityExecutionInput = {
   readonly executionId: string;
   readonly stepId: string;
+  /** Stable, durable key for this run/step/attempt; present only for persisted execution. */
+  readonly executionKey?: string;
   readonly capabilityId: CapabilityId;
   readonly inputs: readonly ResolvedExecutionInput[];
   readonly context: {

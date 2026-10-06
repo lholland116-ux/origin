@@ -1,4 +1,4 @@
-import { createActor, createMachine } from "xstate";
+import { createActor, createMachine, type SnapshotFrom } from "xstate";
 import type { ExecutionRunStatus, ExecutionStepStatus } from "@/lib/agent-runtime/runtime-contracts";
 
 const runLifecycleMachine = createMachine({
@@ -24,41 +24,59 @@ const stepLifecycleMachine = createMachine({
   },
 });
 
-type LifecycleMachine = typeof runLifecycleMachine | typeof stepLifecycleMachine;
-
-function createLifecycleActor<Status extends string>(machine: LifecycleMachine) {
-  const actor = createActor(machine).start();
+function lifecycleView<Status extends string>(
+  getStatus: () => Status,
+  send: (type: "START" | "SUCCEED" | "FAIL" | "SKIP") => void,
+  getPersistedSnapshot: () => unknown,
+  stop: () => void,
+) {
   return Object.freeze({
     get status(): Status {
-      return actor.getSnapshot().value as Status;
+      return getStatus();
     },
     start() {
-      actor.send({ type: "START" });
+      send("START");
     },
     succeed() {
-      actor.send({ type: "SUCCEED" });
+      send("SUCCEED");
     },
     fail() {
-      actor.send({ type: "FAIL" });
+      send("FAIL");
     },
     skip() {
-      actor.send({ type: "SKIP" });
+      send("SKIP");
     },
     getPersistedSnapshot(): unknown {
-      return actor.getPersistedSnapshot();
+      return getPersistedSnapshot();
     },
     stop() {
-      actor.stop();
+      stop();
     },
   });
 }
 
 /** XState lifecycle actors keep runtime inputs and collaborators outside actor context. */
-export function createExecutionRunLifecycle() {
-  return createLifecycleActor<ExecutionRunStatus>(runLifecycleMachine);
+export function createExecutionRunLifecycle(persistedSnapshot?: unknown) {
+  const actor = persistedSnapshot === undefined
+    ? createActor(runLifecycleMachine).start()
+    : createActor(runLifecycleMachine, { snapshot: persistedSnapshot as SnapshotFrom<typeof runLifecycleMachine> }).start();
+  return lifecycleView<ExecutionRunStatus>(
+    () => actor.getSnapshot().value as ExecutionRunStatus,
+    (type) => actor.send({ type: type as "START" | "SUCCEED" | "FAIL" }),
+    () => actor.getPersistedSnapshot(),
+    () => actor.stop(),
+  );
 }
 
 /** A pending step may be skipped when a dependency failed; all other terminal transitions require running. */
-export function createExecutionStepLifecycle() {
-  return createLifecycleActor<ExecutionStepStatus>(stepLifecycleMachine);
+export function createExecutionStepLifecycle(persistedSnapshot?: unknown) {
+  const actor = persistedSnapshot === undefined
+    ? createActor(stepLifecycleMachine).start()
+    : createActor(stepLifecycleMachine, { snapshot: persistedSnapshot as SnapshotFrom<typeof stepLifecycleMachine> }).start();
+  return lifecycleView<ExecutionStepStatus>(
+    () => actor.getSnapshot().value as ExecutionStepStatus,
+    (type) => actor.send({ type }),
+    () => actor.getPersistedSnapshot(),
+    () => actor.stop(),
+  );
 }

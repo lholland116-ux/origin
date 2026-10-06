@@ -53,6 +53,15 @@ export const EXECUTION_FAILURE_CODES = [
   "authorization_failed",
   "executor_failed",
   "invalid_executor_result",
+  "ownership_denied",
+  "idempotency_conflict",
+  "snapshot_conflict",
+  "indeterminate_step",
+  "invalid_persisted_state",
+  "unsupported_handoff_version",
+  "unsupported_snapshot_version",
+  "invalid_snapshot",
+  "persistence_failed",
 ] as const;
 
 export type ExecutionFailureCode = (typeof EXECUTION_FAILURE_CODES)[number];
@@ -94,6 +103,12 @@ export type ExecutionOutcome =
   | {
       readonly kind: "rejected";
       readonly failure: ExecutionFailure;
+    }
+  | {
+      readonly kind: "recovery_required";
+      readonly run: ExecutionRun;
+      readonly failure: ExecutionFailure;
+      readonly stepId: string;
     };
 
 export function isJsonValue(value: unknown): value is JsonValue {

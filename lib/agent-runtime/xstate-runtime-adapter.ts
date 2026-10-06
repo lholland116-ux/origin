@@ -57,27 +57,36 @@ const FAILURE_MESSAGES: Readonly<Record<ExecutionFailureCode, string>> = Object.
   authorization_failed: "Authorization could not be verified.",
   executor_failed: "The requested step could not be completed.",
   invalid_executor_result: "The requested step returned an invalid result.",
+  ownership_denied: "This execution is unavailable.",
+  idempotency_conflict: "This idempotency key is already bound to another execution request.",
+  snapshot_conflict: "Execution state changed while this checkpoint was being saved.",
+  indeterminate_step: "A step may have started before interruption and cannot be safely replayed.",
+  invalid_persisted_state: "The stored execution state is invalid.",
+  unsupported_handoff_version: "The stored execution handoff version is not supported.",
+  unsupported_snapshot_version: "The stored execution snapshot version is not supported.",
+  invalid_snapshot: "The stored execution snapshot is invalid.",
+  persistence_failed: "Execution state could not be safely persisted.",
 });
 
-function failure(code: ExecutionFailureCode): ExecutionFailure {
+export function executionFailure(code: ExecutionFailureCode): ExecutionFailure {
   return Object.freeze({ code, message: FAILURE_MESSAGES[code] });
 }
 
-function validHandoff(input: unknown): { handoff: PlannedExecutionHandoff; failure?: never } | { handoff?: never; failure: ExecutionFailure } {
+export function validateExecutionHandoff(input: unknown): { handoff: PlannedExecutionHandoff; failure?: never } | { handoff?: never; failure: ExecutionFailure } {
   const parsed = handoffSchema.safeParse(input);
-  if (!parsed.success) return { failure: failure("invalid_handoff") };
+  if (!parsed.success) return { failure: executionFailure("invalid_handoff") };
   const raw = parsed.data;
-  if (raw.version !== 1 || raw.governance.handoffVersion !== 1) return { failure: failure("invalid_handoff") };
+  if (raw.version !== 1 || raw.governance.handoffVersion !== 1) return { failure: executionFailure("invalid_handoff") };
   if ((raw.plannerSource === "model" && !raw.governance.modelPlanningAllowed)
     || (!raw.governance.attachmentContextAllowed && raw.attachmentContext !== undefined)) {
-    return { failure: failure("invalid_handoff") };
+    return { failure: executionFailure("invalid_handoff") };
   }
 
   if (raw.plan !== null && typeof raw.plan === "object" && "steps" in raw.plan && Array.isArray(raw.plan.steps)) {
     if (raw.plan.steps.some((step) => step !== null && typeof step === "object"
       && "capability" in step && typeof step.capability === "string"
       && !CAPABILITY_REGISTRY.has(step.capability))) {
-      return { failure: failure("unsupported_capability") };
+      return { failure: executionFailure("unsupported_capability") };
     }
   }
 
@@ -87,14 +96,14 @@ function validHandoff(input: unknown): { handoff: PlannedExecutionHandoff; failu
     || validation.orderedStepIds.length > raw.governance.maxSteps
     || raw.orderedStepIds.length !== validation.orderedStepIds.length
     || raw.orderedStepIds.some((id, index) => id !== validation.orderedStepIds[index])) {
-    return { failure: failure("invalid_handoff") };
+    return { failure: executionFailure("invalid_handoff") };
   }
 
   const capabilities = new Set<string>(raw.governance.capabilityIds);
   if (capabilities.size !== raw.governance.capabilityIds.length
     || raw.governance.capabilityIds.some((id) => !CAPABILITY_REGISTRY.has(id))
     || (raw.plan as { steps: PlanStep[] }).steps.some((step) => !capabilities.has(step.capability))) {
-    return { failure: failure("invalid_handoff") };
+    return { failure: executionFailure("invalid_handoff") };
   }
 
   return { handoff: raw as PlannedExecutionHandoff };
@@ -108,7 +117,7 @@ function jsonBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-function validStepResult(value: unknown, capabilityId: CapabilityId): value is ExecutionStepResult {
+export function validateExecutionStepResult(value: unknown, capabilityId: CapabilityId): value is ExecutionStepResult {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
   if (Object.getPrototypeOf(value) !== Object.prototype
@@ -152,7 +161,7 @@ function attachmentKindFor(input: PlanInputRef): "file" | "image" | null {
   return null;
 }
 
-function resolveInputs(
+export function resolveExecutionInputs(
   step: PlanStep,
   handoff: PlannedExecutionHandoff,
   runtimeInput: ExecutionRuntimeInput,
@@ -170,7 +179,7 @@ function resolveInputs(
       const matches = (runtimeInput.attachments ?? [])
         .filter((attachment) => kind === null || attachment.kind === kind)
         .map(({ id, kind: attachmentKind }): RuntimeAttachmentReference => ({ id, kind: attachmentKind }));
-      if (matches.length === 0) return { failure: failure("missing_input") };
+      if (matches.length === 0) return { failure: executionFailure("missing_input") };
       for (const reference of matches) {
         inputs.push({ source: "attachment", reference });
         refs.add(reference.id);
@@ -178,8 +187,8 @@ function resolveInputs(
       continue;
     }
     const result = results[input.stepId];
-    if (!isStepResult(result)) return { failure: failure("missing_predecessor_result") };
-    if (input.output && result.kind !== input.output) return { failure: failure("missing_predecessor_result") };
+    if (!isStepResult(result)) return { failure: executionFailure("missing_predecessor_result") };
+    if (input.output && result.kind !== input.output) return { failure: executionFailure("missing_predecessor_result") };
     if (result.ref) refs.add(result.ref.id);
     inputs.push({ source: "step", stepId: input.stepId, result });
   }
@@ -229,7 +238,7 @@ export class XStateExecutionAdapter {
     executor: CapabilityExecutor,
     authorizer: ExecutionAuthorizer,
   ): Promise<ExecutionOutcome> {
-    const checked = validHandoff(handoffInput);
+    const checked = validateExecutionHandoff(handoffInput);
     if (!checked.handoff) return { kind: "rejected", failure: checked.failure };
     const handoff = checked.handoff;
     if (!safeId(runtimeInput.authenticatedUserId)
@@ -241,7 +250,7 @@ export class XStateExecutionAdapter {
         && (!Array.isArray(runtimeInput.resourceReferences) || runtimeInput.resourceReferences.some((ref) => typeof ref !== "string" || !safeId(ref))))
       || (runtimeInput.attachments !== undefined
         && (!Array.isArray(runtimeInput.attachments) || runtimeInput.attachments.some((item) => !item || !safeId(item.id) || !["file", "image"].includes(item.kind))))) {
-      return { kind: "rejected", failure: failure("invalid_handoff") };
+      return { kind: "rejected", failure: executionFailure("invalid_handoff") };
     }
 
     const executionId = this.options.createExecutionId();
@@ -302,7 +311,7 @@ export class XStateExecutionAdapter {
         failureState.value ??= error;
       };
 
-      const resolved = resolveInputs(step, handoff, runtimeInput, results);
+      const resolved = resolveExecutionInputs(step, handoff, runtimeInput, results);
       if (!resolved.inputs) {
         markFailed(resolved.failure);
         stepLifecycle.stop();
@@ -325,17 +334,17 @@ export class XStateExecutionAdapter {
       try {
         authorization = await authorizer.authorize(authInput);
       } catch {
-        markFailed(failure("authorization_failed"));
+        markFailed(executionFailure("authorization_failed"));
         stepLifecycle.stop();
         continue;
       }
       if (authorization === null || typeof authorization !== "object" || typeof authorization.allowed !== "boolean") {
-        markFailed(failure("authorization_failed"));
+        markFailed(executionFailure("authorization_failed"));
         stepLifecycle.stop();
         continue;
       }
       if (!authorization.allowed) {
-        markFailed(failure("authorization_denied"));
+        markFailed(executionFailure("authorization_denied"));
         stepLifecycle.stop();
         continue;
       }
@@ -358,18 +367,18 @@ export class XStateExecutionAdapter {
       try {
         result = await executor.execute(executionInput);
       } catch {
-        markFailed(failure("executor_failed"));
+        markFailed(executionFailure("executor_failed"));
         stepLifecycle.stop();
         continue;
       }
       let resultIsValid = false;
       try {
-        resultIsValid = validStepResult(result, capabilityId);
+        resultIsValid = validateExecutionStepResult(result, capabilityId);
       } catch {
         resultIsValid = false;
       }
       if (!resultIsValid) {
-        markFailed(failure("invalid_executor_result"));
+        markFailed(executionFailure("invalid_executor_result"));
         stepLifecycle.stop();
         continue;
       }
