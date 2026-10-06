@@ -22,7 +22,7 @@ export const CAPA_PDF_EXTRACTOR_VERSION =
   "pdf-parse-2.4.5-adapter-1.0.0";
 
 export const CAPA_DOCX_EXTRACTOR_VERSION =
-  "mammoth-1.12.0-adapter-1.0.0";
+  "mammoth-1.12.3-adapter-1.0.0";
 
 export const CAPA_XLSX_EXTRACTOR_VERSION =
   "exceljs-4.4.0-adapter-1.0.0";
