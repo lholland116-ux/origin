@@ -3,9 +3,13 @@ export type TaskComplexity = "single_step" | "multi_step";
 const researchIntent =
   /\b(?:search|research|look\s+up|find\s+(?:current|latest)|latest|current|today|recent|up-to-date)\b/i;
 const analysisIntent =
-  /\b(?:analy[sz]e|review|inspect|examine|identify|extract|summari[sz]e)\b/i;
+  /\b(?:analy[sz]e|review|inspect|examine|identify|extract|summari[sz]e|compare|contrast)\b/i;
 const artifactCreationIntent =
-  /\b(?:create|generate|make|produce|prepare|export|build|turn|convert)\b.{0,100}\b(?:pdf|powerpoint|presentation|word(?:\s+document)?|docx|report|briefing|spreadsheet|excel|xlsx|document|artifact|file|downloadable)\b/i;
+  /\b(?:create|generate|make|produce|prepare|export|build|turn|convert)\b.{0,100}\b(?:pdf|pptx|powerpoint|presentation|word(?:\s+document)?|docx|report|briefing|spreadsheet|excel|xlsx|document|artifact|file|downloadable)\b/i;
+
+export function hasArtifactCreationIntent(prompt: string): boolean {
+  return artifactCreationIntent.test(prompt.trim());
+}
 
 /**
  * Conservative structural signal only. Ambiguous requests remain on V1's
@@ -15,7 +19,7 @@ export function classifyTaskComplexity(prompt: string): TaskComplexity {
   const normalized = prompt.trim();
   if (!normalized) return "single_step";
 
-  const createsArtifact = artifactCreationIntent.test(normalized);
+  const createsArtifact = hasArtifactCreationIntent(normalized);
   if (
     createsArtifact &&
     (researchIntent.test(normalized) || analysisIntent.test(normalized))
@@ -25,4 +29,3 @@ export function classifyTaskComplexity(prompt: string): TaskComplexity {
 
   return "single_step";
 }
-

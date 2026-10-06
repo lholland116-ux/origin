@@ -10,7 +10,8 @@ export const GENERAL_CHAT_MODEL = GPT_6_LUNA_MODEL;
 export const GENERAL_CHAT_ROLLBACK_MODEL = GPT_5_6_LUNA_MODEL;
 
 /**
- * OpenAI request configuration for a primary general-chat response only.
+ * Configured OpenAI model and reasoning effort for primary general-chat calls.
+ * Planner-only callers may reuse it at low effort without changing chat routing.
  * Titles, CAPA, and document-intent planning intentionally do not use it.
  */
 export function getGeneralChatConfig(effort: ProviderChatReasoningEffort) {

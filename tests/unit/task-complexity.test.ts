@@ -17,7 +17,9 @@ describe("task complexity foundation", () => {
 
   it.each([
     "Search the latest FDA QMSR changes and create a PDF briefing.",
+    "Search the latest FDA QMSR changes and create a PPTX briefing.",
     "Analyze this spreadsheet and create a PowerPoint.",
+    "Analyze this spreadsheet and create a PPTX.",
     "Research EU MDR deadlines and create a Word report.",
     "Analyze this image and create a PDF defect report.",
     "Search current information, summarize it, and create an artifact.",
@@ -30,4 +32,3 @@ describe("task complexity foundation", () => {
     expect(classifyTaskComplexity("Search for research about FDA QMSR.")).toBe("single_step");
   });
 });
-
