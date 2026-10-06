@@ -126,18 +126,18 @@ describe("multi-step planner deterministic path", () => {
     const modelClient = mockModelClient(validModelPlan);
     await expect(createMultiStepPlanner(modelClient).plan({
       objective: "Analyze this complaint spreadsheet and create a PDF report.",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "missing_required_attachment" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "missing_required_attachment", plannerModelCalls: 0, repairAttempted: false });
     expect(modelClient.generateStructuredPlan).not.toHaveBeenCalled();
 
     await expect(createMultiStepPlanner(modelClient).plan({
       objective: "Search current information and compare it with this uploaded report, then create a briefing.",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "missing_required_attachment" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "missing_required_attachment", plannerModelCalls: 0, repairAttempted: false });
     expect(modelClient.generateStructuredPlan).not.toHaveBeenCalled();
 
     await expect(createMultiStepPlanner(mockModelClient()).plan({
       objective: "Search the latest FDA changes and create a PDF report.",
       availableCapabilities: ["standard", "not_registered"],
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "unsupported_objective" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "unsupported_objective", plannerModelCalls: 0, repairAttempted: false });
   });
 
   it("keeps V1 single-step cases on the zero-model-call fast path", async () => {
@@ -152,7 +152,7 @@ describe("multi-step planner deterministic path", () => {
       "Create a PDF report.",
       "What's the latest FDA QMSR news?",
     ]) {
-      await expect(planner.plan({ objective })).resolves.toEqual({ kind: "single_step" });
+      await expect(planner.plan({ objective })).resolves.toEqual({ kind: "single_step", plannerModelCalls: 0, repairAttempted: false });
     }
     expect(modelClient.generateStructuredPlan).not.toHaveBeenCalled();
   });
@@ -211,14 +211,14 @@ describe("multi-step planner model path", () => {
     await expect(createMultiStepPlanner(modelClient).plan({
       objective: "Compare these two proposals and create a document.",
       taskComplexity: "multi_step",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "plan_too_complex" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "plan_too_complex", plannerModelCalls: 1, repairAttempted: false });
     expect(modelClient.generateStructuredPlan).toHaveBeenCalledTimes(1);
   });
 
   it("returns safe codes for invalid output, unsuccessful repair, and provider failure", async () => {
     await expect(createMultiStepPlanner(mockModelClient({ malformed: true })).plan({
       objective: "Compare these two proposals and create a document.",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "invalid_model_plan" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "invalid_model_plan", plannerModelCalls: 1, repairAttempted: false });
 
     const stillInvalid = modelPlan([
       modelStep("a", "standard", ["b"], [stepInput("b", "text")], "text"),
@@ -227,7 +227,7 @@ describe("multi-step planner model path", () => {
     const repairClient = mockModelClient(stillInvalid, stillInvalid);
     await expect(createMultiStepPlanner(repairClient).plan({
       objective: "Compare these two proposals and create a document.",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "invalid_model_plan" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "invalid_model_plan", plannerModelCalls: 2, repairAttempted: true });
     expect(repairClient.generateStructuredPlan).toHaveBeenCalledTimes(2);
 
     const providerFailure: MultiStepPlannerModelClient = {
@@ -235,7 +235,7 @@ describe("multi-step planner model path", () => {
     };
     await expect(createMultiStepPlanner(providerFailure).plan({
       objective: "Compare these two proposals and create a document.",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "planner_unavailable" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "planner_unavailable", plannerModelCalls: 1, repairAttempted: false });
   });
 
   it("does not accept chain-of-thought fields and never exceeds two model calls", async () => {
@@ -243,7 +243,7 @@ describe("multi-step planner model path", () => {
     const modelClient = mockModelClient(withRationale);
     await expect(createMultiStepPlanner(modelClient).plan({
       objective: "Compare these two proposals and create a document.",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "invalid_model_plan" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "invalid_model_plan", plannerModelCalls: 1, repairAttempted: false });
     expect(modelClient.generateStructuredPlan).toHaveBeenCalledTimes(1);
   });
 
@@ -255,11 +255,35 @@ describe("multi-step planner model path", () => {
     });
     await expect(createMultiStepPlanner(modelClient).plan({
       objective: "Compare these two proposals and create a document.",
-    })).resolves.toEqual({ kind: "unable_to_plan", code: "plan_too_complex" });
+    })).resolves.toEqual({ kind: "unable_to_plan", code: "plan_too_complex", plannerModelCalls: 1, repairAttempted: false });
     expect(modelClient.generateStructuredPlan).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the default planner usable for a single-step request without loading a model", async () => {
-    await expect(planMultiStepObjective({ objective: "Explain ISO 14971." })).resolves.toEqual({ kind: "single_step" });
+    await expect(planMultiStepObjective({ objective: "Explain ISO 14971." })).resolves.toEqual({ kind: "single_step", plannerModelCalls: 0, repairAttempted: false });
+  });
+
+  it("disables only model-assisted planning when governance turns model planning off", async () => {
+    const modelClient = mockModelClient(validModelPlan);
+    const planner = createMultiStepPlanner(modelClient);
+    await expect(planner.plan({
+      objective: "Compare these two proposals and create a document.",
+      modelPlanningAllowed: false,
+    })).resolves.toMatchObject({
+      kind: "unable_to_plan",
+      code: "model_planning_disabled",
+      plannerModelCalls: 0,
+    });
+    expect(modelClient.generateStructuredPlan).not.toHaveBeenCalled();
+
+    await expect(planner.plan({
+      objective: "Search the latest FDA QMSR changes and create a PDF briefing.",
+      modelPlanningAllowed: false,
+    })).resolves.toMatchObject({
+      kind: "planned",
+      source: "deterministic",
+      plannerModelCalls: 0,
+    });
+    expect(modelClient.generateStructuredPlan).not.toHaveBeenCalled();
   });
 });

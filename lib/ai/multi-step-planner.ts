@@ -14,22 +14,29 @@ import {
   type PlannerAttachmentKind,
 } from "@/lib/ai/multi-step-planner-model-client";
 import { hasArtifactCreationIntent, classifyTaskComplexity, type TaskComplexity } from "@/lib/ai/task-complexity";
+import { MAX_PLANNER_MODEL_CALLS, MAX_PLANNER_REPAIR_ATTEMPTS } from "@/lib/ai/planner-governance";
 
 export type PlanningFailureCode =
   | "unsupported_objective"
   | "missing_required_attachment"
   | "invalid_model_plan"
   | "planner_unavailable"
-  | "plan_too_complex";
+  | "plan_too_complex"
+  | "model_planning_disabled";
+
+export type PlannerExecutionMetadata = {
+  readonly plannerModelCalls: number;
+  readonly repairAttempted: boolean;
+};
 
 export type PlanningResult =
-  | { readonly kind: "single_step" }
+  | ({ readonly kind: "single_step" } & PlannerExecutionMetadata)
   | {
       readonly kind: "planned";
       readonly plan: IntelligencePlan;
       readonly source: "deterministic" | "model";
-    }
-  | { readonly kind: "unable_to_plan"; readonly code: PlanningFailureCode };
+    } & PlannerExecutionMetadata
+  | ({ readonly kind: "unable_to_plan"; readonly code: PlanningFailureCode } & PlannerExecutionMetadata);
 
 export type MultiStepPlannerInput = {
   readonly objective: string;
@@ -38,6 +45,7 @@ export type MultiStepPlannerInput = {
   readonly taskComplexity?: TaskComplexity;
   /** External callers may narrow the registry allowlist, but cannot add IDs. */
   readonly availableCapabilities?: readonly string[];
+  readonly modelPlanningAllowed?: boolean;
 };
 
 const outputKinds = [
@@ -231,11 +239,26 @@ function errorsForPlan(plan: IntelligencePlan, available: ReadonlySet<Capability
   return [...result.errors, ...unavailable];
 }
 
-function validatedResult(plan: IntelligencePlan, source: "deterministic" | "model"): PlanningResult {
+function unableToPlan(
+  code: PlanningFailureCode,
+  plannerModelCalls = 0,
+  repairAttempted = false,
+): PlanningResult {
+  return { kind: "unable_to_plan", code, plannerModelCalls, repairAttempted };
+}
+
+function validatedResult(
+  plan: IntelligencePlan,
+  source: "deterministic" | "model",
+  plannerModelCalls: number,
+  repairAttempted: boolean,
+): PlanningResult {
   return {
     kind: "planned",
     plan: { ...plan, status: "validated" },
     source,
+    plannerModelCalls,
+    repairAttempted,
   };
 }
 
@@ -250,72 +273,86 @@ export function createMultiStepPlanner(
   return {
     async plan(input: MultiStepPlannerInput): Promise<PlanningResult> {
       const objective = input.objective.trim();
-      if (!objective) return { kind: "unable_to_plan", code: "unsupported_objective" };
+      if (!objective) return unableToPlan("unsupported_objective");
 
       const complexity = input.taskComplexity ?? classifyTaskComplexity(objective);
-      if (complexity === "single_step") return { kind: "single_step" };
+      if (complexity === "single_step") {
+        return { kind: "single_step", plannerModelCalls: 0, repairAttempted: false };
+      }
 
       const available = availableCapabilityIds(input);
-      if (available.length === 0) return { kind: "unable_to_plan", code: "unsupported_objective" };
+      if (available.length === 0) return unableToPlan("unsupported_objective");
       const availableSet = new Set(available);
       const attachments = unique(input.attachments ?? []);
       const deterministic = deterministicPlan(objective, attachments, availableSet);
 
       if (deterministic?.kind === "failure") {
-        return { kind: "unable_to_plan", code: deterministic.code };
+        return unableToPlan(deterministic.code);
       }
       if (deterministic?.kind === "plan") {
         const validationErrors = errorsForPlan(deterministic.plan, availableSet);
         if (validationErrors.length > 0) {
           throw new Error(`Deterministic planner produced an invalid plan: ${validationErrors.join(" ")}`);
         }
-        return validatedResult(deterministic.plan, "deterministic");
+        return validatedResult(deterministic.plan, "deterministic", 0, false);
+      }
+
+      if (input.modelPlanningAllowed === false) {
+        return unableToPlan("model_planning_disabled");
       }
 
       const capabilities = available.map((id) => CAPABILITY_REGISTRY.get(id)!).filter(Boolean);
       const request = { objective, attachments, capabilities };
       let firstResponse: unknown;
+      let plannerModelCalls = 1;
       try {
         firstResponse = await modelClient.generateStructuredPlan(request);
       } catch (error) {
-        return {
-          kind: "unable_to_plan",
-          code: error instanceof MalformedStructuredPlanResponseError ? "invalid_model_plan" : "planner_unavailable",
-        };
+        return unableToPlan(
+          error instanceof MalformedStructuredPlanResponseError ? "invalid_model_plan" : "planner_unavailable",
+          plannerModelCalls,
+        );
       }
 
       if (isTooComplex(firstResponse)) {
-        return { kind: "unable_to_plan", code: "plan_too_complex" };
+        return unableToPlan("plan_too_complex", plannerModelCalls);
       }
       const first = normalizeModelResponse(firstResponse, objective);
-      if (first.kind === "unable") return { kind: "unable_to_plan", code: first.code };
-      if (first.kind === "invalid") return { kind: "unable_to_plan", code: "invalid_model_plan" };
+      if (first.kind === "unable") return unableToPlan(first.code, plannerModelCalls);
+      if (first.kind === "invalid") return unableToPlan("invalid_model_plan", plannerModelCalls);
 
       const firstErrors = errorsForPlan(first.plan, availableSet);
-      if (firstErrors.length === 0) return validatedResult(first.plan, "model");
+      if (firstErrors.length === 0) return validatedResult(first.plan, "model", plannerModelCalls, false);
+
+      if (MAX_PLANNER_REPAIR_ATTEMPTS < 1 || plannerModelCalls >= MAX_PLANNER_MODEL_CALLS) {
+        return unableToPlan("invalid_model_plan", plannerModelCalls);
+      }
 
       let repairResponse: unknown;
+      const repairAttempted = true;
+      plannerModelCalls += 1;
       try {
         repairResponse = await modelClient.generateStructuredPlan({
           ...request,
           repair: { candidate: firstResponse, validationErrors: firstErrors },
         });
       } catch (error) {
-        return {
-          kind: "unable_to_plan",
-          code: error instanceof MalformedStructuredPlanResponseError ? "invalid_model_plan" : "planner_unavailable",
-        };
+        return unableToPlan(
+          error instanceof MalformedStructuredPlanResponseError ? "invalid_model_plan" : "planner_unavailable",
+          plannerModelCalls,
+          repairAttempted,
+        );
       }
 
       if (isTooComplex(repairResponse)) {
-        return { kind: "unable_to_plan", code: "plan_too_complex" };
+        return unableToPlan("plan_too_complex", plannerModelCalls, repairAttempted);
       }
       const repaired = normalizeModelResponse(repairResponse, objective);
-      if (repaired.kind === "unable") return { kind: "unable_to_plan", code: repaired.code };
+      if (repaired.kind === "unable") return unableToPlan(repaired.code, plannerModelCalls, repairAttempted);
       if (repaired.kind === "invalid" || errorsForPlan(repaired.plan, availableSet).length > 0) {
-        return { kind: "unable_to_plan", code: "invalid_model_plan" };
+        return unableToPlan("invalid_model_plan", plannerModelCalls, repairAttempted);
       }
-      return validatedResult(repaired.plan, "model");
+      return validatedResult(repaired.plan, "model", plannerModelCalls, repairAttempted);
     },
   };
 }
