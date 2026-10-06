@@ -201,6 +201,63 @@ describe("Intelligence Router core", () => {
   });
 
   it.each([
+    "Should I add a pricing page to my web app?",
+    "Can I add a pricing page to my web app?",
+    "Should I remove the pricing page?",
+    "is it too early to add a pag to my web app?",
+    "What should I change on my website?",
+    "Change is inevitable",
+    "Change happens over time",
+    "Make is a verb",
+    "Remove is a command in some software.",
+    "Add a login page to my web app.",
+    "Add a pricing tier.",
+    "Remove the old API endpoint.",
+    "Remove the background process.",
+    "Change my password.",
+    "Replace the authentication provider.",
+    "Make the button submit the form.",
+    "Remove the image from my homepage.",
+    "Crop the image before uploading it to my website.",
+    "Add an image to the pricing page.",
+    "Replace the hero image on my landing page.",
+    "Remove the background image from the CSS.",
+    "Add a photo gallery to my website.",
+    "Change the logo on my web app.",
+    "Make the button blue.",
+    "Change the background color of my website.",
+    "Make the page background darker.",
+    "Make the image brighter.",
+    "Crop the photo.",
+  ])("does not treat advisory or unrelated imperatives as image edits with historical image context: %s", (prompt) => {
+    expect(autoRoute(prompt, true)).toEqual({
+      route: "standard",
+      reason: "default_standard",
+    });
+  });
+
+  it.each([
+    "Add safety glasses to the person in this image.",
+    "Make the walls blue.",
+    "Change the sky to blue.",
+    "Remove the tree.",
+    "Add sunglasses to the person.",
+    "Replace the background with a beach.",
+    "Remove the object from this picture.",
+    "Make this image brighter.",
+    "Crop this photo.",
+    "Change that image to black and white.",
+    "Edit the image above and remove the tree.",
+    "Edit the generated image and remove the tree.",
+    "Edit the image you made and remove the tree.",
+    "Can you add sunglasses to the person?",
+    "Could you make the walls white?",
+    "Please remove the tree.",
+  ])("routes visually grounded edits with passive historical image context: %s", (prompt) => {
+    expect(autoRoute(prompt, true).route).toBe("image_editing");
+  });
+
+  it.each([
     "Summarize this image.",
     "What is shown in this screenshot?",
     "Read the text in this image.",

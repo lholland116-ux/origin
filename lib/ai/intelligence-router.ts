@@ -32,7 +32,7 @@ export type IntelligenceRouteDecision = {
 export type IntelligenceRouteInput = {
   mode: IntelligenceRouterMode;
   prompt: string;
-  /** An image reference that the existing image-edit API can safely resolve. */
+  /** Passive historical image availability; it does not imply the user selected Edit. */
   hasImageContext: boolean;
   hasImageAttachment?: boolean;
   hasDocumentAttachment?: boolean;
@@ -46,12 +46,16 @@ export type IntelligenceRouteInput = {
 const imageAnalysisIntent =
   /^\s*(?:please\s+)?(?:summari[sz]e|describe|read|explain|analy[sz]e|identify|what(?:\s+is|\s+does|'s)|tell\s+me)\b/i;
 
+const imageEditRequestPrefix =
+  /^\s*(?:(?:can|could|would)\s+you(?:\s+please)?\s+|i\s+(?:want|need)\s+you\s+to(?:\s+please)?\s+|i(?:'d|\s+would)\s+like\s+you\s+to(?:\s+please)?\s+|please\s+)?/i;
 const imageEditIntent =
-  /\b(?:remove|erase|replace|change|add|crop|edit|modify|transform|recolou?r|brighten|darken|blur|sharpen|retouch|restore|clean\s+up)\b/i;
+  /^\s*(?:remove|erase|replace|change|add|crop|edit|modify|transform|recolou?r|brighten|darken|blur|sharpen|retouch|restore|clean\s+up)\s+(?!(?:is|are|was|were|be|being|been|happens?|happened|occurs?|occurred|means?|refers?|can|could|would|should|may|might|must|will|shall)\b)\S+/i;
 const makeImageEditIntent =
-  /\bmake\s+(?:this|the|that|my)\s+(?:image|picture|photo|photograph|illustration)\b|\bmake\s+(?:the|this|that|my)\s+[\w -]{1,50}\s+(?:blue|red|green|yellow|black|white|brighter|darker|larger|smaller|cleaner|warmer|cooler)\b/i;
+  /^\s*make\s+(?:this|the|that|my)\s+(?:image|picture|photo|photograph|illustration)\b|^\s*make\s+it\s+(?:blue|red|green|yellow|black|white|brighter|darker|larger|smaller|cleaner|warmer|cooler)\b|^\s*make\s+(?:the|this|that|my)\s+[\w -]{1,50}\s+(?:blue|red|green|yellow|black|white|brighter|darker|larger|smaller|cleaner|warmer|cooler)\b/i;
 const transformImageEditIntent =
-  /\b(?:turn|convert)\b.{0,40}\b(?:image|picture|photo|photograph)\b|\b(?:turn|convert)\s+(?:this|it)\s+into\s+(?:a\s+)?(?:watercolor|painting|sketch|illustration|cartoon|oil\s+painting)\b/i;
+  /^\s*(?:turn|convert)\b.{0,40}\b(?:image|picture|photo|photograph)\b|^\s*(?:turn|convert)\s+(?:this|it)\s+into\s+(?:a\s+)?(?:watercolor|painting|sketch|illustration|cartoon|oil\s+painting)\b/i;
+const passiveImageEditEvidence =
+  /\b(?:(?:this|that|attached|selected)\s+(?:image|picture|photo|photograph|illustration|screenshot)|the\s+(?:image|picture|photo|photograph|illustration|screenshot)\s+(?:above|below|you\s+(?:made|created|generated))|(?:generated|created)\s+(?:image|picture|photo|photograph)|(?:image|picture|photo|photograph)\s+background|sky|walls?|trees?|sunglasses|glasses|face|hair|clothing|beach|ocean|sea|mountain|forest|landscape)\b/i;
 
 const imageGenerationRequest =
   /^\s*(?:(?:please\s+)?(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+|i(?:'d|\s+would)\s+like\s+you\s+to\s+)?(?:please\s+)?(?:create|generate|draw|illustrate|render|design|make|sketch)\b/i;
@@ -93,13 +97,18 @@ export function hasCurrentInformationIntent(prompt: string): boolean {
 
 export function hasImageEditIntent(prompt: string): boolean {
   const normalized = prompt.trim();
+  const requestedAction = normalized.replace(imageEditRequestPrefix, "");
   return Boolean(
-      normalized &&
+    normalized &&
       !imageAnalysisIntent.test(normalized) &&
-      (imageEditIntent.test(normalized) ||
-        makeImageEditIntent.test(normalized) ||
-        transformImageEditIntent.test(normalized)),
+      (imageEditIntent.test(requestedAction) ||
+        makeImageEditIntent.test(requestedAction) ||
+        transformImageEditIntent.test(requestedAction)),
   );
+}
+
+function hasPassiveImageEditIntent(prompt: string): boolean {
+  return hasImageEditIntent(prompt) && passiveImageEditEvidence.test(prompt);
 }
 
 export function hasImageGenerationIntent(prompt: string): boolean {
@@ -144,16 +153,25 @@ export function selectIntelligenceRoute(
 
     if (
       input.hasImageContext &&
-      !input.hasDocumentAttachment &&
-      !input.hasOtherAttachments
+      !hasDocumentAttachment &&
+      !input.hasOtherAttachments &&
+      hasPassiveImageEditIntent(input.prompt)
     ) {
       return { route: "image_editing", reason: "image_edit_intent" };
     }
 
-    return { route: "standard", reason: "image_edit_not_executable" };
+    if (!input.hasImageContext || hasDocumentAttachment || input.hasOtherAttachments) {
+      return { route: "standard", reason: "image_edit_not_executable" };
+    }
+
+    // Historical availability alone is insufficient; let ordinary routing continue.
   }
 
-  if (!hasAnyAttachment && hasImageGenerationIntent(input.prompt)) {
+  if (
+    !hasAnyAttachment &&
+    !(input.hasImageContext && editIntent) &&
+    hasImageGenerationIntent(input.prompt)
+  ) {
     return { route: "image_generation", reason: "image_generation_intent" };
   }
 
