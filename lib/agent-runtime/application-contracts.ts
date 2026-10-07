@@ -204,8 +204,8 @@ export const generatedImageReferenceSchema = z.object({
   userMessageId: uuidSchema,
   assistantMessageId: uuidSchema,
   mimeType: z.enum(["image/webp", "image/png", "image/jpeg"]),
-  provider: z.string().min(1).max(100).regex(/^[a-zA-Z0-9._:/-]+$/),
-  model: z.string().min(1).max(100).regex(/^[a-zA-Z0-9._:/-]+$/),
+  provider: z.string().min(1).max(100).regex(/^[a-zA-Z0-9._:@/-]+$/),
+  model: z.string().min(1).max(100).regex(/^[a-zA-Z0-9._:@/-]+$/),
 }).strict();
 
 export type GeneratedImageReference = z.infer<typeof generatedImageReferenceSchema>;

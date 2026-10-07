@@ -13,6 +13,7 @@ import type {
   ResolvedExecutionInput,
   RuntimeAttachmentReference,
 } from "@/lib/agent-runtime/capability-executor";
+import { CapabilityAdapterError } from "@/lib/agent-runtime/capability-adapters/common";
 import {
   conversationExecutionContextSchema,
   requestMessageBindingSchema,
@@ -393,8 +394,10 @@ export class XStateExecutionAdapter {
       let result: unknown;
       try {
         result = await executor.execute(executionInput);
-      } catch {
-        markFailed(executionFailure("executor_failed"));
+      } catch (error) {
+        markFailed(error instanceof CapabilityAdapterError
+          ? executionFailure(error.code)
+          : executionFailure("executor_failed"));
         stepLifecycle.stop();
         continue;
       }

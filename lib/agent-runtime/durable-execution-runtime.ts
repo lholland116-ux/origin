@@ -9,6 +9,7 @@ import type {
   ExecutionRuntimeInput,
   RequestMessageBindingValidator,
 } from "@/lib/agent-runtime/capability-executor";
+import { CapabilityAdapterError } from "@/lib/agent-runtime/capability-adapters/common";
 import { requestMessageBindingSchema } from "@/lib/agent-runtime/application-contracts";
 import {
   EXECUTION_RUNTIME_VERSION,
@@ -41,6 +42,7 @@ import {
   type ExecutionOperationalMetadata,
   executionRunSchema,
   executionStepSchema,
+  EXECUTION_FAILURE_CODES,
 } from "@/lib/agent-runtime/runtime-contracts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -234,8 +236,9 @@ function snapshotForActors(
 }
 
 function errorForStoredCode(value?: string): ExecutionFailure {
-  const allowed = ["authorization_denied", "authorization_failed", "executor_failed", "invalid_executor_result", "result_too_large", "missing_input", "missing_predecessor_result"] as const;
-  return executionFailure(allowed.includes(value as typeof allowed[number]) ? value as typeof allowed[number] : "invalid_persisted_state");
+  return executionFailure(EXECUTION_FAILURE_CODES.includes(value as typeof EXECUTION_FAILURE_CODES[number])
+    ? value as typeof EXECUTION_FAILURE_CODES[number]
+    : "invalid_persisted_state");
 }
 
 export type DurableExecutionRuntimeOptions = {
@@ -548,8 +551,10 @@ export class DurableXStateExecutionRuntime {
               : executionFailure("invalid_executor_result");
           }
           else result = executorResult;
-        } catch {
-          stepFailure = executionFailure("executor_failed");
+        } catch (error) {
+          stepFailure = error instanceof CapabilityAdapterError
+            ? executionFailure(error.code)
+            : executionFailure("executor_failed");
         }
       }
 
