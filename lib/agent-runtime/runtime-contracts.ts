@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { CapabilityOutputKind } from "@/lib/ai/capability-registry";
 
 export const EXECUTION_RUN_STATUSES = ["pending", "running", "succeeded", "failed"] as const;
-export const EXECUTION_STEP_STATUSES = ["pending", "running", "succeeded", "failed", "skipped"] as const;
+export const EXECUTION_STEP_STATUSES = ["pending", "running", "retry_pending", "succeeded", "failed", "skipped"] as const;
+export const MAX_EXECUTION_STEP_ATTEMPTS = 3 as const;
 
 export const executionStepSchema = z.object({
   id: z.string().min(1),
@@ -11,10 +12,18 @@ export const executionStepSchema = z.object({
   dependsOn: z.array(z.string()),
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
-  attempt: z.number().int().min(1),
+  attempt: z.number().int().min(1).max(MAX_EXECUTION_STEP_ATTEMPTS),
+  nextRetryAt: z.string().datetime().optional(),
   resultRef: z.string().optional(),
   errorCode: z.string().optional(),
-}).strict();
+}).strict().superRefine((step, context) => {
+  if ((step.status === "retry_pending") !== (step.nextRetryAt !== undefined)) {
+    context.addIssue({ code: "custom", message: "Only retry-pending steps may have a retry eligibility time." });
+  }
+  if (step.status === "retry_pending" && (!step.startedAt || step.completedAt || step.resultRef)) {
+    context.addIssue({ code: "custom", message: "Retry-pending steps must represent an incomplete attempt without a result." });
+  }
+});
 
 export const executionRunSchema = z.object({
   id: z.string().min(1),
@@ -110,6 +119,12 @@ export type ExecutionOutcome =
       readonly run: ExecutionRun;
       readonly failure: ExecutionFailure;
       readonly stepId: string;
+    }
+  | {
+      readonly kind: "retry_pending";
+      readonly run: ExecutionRun;
+      readonly stepId: string;
+      readonly nextRetryAt: string;
     };
 
 export function isJsonValue(value: unknown): value is JsonValue {

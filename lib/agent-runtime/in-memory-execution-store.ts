@@ -13,6 +13,7 @@ import {
   executionResultsEqual,
   MAX_DURABLE_RESULT_PAYLOAD_BYTES,
 } from "@/lib/agent-runtime/result-payload-contract";
+import { MAX_EXECUTION_STEP_ATTEMPTS } from "@/lib/agent-runtime/runtime-contracts";
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableStep = Mutable<DurableExecutionStep>;
@@ -21,6 +22,8 @@ type MutableRun = Mutable<Omit<DurableExecutionRun, "steps">> & { steps: Mutable
 /** Deterministic store fake for adapter tests; production claims use PostgreSQL conditional updates. */
 export class InMemoryExecutionStore implements ExecutionStore {
   private readonly runs = new Map<string, MutableRun>();
+
+  constructor(private readonly now: () => Date = () => new Date()) {}
 
   async createRun(input: CreateDurableExecutionRunInput): Promise<CreateDurableExecutionRunResult> {
     const prior = [...this.runs.values()].find((run) => run.userId === input.userId
@@ -93,6 +96,52 @@ export class InMemoryExecutionStore implements ExecutionStore {
     run.snapshot = structuredClone(input.snapshot);
     run.snapshotRevision += 1;
     return { status: "claimed", executionKey: step.executionKey, snapshotRevision: run.snapshotRevision };
+  }
+
+  async scheduleStepRetry(input: Parameters<ExecutionStore["scheduleStepRetry"]>[0]) {
+    const run = this.ownedRun(input.runId, input.userId);
+    if (!run) return { status: "not_found" } as const;
+    if (run.snapshotRevision !== input.expectedRevision || run.status !== "running") return { status: "conflict" } as const;
+    const step = run.steps.find((candidate) => candidate.stepId === input.stepId);
+    if (!step) return { status: "not_found" } as const;
+    if (step.status !== "running") return { status: "conflict" } as const;
+    const timestamp = new Date(input.nextRetryAt);
+    if (!Number.isFinite(timestamp.getTime())) return { status: "conflict" } as const;
+    step.status = "retry_pending";
+    step.nextRetryAt = timestamp.toISOString();
+    delete step.completedAt;
+    delete step.result;
+    delete step.failureCode;
+    run.snapshot = structuredClone(input.snapshot);
+    run.snapshotRevision += 1;
+    return { status: "saved", snapshotRevision: run.snapshotRevision } as const;
+  }
+
+  async claimRetryableStep(input: Parameters<ExecutionStore["claimRetryableStep"]>[0]) {
+    const run = this.ownedRun(input.runId, input.userId);
+    if (!run) return { status: "not_found" } as const;
+    if (run.snapshotRevision !== input.expectedRevision || run.status !== "running") return { status: "conflict" } as const;
+    const step = run.steps.find((candidate) => candidate.stepId === input.stepId);
+    if (!step) return { status: "not_found" } as const;
+    if (step.status !== "retry_pending" || !step.nextRetryAt) {
+      return { status: "already_claimed", stepStatus: step.status } as const;
+    }
+    if (step.attempt >= MAX_EXECUTION_STEP_ATTEMPTS) return { status: "attempt_limit" } as const;
+    const now = this.now();
+    const nextRetryAt = new Date(step.nextRetryAt);
+    if (!Number.isFinite(now.getTime()) || nextRetryAt.getTime() > now.getTime()) {
+      return { status: "not_eligible", nextRetryAt: step.nextRetryAt } as const;
+    }
+    step.status = "running";
+    step.attempt += 1;
+    step.startedAt = now.toISOString();
+    delete step.nextRetryAt;
+    delete step.completedAt;
+    delete step.result;
+    delete step.failureCode;
+    run.snapshot = structuredClone(input.snapshot);
+    run.snapshotRevision += 1;
+    return { status: "claimed", executionKey: step.executionKey, attempt: step.attempt, snapshotRevision: run.snapshotRevision } as const;
   }
 
   async checkpoint(input: Parameters<ExecutionStore["checkpoint"]>[0]): Promise<ExecutionStoreWriteResult> {

@@ -10,7 +10,9 @@ import type {
   RequestMessageBindingValidator,
 } from "@/lib/agent-runtime/capability-executor";
 import type { ExecutionStore } from "@/lib/agent-runtime/execution-store";
+import type { ExecutionSnapshotEnvelope } from "@/lib/agent-runtime/execution-store";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
+import { createExecutionRunLifecycle, createExecutionStepLifecycle } from "@/lib/agent-runtime/execution-lifecycle";
 import { InMemoryExecutionStore } from "@/lib/agent-runtime/in-memory-execution-store";
 import { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-execution-runtime";
 import type { ExecutionStepResult } from "@/lib/agent-runtime/runtime-contracts";
@@ -103,6 +105,8 @@ function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["cla
     getRun: (input) => base.getRun(input),
     saveRunState: (input) => base.saveRunState(input),
     claimStep: claim,
+    scheduleStepRetry: (input) => base.scheduleStepRetry(input),
+    claimRetryableStep: (input) => base.claimRetryableStep(input),
     checkpoint: (input) => base.checkpoint(input),
   };
 }
@@ -282,6 +286,78 @@ describe("durable XState execution runtime", () => {
     expect(uncertain?.status).toBe("running");
     expect(uncertain?.runtimeContext.requestMessageBinding).toEqual(REQUEST_BINDING);
     expect(uncertain?.steps.map(({ status }) => status)).toEqual(["running", "pending", "pending"]);
+  });
+
+  it("resumes retry-pending state without claiming or dispatching it, while a claimed running retry stays fail-closed", async () => {
+    const store = new InMemoryExecutionStore(() => new Date("2026-10-07T15:00:00.000Z"));
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const crashingStore = storeWithClaim(store, async (input) => {
+      const claimed = await store.claimStep(input);
+      if (claimed.status === "claimed") throw new Error("simulated process interruption after claim");
+      return claimed;
+    });
+    const interrupted = await runtime(crashingStore, executor).execute(handoff(), runtimeInput(), "retry-state-resume-key");
+    expect(interrupted).toMatchObject({ kind: "rejected", failure: { code: "persistence_failed" } });
+    expect(executor).not.toHaveBeenCalled();
+
+    const persisted = await store.getRun({ runId: RUN_ID, userId: USER_ID });
+    expect(persisted?.steps.map((step) => step.status)).toEqual(["running", "pending", "pending"]);
+    const runActor = createExecutionRunLifecycle(persisted!.snapshot.snapshot.run);
+    const stepActors = Object.fromEntries(Object.entries(persisted!.snapshot.snapshot.steps)
+      .map(([stepId, snapshot]) => [stepId, createExecutionStepLifecycle(snapshot)]));
+    stepActors["step-1"]!.scheduleRetry();
+    const retryPendingSnapshot: ExecutionSnapshotEnvelope = {
+      version: 1,
+      runtimeVersion: 1,
+      snapshot: {
+        run: runActor.getPersistedSnapshot(),
+        steps: Object.fromEntries(Object.entries(stepActors).map(([stepId, actor]) => [stepId, actor.getPersistedSnapshot()])),
+      },
+    };
+    expect(await store.scheduleStepRetry({
+      runId: RUN_ID,
+      userId: USER_ID,
+      stepId: "step-1",
+      expectedRevision: persisted!.snapshotRevision,
+      snapshot: retryPendingSnapshot,
+      nextRetryAt: "2000-01-01T00:00:00.000Z",
+    })).toEqual({ status: "saved", snapshotRevision: persisted!.snapshotRevision + 1 });
+
+    const resumed = await runtime(store, executor).resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+    expect(resumed).toMatchObject({
+      kind: "retry_pending",
+      stepId: "step-1",
+      nextRetryAt: "2000-01-01T00:00:00.000Z",
+      run: { status: "running" },
+    });
+    if (resumed.kind === "retry_pending") {
+      expect(resumed.run.steps.map(({ status, attempt }) => [status, attempt]))
+        .toEqual([["retry_pending", 1], ["pending", 1], ["pending", 1]]);
+    }
+    expect(executor).not.toHaveBeenCalled();
+
+    stepActors["step-1"]!.claimRetry();
+    const retryClaimSnapshot: ExecutionSnapshotEnvelope = {
+      ...retryPendingSnapshot,
+      snapshot: {
+        ...retryPendingSnapshot.snapshot,
+        steps: Object.fromEntries(Object.entries(stepActors).map(([stepId, actor]) => [stepId, actor.getPersistedSnapshot()])),
+      },
+    };
+    expect(await store.claimRetryableStep({
+      runId: RUN_ID,
+      userId: USER_ID,
+      stepId: "step-1",
+      expectedRevision: persisted!.snapshotRevision + 1,
+      snapshot: retryClaimSnapshot,
+    })).toMatchObject({ status: "claimed", attempt: 2, snapshotRevision: persisted!.snapshotRevision + 2 });
+    const inFlight = await runtime(store, executor).resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+    expect(inFlight).toMatchObject({ kind: "recovery_required", stepId: "step-1", failure: { code: "indeterminate_step" } });
+    expect(executor).not.toHaveBeenCalled();
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps.map((step) => step.status))
+      .toEqual(["running", "pending", "pending"]);
+    for (const actor of Object.values(stepActors)) actor.stop();
+    runActor.stop();
   });
 
   it("does not let a step result rebind the immutable request message pair", async () => {

@@ -17,7 +17,8 @@ const stepLifecycleMachine = createMachine({
   initial: "pending",
   states: {
     pending: { on: { START: "running", SKIP: "skipped" } },
-    running: { on: { SUCCEED: "succeeded", FAIL: "failed" } },
+    running: { on: { SCHEDULE_RETRY: "retry_pending", SUCCEED: "succeeded", FAIL: "failed" } },
+    retry_pending: { on: { CLAIM_RETRY: "running" } },
     succeeded: { type: "final" },
     failed: { type: "final" },
     skipped: { type: "final" },
@@ -26,7 +27,7 @@ const stepLifecycleMachine = createMachine({
 
 function lifecycleView<Status extends string>(
   getStatus: () => Status,
-  send: (type: "START" | "SUCCEED" | "FAIL" | "SKIP") => void,
+  send: (type: "START" | "SCHEDULE_RETRY" | "CLAIM_RETRY" | "SUCCEED" | "FAIL" | "SKIP") => void,
   getPersistedSnapshot: () => unknown,
   stop: () => void,
 ) {
@@ -36,6 +37,12 @@ function lifecycleView<Status extends string>(
     },
     start() {
       send("START");
+    },
+    scheduleRetry() {
+      send("SCHEDULE_RETRY");
+    },
+    claimRetry() {
+      send("CLAIM_RETRY");
     },
     succeed() {
       send("SUCCEED");
@@ -75,7 +82,7 @@ export function createExecutionStepLifecycle(persistedSnapshot?: unknown) {
     : createActor(stepLifecycleMachine, { snapshot: persistedSnapshot as SnapshotFrom<typeof stepLifecycleMachine> }).start();
   return lifecycleView<ExecutionStepStatus>(
     () => actor.getSnapshot().value as ExecutionStepStatus,
-    (type) => actor.send({ type }),
+    (type) => actor.send({ type: type as "START" | "SCHEDULE_RETRY" | "CLAIM_RETRY" | "SUCCEED" | "FAIL" | "SKIP" }),
     () => actor.getPersistedSnapshot(),
     () => actor.stop(),
   );

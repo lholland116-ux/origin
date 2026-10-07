@@ -52,9 +52,10 @@ export type DurableExecutionStep = {
   readonly stepId: string;
   readonly capabilityId: string;
   readonly dependencyIds: readonly string[];
-  readonly attempt: 1;
+  readonly attempt: number;
   readonly executionKey: string;
   readonly status: ExecutionStepStatus;
+  readonly nextRetryAt?: string;
   readonly result?: ExecutionStepResult;
   readonly failureCode?: string;
   readonly startedAt?: string;
@@ -105,7 +106,7 @@ export type CreateDurableExecutionRunResult =
 
 export type DurableStepCheckpoint = {
   readonly stepId: string;
-  readonly status: Exclude<ExecutionStepStatus, "pending" | "running">;
+  readonly status: Exclude<ExecutionStepStatus, "pending" | "running" | "retry_pending">;
   readonly result?: ExecutionStepResult;
   readonly failureCode?: string;
   readonly completedAt: string;
@@ -118,6 +119,17 @@ export type ExecutionStoreWriteResult =
 
 export type ClaimDurableStepResult =
   | { readonly status: "claimed"; readonly executionKey: string; readonly snapshotRevision: number }
+  | { readonly status: "already_claimed"; readonly stepStatus: ExecutionStepStatus }
+  | { readonly status: "conflict" | "not_found" };
+
+export type ScheduleDurableStepRetryResult =
+  | { readonly status: "saved"; readonly snapshotRevision: number }
+  | { readonly status: "conflict" | "not_found" };
+
+export type ClaimRetryableStepResult =
+  | { readonly status: "claimed"; readonly executionKey: string; readonly attempt: number; readonly snapshotRevision: number }
+  | { readonly status: "not_eligible"; readonly nextRetryAt: string }
+  | { readonly status: "attempt_limit" }
   | { readonly status: "already_claimed"; readonly stepStatus: ExecutionStepStatus }
   | { readonly status: "conflict" | "not_found" };
 
@@ -144,6 +156,21 @@ export interface ExecutionStore {
     readonly snapshot: ExecutionSnapshotEnvelope;
     readonly startedAt: string;
   }): Promise<ClaimDurableStepResult>;
+  scheduleStepRetry(input: {
+    readonly runId: string;
+    readonly userId: string;
+    readonly stepId: string;
+    readonly expectedRevision: number;
+    readonly snapshot: ExecutionSnapshotEnvelope;
+    readonly nextRetryAt: string;
+  }): Promise<ScheduleDurableStepRetryResult>;
+  claimRetryableStep(input: {
+    readonly runId: string;
+    readonly userId: string;
+    readonly stepId: string;
+    readonly expectedRevision: number;
+    readonly snapshot: ExecutionSnapshotEnvelope;
+  }): Promise<ClaimRetryableStepResult>;
   checkpoint(input: {
     readonly runId: string;
     readonly userId: string;

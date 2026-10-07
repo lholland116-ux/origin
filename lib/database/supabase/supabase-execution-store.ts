@@ -20,6 +20,7 @@ import type {
   ExecutionStore,
   ExecutionStoreWriteResult,
 } from "@/lib/agent-runtime/execution-store";
+import { MAX_EXECUTION_STEP_ATTEMPTS } from "@/lib/agent-runtime/runtime-contracts";
 
 type ExecutionSql = postgres.Sql | postgres.TransactionSql;
 type Row = postgres.Row & Record<string, unknown>;
@@ -40,10 +41,12 @@ function iso(value: unknown): string | undefined {
 }
 
 function mapStep(value: unknown): DurableExecutionStep {
+  const attempt = isRecord(value) ? Number(value.attempt) : Number.NaN;
   if (!isRecord(value) || typeof value.run_id !== "string" || typeof value.user_id !== "string"
     || typeof value.step_id !== "string" || typeof value.capability_id !== "string"
     || !Array.isArray(value.dependency_ids) || typeof value.execution_key !== "string"
-    || typeof value.status !== "string" || value.attempt !== 1) {
+    || typeof value.status !== "string" || !Number.isInteger(attempt)
+    || attempt < 1 || attempt > MAX_EXECUTION_STEP_ATTEMPTS) {
     throw new Error("Execution store returned an invalid step record.");
   }
   let result: DurableExecutionStep["result"];
@@ -80,9 +83,10 @@ function mapStep(value: unknown): DurableExecutionStep {
     stepId: value.step_id,
     capabilityId: value.capability_id,
     dependencyIds: value.dependency_ids.filter((item): item is string => typeof item === "string"),
-    attempt: 1,
+    attempt,
     executionKey: value.execution_key,
     status: value.status as DurableExecutionStep["status"],
+    ...(iso(value.next_retry_at) ? { nextRetryAt: iso(value.next_retry_at) } : {}),
     ...(result ? { result } : {}),
     ...(typeof value.failure_code === "string" ? { failureCode: value.failure_code } : {}),
     ...(iso(value.started_at) ? { startedAt: iso(value.started_at) } : {}),
@@ -245,6 +249,77 @@ export class SupabaseExecutionStore implements ExecutionStore {
         RETURNING snapshot_revision` as readonly Row[];
       if (updated.length !== 1) throw new Error("Execution step claim lost its locked run revision.");
       return { status: "claimed", executionKey: claimed[0]!.execution_key, snapshotRevision: Number(updated[0]!.snapshot_revision) };
+    });
+  }
+
+  async scheduleStepRetry(input: Parameters<ExecutionStore["scheduleStepRetry"]>[0]): Promise<Awaited<ReturnType<ExecutionStore["scheduleStepRetry"]>>> {
+    return this.sql.begin(async (tx) => {
+      const runs = await tx`SELECT snapshot_revision, status FROM public.execution_runs
+        WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid FOR UPDATE` as readonly Row[];
+      if (runs.length !== 1) return { status: "not_found" };
+      if (Number(runs[0]!.snapshot_revision) !== input.expectedRevision || runs[0]!.status !== "running") return { status: "conflict" };
+      const steps = await tx`SELECT status, attempt FROM public.execution_steps
+        WHERE run_id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid AND step_id = ${input.stepId} FOR UPDATE` as readonly Row[];
+      if (steps.length !== 1) return { status: "not_found" };
+      if (steps[0]!.status !== "running") return { status: "conflict" };
+      const scheduled = await tx`UPDATE public.execution_steps SET
+          status = 'retry_pending', next_retry_at = ${input.nextRetryAt}::timestamptz,
+          result_envelope = NULL, result_payload_id = NULL, failure_code = NULL, completed_at = NULL
+        WHERE run_id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid
+          AND step_id = ${input.stepId} AND status = 'running'
+        RETURNING step_id` as readonly Row[];
+      if (scheduled.length !== 1) return { status: "conflict" };
+      const updated = await tx`UPDATE public.execution_runs SET snapshot = ${tx.json(json(input.snapshot))},
+          snapshot_revision = snapshot_revision + 1
+        WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid
+          AND status = 'running' AND snapshot_revision = ${input.expectedRevision}
+        RETURNING snapshot_revision` as readonly Row[];
+      if (updated.length !== 1) throw new Error("Retry scheduling lost its locked run revision.");
+      return { status: "saved", snapshotRevision: Number(updated[0]!.snapshot_revision) };
+    });
+  }
+
+  async claimRetryableStep(input: Parameters<ExecutionStore["claimRetryableStep"]>[0]): Promise<Awaited<ReturnType<ExecutionStore["claimRetryableStep"]>>> {
+    return this.sql.begin(async (tx) => {
+      const runs = await tx`SELECT snapshot_revision, status FROM public.execution_runs
+        WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid FOR UPDATE` as readonly Row[];
+      if (runs.length !== 1) return { status: "not_found" };
+      if (Number(runs[0]!.snapshot_revision) !== input.expectedRevision || runs[0]!.status !== "running") return { status: "conflict" };
+      const steps = await tx`SELECT status, attempt, next_retry_at FROM public.execution_steps
+        WHERE run_id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid AND step_id = ${input.stepId} FOR UPDATE` as readonly Row[];
+      if (steps.length !== 1) return { status: "not_found" };
+      if (steps[0]!.status !== "retry_pending") {
+        return { status: "already_claimed", stepStatus: steps[0]!.status as DurableExecutionStep["status"] };
+      }
+      if (Number(steps[0]!.attempt) >= MAX_EXECUTION_STEP_ATTEMPTS) return { status: "attempt_limit" };
+      const claimed = await tx`UPDATE public.execution_steps SET
+          status = 'running', attempt = attempt + 1, started_at = clock_timestamp(), next_retry_at = NULL,
+          result_envelope = NULL, result_payload_id = NULL, failure_code = NULL, completed_at = NULL
+        WHERE run_id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid
+          AND step_id = ${input.stepId} AND status = 'retry_pending'
+          AND next_retry_at <= clock_timestamp() AND attempt < ${MAX_EXECUTION_STEP_ATTEMPTS}
+        RETURNING execution_key, attempt` as readonly Row[];
+      if (claimed.length !== 1 || typeof claimed[0]!.execution_key !== "string") {
+        const eligibility = await tx`SELECT next_retry_at, clock_timestamp() AS database_now
+          FROM public.execution_steps WHERE run_id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid
+            AND step_id = ${input.stepId}` as readonly Row[];
+        const nextRetryAt = iso(eligibility[0]?.next_retry_at);
+        const databaseNow = iso(eligibility[0]?.database_now);
+        if (nextRetryAt && databaseNow && nextRetryAt > databaseNow) return { status: "not_eligible", nextRetryAt };
+        return { status: "attempt_limit" };
+      }
+      const updated = await tx`UPDATE public.execution_runs SET snapshot = ${tx.json(json(input.snapshot))},
+          snapshot_revision = snapshot_revision + 1
+        WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid
+          AND status = 'running' AND snapshot_revision = ${input.expectedRevision}
+        RETURNING snapshot_revision` as readonly Row[];
+      if (updated.length !== 1) throw new Error("Retry claim lost its locked run revision.");
+      return {
+        status: "claimed",
+        executionKey: claimed[0]!.execution_key,
+        attempt: Number(claimed[0]!.attempt),
+        snapshotRevision: Number(updated[0]!.snapshot_revision),
+      };
     });
   }
 

@@ -117,6 +117,7 @@ function executionRun(record: DurableExecutionRun): ExecutionRun {
       status: step.status,
       dependsOn: [...step.dependencyIds],
       attempt: step.attempt,
+      ...(step.nextRetryAt ? { nextRetryAt: step.nextRetryAt } : {}),
       ...(step.startedAt ? { startedAt: step.startedAt } : {}),
       ...(step.completedAt ? { completedAt: step.completedAt } : {}),
       ...(step.result ? { resultRef: `durable:${record.id}:${step.stepId}` } : {}),
@@ -130,7 +131,7 @@ function telemetry(run: ExecutionRun, failureCode: ExecutionFailure["code"] | nu
     execution_id: run.id,
     status: run.status as "succeeded" | "failed",
     step_count: run.steps.length,
-    completed_step_count: run.steps.filter((step) => step.status !== "pending" && step.status !== "running").length,
+    completed_step_count: run.steps.filter((step) => step.status === "succeeded" || step.status === "failed" || step.status === "skipped").length,
     current_step_id: null,
     capability_steps: Object.freeze(run.steps.map((step) => Object.freeze({ step_id: step.id, capability: step.capability, status: step.status, attempt: step.attempt }))),
     runtime_duration_ms: Math.max(0, Date.parse(run.completedAt ?? run.createdAt) - Date.parse(run.startedAt ?? run.createdAt)),
@@ -203,6 +204,7 @@ function isValidDurableRecord(record: DurableExecutionRun, handoff: PlannedExecu
         status: step.status,
         dependsOn: step.dependencyIds,
         attempt: step.attempt,
+        ...(step.nextRetryAt ? { nextRetryAt: step.nextRetryAt } : {}),
         ...(step.startedAt ? { startedAt: step.startedAt } : {}),
         ...(step.completedAt ? { completedAt: step.completedAt } : {}),
         ...(step.result ? { resultRef: `durable:${record.id}:${step.stepId}` } : {}),
@@ -213,7 +215,9 @@ function isValidDurableRecord(record: DurableExecutionRun, handoff: PlannedExecu
   }
   if (record.status === "pending" && record.steps.some((step) => step.status !== "pending")) return false;
   if (record.status === "running" && (record.steps.some((step) => step.status === "failed" || step.status === "skipped")
-    || record.steps.filter((step) => step.status === "running").length > 1)) return false;
+    || record.steps.filter((step) => step.status === "running").length > 1
+    || record.steps.filter((step) => step.status === "retry_pending").length > 1
+    || (record.steps.some((step) => step.status === "running") && record.steps.some((step) => step.status === "retry_pending")))) return false;
   if (record.status === "succeeded" && record.steps.some((step) => step.status !== "succeeded")) return false;
   if (record.status === "failed" && !record.steps.some((step) => step.status === "failed")) return false;
   return true;
@@ -438,6 +442,15 @@ export class DurableXStateExecutionRuntime {
     }
     if (!persistedBinding) {
       return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
+    }
+    const retryPending = record.steps.find((step) => step.status === "retry_pending");
+    if (retryPending) {
+      return {
+        kind: "retry_pending",
+        run: executionRun(record),
+        stepId: retryPending.stepId,
+        nextRetryAt: retryPending.nextRetryAt!,
+      };
     }
 
     let revision = record.snapshotRevision;
