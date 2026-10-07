@@ -16,7 +16,7 @@ import { validateFiles } from "@/lib/documents/validate-upload";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
 const uploadRouteSource = readFileSync("app/api/documents/upload/route.ts", "utf8");
-const chatRouteSource = readFileSync("app/api/chat/route.ts", "utf8");
+const standardChatServiceSource = readFileSync("lib/ai/standard-chat-service.ts", "utf8");
 
 function makeDocumentFile(name: string, sizeBytes: number, type: string): File {
   return new File([new Uint8Array(sizeBytes)], name, { type });
@@ -319,10 +319,10 @@ describe("composer large-input handling", () => {
     expect(uploadRouteSource).toContain("const planCheck = await getUserPlan");
     expect(uploadRouteSource).toContain("validateFiles(files, planCheck.plan");
     expect(uploadRouteSource).not.toContain("File uploads are a Pro feature");
-    expect(chatRouteSource).toContain("const documentLimits = getDocumentLimits(plan)");
-    expect(chatRouteSource).toContain("DOCUMENT_LIMIT_EXCEEDED");
-    expect(chatRouteSource).toContain("resolveDailyUsageLimits");
-    expect(chatRouteSource).toContain("reserveDailyUsage({");
+    expect(standardChatServiceSource).toContain("const documentLimits = getDocumentLimits(plan)");
+    expect(standardChatServiceSource).toContain("DOCUMENT_LIMIT_EXCEEDED");
+    expect(standardChatServiceSource).toContain("resolveDailyUsageLimits");
+    expect(standardChatServiceSource).toContain("reserveDailyUsage({");
     expect(clientSource).toContain("Document upload is not available in Create Image mode.");
     expect(clientSource).toContain("Image generation mode does not support file upload.");
     expect(clientSource).toContain("disabled={composerDisabled}");

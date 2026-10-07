@@ -76,6 +76,8 @@ vi.mock("../../lib/utils", () => ({
 
 import { POST as postStandard } from "../../app/api/chat/route";
 import { POST as postWebSearch } from "../../app/api/chat-web/route";
+import { createStandardChatService } from "../../lib/ai/standard-chat-service";
+import { createWebSearchService } from "../../lib/ai/web-search-service";
 import {
   buildDocumentContext,
   DocumentContextLimitError,
@@ -241,6 +243,55 @@ describe("Free Web Search entitlement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.writeAiRequestTelemetry.mockResolvedValue(undefined);
+  });
+
+  it("runs the shared Standard service through injected provider mocks and emits application events", async () => {
+    const { queries } = setup({ plan: "free", usageCount: 0 });
+    const service = createStandardChatService({
+      createSupabaseClient: vi.fn(async () => mocks.supabase) as never,
+      provider: mocks.openai as never,
+      writeTelemetry: mocks.writeAiRequestTelemetry as never,
+    });
+
+    const result = await service.run({
+      userId: USER_ID,
+      body: { conversationId: CONVERSATION_ID, message: "Ask a standard question." },
+    });
+
+    expect(result.kind).toBe("stream");
+    if (result.kind !== "stream") throw new Error("Expected a Standard stream result.");
+    const events = [];
+    for await (const event of result.events) events.push(event);
+
+    expect(events).toEqual([{ type: "text_delta", text: "Standard answer." }]);
+    expect(mocks.openai.responses.stream).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc).toHaveBeenCalledOnce();
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(queries.messages.insert).toHaveBeenCalledTimes(2);
+    expect(mocks.writeAiRequestTelemetry).toHaveBeenCalledOnce();
+  });
+
+  it("runs the shared Web Search service with mocked provider and returns its application result", async () => {
+    setup({ plan: "free", usageCount: 0 });
+    const service = createWebSearchService({
+      createSupabaseClient: vi.fn(async () => mocks.supabase) as never,
+      provider: mocks.openai as never,
+      writeTelemetry: mocks.writeAiRequestTelemetry as never,
+    });
+
+    const result = await service.run({
+      userId: USER_ID,
+      body: { conversationId: CONVERSATION_ID, message: "Find current information." },
+    });
+
+    expect(result).toMatchObject({
+      kind: "json",
+      status: 200,
+      body: { reply: "Web answer with current information.", web: true },
+    });
+    expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc).toHaveBeenCalledOnce();
+    expect(mocks.writeAiRequestTelemetry).toHaveBeenCalledOnce();
   });
 
   it.each(["standard", "web_search"] as const)(
