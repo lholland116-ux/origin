@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PlanStep } from "@/lib/ai/intelligence-plan";
+import type { CapabilityId } from "@/lib/ai/capability-registry";
 import { validateIntelligencePlan } from "@/lib/ai/plan-validator";
 import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coordinator";
 import type { StandardOperationInput } from "@/lib/ai/standard-operation-service";
@@ -12,6 +13,8 @@ import type { RequestMessageBinding } from "@/lib/agent-runtime/application-cont
 import { createStandardCapabilityAdapter, type StandardOperationRunner } from "@/lib/agent-runtime/capability-adapters/standard";
 import { createWebSearchCapabilityAdapter } from "@/lib/agent-runtime/capability-adapters/web-search";
 import { createFileAnalysisCapabilityAdapter, type FileContextPreparer } from "@/lib/agent-runtime/capability-adapters/file-analysis";
+import { createExecutionRegistry } from "@/lib/agent-runtime/execution-registry";
+import { createRegistryCapabilityExecutor } from "@/lib/agent-runtime/registry-capability-executor";
 import { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-execution-runtime";
 import { executionResultJsonBytes } from "@/lib/agent-runtime/result-payload-contract";
 import { SupabaseExecutionStore } from "@/lib/database/supabase/supabase-execution-store";
@@ -53,6 +56,43 @@ function handoff(step: PlanStep): PlannedExecutionHandoff {
       handoffVersion: 1,
     },
   };
+}
+
+function multiStepHandoff(steps: PlanStep[]): PlannedExecutionHandoff {
+  const objective = "Verify large file context through registry dispatch.";
+  const plan = { objective, steps, status: "validated" as const };
+  const validation = validateIntelligencePlan(plan);
+  if (!validation.valid) throw new Error(`Invalid registry payload flow plan: ${validation.errors.join(", ")}`);
+  return {
+    version: 1,
+    objective,
+    plan,
+    orderedStepIds: validation.orderedStepIds,
+    plannerSource: "deterministic",
+    governance: {
+      maxSteps: 6,
+      capabilityIds: [...new Set(steps.map((step) => step.capability))].sort() as PlannedExecutionHandoff["governance"]["capabilityIds"],
+      modelPlanningAllowed: false,
+      maxModelCalls: 0,
+      maxRepairAttempts: 0,
+      attachmentContextAllowed: true,
+      handoffVersion: 1,
+    },
+  };
+}
+
+function executorThroughRegistry(capabilityId: CapabilityId, adapter: CapabilityExecutor): CapabilityExecutor {
+  const unused = (): CapabilityExecutor => ({
+    async execute() { throw new Error("Unexpected capability in payload integration."); },
+  });
+  return createRegistryCapabilityExecutor(createExecutionRegistry({
+    standardExecutor: capabilityId === "standard" ? adapter : unused(),
+    webSearchExecutor: capabilityId === "web_search" ? adapter : unused(),
+    fileAnalysisExecutor: capabilityId === "file_analysis" ? adapter : unused(),
+    documentGenerationExecutor: capabilityId === "document_generation" ? adapter : unused(),
+    imageGenerationExecutor: capabilityId === "image_generation" ? adapter : unused(),
+    imageEditingExecutor: capabilityId === "image_editing" ? adapter : unused(),
+  }));
 }
 
 function makeBinding(userId: string, conversationId: string): RequestMessageBinding {
@@ -138,7 +178,7 @@ describeDatabase("large capability adapter results through durable PostgreSQL st
       const adapter = item.createAdapter(binding);
       const runtime = new DurableXStateExecutionRuntime({
         store,
-        executor: adapter,
+        executor: executorThroughRegistry(item.capability, adapter),
         authorizer: { authorize: async () => ({ allowed: true }) },
         requestMessageBindingValidator: { validate: async () => true },
       });
@@ -177,5 +217,98 @@ describeDatabase("large capability adapter results through durable PostgreSQL st
       expect(Number(rows[0]!.serialized_size_bytes)).toBe(executionResultJsonBytes(savedResult));
       expect(rows[0]!.result_kind).toBe(item.resultKind);
     }
+  });
+
+  it("routes a >65 KiB CJK File Context through registry and durable runtime into Standard unchanged", async () => {
+    const binding = makeBinding(userId, conversationId);
+    const sourceDocumentId = randomUUID();
+    const extractedText = "漢字資".repeat(9_500);
+    const receivedContexts: string[] = [];
+    const unused = (): CapabilityExecutor => ({ async execute() { throw new Error("Unexpected capability in large-result flow."); } });
+    const fileAdapter = createFileAnalysisCapabilityAdapter({
+      prepareFileContext: (async (input: FileContextServiceInput) => ({
+        kind: "file_context" as const,
+        userId,
+        conversationId,
+        documents: [{
+          documentId: input.documentIds[0]!,
+          fileName: "large-unicode-source.txt",
+          mimeType: "text/plain",
+          sizeBytes: new TextEncoder().encode(extractedText).byteLength,
+          extractedText,
+        }],
+      })) as FileContextPreparer,
+    });
+    const standardAdapter = createStandardCapabilityAdapter({
+      runOperation: (async function* (input: StandardOperationInput) {
+        receivedContexts.push(input.fileContext?.documents[0]?.extractedText ?? "");
+        const reply = "The full Unicode source reached Standard.";
+        const result = {
+          kind: "standard_operation" as const,
+          requestId: binding.requestId,
+          userId,
+          conversationId,
+          reply,
+          model: "test-model",
+          reasoningEffort: input.reasoningEffort,
+          measurements: [],
+        };
+        yield { type: "text_delta" as const, text: reply };
+        yield { type: "completion" as const, result };
+      }) as StandardOperationRunner,
+    });
+    const registry = createExecutionRegistry({
+      standardExecutor: standardAdapter,
+      webSearchExecutor: unused(),
+      fileAnalysisExecutor: fileAdapter,
+      documentGenerationExecutor: unused(),
+      imageGenerationExecutor: unused(),
+      imageEditingExecutor: unused(),
+    });
+    const runtime = new DurableXStateExecutionRuntime({
+      store,
+      executor: createRegistryCapabilityExecutor(registry),
+      authorizer: { authorize: async () => ({ allowed: true }) },
+      requestMessageBindingValidator: { validate: async () => true },
+    });
+    const steps: PlanStep[] = [
+      { id: "files", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
+      { id: "answer", capability: "standard", dependsOn: ["files"], inputs: [
+        { source: "user" }, { source: "step", stepId: "files", output: "structured_data" },
+      ], expectedOutput: "text" },
+    ];
+    const outcome = await runtime.execute(multiStepHandoff(steps), {
+      authenticatedUserId: userId,
+      conversationId,
+      requestMessageBinding: binding,
+      userInput: "Use the entire uploaded source.",
+      attachments: [{ id: sourceDocumentId, kind: "file" }],
+    }, `registry-large-file-${randomUUID()}`);
+    expect(outcome.kind).toBe("succeeded");
+    if (outcome.kind !== "succeeded") return;
+
+    expect(executionResultJsonBytes({
+      kind: "structured_data",
+      value: { kind: "file_context", userId, conversationId, documents: [{ extractedText }] },
+    })).toBeGreaterThan(65_536);
+    expect(receivedContexts).toEqual([extractedText]);
+    const saved = await store.getRun({ runId: outcome.run.id, userId });
+    const fileResult = saved?.steps.find(({ stepId }) => stepId === "files")?.result;
+    expect(fileResult).toEqual(outcome.stepResults.files);
+    expect((fileResult?.value as { documents: Array<{ extractedText: string }> }).documents[0]!.extractedText)
+      .toBe(extractedText);
+    const rows = await sql`SELECT steps.result_payload_id,
+        octet_length(steps.result_envelope::text) AS envelope_bytes,
+        payload.serialized_size_bytes, payload.result_kind
+      FROM public.execution_steps AS steps
+      JOIN public.execution_step_result_payloads AS payload
+        ON payload.id = steps.result_payload_id
+        AND payload.run_id = steps.run_id AND payload.user_id = steps.user_id AND payload.step_id = steps.step_id
+      WHERE steps.run_id = ${outcome.run.id}::uuid AND steps.user_id = ${userId}::uuid AND steps.step_id = 'files'`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.result_payload_id).toBeTruthy();
+    expect(Number(rows[0]!.envelope_bytes)).toBeLessThanOrEqual(65_536);
+    expect(Number(rows[0]!.serialized_size_bytes)).toBe(executionResultJsonBytes(fileResult));
+    expect(rows[0]!.result_kind).toBe("structured_data");
   });
 });

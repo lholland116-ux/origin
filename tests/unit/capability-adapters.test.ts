@@ -22,6 +22,8 @@ import { createFileAnalysisCapabilityAdapter, type FileContextPreparer } from "@
 import { createDocumentGenerationCapabilityAdapter } from "@/lib/agent-runtime/capability-adapters/document-generation";
 import { createImageGenerationCapabilityAdapter } from "@/lib/agent-runtime/capability-adapters/image-generation";
 import { createImageEditingCapabilityAdapter, type ImageEditingCapabilityResult } from "@/lib/agent-runtime/capability-adapters/image-editing";
+import { createExecutionRegistry, type ExecutionRegistryExecutors } from "@/lib/agent-runtime/execution-registry";
+import { createRegistryCapabilityExecutor } from "@/lib/agent-runtime/registry-capability-executor";
 import { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-execution-runtime";
 import { InMemoryExecutionStore } from "@/lib/agent-runtime/in-memory-execution-store";
 import type { ExecutionStepResult } from "@/lib/agent-runtime/runtime-contracts";
@@ -172,6 +174,20 @@ function runtimeHandoff(steps: PlanStep[]): PlannedExecutionHandoff {
       handoffVersion: 1,
     },
   };
+}
+
+function registryExecutor(overrides: Partial<ExecutionRegistryExecutors>): CapabilityExecutor {
+  const unused = (): CapabilityExecutor => ({
+    async execute() { throw new Error("Unexpected capability execution in test."); },
+  });
+  return createRegistryCapabilityExecutor(createExecutionRegistry({
+    standardExecutor: overrides.standardExecutor ?? unused(),
+    webSearchExecutor: overrides.webSearchExecutor ?? unused(),
+    fileAnalysisExecutor: overrides.fileAnalysisExecutor ?? unused(),
+    documentGenerationExecutor: overrides.documentGenerationExecutor ?? unused(),
+    imageGenerationExecutor: overrides.imageGenerationExecutor ?? unused(),
+    imageEditingExecutor: overrides.imageEditingExecutor ?? unused(),
+  }));
 }
 
 describe("six independent capability adapters", () => {
@@ -516,18 +532,10 @@ describe("six independent capability adapters", () => {
       createDependencies: editDependencies,
       orchestrate: orchestrateMock as unknown as ExistingMessageImageEditor,
     });
-    const testOnlyComposite: CapabilityExecutor = {
-      execute(input) {
-        switch (input.capabilityId) {
-          case "image_generation": return imageGeneration.execute(input);
-          case "image_editing": return imageEditing.execute(input);
-          default: throw new Error("Unexpected test capability.");
-        }
-      },
-    };
+    const store = new InMemoryExecutionStore();
     const runtime = new DurableXStateExecutionRuntime({
-      store: new InMemoryExecutionStore(),
-      executor: testOnlyComposite,
+      store,
+      executor: registryExecutor({ imageGenerationExecutor: imageGeneration, imageEditingExecutor: imageEditing }),
       authorizer: { authorize: async () => ({ allowed: true }) },
       requestMessageBindingValidator: { validate: async () => true },
       createExecutionId: () => "a3100000-0000-4000-8000-000000000042",
@@ -552,12 +560,18 @@ describe("six independent capability adapters", () => {
       attachments: [{ id: "a3100000-0000-4000-8000-000000000020", kind: "image" }],
     }, "durable-image-generation-edit-handoff");
     expect(outcome.kind).toBe("succeeded");
+    if (outcome.kind !== "succeeded") return;
     expect(generateMock).toHaveBeenCalledTimes(1);
     expect(orchestrateMock).toHaveBeenCalledTimes(1);
     expect(orchestrateMock.mock.calls[0]![0].sourceReference).toEqual({
       kind: "generated_image", generatedImageId: generatedImage().imageId,
     });
+    expect(orchestrateMock.mock.calls[0]![0].authenticatedUserId).toBe(USER_ID);
+    expect(orchestrateMock.mock.calls[0]![0].userMessageId).toBe(REQUEST_BINDING.userMessageId);
     expect(orchestrateMock.mock.calls[0]![0].assistantMessageId).toBe(REQUEST_BINDING.assistantMessageId);
+    const saved = await store.getRun({ runId: outcome.run.id, userId: USER_ID });
+    expect(orchestrateMock.mock.calls[0]![0].idempotencyKey)
+      .toBe(saved?.steps.find(({ stepId }) => stepId === "edit")?.executionKey);
   });
 
   it("rejects arbitrary or cross-binding Image Editing predecessors before orchestration", async () => {
@@ -647,7 +661,7 @@ describe("six independent capability adapters", () => {
     expect(resumed).toMatchObject({ kind: "failed", failure: { code: "ownership_denied", message: "This execution is unavailable." } });
   });
 
-  it("qualifies a real durable runtime file -> Standard -> document flow with one explicit test-only dispatcher", async () => {
+  it("qualifies File -> Standard -> document through the static registry and real durable runtime", async () => {
     const context = fileResult("Owned source material.");
     const standard = standardResult("A final response from the Standard core.", RUNTIME_REQUEST_ID);
     const artifact = { bytes: new Uint8Array([4, 5, 6]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 3 } as GeneratedArtifact;
@@ -660,23 +674,22 @@ describe("six independent capability adapters", () => {
     const persist = persistMock as unknown as ExistingMessageDocumentPersister;
     const document = createDocumentGenerationCapabilityAdapter({ render, persist });
     const calls: CapabilityExecutionInput[] = [];
-    // This deterministic dispatch belongs only to this test; no production registry is created.
-    const testOnlyComposite: CapabilityExecutor = {
+    const selectedAdapters = registryExecutor({
+      fileAnalysisExecutor: file,
+      standardExecutor: standardAdapter,
+      documentGenerationExecutor: document,
+    });
+    const registryDispatch: CapabilityExecutor = {
       async execute(input) {
         calls.push(input);
-        switch (input.capabilityId) {
-          case "file_analysis": return file.execute(input);
-          case "standard": return standardAdapter.execute(input);
-          case "document_generation": return document.execute(input);
-          default: throw new Error("Unexpected test capability.");
-        }
+        return selectedAdapters.execute(input);
       },
     };
     const store = new InMemoryExecutionStore();
     let sequence = 0;
     const runtime = new DurableXStateExecutionRuntime({
       store,
-      executor: testOnlyComposite,
+      executor: registryDispatch,
       authorizer: { authorize: async () => ({ allowed: true }) },
       requestMessageBindingValidator: { validate: async () => true },
       createExecutionId: () => "a3100000-0000-4000-8000-000000000030",
@@ -713,5 +726,182 @@ describe("six independent capability adapters", () => {
     expect(saved?.status).toBe("succeeded");
     expect(saved?.runtimeContext.requestMessageBinding).toEqual(runtimeBinding);
     expect(saved?.steps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+  });
+
+  it("runs Web -> Standard and File + Web -> Standard through the static registry and durable runtime", async () => {
+    const runtimeBinding = { ...REQUEST_BINDING, requestId: RUNTIME_REQUEST_ID };
+    const preparedDocuments: string[] = [];
+    const prepareFileContext = vi.fn(async (input: FileContextServiceInput) => {
+      preparedDocuments.push(...input.documentIds);
+      return fileResult("Registry-routed owned file context.");
+    });
+    const runWebOperation = vi.fn(async (input: Parameters<WebSearchOperationRunner>[0]) => {
+      const result = {
+        ...webResult(`Research for: ${input.objective}`),
+        requestId: input.requestContext.requestId,
+        userId: input.requestContext.userId,
+        conversationId: input.requestContext.conversationId,
+      };
+      return {
+        ok: true as const,
+        result,
+        measurement: {
+          model: result.model,
+          webSearchCalls: result.webSearchCalls,
+          outcome: "success" as const,
+          latencyMs: result.latencyMs,
+          usage: result.usage,
+        },
+      };
+    });
+    const standardInputs: StandardOperationInput[] = [];
+    const runStandard = vi.fn(async function* (input: StandardOperationInput) {
+      standardInputs.push(input);
+      const result = {
+        ...standardResult(`Synthesized response for: ${input.objective}`, input.requestContext.requestId),
+        userId: input.requestContext.userId,
+        conversationId: input.requestContext.conversationId,
+      };
+      yield* standardEvents(result);
+    });
+    const registry = registryExecutor({
+      fileAnalysisExecutor: createFileAnalysisCapabilityAdapter({ prepareFileContext }),
+      standardExecutor: createStandardCapabilityAdapter({ runOperation: runStandard }),
+      webSearchExecutor: createWebSearchCapabilityAdapter({ runOperation: runWebOperation }),
+    });
+    let runSequence = 50;
+    let keySequence = 60;
+    const store = new InMemoryExecutionStore();
+    const authorize = vi.fn(async () => ({ allowed: true as const }));
+    const runtime = new DurableXStateExecutionRuntime({
+      store,
+      executor: registry,
+      authorizer: { authorize },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: () => `a3100000-0000-4000-8000-${String(runSequence++).padStart(12, "0")}`,
+      createExecutionKey: () => `a3100000-0000-4000-8000-${String(keySequence++).padStart(12, "0")}`,
+      now: () => new Date("2026-10-07T12:00:00.000Z"),
+    });
+    const runtimeInput: ExecutionRuntimeInput = {
+      authenticatedUserId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      requestMessageBinding: runtimeBinding,
+      userInput: "Compare the uploaded material with current information.",
+      attachments: [{ id: "a3100000-0000-4000-8000-000000000051", kind: "file" }],
+    };
+
+    const webOnly = await runtime.execute(runtimeHandoff([
+      { id: "web", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
+      { id: "answer", capability: "standard", dependsOn: ["web"], inputs: [
+        { source: "user" }, { source: "step", stepId: "web", output: "search_results" },
+      ], expectedOutput: "text" },
+    ]), runtimeInput, "registry-web-standard");
+    expect(webOnly.kind).toBe("succeeded");
+    expect(runWebOperation).toHaveBeenCalledTimes(1);
+    expect(standardInputs[0]?.webSearchResult?.reply).toContain("Compare the uploaded material");
+    expect(standardInputs[0]?.fileContext).toBeUndefined();
+
+    const joined = await runtime.execute(runtimeHandoff([
+      { id: "files", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
+      { id: "web", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
+      { id: "answer", capability: "standard", dependsOn: ["files", "web"], inputs: [
+        { source: "user" },
+        { source: "step", stepId: "files", output: "structured_data" },
+        { source: "step", stepId: "web", output: "search_results" },
+      ], expectedOutput: "text" },
+    ]), runtimeInput, "registry-file-web-standard");
+    expect(joined.kind).toBe("succeeded");
+    expect(prepareFileContext).toHaveBeenCalledTimes(1);
+    expect(runWebOperation).toHaveBeenCalledTimes(2);
+    expect(standardInputs[1]?.fileContext?.documents[0]?.extractedText).toBe("Registry-routed owned file context.");
+    expect(standardInputs[1]?.webSearchResult?.reply).toContain("Compare the uploaded material");
+    expect(joined.kind === "succeeded" && joined.run.steps.map(({ status }) => status)).toEqual([
+      "succeeded", "succeeded", "succeeded",
+    ]);
+    expect(authorize).toHaveBeenCalledTimes(5);
+    expect(preparedDocuments).toEqual(["a3100000-0000-4000-8000-000000000051"]);
+  });
+
+  it("reaches all six real qualified adapters through one injected static registry", async () => {
+    const standardOperation = standardRunner(standardResult());
+    const webSearchOperation = vi.fn(async () => {
+      const result = webResult();
+      return {
+        ok: true as const,
+        result,
+        measurement: {
+          model: result.model,
+          webSearchCalls: result.webSearchCalls,
+          outcome: "success" as const,
+          latencyMs: result.latencyMs,
+          usage: result.usage,
+        },
+      };
+    });
+    const fileContextPreparer = vi.fn(async () => fileResult());
+    const artifact = {
+      bytes: new Uint8Array([8, 9]),
+      filename: "registered.pdf",
+      format: "pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 2,
+    } as GeneratedArtifact;
+    const renderDocument = vi.fn(async () => artifact);
+    const persistDocument = vi.fn(async () => ({ reference: generatedDocument(), delivery: artifact }));
+    const generateImage = vi.fn(async () => ({ reference: generatedImage(), responseBytes: new Uint8Array([1, 2]) }));
+    const editImage = vi.fn(async (input: ImageEditExistingMessageOrchestratorInput) => ({
+      kind: "completed" as const,
+      disposition: "claimed" as const,
+      status: "completed" as const,
+      conversationId: input.conversationId,
+      imageEditRequestId: "a3100000-0000-4000-8000-000000000061",
+      userMessageId: input.userMessageId,
+      assistantMessageId: input.assistantMessageId,
+      generatedImageId: "a3100000-0000-4000-8000-000000000062",
+    }));
+
+    const registry = createExecutionRegistry({
+      standardExecutor: createStandardCapabilityAdapter({ runOperation: standardOperation }),
+      webSearchExecutor: createWebSearchCapabilityAdapter({ runOperation: webSearchOperation as unknown as WebSearchOperationRunner }),
+      fileAnalysisExecutor: createFileAnalysisCapabilityAdapter({ prepareFileContext: fileContextPreparer }),
+      documentGenerationExecutor: createDocumentGenerationCapabilityAdapter({
+        render: renderDocument as unknown as DocumentRenderer,
+        persist: persistDocument as unknown as ExistingMessageDocumentPersister,
+      }),
+      imageGenerationExecutor: createImageGenerationCapabilityAdapter({ generate: generateImage }),
+      imageEditingExecutor: createImageEditingCapabilityAdapter({
+        createDependencies: vi.fn(async () => ({} as never)),
+        orchestrate: editImage as unknown as ExistingMessageImageEditor,
+      }),
+    });
+    const executor = createRegistryCapabilityExecutor(registry);
+    const inputs: readonly [CapabilityExecutionInput["capabilityId"], CapabilityExecutionInput["inputs"]][] = [
+      ["standard", [{ source: "user", value: "Explain this request." }]],
+      ["web_search", [{ source: "user", value: "Find current information." }]],
+      ["file_analysis", [{ source: "attachment", reference: { id: "a3100000-0000-4000-8000-000000000063", kind: "file" } }]],
+      ["document_generation", [
+        { source: "user", value: "Create a PDF." },
+        { source: "step", stepId: "standard", result: { kind: "text", value: standardResult() } },
+      ]],
+      ["image_generation", [{ source: "user", value: "Generate a mountain landscape." }]],
+      ["image_editing", [
+        { source: "user", value: "Make it brighter." },
+        { source: "step", stepId: "image", result: { kind: "image", value: generatedImage() } },
+      ]],
+    ];
+    const expectedKinds = ["text", "search_results", "structured_data", "document", "image", "image"];
+    for (const [index, [capabilityId, resolvedInputs]] of inputs.entries()) {
+      const result = await executor.execute(executionInput(capabilityId, resolvedInputs));
+      expect(result.kind).toBe(expectedKinds[index]);
+    }
+
+    expect(standardOperation).toHaveBeenCalledTimes(1);
+    expect(webSearchOperation).toHaveBeenCalledTimes(1);
+    expect(fileContextPreparer).toHaveBeenCalledTimes(1);
+    expect(renderDocument).toHaveBeenCalledTimes(1);
+    expect(persistDocument).toHaveBeenCalledTimes(1);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(editImage).toHaveBeenCalledTimes(1);
+    expect(registry.all()).toHaveLength(6);
   });
 });
