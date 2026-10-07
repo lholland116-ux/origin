@@ -8,6 +8,11 @@ import type {
   ExecutionStore,
   ExecutionStoreWriteResult,
 } from "@/lib/agent-runtime/execution-store";
+import {
+  executionResultJsonBytes,
+  executionResultsEqual,
+  MAX_DURABLE_RESULT_PAYLOAD_BYTES,
+} from "@/lib/agent-runtime/result-payload-contract";
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableStep = Mutable<DurableExecutionStep>;
@@ -93,7 +98,23 @@ export class InMemoryExecutionStore implements ExecutionStore {
   async checkpoint(input: Parameters<ExecutionStore["checkpoint"]>[0]): Promise<ExecutionStoreWriteResult> {
     const run = this.ownedRun(input.runId, input.userId);
     if (!run) return { status: "not_found" };
-    if (run.snapshotRevision !== input.expectedRevision) return { status: "conflict" };
+    if (run.snapshotRevision !== input.expectedRevision) {
+      const replayMatches = input.updates.length > 0 && input.updates.every((update) => {
+        const step = run.steps.find((candidate) => candidate.stepId === update.stepId);
+        return step?.status === update.status
+          && step.failureCode === update.failureCode
+          && (update.result === undefined
+            ? step.result === undefined
+            : step.result !== undefined && executionResultsEqual(step.result, update.result));
+      });
+      return replayMatches
+        ? { status: "saved", snapshotRevision: run.snapshotRevision }
+        : { status: "conflict" };
+    }
+    if (input.updates.some((update) => update.result !== undefined
+      && ((executionResultJsonBytes(update.result) ?? MAX_DURABLE_RESULT_PAYLOAD_BYTES + 1) > MAX_DURABLE_RESULT_PAYLOAD_BYTES))) {
+      return { status: "result_too_large" };
+    }
     const resolved: Array<{ step: MutableStep; update: DurableStepCheckpoint }> = [];
     for (const update of input.updates) {
       const step = run.steps.find((candidate) => candidate.stepId === update.stepId);

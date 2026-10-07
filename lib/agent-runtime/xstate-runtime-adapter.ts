@@ -28,12 +28,14 @@ import {
   type ExecutionStepResult,
 } from "@/lib/agent-runtime/runtime-contracts";
 import { createExecutionRunLifecycle, createExecutionStepLifecycle } from "@/lib/agent-runtime/execution-lifecycle";
+import {
+  executionResultJsonBytes,
+  MAX_DURABLE_RESULT_PAYLOAD_BYTES,
+} from "@/lib/agent-runtime/result-payload-contract";
 
 if (typeof window !== "undefined") {
   throw new Error("LVTChat execution runtime is server-only");
 }
-
-const MAX_RESULT_JSON_BYTES = 64 * 1024;
 
 const handoffSchema = z.object({
   version: z.number().int(),
@@ -62,6 +64,7 @@ const FAILURE_MESSAGES: Readonly<Record<ExecutionFailureCode, string>> = Object.
   authorization_failed: "Authorization could not be verified.",
   executor_failed: "The requested step could not be completed.",
   invalid_executor_result: "The requested step returned an invalid result.",
+  result_too_large: "The requested step result exceeds the supported durable size limit.",
   ownership_denied: "This execution is unavailable.",
   idempotency_conflict: "This idempotency key is already bound to another execution request.",
   snapshot_conflict: "Execution state changed while this checkpoint was being saved.",
@@ -118,10 +121,6 @@ function safeId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
-function jsonBytes(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-}
-
 export function validateExecutionStepResult(value: unknown, capabilityId: CapabilityId): value is ExecutionStepResult {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
@@ -142,11 +141,8 @@ export function validateExecutionStepResult(value: unknown, capabilityId: Capabi
       || typeof ref.id !== "string" || !safeId(ref.id)
       || !["artifact", "document", "image", "file"].includes(String(ref.kind))) return false;
   }
-  try {
-    return jsonBytes(value) <= MAX_RESULT_JSON_BYTES;
-  } catch {
-    return false;
-  }
+  const byteLength = executionResultJsonBytes(value);
+  return byteLength !== null && byteLength <= MAX_DURABLE_RESULT_PAYLOAD_BYTES;
 }
 
 function recordForResult(value: ExecutionStepResult): Record<string, unknown> {
@@ -191,6 +187,7 @@ export function resolveExecutionInputs(
       }
       continue;
     }
+    if (!step.dependsOn.includes(input.stepId)) return { failure: executionFailure("missing_predecessor_result") };
     const result = results[input.stepId];
     if (!isStepResult(result)) return { failure: executionFailure("missing_predecessor_result") };
     if (input.output && result.kind !== input.output) return { failure: executionFailure("missing_predecessor_result") };
@@ -408,7 +405,10 @@ export class XStateExecutionAdapter {
         resultIsValid = false;
       }
       if (!resultIsValid) {
-        markFailed(executionFailure("invalid_executor_result"));
+        const byteLength = executionResultJsonBytes(result);
+        markFailed(executionFailure(byteLength !== null && byteLength > MAX_DURABLE_RESULT_PAYLOAD_BYTES
+          ? "result_too_large"
+          : "invalid_executor_result"));
         stepLifecycle.stop();
         continue;
       }

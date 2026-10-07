@@ -17,9 +17,9 @@ function requireLocalDatabase(connectionString: string): void {
   }
   if (!["postgres:", "postgresql:"].includes(parsed.protocol)
     || !["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)
-    || !["54322", "57222"].includes(parsed.port)
+    || !["54322", "57222", "57242"].includes(parsed.port)
     || parsed.pathname !== "/postgres") {
-    throw new Error("Execution persistence integration tests may only use localhost database ports 54322 or 57222 and database postgres.");
+    throw new Error("Execution persistence integration tests may only use localhost database ports 54322, 57222, or 57242 and database postgres.");
   }
 }
 

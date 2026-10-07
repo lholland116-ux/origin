@@ -53,6 +53,7 @@ export const EXECUTION_FAILURE_CODES = [
   "authorization_failed",
   "executor_failed",
   "invalid_executor_result",
+  "result_too_large",
   "ownership_denied",
   "idempotency_conflict",
   "snapshot_conflict",

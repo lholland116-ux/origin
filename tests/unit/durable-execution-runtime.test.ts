@@ -174,6 +174,36 @@ describe("durable XState execution runtime", () => {
     expect(resumed.stepResults["step-1"]).toEqual({ kind: "search_results", value: { step: "step-1", prior: [] } });
   });
 
+  it("passes a large result transparently to a declared successor and returns it unchanged after resume", async () => {
+    const store = new InMemoryExecutionStore();
+    const largeResult: ExecutionStepResult = {
+      kind: "search_results",
+      value: { reply: "bounded web result ".repeat(6_000), source: { title: "Source", url: "https://example.test" } },
+    };
+    const calls: CapabilityExecutionInput[] = [];
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => {
+      calls.push(input);
+      if (input.stepId === "step-1") return largeResult;
+      if (input.stepId === "step-2") return { kind: "text" as const, value: { received: input.inputs[0]?.source === "step" ? input.inputs[0].result : null } };
+      return mockResult(input);
+    });
+    const plan = handoff([
+      { id: "step-1", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
+      { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "search_results" }], expectedOutput: "text" },
+    ]);
+    const service = runtime(store, executor);
+    const result = await service.execute(plan, runtimeInput(), "large-result-transparent-key");
+
+    expect(result.kind).toBe("succeeded");
+    expect(calls[1]?.inputs).toEqual([{ source: "step", stepId: "step-1", result: largeResult }]);
+    const persisted = await store.getRun({ runId: RUN_ID, userId: USER_ID });
+    expect(persisted?.steps[0]?.result).toEqual(largeResult);
+    const resumed = await service.resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+    expect(resumed.kind).toBe("succeeded");
+    if (resumed.kind === "succeeded") expect(resumed.stepResults["step-1"]).toEqual(largeResult);
+    expect(executor).toHaveBeenCalledTimes(2);
+  });
+
   it("returns a terminal succeeded run without executing again and binds idempotency to request content", async () => {
     const store = new InMemoryExecutionStore();
     const execute = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));

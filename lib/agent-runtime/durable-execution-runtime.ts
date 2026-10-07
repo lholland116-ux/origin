@@ -30,6 +30,10 @@ import {
   validateExecutionStepResult,
 } from "@/lib/agent-runtime/xstate-runtime-adapter";
 import {
+  executionResultJsonBytes,
+  MAX_DURABLE_RESULT_PAYLOAD_BYTES,
+} from "@/lib/agent-runtime/result-payload-contract";
+import {
   type ExecutionFailure,
   type ExecutionOutcome,
   type ExecutionRun,
@@ -230,7 +234,7 @@ function snapshotForActors(
 }
 
 function errorForStoredCode(value?: string): ExecutionFailure {
-  const allowed = ["authorization_denied", "authorization_failed", "executor_failed", "invalid_executor_result", "missing_input", "missing_predecessor_result"] as const;
+  const allowed = ["authorization_denied", "authorization_failed", "executor_failed", "invalid_executor_result", "result_too_large", "missing_input", "missing_predecessor_result"] as const;
   return executionFailure(allowed.includes(value as typeof allowed[number]) ? value as typeof allowed[number] : "invalid_persisted_state");
 }
 
@@ -537,7 +541,12 @@ export class DurableXStateExecutionRuntime {
         };
         try {
           const executorResult: unknown = await this.options.executor.execute(executionInput);
-          if (!validateExecutionStepResult(executorResult, capabilityId)) stepFailure = executionFailure("invalid_executor_result");
+          if (!validateExecutionStepResult(executorResult, capabilityId)) {
+            const byteLength = executionResultJsonBytes(executorResult);
+            stepFailure = byteLength !== null && byteLength > MAX_DURABLE_RESULT_PAYLOAD_BYTES
+              ? executionFailure("result_too_large")
+              : executionFailure("invalid_executor_result");
+          }
           else result = executorResult;
         } catch {
           stepFailure = executionFailure("executor_failed");
@@ -593,7 +602,7 @@ export class DurableXStateExecutionRuntime {
       if (saved.status !== "saved") {
         runActor.stop();
         for (const actor of stepActors.values()) actor.stop();
-        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId };
+        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure(saved.status === "result_too_large" ? "result_too_large" : "snapshot_conflict"), stepId };
       }
       revision = saved.snapshotRevision;
       current = {

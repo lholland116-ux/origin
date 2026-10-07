@@ -121,10 +121,62 @@ describe("durable execution store contract and snapshot envelope", () => {
     expect(stale.status).toBe("conflict");
     const saved = await store.checkpoint({ runId: RUN_ID, userId: USER_ID, expectedRevision: 2, runStatus: "succeeded", snapshot: checkpoint, updates: [{ stepId: "step-1", status: "succeeded", result: { kind: "text", value: "result" }, completedAt: "2026-10-06T12:00:03.000Z" }], completedAt: "2026-10-06T12:00:03.000Z", retainUserInput: false });
     expect(saved).toMatchObject({ status: "saved", snapshotRevision: 3 });
+    expect(await store.checkpoint({ runId: RUN_ID, userId: USER_ID, expectedRevision: 2, runStatus: "succeeded", snapshot: checkpoint, updates: [{ stepId: "step-1", status: "succeeded", result: { kind: "text", value: "result" }, completedAt: "2026-10-06T12:00:03.000Z" }], completedAt: "2026-10-06T12:00:03.000Z" }))
+      .toEqual({ status: "saved", snapshotRevision: 3 });
+    expect(await store.checkpoint({ runId: RUN_ID, userId: USER_ID, expectedRevision: 2, runStatus: "succeeded", snapshot: checkpoint, updates: [{ stepId: "step-1", status: "succeeded", result: { kind: "text", value: "conflicting result" }, completedAt: "2026-10-06T12:00:03.000Z" }], completedAt: "2026-10-06T12:00:03.000Z" }))
+      .toEqual({ status: "conflict" });
     const loaded = await store.getRun({ runId: RUN_ID, userId: USER_ID });
     expect(loaded).toMatchObject({ status: "succeeded", steps: [{ status: "succeeded", result: { kind: "text", value: "result" } }] });
     expect(loaded?.runtimeContext.requestMessageBinding).toEqual(REQUEST_MESSAGE_BINDING);
     expect(loaded?.runtimeContext).not.toHaveProperty("userInput");
+  });
+
+  it("accepts, retains, and idempotently checkpoints a bounded large result", async () => {
+    const store = new InMemoryExecutionStore();
+    await store.createRun(createInput());
+    const runActor = createExecutionRunLifecycle();
+    const stepActor = createExecutionStepLifecycle();
+    runActor.start();
+    await store.saveRunState({ runId: RUN_ID, userId: USER_ID, expectedRevision: 0, status: "running", snapshot: {
+      version: 1, runtimeVersion: 1, snapshot: { run: runActor.getPersistedSnapshot(), steps: { "step-1": stepActor.getPersistedSnapshot() } },
+    }, startedAt: "2026-10-06T12:00:01.000Z" });
+    stepActor.start();
+    await store.claimStep({ runId: RUN_ID, userId: USER_ID, stepId: "step-1", expectedRevision: 1, snapshot: {
+      version: 1, runtimeVersion: 1, snapshot: { run: runActor.getPersistedSnapshot(), steps: { "step-1": stepActor.getPersistedSnapshot() } },
+    }, startedAt: "2026-10-06T12:00:02.000Z" });
+    stepActor.succeed();
+    runActor.succeed();
+    const checkpoint = { version: 1 as const, runtimeVersion: 1 as const, snapshot: {
+      run: runActor.getPersistedSnapshot(), steps: { "step-1": stepActor.getPersistedSnapshot() },
+    } };
+    const result = { kind: "text" as const, value: "x".repeat(100_000) };
+    const input = { runId: RUN_ID, userId: USER_ID, expectedRevision: 2, runStatus: "succeeded" as const, snapshot: checkpoint,
+      updates: [{ stepId: "step-1", status: "succeeded" as const, result, completedAt: "2026-10-06T12:00:03.000Z" }], completedAt: "2026-10-06T12:00:03.000Z" };
+    expect((await store.checkpoint(input)).status).toBe("saved");
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps[0]?.result).toEqual(result);
+    expect(await store.checkpoint(input)).toEqual({ status: "saved", snapshotRevision: 3 });
+  });
+
+  it("rejects an oversized checkpoint without changing the running step", async () => {
+    const store = new InMemoryExecutionStore();
+    await store.createRun(createInput());
+    const runActor = createExecutionRunLifecycle();
+    const stepActor = createExecutionStepLifecycle();
+    runActor.start();
+    await store.saveRunState({ runId: RUN_ID, userId: USER_ID, expectedRevision: 0, status: "running", snapshot: {
+      version: 1, runtimeVersion: 1, snapshot: { run: runActor.getPersistedSnapshot(), steps: { "step-1": stepActor.getPersistedSnapshot() } },
+    }, startedAt: "2026-10-06T12:00:01.000Z" });
+    stepActor.start();
+    await store.claimStep({ runId: RUN_ID, userId: USER_ID, stepId: "step-1", expectedRevision: 1, snapshot: {
+      version: 1, runtimeVersion: 1, snapshot: { run: runActor.getPersistedSnapshot(), steps: { "step-1": stepActor.getPersistedSnapshot() } },
+    }, startedAt: "2026-10-06T12:00:02.000Z" });
+    const result = { kind: "text" as const, value: "x".repeat(1_400_000) };
+    const saved = await store.checkpoint({ runId: RUN_ID, userId: USER_ID, expectedRevision: 2, runStatus: "succeeded", snapshot: snapshot(),
+      updates: [{ stepId: "step-1", status: "succeeded", result, completedAt: "2026-10-06T12:00:03.000Z" }] });
+    expect(saved).toEqual({ status: "result_too_large" });
+    const unchanged = await store.getRun({ runId: RUN_ID, userId: USER_ID });
+    expect(unchanged).toMatchObject({ status: "running", snapshotRevision: 2, steps: [{ status: "running" }] });
+    expect(unchanged?.steps[0]).not.toHaveProperty("result");
   });
 
   it("validates v1 snapshot states and rejects malformed and unknown versions", () => {

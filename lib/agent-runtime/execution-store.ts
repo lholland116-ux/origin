@@ -113,6 +113,7 @@ export type DurableStepCheckpoint = {
 
 export type ExecutionStoreWriteResult =
   | { readonly status: "saved"; readonly snapshotRevision: number }
+  | { readonly status: "result_too_large" }
   | { readonly status: "conflict" | "not_found" };
 
 export type ClaimDurableStepResult =
