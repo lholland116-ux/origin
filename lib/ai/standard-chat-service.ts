@@ -23,8 +23,8 @@ import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 import {
   buildDocumentContext,
-  DocumentContextLimitError,
 } from "@/lib/documents/prepare-context";
+import { DocumentContextLimitError } from "@/lib/documents/context-limits";
 import { formatMaxDocumentCount, getDocumentLimits } from "@/lib/documents/config";
 import {
   assertStoredImageCount,
@@ -40,17 +40,22 @@ import {
   reserveDailyUsage,
   resolveDailyUsageLimits,
 } from "@/lib/capabilities/daily-usage";
-import type { DocumentFormat } from "@/lib/documents/generation/contracts";
 import { DocumentGenerationIntentValidationError, resolveDocumentGenerationIntent } from "@/lib/documents/generation/intent";
 import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
 import { TemplateValidationError } from "@/lib/documents/generation/templates/types";
 import {
+  FileContextPreparationError,
+  MAX_FILE_CONTEXT_DOCUMENTS,
+  prepareFileContext,
+} from "@/lib/ai/file-context-service";
+import {
   downloadGeneratedDocument,
-  findGeneratedDocumentById,
   findGeneratedDocumentByRequest,
-  removeGeneratedDocumentObjectByPath,
-  uploadGeneratedDocumentArtifact,
 } from "@/lib/documents/generated-document-server";
+import {
+  GeneratedDocumentPersistenceError,
+  persistGeneratedDocument,
+} from "@/lib/ai/generated-document-persistence-service";
 
 const DAILY_USAGE_LIMITS = resolveDailyUsageLimits();
 
@@ -62,7 +67,6 @@ const MIN_ACCEPTABLE_REPLY_LENGTH = 10;
 const MAX_IMAGE_PATH_LENGTH = 500;
 const MAX_IMAGE_NAME_LENGTH = 255;
 const MODEL_IMAGE_URL_TTL_SECONDS = 5 * 60;
-const MAX_DOCUMENT_IDS = 10;
 const IS_DEV = process.env.NODE_ENV === "development";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -183,16 +187,6 @@ type StoredDocument = {
   conversation_id: string | null;
 };
 
-type PersistableDocumentRow = {
-  id: string;
-  file_name: string;
-  mime_type: string;
-  size_bytes: number;
-  extraction_status: "ready";
-  extraction_error: string | null;
-  conversation_id: string | null;
-};
-
 type ResponsesStreamEvent = {
   type: string;
   delta?: string;
@@ -260,7 +254,7 @@ function normalizeDocumentIds(input: unknown): string[] {
     .map((value) => value.trim())
     .filter(Boolean);
 
-  return Array.from(new Set(ids)).slice(0, MAX_DOCUMENT_IDS);
+  return Array.from(new Set(ids)).slice(0, MAX_FILE_CONTEXT_DOCUMENTS);
 }
 
 function sanitizeTitle(title: string, fallback: string): string {
@@ -507,58 +501,36 @@ async function resolveStoredImageUrls(params: {
   };
 }
 
-async function loadPersistableDocuments(params: {
-  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
-  userId: string;
-  documentIds: string[];
-}) {
-  const { supabase, userId, documentIds } = params;
-
-  if (documentIds.length === 0) {
-    return [];
-  }
-
-  const { data, error } = await supabase
-    .from("documents")
-    .select(
-      "id, file_name, mime_type, size_bytes, extraction_status, extraction_error, conversation_id, extracted_text"
-    )
-    .eq("user_id", userId)
-    .in("id", documentIds)
-    .eq("extraction_status", "ready");
-
-  if (error) {
-    throw new Error(`Failed to load document context: ${error.message}`);
-  }
-
-  return (data ?? []) as (PersistableDocumentRow & {
-    extracted_text: string | null;
-  })[];
-}
-
 async function loadDocumentArtifacts(params: {
-  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
   userId: string;
+  conversationId: string;
   documentIds: string[];
 }) {
-  const rows = await loadPersistableDocuments(params);
+  if (params.documentIds.length === 0) {
+    return {
+      persistedDocuments: [] as StoredDocument[],
+      documentContext: "",
+    };
+  }
 
-  const persistedDocuments: StoredDocument[] = rows.map((row) => ({
-    id: row.id,
-    file_name: row.file_name,
-    mime_type: row.mime_type,
-    size_bytes: row.size_bytes,
+  const fileContext = await prepareFileContext(params);
+
+  const persistedDocuments: StoredDocument[] = fileContext.documents.map((document) => ({
+    id: document.documentId,
+    file_name: document.fileName,
+    mime_type: document.mimeType,
+    size_bytes: document.sizeBytes,
     extraction_status: "ready",
-    extraction_error: row.extraction_error,
-    conversation_id: row.conversation_id,
+    extraction_error: null,
+    conversation_id: fileContext.conversationId,
   }));
 
   const documentContext = buildDocumentContext(
-    rows.map((row) => ({
-      id: row.id,
-      file_name: row.file_name,
-      extracted_text: row.extracted_text,
-      extraction_status: row.extraction_status,
+    fileContext.documents.map((document) => ({
+      id: document.documentId,
+      file_name: document.fileName,
+      extracted_text: document.extractedText,
+      extraction_status: "ready" as const,
     }))
   );
 
@@ -952,8 +924,8 @@ async function executeStandardChatService(input: {
 
     try {
       const artifacts = await loadDocumentArtifacts({
-        supabase,
         userId,
+        conversationId,
         documentIds,
       });
 
@@ -961,7 +933,8 @@ async function executeStandardChatService(input: {
       documentContext = artifacts.documentContext;
     } catch (error) {
       console.error("Document context load error:", error);
-      if (error instanceof DocumentContextLimitError) {
+      if (error instanceof DocumentContextLimitError
+        || (error instanceof FileContextPreparationError && error.code === "context_too_large")) {
         return jsonResponse({ error: error.message, code: "DOCUMENT_CONTEXT_TOO_LARGE" }, 413);
       }
       return jsonResponse({ error: "Failed to load document context." }, 500);
@@ -1117,10 +1090,6 @@ async function executeStandardChatService(input: {
 
     if (documentIntent) {
       const effectiveGenerationRequestId = generationRequestId || randomUUID();
-      const generatedDocumentId = randomUUID();
-      let storagePath = "";
-      let uploadedFilename = "";
-      let uploadedFormat: DocumentFormat | null = null;
 
       try {
         const artifact = await generateTemplateOutput({
@@ -1129,120 +1098,30 @@ async function executeStandardChatService(input: {
           variables: documentIntent.variables,
           packageAsZip: documentIntent.packageAsZip,
         });
-
-        uploadedFilename = artifact.filename;
-        uploadedFormat = artifact.format;
-        storagePath = await uploadGeneratedDocumentArtifact({
+        const persisted = await persistGeneratedDocument({
           userId,
           conversationId,
-          generatedDocumentId,
-          filename: artifact.filename,
-          format: artifact.format,
-          mimeType: artifact.mimeType.split(";", 1)[0] ?? artifact.mimeType,
-          bytes: artifact.bytes,
+          generationRequestId: effectiveGenerationRequestId,
+          templateId: documentIntent.templateId,
+          generatedOutput: artifact,
+          assistantMessageContent: "I created " + artifact.filename + ". Use the download button below to save it.",
         });
-
-        const rpcClient = supabase as unknown as {
-          rpc: (
-            functionName: string,
-            params: Record<string, unknown>,
-          ) => Promise<{ data: unknown; error: unknown }>;
-        };
-        const { data, error } = await rpcClient.rpc("persist_generated_document_chat", {
-          p_conversation_id: conversationId,
-          p_generation_request_id: effectiveGenerationRequestId,
-          p_generated_document_id: generatedDocumentId,
-          p_storage_path: storagePath,
-          p_filename: artifact.filename,
-          p_format: artifact.format,
-          p_mime_type: artifact.mimeType.split(";", 1)[0] ?? artifact.mimeType,
-          p_size_bytes: artifact.sizeBytes,
-          p_template_id: documentIntent.templateId,
-          p_content: "I created " + artifact.filename + ". Use the download button below to save it.",
-        });
-
-        if (error || !Array.isArray(data) || !data[0] || typeof data[0] !== "object") {
-          throw new Error("Generated document persistence failed.");
-        }
-
-        const persisted = data[0] as {
-          assistant_message_id?: unknown;
-          generated_document_id?: unknown;
-          was_existing?: unknown;
-        };
-        const assistantMessageId =
-          typeof persisted.assistant_message_id === "string" ? persisted.assistant_message_id : "";
-        const persistedDocumentId =
-          typeof persisted.generated_document_id === "string"
-            ? persisted.generated_document_id
-            : "";
-        const wasExisting = persisted.was_existing === true;
-
-        if (!isValidUuid(assistantMessageId) || !isValidUuid(persistedDocumentId)) {
-          throw new Error("Generated document persistence response was invalid.");
-        }
-
-        if (wasExisting) {
-          await removeGeneratedDocumentObjectByPath({
-            userId,
-            conversationId,
-            generatedDocumentId,
-            filename: artifact.filename,
-            format: artifact.format,
-            storagePath,
-          });
-          storagePath = "";
-
-          const existing = await findGeneratedDocumentById({
-            userId,
-            generatedDocumentId: persistedDocumentId,
-          });
-          if (!existing) throw new Error("Existing generated document metadata was unavailable.");
-
-          const bytes = await downloadGeneratedDocument(existing);
-          await touchConversation({ supabase, conversationId, userId });
-          return generatedDocumentResponse(
-            {
-              bytes,
-              filename: existing.filename,
-              mimeType: existing.mimeType,
-              format: existing.format,
-            },
-            {
-              generatedDocumentId: existing.id,
-              messageId: existing.messageId,
-            },
-          );
-        }
-
         await touchConversation({ supabase, conversationId, userId });
-        return generatedDocumentResponse(artifact, {
-          generatedDocumentId: persistedDocumentId,
-          messageId: assistantMessageId,
+        return generatedDocumentResponse(persisted.delivery, {
+          generatedDocumentId: persisted.reference.artifactId,
+          messageId: persisted.reference.messageId,
         });
       } catch (error) {
-        if (storagePath && uploadedFilename && uploadedFormat) {
-          try {
-            await removeGeneratedDocumentObjectByPath({
-              userId,
-              conversationId,
-              generatedDocumentId,
-              filename: uploadedFilename,
-              format: uploadedFormat,
-              storagePath,
-            });
-          } catch (cleanupError) {
-            console.error("Generated document cleanup failed:", {
-              reason: cleanupError instanceof Error ? cleanupError.message : "unknown",
-            });
-          }
-        }
-
         if (error instanceof TemplateValidationError) {
           console.error("/api/chat document template validation error:", {
             issues: error.issues,
           });
           return jsonResponse({ error: "The requested document could not be generated." }, 400);
+        }
+
+        if (error instanceof GeneratedDocumentPersistenceError) {
+          console.error("/api/chat document persistence error:", { code: error.code });
+          return jsonResponse({ error: "The document could not be generated. Please try again." }, 500);
         }
 
         if (error instanceof DocumentGenerationValidationError) {

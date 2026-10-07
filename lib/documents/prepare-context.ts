@@ -4,16 +4,12 @@ type DocumentRow = {
   extracted_text: string | null;
 };
 
-export const MAX_DOCUMENT_CONTEXT_CHARS = 30000;
+import {
+  DocumentContextLimitError,
+  MAX_DOCUMENT_CONTEXT_CHARS,
+} from "@/lib/documents/context-limits";
 
-export class DocumentContextLimitError extends Error {
-  constructor() {
-    super(
-      "Attached document content exceeds the supported context size. Please remove a document or use a shorter file."
-    );
-    this.name = "DocumentContextLimitError";
-  }
-}
+export { DocumentContextLimitError, MAX_DOCUMENT_CONTEXT_CHARS } from "@/lib/documents/context-limits";
 
 export function buildDocumentContext(documents: DocumentRow[]) {
   const usable = documents.filter((doc) => doc.extracted_text?.trim());

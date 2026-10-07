@@ -40,7 +40,7 @@ const mocks = vi.hoisted(() => ({
   supabase: null as unknown as MockSupabase,
   generatedDocumentServer: {
     findGeneratedDocumentByRequest: vi.fn<GeneratedDocumentLookup>(async () => null),
-    findGeneratedDocumentById: vi.fn(async () => null),
+    findGeneratedDocumentById: vi.fn(async (): Promise<GeneratedDocumentPersistenceRecord | null> => null),
     uploadGeneratedDocumentArtifact: vi.fn(async () => "uploaded/path"),
     removeGeneratedDocumentObjectByPath: vi.fn(async () => undefined),
     downloadGeneratedDocument: vi.fn(async () => new Uint8Array([1, 2, 3])),
@@ -194,6 +194,24 @@ function configureDocumentPlanner(format = "txt") {
   });
 }
 
+function configurePersistedDocument(format: "txt" | "pdf") {
+  const filename = `Conversation-Summary.${format}`;
+  mocks.generatedDocumentServer.findGeneratedDocumentById.mockResolvedValue({
+    id: "450e8400-e29b-41d4-a716-446655440000",
+    userId: USER_ID,
+    conversationId: CONVERSATION_ID,
+    messageId: "350e8400-e29b-41d4-a716-446655440000",
+    generationRequestId: "750e8400-e29b-41d4-a716-446655440000",
+    storagePath: `${USER_ID}/${CONVERSATION_ID}/450e8400-e29b-41d4-a716-446655440000/${filename}`,
+    filename,
+    format,
+    mimeType: format === "pdf" ? "application/pdf" : "text/plain",
+    sizeBytes: 3,
+    templateId: "general-report",
+    createdAt: "2026-10-07T12:00:00.000Z",
+  });
+}
+
 describe("POST /api/chat stored image validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -277,6 +295,7 @@ describe("POST /api/chat stored image validation", () => {
 describe("POST /api/chat document generation integration", () => {
   it("generates a TXT summary from an existing conversation", async () => {
     setupSupabase({});
+    configurePersistedDocument("txt");
     mocks.openai.responses.create.mockResolvedValue({
       output_text: JSON.stringify({
         action: "generate_document",
@@ -445,6 +464,7 @@ describe("POST /api/chat document generation integration", () => {
 
   it("supports binary persistence metadata using PDF", async () => {
     setupSupabase({});
+    configurePersistedDocument("pdf");
     configureDocumentPlanner("pdf");
     const response = await request({
       message: "Create a PDF summary.",

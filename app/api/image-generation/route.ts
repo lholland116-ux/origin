@@ -1,16 +1,9 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
-  IMAGE_GENERATION_DEFAULT_PROVIDER,
   IMAGE_GENERATION_DEFAULT_MODEL,
 } from "@/lib/image-generation/config";
-import {
-  ReplicateFluxSchnellProvider,
-  ReplicateFluxSchnellProviderError,
-  type ReplicateFluxSchnellProviderErrorCode,
-} from "@/lib/image-generation/providers/replicate-flux-schnell";
 import { validateImageGenerationRequest } from "@/lib/image-generation/validation";
-import { normalizeGeneratedImageMimeType } from "@/lib/chat/generated-image-history";
+import { generateImage, ImageGenerationServiceError } from "@/lib/ai/image-generation-service";
 
 export const runtime = "nodejs";
 
@@ -42,39 +35,8 @@ class RequestBodyTooLargeError extends Error {}
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const GENERATED_MIME_EXTENSIONS: Record<string, string> = {
-  "image/webp": "webp",
-  "image/png": "png",
-  "image/jpeg": "jpg",
-};
-
-function isSafeMetadata(value: string): boolean {
-  return value.length > 0 && value.length <= 100 && /^[a-zA-Z0-9._:/-]+$/.test(value);
-}
-
 function isSafeUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value);
-}
-
-function getDurableIds(data: unknown): {
-  userMessageId?: string;
-  assistantMessageId?: string;
-  generatedImageId?: string;
-} {
-  const row = Array.isArray(data) ? data[0] : data;
-  if (!isRecord(row)) return {};
-
-  return {
-    ...(isSafeUuid(row.user_message_id)
-      ? { userMessageId: row.user_message_id }
-      : {}),
-    ...(isSafeUuid(row.assistant_message_id)
-      ? { assistantMessageId: row.assistant_message_id }
-      : {}),
-    ...(isSafeUuid(row.generated_image_id)
-      ? { generatedImageId: row.generated_image_id }
-      : {}),
-  };
 }
 
 function errorResponse(
@@ -169,121 +131,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isProviderError(
-  error: unknown,
-): error is ReplicateFluxSchnellProviderError & {
-  code: ReplicateFluxSchnellProviderErrorCode;
-} {
-  return error instanceof ReplicateFluxSchnellProviderError;
-}
-
-function mapProviderError(error: unknown): Response {
-  if (!isProviderError(error)) {
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-
-  switch (error.code) {
-    case "invalid_request":
-      return errorResponse(
-        400,
-        "INVALID_REQUEST",
-        "The image generation request is not supported.",
-      );
-    case "configuration":
-      return errorResponse(
-        500,
-        "IMAGE_GENERATION_CONFIGURATION",
-        "Image generation is not configured.",
-      );
-    case "provider_failure":
-      return errorResponse(
-        502,
-        "IMAGE_GENERATION_PROVIDER",
-        "The image generation provider could not complete the request.",
-      );
-    case "invalid_output":
-      return errorResponse(
-        502,
-        "INVALID_PROVIDER_OUTPUT",
-        "The image generation provider returned an invalid image.",
-      );
-  }
-}
-
-type ImageQuotaReleaseReason =
-  | "provider_failure"
-  | "invalid_provider_output"
-  | "storage_failure"
-  | "persistence_failure"
-  | "request_aborted"
-  | "internal_failure";
-
-function getRpcErrorMessage(error: unknown): string {
-  if (!isRecord(error) || typeof error.message !== "string") {
-    return "";
-  }
-
-  return error.message;
-}
-
-function mapQuotaError(error: unknown): Response | null {
-  switch (getRpcErrorMessage(error)) {
-    case "IMAGE_DAILY_LIMIT_REACHED":
-      return errorResponse(
-        429,
-        "IMAGE_DAILY_LIMIT_REACHED",
-        "You've reached today's image generation limit.",
-      );
-    case "IMAGE_MONTHLY_LIMIT_REACHED":
-      return errorResponse(
-        429,
-        "IMAGE_MONTHLY_LIMIT_REACHED",
-        "You've reached this month's image generation limit.",
-      );
-    case "CONVERSATION_NOT_FOUND":
-      return errorResponse(404, "INVALID_REQUEST", "Conversation not found.");
-    case "UNAUTHORIZED":
-      return errorResponse(401, "UNAUTHORIZED", "Authentication is required.");
-    default:
-      return null;
-  }
-}
-
-function getReservedAttemptId(data: unknown): string | null {
-  const row = Array.isArray(data) ? data[0] : data;
-  if (!isRecord(row) || !isSafeUuid(row.attempt_id)) {
-    return null;
-  }
-
-  return row.attempt_id;
-}
-
-async function releaseImageQuotaReservation(
-  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
-  attemptId: string,
-  reason: ImageQuotaReleaseReason,
-): Promise<void> {
-  try {
-    const { error } = await supabase.rpc("release_image_generation_quota", {
-      p_attempt_id: attemptId,
-      p_reason: reason,
-    });
-
-    if (error) {
-      console.error("POST /api/image-generation quota release failed", {
-        reason,
-      });
-    }
-  } catch {
-    console.error("POST /api/image-generation quota release exception", {
-      reason,
-    });
-  }
-}
 
 export async function POST(request: Request): Promise<Response> {
   let supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
@@ -412,293 +259,31 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  let conversation: { id: string } | null = null;
-  let conversationError: { message?: string } | null = null;
   try {
-    ({ data: conversation, error: conversationError } = await supabase
-      .from("conversations")
-      .select("id")
-      .eq("id", rawConversationId)
-      .eq("user_id", userId)
-      .maybeSingle());
-  } catch (error) {
-    conversationError = {
-      message: error instanceof Error ? error.message : "Unknown error.",
-    };
-  }
-
-  if (conversationError) {
-    console.error("POST /api/image-generation conversation lookup failed", {
+    const generated = await generateImage({
+      userId,
       conversationId: rawConversationId,
-      reason: conversationError.message,
+      request: validated.request,
     });
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-
-  if (!conversation) {
-    return errorResponse(
-      404,
-      "INVALID_REQUEST",
-      "Conversation not found.",
-    );
-  }
-
-  let attemptId: string;
-  try {
-    const { data, error } = await supabase.rpc(
-      "reserve_image_generation_quota",
-      { p_conversation_id: rawConversationId },
-    );
-
-    if (error) {
-      return mapQuotaError(error) ?? errorResponse(
-        500,
-        "INTERNAL_ERROR",
-        "Image generation could not be completed.",
-      );
-    }
-
-    const reservedAttemptId = getReservedAttemptId(data);
-    if (!reservedAttemptId) {
-      return errorResponse(
-        500,
-        "INTERNAL_ERROR",
-        "Image generation could not be completed.",
-      );
-    }
-
-    attemptId = reservedAttemptId;
-  } catch (error) {
-    return mapQuotaError(error) ?? errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-
-  try {
-    const { data, error } = await supabase.rpc(
-      "start_image_generation_attempt",
-      {
-        p_attempt_id: attemptId,
-        p_provider: IMAGE_GENERATION_DEFAULT_PROVIDER,
-        p_model: IMAGE_GENERATION_DEFAULT_MODEL,
+    const responseBytes = new ArrayBuffer(generated.responseBytes.byteLength);
+    new Uint8Array(responseBytes).set(generated.responseBytes);
+    return new Response(responseBytes, {
+      status: 200,
+      headers: {
+        "Content-Type": generated.reference.mimeType,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-LVTChat-Image-Provider": generated.reference.provider,
+        "X-LVTChat-Image-Model": generated.reference.model,
+        "X-LVTChat-User-Message-Id": generated.reference.userMessageId,
+        "X-LVTChat-Assistant-Message-Id": generated.reference.assistantMessageId,
+        "X-LVTChat-Generated-Image-Id": generated.reference.imageId,
       },
-    );
-
-    if (error || data !== true) {
-      await releaseImageQuotaReservation(supabase, attemptId, "internal_failure");
-      return errorResponse(
-        500,
-        "INTERNAL_ERROR",
-        "Image generation could not be completed.",
-      );
-    }
-  } catch {
-    await releaseImageQuotaReservation(supabase, attemptId, "internal_failure");
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-
-  let result: Awaited<ReturnType<ReplicateFluxSchnellProvider["generateImage"]>>;
-
-  try {
-    const provider = new ReplicateFluxSchnellProvider();
-    result = await provider.generateImage(validated.request);
-  } catch (error) {
-    await releaseImageQuotaReservation(
-      supabase,
-      attemptId,
-      isProviderError(error) && error.code === "invalid_output"
-        ? "invalid_provider_output"
-        : "provider_failure",
-    );
-    return mapProviderError(error);
-  }
-
-  const mimeType = normalizeGeneratedImageMimeType(result.mimeType);
-  const providerName = typeof result.provider === "string" ? result.provider.trim() : "";
-  const modelName = typeof result.model === "string" ? result.model.trim() : "";
-  const generatedBytes =
-    result.bytes instanceof Uint8Array ? result.bytes : null;
-
-  if (
-    !mimeType ||
-    !GENERATED_MIME_EXTENSIONS[mimeType] ||
-    !generatedBytes ||
-    !generatedBytes.byteLength ||
-    !isSafeMetadata(providerName) ||
-    !isSafeMetadata(modelName)
-  ) {
-    await releaseImageQuotaReservation(
-      supabase,
-      attemptId,
-      "invalid_provider_output",
-    );
-    return errorResponse(
-      502,
-      "INVALID_PROVIDER_OUTPUT",
-      "The image generation provider returned an invalid image.",
-    );
-  }
-
-  const storagePath =
-    `generated/${userId}/${rawConversationId}/${crypto.randomUUID()}.` +
-    GENERATED_MIME_EXTENSIONS[mimeType];
-  const admin = (() => {
-    try {
-      return createAdminClient();
-    } catch (error) {
-      console.error("POST /api/image-generation admin client unavailable", {
-        reason: error instanceof Error ? error.message : "Unknown error.",
-      });
-      return null;
-    }
-  })();
-
-  if (!admin) {
-    await releaseImageQuotaReservation(supabase, attemptId, "internal_failure");
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-
-  let uploadError: { message?: string } | null = null;
-  try {
-    ({ error: uploadError } = await admin.storage
-      .from("chat-images")
-      .upload(storagePath, Buffer.from(generatedBytes), {
-        contentType: mimeType,
-        cacheControl: "3600",
-        upsert: false,
-      }));
-  } catch (error) {
-    console.error("POST /api/image-generation storage upload exception", {
-      conversationId: rawConversationId,
-      reason: error instanceof Error ? error.message : "Unknown error.",
     });
-    await releaseImageQuotaReservation(supabase, attemptId, "storage_failure");
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-
-  if (uploadError) {
-    console.error("POST /api/image-generation storage upload failed", {
-      conversationId: rawConversationId,
-      reason: uploadError.message,
-    });
-    await releaseImageQuotaReservation(supabase, attemptId, "storage_failure");
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-
-  let persisted: unknown;
-  let persistenceError: { message?: string } | null = null;
-  try {
-    ({ data: persisted, error: persistenceError } = await supabase.rpc(
-      "complete_generated_image_generation",
-      {
-        p_attempt_id: attemptId,
-        p_conversation_id: rawConversationId,
-        p_content: validated.request.prompt,
-        p_storage_path: storagePath,
-        p_mime_type: mimeType,
-        p_provider: providerName,
-        p_model: modelName,
-      },
-    ));
   } catch (error) {
-    persistenceError = {
-      message: error instanceof Error ? error.message : "Unknown error.",
-    };
-  }
-
-  if (persistenceError) {
-    console.error("POST /api/image-generation persistence failed", {
-      conversationId: rawConversationId,
-      reason: persistenceError.message,
-    });
-    try {
-      await admin.storage.from("chat-images").remove([storagePath]);
-    } catch (cleanupError) {
-      console.error("POST /api/image-generation storage cleanup failed", {
-        conversationId: rawConversationId,
-        reason: cleanupError instanceof Error ? cleanupError.message : "Unknown error.",
-      });
+    if (error instanceof ImageGenerationServiceError) {
+      return errorResponse(error.status, error.publicCode as ImageGenerationErrorCode, error.message);
     }
-    await releaseImageQuotaReservation(
-      supabase,
-      attemptId,
-      "persistence_failure",
-    );
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
+    return errorResponse(500, "INTERNAL_ERROR", "Image generation could not be completed.");
   }
-
-  const durableIds = getDurableIds(persisted);
-  if (
-    !durableIds.userMessageId ||
-    !durableIds.assistantMessageId ||
-    !durableIds.generatedImageId
-  ) {
-    try {
-      await admin.storage.from("chat-images").remove([storagePath]);
-    } catch (cleanupError) {
-      console.error("POST /api/image-generation storage cleanup failed", {
-        conversationId: rawConversationId,
-        reason:
-          cleanupError instanceof Error ? cleanupError.message : "Unknown error.",
-      });
-    }
-    await releaseImageQuotaReservation(
-      supabase,
-      attemptId,
-      "persistence_failure",
-    );
-    return errorResponse(
-      500,
-      "INTERNAL_ERROR",
-      "Image generation could not be completed.",
-    );
-  }
-  const responseBytes = new ArrayBuffer(generatedBytes.byteLength);
-  new Uint8Array(responseBytes).set(generatedBytes);
-
-  return new Response(responseBytes, {
-    status: 200,
-    headers: {
-      "Content-Type": mimeType,
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-      "X-LVTChat-Image-Provider": providerName,
-      "X-LVTChat-Image-Model": modelName,
-      ...(durableIds.userMessageId
-        ? { "X-LVTChat-User-Message-Id": durableIds.userMessageId }
-        : {}),
-      ...(durableIds.assistantMessageId
-        ? { "X-LVTChat-Assistant-Message-Id": durableIds.assistantMessageId }
-        : {}),
-      ...(durableIds.generatedImageId
-        ? { "X-LVTChat-Generated-Image-Id": durableIds.generatedImageId }
-        : {}),
-    },
-  });
 }

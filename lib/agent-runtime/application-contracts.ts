@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_DOCUMENT_CONTEXT_CHARS } from "@/lib/documents/prepare-context";
+import { MAX_DOCUMENT_CONTEXT_CHARS } from "@/lib/documents/context-limits";
 import { isValidGeneratedDocumentMetadata } from "@/lib/documents/generated-document-contracts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -86,3 +86,16 @@ export const generatedDocumentReferenceSchema = z.object({
 });
 
 export type GeneratedDocumentReference = z.infer<typeof generatedDocumentReferenceSchema>;
+
+export const generatedImageReferenceSchema = z.object({
+  kind: z.literal("generated_image"),
+  imageId: uuidSchema,
+  conversationId: uuidSchema,
+  userMessageId: uuidSchema,
+  assistantMessageId: uuidSchema,
+  mimeType: z.enum(["image/webp", "image/png", "image/jpeg"]),
+  provider: z.string().min(1).max(100).regex(/^[a-zA-Z0-9._:/-]+$/),
+  model: z.string().min(1).max(100).regex(/^[a-zA-Z0-9._:/-]+$/),
+}).strict();
+
+export type GeneratedImageReference = z.infer<typeof generatedImageReferenceSchema>;
