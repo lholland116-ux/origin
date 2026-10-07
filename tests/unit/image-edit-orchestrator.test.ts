@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createImageEditRequestFingerprint,
+  createImageEditRequestFingerprintForExistingMessages,
   ImageEditOrchestrationError,
   orchestrateImageEdit,
+  orchestrateImageEditForExistingMessages,
   type ImageEditClaim,
   type ImageEditOrchestratorDependencies,
   type ImageEditOrchestratorInput,
@@ -264,6 +266,32 @@ describe("image edit request fingerprint", () => {
     ).not.toBe(base);
   });
 
+  it("binds existing-message linkage into a versioned edit fingerprint", () => {
+    const base = {
+      conversationId: CONVERSATION_ID,
+      sourceReference: SOURCE_REFERENCE,
+      instruction: "Remove the red mug.",
+    };
+    const first = createImageEditRequestFingerprintForExistingMessages({
+      ...base,
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(first).not.toBe(createImageEditRequestFingerprint(base));
+    expect(createImageEditRequestFingerprintForExistingMessages({
+      ...base,
+      userMessageId: "99999999-9999-4999-8999-999999999999",
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    })).not.toBe(first);
+    expect(createImageEditRequestFingerprintForExistingMessages({
+      ...base,
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: "99999999-9999-4999-8999-999999999999",
+    })).not.toBe(first);
+  });
+
   it("does not include the authenticated user or idempotency key", async () => {
     const first = makeDependencies();
     const second = makeDependencies();
@@ -369,6 +397,77 @@ describe("image edit orchestration idempotency", () => {
     });
     expect(setup.spies.reserveImageQuota).not.toHaveBeenCalled();
     expect(setup.spies.imageEditingProvider.editImage).not.toHaveBeenCalled();
+    expectNoDownstreamWork(setup);
+  });
+
+  it("runs the existing-message finalization path with the exact pair and preserves the normal quota lifecycle", async () => {
+    const finalizeImageEditForExistingMessages = vi.fn(async () => ({
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      generatedImageId: GENERATED_IMAGE_ID,
+    }));
+    const setup = makeDependencies({ finalizeImageEditForExistingMessages });
+
+    const result = await orchestrateImageEditForExistingMessages({
+      ...INPUT,
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    }, setup.dependencies);
+
+    expect(result).toMatchObject({
+      kind: "completed",
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      generatedImageId: GENERATED_IMAGE_ID,
+    });
+    expect(finalizeImageEditForExistingMessages).toHaveBeenCalledOnce();
+    expect(finalizeImageEditForExistingMessages).toHaveBeenCalledWith(expect.objectContaining({
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      imageEditRequestId: REQUEST_ID,
+      attemptId: ATTEMPT_ID,
+    }));
+    expect(setup.spies.finalizeImageEdit).not.toHaveBeenCalled();
+    expect(setup.spies.reserveImageQuota).toHaveBeenCalledOnce();
+    expect(setup.spies.startImageGenerationAttempt).toHaveBeenCalledOnce();
+    expect(setup.spies.imageEditingProvider.editImage).toHaveBeenCalledOnce();
+    expect(setup.spies.uploadDerivative).toHaveBeenCalledOnce();
+  });
+
+  it("returns completed replay only for the same existing-message pair", async () => {
+    const setup = makeDependencies({
+      claimImageEditRequest: vi.fn(async () => claimedClaim({
+        disposition: "completed",
+        status: "completed",
+        userMessageId: USER_MESSAGE_ID,
+        assistantMessageId: ASSISTANT_MESSAGE_ID,
+        generatedImageId: GENERATED_IMAGE_ID,
+      })),
+    });
+    const input = { ...INPUT, userMessageId: USER_MESSAGE_ID, assistantMessageId: ASSISTANT_MESSAGE_ID };
+
+    await expect(orchestrateImageEditForExistingMessages(input, setup.dependencies)).resolves.toMatchObject({
+      kind: "completed_replay",
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+    expect(setup.spies.reserveImageQuota).not.toHaveBeenCalled();
+
+    await expect(orchestrateImageEditForExistingMessages({
+      ...input,
+      assistantMessageId: "99999999-9999-4999-8999-999999999999",
+    }, setup.dependencies)).resolves.toMatchObject({ kind: "conflict" });
+    expect(setup.spies.reserveImageQuota).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid existing message IDs before claiming an edit request", async () => {
+    const setup = makeDependencies();
+    await expectError(orchestrateImageEditForExistingMessages({
+      ...INPUT,
+      userMessageId: "not-a-uuid",
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    }, setup.dependencies), "invalid_request");
+    expect(setup.spies.claimImageEditRequest).not.toHaveBeenCalled();
     expectNoDownstreamWork(setup);
   });
 

@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createImageEditServerDependencies,
+  createImageEditServerDependenciesForExistingMessages,
   type ImageEditServerDependencies,
 } from "../../lib/image-generation/image-edit-server-dependencies";
+import type { ImageEditFinalizerInput } from "../../lib/image-generation/image-edit-orchestrator";
+import {
+  RUNWARE_IMAGE_EDIT_MODEL,
+  RUNWARE_IMAGE_EDIT_PROVIDER,
+} from "../../lib/image-generation/config";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const CONVERSATION_ID = "22222222-2222-4222-8222-222222222222";
@@ -190,6 +196,58 @@ describe("image edit server dependency adapters", () => {
         p_idempotency_key: REQUEST_ID,
         p_request_fingerprint: "b".repeat(64),
       },
+    );
+  });
+
+  it("constructs an explicit existing-message finalizer with target IDs", async () => {
+    const authenticatedClient = { rpc: vi.fn(), from: vi.fn() };
+    const serviceClient = {
+      rpc: vi.fn(async () => ({
+        data: [{
+          user_message_id: MESSAGE_ID,
+          assistant_message_id: DERIVATIVE_ID,
+          generated_image_id: SOURCE_ID,
+        }],
+        error: null,
+      })),
+      from: vi.fn(),
+      storage: { from: vi.fn() },
+    };
+    const dependencies = createImageEditServerDependenciesForExistingMessages({
+      authenticatedClient,
+      serviceClient,
+      authenticatedUserId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      userMessageId: MESSAGE_ID,
+      assistantMessageId: DERIVATIVE_ID,
+    });
+    const input: ImageEditFinalizerInput & { userMessageId: string; assistantMessageId: string } = {
+      imageEditRequestId: REQUEST_ID,
+      attemptId: ATTEMPT_ID,
+      conversationId: CONVERSATION_ID,
+      sourceReference: IDENTITY,
+      instruction: "Remove the object.",
+      storagePath: `generated/${USER_ID}/${CONVERSATION_ID}/${DERIVATIVE_ID}.png`,
+      mimeType: "image/png",
+      provider: RUNWARE_IMAGE_EDIT_PROVIDER,
+      model: RUNWARE_IMAGE_EDIT_MODEL,
+      sourceGeneratedImageId: SOURCE_ID,
+      sourceUploadedMessageId: null,
+      sourceUploadedOrdinal: null,
+      userMessageId: MESSAGE_ID,
+      assistantMessageId: DERIVATIVE_ID,
+    };
+
+    expect(dependencies.finalizeImageEditForExistingMessages).toBeTypeOf("function");
+    await dependencies.finalizeImageEditForExistingMessages?.(input);
+
+    expect(serviceClient.rpc).toHaveBeenCalledWith(
+      "complete_generated_image_edit_for_existing_messages",
+      expect.objectContaining({
+        p_user_message_id: MESSAGE_ID,
+        p_assistant_message_id: DERIVATIVE_ID,
+        p_authenticated_user_id: USER_ID,
+      }),
     );
   });
 

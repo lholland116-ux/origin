@@ -7,7 +7,10 @@ import {
   type ImageEditReleaseReason,
   type StaleAttemptResolution,
 } from "./image-edit-orchestrator";
-import { createImageEditFinalizer } from "./image-edit-finalizer";
+import {
+  createImageEditFinalizer,
+  createImageEditFinalizerForExistingMessages,
+} from "./image-edit-finalizer";
 import {
   resolveImageEditSource,
   type ImageEditSourceResolverInput,
@@ -87,6 +90,12 @@ export type ImageEditServerDependenciesOptions = Readonly<{
   authenticatedUserId: string;
   conversationId: string;
 }>;
+
+export type ImageEditServerDependenciesForExistingMessagesOptions =
+  ImageEditServerDependenciesOptions & Readonly<{
+    userMessageId: string;
+    assistantMessageId: string;
+  }>;
 
 export type ImageEditServerDependencies = ImageEditOrchestratorDependencies &
   Readonly<{
@@ -310,8 +319,9 @@ async function readSingle(
   }
 }
 
-export function createImageEditServerDependencies(
+function createImageEditServerDependenciesInternal(
   options: ImageEditServerDependenciesOptions,
+  messageTarget: Readonly<{ userMessageId: string; assistantMessageId: string }> | null,
 ): ImageEditServerDependencies {
   const authenticatedClient = options.authenticatedClient as RpcClientLike;
   const serviceClient = options.serviceClient as RpcClientLike &
@@ -321,6 +331,21 @@ export function createImageEditServerDependencies(
   const conversationId = normalizeUuid(options.conversationId);
 
   if (!authenticatedUserId || !conversationId) {
+    throw new Error("IMAGE_EDIT_DEPENDENCIES_INVALID_CONTEXT");
+  }
+
+  const normalizedMessageTarget = messageTarget
+    ? {
+        userMessageId: normalizeUuid(messageTarget.userMessageId),
+        assistantMessageId: normalizeUuid(messageTarget.assistantMessageId),
+      }
+    : null;
+  if (
+    messageTarget &&
+    (!normalizedMessageTarget?.userMessageId ||
+      !normalizedMessageTarget.assistantMessageId ||
+      normalizedMessageTarget.userMessageId === normalizedMessageTarget.assistantMessageId)
+  ) {
     throw new Error("IMAGE_EDIT_DEPENDENCIES_INVALID_CONTEXT");
   }
 
@@ -633,6 +658,13 @@ export function createImageEditServerDependencies(
     serviceClient as Parameters<typeof createImageEditFinalizer>[0],
     authenticatedUserId,
   );
+  const existingMessageFinalizer = normalizedMessageTarget
+    ? createImageEditFinalizerForExistingMessages(
+        serviceClient as Parameters<typeof createImageEditFinalizerForExistingMessages>[0],
+        authenticatedUserId,
+        normalizedMessageTarget as { userMessageId: string; assistantMessageId: string },
+      )
+    : null;
 
   return {
     claimImageEditRequest,
@@ -651,11 +683,30 @@ export function createImageEditServerDependencies(
     removeDerivative,
     failImageEditRequest,
     finalizeImageEdit: finalizer,
+    ...(existingMessageFinalizer
+      ? { finalizeImageEditForExistingMessages: existingMessageFinalizer }
+      : {}),
     logger: (event, metadata) => {
       console.error(`image-edit:${event}`, metadata);
     },
     getLastQuotaErrorCode: () => lastQuotaErrorCode,
   };
+}
+
+export function createImageEditServerDependencies(
+  options: ImageEditServerDependenciesOptions,
+): ImageEditServerDependencies {
+  return createImageEditServerDependenciesInternal(options, null);
+}
+
+export function createImageEditServerDependenciesForExistingMessages(
+  options: ImageEditServerDependenciesForExistingMessagesOptions,
+): ImageEditServerDependencies {
+  const { userMessageId, assistantMessageId, ...dependenciesOptions } = options;
+  return createImageEditServerDependenciesInternal(dependenciesOptions, {
+    userMessageId,
+    assistantMessageId,
+  });
 }
 
 export async function createDefaultImageEditServerDependencies(input: {
@@ -670,5 +721,24 @@ export async function createDefaultImageEditServerDependencies(input: {
     serviceClient,
     authenticatedUserId: input.authenticatedUserId,
     conversationId: input.conversationId,
+  });
+}
+
+export async function createDefaultImageEditServerDependenciesForExistingMessages(input: {
+  authenticatedUserId: string;
+  conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}): Promise<ImageEditServerDependencies> {
+  const authenticatedClient = await createServerSupabaseClient();
+  const serviceClient = createAdminClient();
+
+  return createImageEditServerDependenciesForExistingMessages({
+    authenticatedClient,
+    serviceClient,
+    authenticatedUserId: input.authenticatedUserId,
+    conversationId: input.conversationId,
+    userMessageId: input.userMessageId,
+    assistantMessageId: input.assistantMessageId,
   });
 }

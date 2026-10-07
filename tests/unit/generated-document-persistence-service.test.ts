@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createGeneratedDocumentPersistenceService,
+  createGeneratedDocumentPersistenceServiceForExistingMessage,
   GeneratedDocumentPersistenceError,
   type GeneratedDocumentPersistenceDependencies,
   type PersistGeneratedDocumentInput,
@@ -11,6 +12,7 @@ const USER_ID = "a1000000-0000-4000-8000-000000000001";
 const CONVERSATION_ID = "b1000000-0000-4000-8000-000000000001";
 const GENERATED_ID = "c1000000-0000-4000-8000-000000000001";
 const MESSAGE_ID = "d1000000-0000-4000-8000-000000000001";
+const ASSISTANT_MESSAGE_ID = "d1000000-0000-4000-8000-000000000002";
 const REQUEST_ID = "e1000000-0000-4000-8000-000000000001";
 const BYTES = new Uint8Array([1, 2, 3]);
 
@@ -56,12 +58,21 @@ function setup(overrides: Partial<GeneratedDocumentPersistenceDependencies> = {}
       generated_document_id: GENERATED_ID,
       was_existing: false,
     }]),
+    persistChatForExistingMessage: vi.fn(async () => [{
+      assistant_message_id: ASSISTANT_MESSAGE_ID,
+      generated_document_id: GENERATED_ID,
+      was_existing: false,
+    }]),
     remove: vi.fn(async () => undefined),
     findById: vi.fn(async () => record()),
     download: vi.fn(async () => BYTES),
     ...overrides,
   };
-  return { dependencies, persist: createGeneratedDocumentPersistenceService(dependencies) };
+  return {
+    dependencies,
+    persist: createGeneratedDocumentPersistenceService(dependencies),
+    persistForExistingMessage: createGeneratedDocumentPersistenceServiceForExistingMessage(dependencies),
+  };
 }
 
 describe("conversation-bound generated document persistence service", () => {
@@ -111,6 +122,44 @@ describe("conversation-bound generated document persistence service", () => {
     expect(dependencies.findById).toHaveBeenCalledWith({ userId: USER_ID, generatedDocumentId: GENERATED_ID });
     expect(result.reference.messageId).toBe(MESSAGE_ID);
     expect(result.delivery.bytes).toEqual(existingBytes);
+  });
+
+  it("persists against an explicitly supplied assistant message without invoking direct-chat persistence", async () => {
+    const { dependencies, persistForExistingMessage } = setup({
+      findById: vi.fn(async () => record({ messageId: ASSISTANT_MESSAGE_ID })),
+    });
+    const result = await persistForExistingMessage({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      generationRequestId: REQUEST_ID,
+      templateId: "business-report",
+      generatedOutput: input.generatedOutput,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+
+    expect(dependencies.persistChat).not.toHaveBeenCalled();
+    expect(dependencies.persistChatForExistingMessage).toHaveBeenCalledWith(expect.objectContaining({
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      generatedDocumentId: GENERATED_ID,
+      storagePath: "private/storage/path",
+    }));
+    expect(dependencies.upload).toHaveBeenCalledOnce();
+    expect(result.reference.messageId).toBe(ASSISTANT_MESSAGE_ID);
+  });
+
+  it("rejects an invalid existing assistant ID before uploading or persisting", async () => {
+    const { dependencies, persistForExistingMessage } = setup();
+    await expect(persistForExistingMessage({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      generationRequestId: REQUEST_ID,
+      templateId: "business-report",
+      generatedOutput: input.generatedOutput,
+      assistantMessageId: "not-a-uuid",
+    })).rejects.toMatchObject({ code: "invalid_output" });
+
+    expect(dependencies.upload).not.toHaveBeenCalled();
+    expect(dependencies.persistChatForExistingMessage).not.toHaveBeenCalled();
   });
 
   it("cleans the uploaded object when metadata persistence fails", async () => {

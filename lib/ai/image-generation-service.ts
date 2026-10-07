@@ -32,6 +32,11 @@ export type ImageGenerationServiceInput = Readonly<{
   request: ImageGenerationRequest;
 }>;
 
+export type ExistingMessageImageGenerationServiceInput = ImageGenerationServiceInput & Readonly<{
+  userMessageId: string;
+  assistantMessageId: string;
+}>;
+
 export type ImageGenerationServiceResult = Readonly<{
   reference: GeneratedImageReference;
   /** Transient route-delivery bytes; never included in the durable reference. */
@@ -94,6 +99,17 @@ export type ImageGenerationServiceDependencies = Readonly<{
     provider: string;
     model: string;
   }) => Promise<unknown>;
+  completeGenerationForExistingMessages: (input: {
+    attemptId: string;
+    conversationId: string;
+    prompt: string;
+    userMessageId: string;
+    assistantMessageId: string;
+    storagePath: string;
+    mimeType: string;
+    provider: string;
+    model: string;
+  }) => Promise<unknown>;
   removeImage: (storagePath: string) => Promise<void>;
   createId: () => string;
   logFailure: (event: string, context: Readonly<Record<string, string>>) => void;
@@ -109,6 +125,11 @@ type ImageQuotaReleaseReason =
 
 function safeMetadata(value: string): boolean {
   return value.length > 0 && value.length <= 100 && /^[a-zA-Z0-9._:/-]+$/.test(value);
+}
+
+function normalizeUuid(value: unknown): string | null {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) return null;
+  return value.toLowerCase();
 }
 
 function extractMessage(error: unknown): string {
@@ -197,6 +218,24 @@ function defaultDependencies(): ImageGenerationServiceDependencies {
       if (error) throw error;
       return data;
     },
+    completeGenerationForExistingMessages: async (input) => {
+      const { data, error } = await (await client()).rpc(
+        "complete_generated_image_generation_for_existing_messages",
+        {
+          p_attempt_id: input.attemptId,
+          p_conversation_id: input.conversationId,
+          p_content: input.prompt,
+          p_user_message_id: input.userMessageId,
+          p_assistant_message_id: input.assistantMessageId,
+          p_storage_path: input.storagePath,
+          p_mime_type: input.mimeType,
+          p_provider: input.provider,
+          p_model: input.model,
+        },
+      );
+      if (error) throw error;
+      return data;
+    },
     removeImage: async (storagePath) => {
       const { error } = await admin().storage.from("chat-images").remove([storagePath]);
       if (error) throw new Error("Image storage cleanup failed.");
@@ -206,8 +245,19 @@ function defaultDependencies(): ImageGenerationServiceDependencies {
   };
 }
 
-export function createImageGenerationService(dependencies: ImageGenerationServiceDependencies = defaultDependencies()) {
-  return async function generateImage(input: ImageGenerationServiceInput): Promise<ImageGenerationServiceResult> {
+function createImageGenerationOperation<TInput extends ImageGenerationServiceInput>(
+  dependencies: ImageGenerationServiceDependencies,
+  completeGeneration: (input: TInput, completion: {
+    attemptId: string;
+    conversationId: string;
+    prompt: string;
+    storagePath: string;
+    mimeType: string;
+    provider: string;
+    model: string;
+  }) => Promise<unknown>,
+) {
+  return async function generateImage(input: TInput): Promise<ImageGenerationServiceResult> {
     const releaseQuota = async (attemptId: string, reason: ImageQuotaReleaseReason) => {
       try {
         await dependencies.releaseQuota({ attemptId, reason });
@@ -293,7 +343,7 @@ export function createImageGenerationService(dependencies: ImageGenerationServic
 
     let persisted: unknown;
     try {
-      persisted = await dependencies.completeGeneration({
+      persisted = await completeGeneration(input, {
         attemptId,
         conversationId: input.conversationId,
         prompt: validated.request.prompt,
@@ -340,4 +390,38 @@ export function createImageGenerationService(dependencies: ImageGenerationServic
   };
 }
 
+export function createImageGenerationService(dependencies: ImageGenerationServiceDependencies = defaultDependencies()) {
+  return createImageGenerationOperation(dependencies, (_input, completion) =>
+    dependencies.completeGeneration(completion),
+  );
+}
+
+export function createImageGenerationServiceForExistingMessages(
+  dependencies: ImageGenerationServiceDependencies = defaultDependencies(),
+) {
+  const generate = createImageGenerationOperation<ExistingMessageImageGenerationServiceInput>(
+    dependencies,
+    (input, completion) => dependencies.completeGenerationForExistingMessages({
+      ...completion,
+      userMessageId: input.userMessageId,
+      assistantMessageId: input.assistantMessageId,
+    }),
+  );
+  return async function generateImageForExistingMessages(
+    input: ExistingMessageImageGenerationServiceInput,
+  ): Promise<ImageGenerationServiceResult> {
+    const userMessageId = normalizeUuid(input.userMessageId);
+    const assistantMessageId = normalizeUuid(input.assistantMessageId);
+    if (
+      !userMessageId ||
+      !assistantMessageId ||
+      userMessageId === assistantMessageId
+    ) {
+      throw new ImageGenerationServiceError("invalid_request");
+    }
+    return generate({ ...input, userMessageId, assistantMessageId });
+  };
+}
+
 export const generateImage = createImageGenerationService();
+export const generateImageForExistingMessages = createImageGenerationServiceForExistingMessages();

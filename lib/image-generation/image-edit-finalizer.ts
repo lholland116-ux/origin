@@ -1,6 +1,7 @@
 import type { Database } from "../database.types";
 import {
   createImageEditRequestFingerprint,
+  createImageEditRequestFingerprintForExistingMessages,
   type ImageEditFinalizerInput,
   type ImageEditFinalizerResult,
 } from "./image-edit-orchestrator";
@@ -15,8 +16,12 @@ type RpcResult = Readonly<{
 
 export type ImageEditFinalizerRpcClient = Readonly<{
   rpc: (
-    functionName: "complete_generated_image_edit",
-    args: Database["public"]["Functions"]["complete_generated_image_edit"]["Args"],
+    functionName:
+      | "complete_generated_image_edit"
+      | "complete_generated_image_edit_for_existing_messages",
+    args:
+      | Database["public"]["Functions"]["complete_generated_image_edit"]["Args"]
+      | Database["public"]["Functions"]["complete_generated_image_edit_for_existing_messages"]["Args"],
   ) => Promise<RpcResult>;
 }>;
 
@@ -112,5 +117,71 @@ export function createImageEditFinalizer(
     }
 
     return parseResult(result.data);
+  };
+}
+
+export function createImageEditFinalizerForExistingMessages(
+  client: ImageEditFinalizerRpcClient,
+  authenticatedUserId: string,
+  messageTarget: Readonly<{ userMessageId: string; assistantMessageId: string }>,
+): (input: ImageEditFinalizerInput) => Promise<ImageEditFinalizerResult> {
+  if (
+    !isUuid(authenticatedUserId) ||
+    !isUuid(messageTarget.userMessageId) ||
+    !isUuid(messageTarget.assistantMessageId) ||
+    messageTarget.userMessageId.toLowerCase() === messageTarget.assistantMessageId.toLowerCase()
+  ) {
+    throw new ImageEditFinalizerError();
+  }
+
+  const userMessageId = messageTarget.userMessageId.toLowerCase();
+  const assistantMessageId = messageTarget.assistantMessageId.toLowerCase();
+
+  return async (input) => {
+    const requestFingerprint = createImageEditRequestFingerprintForExistingMessages({
+      conversationId: input.conversationId,
+      sourceReference: input.sourceReference,
+      instruction: input.instruction,
+      userMessageId,
+      assistantMessageId,
+    });
+    const isGeneratedSource = input.sourceReference.kind === "generated_image";
+    const args: Database["public"]["Functions"]["complete_generated_image_edit_for_existing_messages"]["Args"] = {
+      p_authenticated_user_id: authenticatedUserId,
+      p_image_edit_request_id: input.imageEditRequestId,
+      p_request_fingerprint: requestFingerprint,
+      p_attempt_id: input.attemptId,
+      p_conversation_id: input.conversationId,
+      p_user_message_id: userMessageId,
+      p_assistant_message_id: assistantMessageId,
+      p_instruction: input.instruction,
+      p_storage_path: input.storagePath,
+      p_mime_type: input.mimeType,
+      p_provider: input.provider,
+      p_model: input.model,
+      p_source_generated_image_id: isGeneratedSource
+        ? input.sourceReference.generatedImageId
+        : null,
+      p_source_uploaded_message_id: isGeneratedSource
+        ? null
+        : input.sourceReference.messageId,
+      p_source_uploaded_ordinal: isGeneratedSource
+        ? null
+        : input.sourceReference.ordinal,
+    };
+
+    let result: RpcResult;
+    try {
+      result = await client.rpc("complete_generated_image_edit_for_existing_messages", args);
+    } catch {
+      throw new ImageEditFinalizerError();
+    }
+
+    if (!result || result.error) throw new ImageEditFinalizerError();
+    const parsed = parseResult(result.data);
+    if (parsed.userMessageId !== userMessageId || parsed.assistantMessageId !== assistantMessageId) {
+      throw new ImageEditFinalizerError();
+    }
+    return parsed;
   };
 }

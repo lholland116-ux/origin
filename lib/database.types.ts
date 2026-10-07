@@ -1466,6 +1466,30 @@ export type Database = {
           user_message_id: string
         }[]
       }
+      complete_generated_image_edit_for_existing_messages: {
+        Args: {
+          p_assistant_message_id: string
+          p_attempt_id: string
+          p_authenticated_user_id: string
+          p_conversation_id: string
+          p_image_edit_request_id: string
+          p_instruction: string
+          p_mime_type: string
+          p_model: string
+          p_provider: string
+          p_request_fingerprint: string
+          p_source_generated_image_id: string | null
+          p_source_uploaded_message_id: string | null
+          p_source_uploaded_ordinal: number | null
+          p_storage_path: string
+          p_user_message_id: string
+        }
+        Returns: {
+          assistant_message_id: string
+          generated_image_id: string
+          user_message_id: string
+        }[]
+      }
       complete_generated_image_generation: {
         Args: {
           p_attempt_id: string
@@ -1480,6 +1504,43 @@ export type Database = {
           assistant_message_id: string
           generated_image_id: string
           user_message_id: string
+        }[]
+      }
+      complete_generated_image_generation_for_existing_messages: {
+        Args: {
+          p_assistant_message_id: string
+          p_attempt_id: string
+          p_conversation_id: string
+          p_content: string
+          p_mime_type: string
+          p_model: string
+          p_provider: string
+          p_storage_path: string
+          p_user_message_id: string
+        }
+        Returns: {
+          assistant_message_id: string
+          generated_image_id: string
+          user_message_id: string
+        }[]
+      }
+      persist_generated_document_for_existing_message: {
+        Args: {
+          p_assistant_message_id: string
+          p_conversation_id: string
+          p_filename: string
+          p_format: string
+          p_generated_document_id: string
+          p_generation_request_id: string
+          p_mime_type: string
+          p_size_bytes: number
+          p_storage_path: string
+          p_template_id: string
+        }
+        Returns: {
+          assistant_message_id: string
+          generated_document_id: string
+          was_existing: boolean
         }[]
       }
       create_chat_message_with_images: {

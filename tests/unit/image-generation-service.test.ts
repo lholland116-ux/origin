@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createImageGenerationService,
+  createImageGenerationServiceForExistingMessages,
   ImageGenerationServiceError,
   type ImageGenerationServiceDependencies,
 } from "@/lib/ai/image-generation-service";
@@ -37,6 +38,11 @@ function setup(overrides: Partial<ImageGenerationServiceDependencies> = {}) {
     createProvider: () => ({ generateImage }),
     uploadImage: vi.fn(async () => undefined),
     completeGeneration: vi.fn(async () => [{
+      user_message_id: USER_MESSAGE_ID,
+      assistant_message_id: ASSISTANT_MESSAGE_ID,
+      generated_image_id: IMAGE_ID,
+    }]),
+    completeGenerationForExistingMessages: vi.fn(async () => [{
       user_message_id: USER_MESSAGE_ID,
       assistant_message_id: ASSISTANT_MESSAGE_ID,
       generated_image_id: IMAGE_ID,
@@ -129,5 +135,57 @@ describe("Image Generation application service", () => {
     await expect(run(input)).rejects.toMatchObject({ code: "persistence_failure" });
     expect(dependencies.removeImage).toHaveBeenCalledWith(`generated/${USER_ID}/${CONVERSATION_ID}/${STORAGE_ID}.webp`);
     expect(dependencies.releaseQuota).toHaveBeenCalledWith({ attemptId: ATTEMPT_ID, reason: "persistence_failure" });
+  });
+
+  it("completes image generation against the supplied messages without using direct-chat persistence", async () => {
+    const { dependencies, generateImage } = setup({
+      completeGenerationForExistingMessages: vi.fn(async () => [{
+        user_message_id: USER_MESSAGE_ID,
+        assistant_message_id: ASSISTANT_MESSAGE_ID,
+        generated_image_id: IMAGE_ID,
+      }]),
+    });
+    const run = createImageGenerationServiceForExistingMessages(dependencies);
+
+    const result = await run({
+      ...input,
+      userMessageId: USER_MESSAGE_ID.toUpperCase(),
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+
+    expect(dependencies.reserveQuota).toHaveBeenCalledOnce();
+    expect(dependencies.startAttempt).toHaveBeenCalledOnce();
+    expect(generateImage).toHaveBeenCalledOnce();
+    expect(dependencies.uploadImage).toHaveBeenCalledOnce();
+    expect(dependencies.completeGeneration).not.toHaveBeenCalled();
+    expect(dependencies.completeGenerationForExistingMessages).toHaveBeenCalledWith(expect.objectContaining({
+      attemptId: ATTEMPT_ID,
+      conversationId: CONVERSATION_ID,
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      storagePath: `generated/${USER_ID}/${CONVERSATION_ID}/${STORAGE_ID}.webp`,
+    }));
+    expect(dependencies.releaseQuota).not.toHaveBeenCalled();
+    expect(result.reference).toMatchObject({
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      imageId: IMAGE_ID,
+    });
+  });
+
+  it.each([
+    ["malformed", "not-a-uuid", ASSISTANT_MESSAGE_ID],
+    ["same user and assistant", USER_MESSAGE_ID, USER_MESSAGE_ID],
+  ])("rejects %s existing message linkage before reserving quota", async (_label, userMessageId, assistantMessageId) => {
+    const { dependencies, generateImage } = setup();
+    const run = createImageGenerationServiceForExistingMessages(dependencies);
+
+    await expect(run({ ...input, userMessageId, assistantMessageId })).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+    expect(dependencies.verifyConversation).not.toHaveBeenCalled();
+    expect(dependencies.reserveQuota).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(dependencies.completeGenerationForExistingMessages).not.toHaveBeenCalled();
   });
 });

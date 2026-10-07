@@ -19,13 +19,20 @@ import {
   type GeneratedDocumentReference,
 } from "@/lib/agent-runtime/application-contracts";
 
-export type PersistGeneratedDocumentInput = Readonly<{
+type GeneratedDocumentPersistenceInput = Readonly<{
   userId: string;
   conversationId: string;
   generationRequestId: string;
   templateId: string;
   generatedOutput: GeneratedArtifact;
+}>;
+
+export type PersistGeneratedDocumentInput = GeneratedDocumentPersistenceInput & Readonly<{
   assistantMessageContent: string;
+}>;
+
+export type PersistGeneratedDocumentForExistingMessageInput = GeneratedDocumentPersistenceInput & Readonly<{
+  assistantMessageId: string;
 }>;
 
 export type GeneratedDocumentPersistenceResult = Readonly<{
@@ -38,6 +45,10 @@ export type GeneratedDocumentPersistenceDependencies = Readonly<{
   createId: () => string;
   upload: typeof uploadGeneratedDocumentArtifact;
   persistChat: (input: PersistGeneratedDocumentInput & {
+    generatedDocumentId: string;
+    storagePath: string;
+  }) => Promise<unknown>;
+  persistChatForExistingMessage: (input: PersistGeneratedDocumentForExistingMessageInput & {
     generatedDocumentId: string;
     storagePath: string;
   }) => Promise<unknown>;
@@ -106,13 +117,33 @@ function defaultDependencies(): GeneratedDocumentPersistenceDependencies {
       if (error) throw new Error("Generated document persistence failed.");
       return data;
     },
+    persistChatForExistingMessage: async (input) => {
+      const client = await createServerSupabaseClient();
+      const rpcClient = client as unknown as {
+        rpc: (name: string, params: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+      };
+      const { data, error } = await rpcClient.rpc("persist_generated_document_for_existing_message", {
+        p_conversation_id: input.conversationId,
+        p_assistant_message_id: input.assistantMessageId,
+        p_generation_request_id: input.generationRequestId,
+        p_generated_document_id: input.generatedDocumentId,
+        p_storage_path: input.storagePath,
+        p_filename: input.generatedOutput.filename,
+        p_format: input.generatedOutput.format,
+        p_mime_type: input.generatedOutput.mimeType.split(";", 1)[0] ?? input.generatedOutput.mimeType,
+        p_size_bytes: input.generatedOutput.sizeBytes,
+        p_template_id: input.templateId,
+      });
+      if (error) throw new Error("Generated document persistence failed.");
+      return data;
+    },
     remove: removeGeneratedDocumentObjectByPath,
     findById: findGeneratedDocumentById,
     download: downloadGeneratedDocument,
   };
 }
 
-function validInput(input: PersistGeneratedDocumentInput): boolean {
+function validInput(input: GeneratedDocumentPersistenceInput): boolean {
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const output = input.generatedOutput;
   const canonicalMime = isSupportedDocumentFormat(output.format)
@@ -142,11 +173,17 @@ function validInput(input: PersistGeneratedDocumentInput): boolean {
     });
 }
 
-export function createGeneratedDocumentPersistenceService(
+function createGeneratedDocumentPersistenceOperations(
   dependencies: GeneratedDocumentPersistenceDependencies = defaultDependencies(),
 ) {
-  return async function persistGeneratedDocument(
-    input: PersistGeneratedDocumentInput,
+  const persist = async function persistGeneratedDocumentWith(
+    input: GeneratedDocumentPersistenceInput,
+    persistChat: (
+      input: GeneratedDocumentPersistenceInput & {
+        generatedDocumentId: string;
+        storagePath: string;
+      },
+    ) => Promise<unknown>,
   ): Promise<GeneratedDocumentPersistenceResult> {
     if (!validInput(input)) throw new GeneratedDocumentPersistenceError("invalid_output");
 
@@ -166,7 +203,7 @@ export function createGeneratedDocumentPersistenceService(
         bytes: input.generatedOutput.bytes,
       });
 
-      const raw = await dependencies.persistChat({
+      const raw = await persistChat({
         ...input,
         generatedDocumentId,
         storagePath,
@@ -231,6 +268,40 @@ export function createGeneratedDocumentPersistenceService(
       );
     }
   };
+
+  return {
+    persistGeneratedDocument: (input: PersistGeneratedDocumentInput) =>
+      persist(input, (persistInput) => dependencies.persistChat({
+        ...persistInput,
+        assistantMessageContent: input.assistantMessageContent,
+      })),
+    persistGeneratedDocumentForExistingMessage: async (
+      input: PersistGeneratedDocumentForExistingMessageInput,
+    ) => {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.assistantMessageId)) {
+        throw new GeneratedDocumentPersistenceError("invalid_output");
+      }
+      return await persist(input, (persistInput) => dependencies.persistChatForExistingMessage({
+        ...persistInput,
+        assistantMessageId: input.assistantMessageId,
+      }));
+    },
+  };
+}
+
+export function createGeneratedDocumentPersistenceService(
+  dependencies: GeneratedDocumentPersistenceDependencies = defaultDependencies(),
+) {
+  return createGeneratedDocumentPersistenceOperations(dependencies).persistGeneratedDocument;
+}
+
+export function createGeneratedDocumentPersistenceServiceForExistingMessage(
+  dependencies: GeneratedDocumentPersistenceDependencies = defaultDependencies(),
+) {
+  return createGeneratedDocumentPersistenceOperations(dependencies)
+    .persistGeneratedDocumentForExistingMessage;
 }
 
 export const persistGeneratedDocument = createGeneratedDocumentPersistenceService();
+export const persistGeneratedDocumentForExistingMessage =
+  createGeneratedDocumentPersistenceServiceForExistingMessage();

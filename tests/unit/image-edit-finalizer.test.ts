@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createImageEditRequestFingerprint,
+  createImageEditRequestFingerprintForExistingMessages,
   type ImageEditFinalizerInput,
 } from "../../lib/image-generation/image-edit-orchestrator";
 import {
   createImageEditFinalizer as createImageEditFinalizerFactory,
+  createImageEditFinalizerForExistingMessages,
   ImageEditFinalizerError,
   type ImageEditFinalizerRpcClient,
 } from "../../lib/image-generation/image-edit-finalizer";
@@ -406,5 +408,65 @@ describe("image edit finalizer", () => {
 
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(Object.keys(client)).toEqual(["rpc"]);
+  });
+
+  it("uses the explicit existing-message RPC and binds both message IDs into the fingerprint", async () => {
+    const { client, rpc } = makeRpcClient();
+    const finalizer = createImageEditFinalizerForExistingMessages(client, AUTHENTICATED_USER_ID, {
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+
+    const result = await finalizer(GENERATED_INPUT);
+
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(rpc.mock.calls[0]?.[0]).toBe("complete_generated_image_edit_for_existing_messages");
+    expect(rpc.mock.calls[0]?.[1]).toMatchObject({
+      p_authenticated_user_id: AUTHENTICATED_USER_ID,
+      p_user_message_id: USER_MESSAGE_ID,
+      p_assistant_message_id: ASSISTANT_MESSAGE_ID,
+      p_request_fingerprint: createImageEditRequestFingerprintForExistingMessages({
+        conversationId: GENERATED_INPUT.conversationId,
+        sourceReference: GENERATED_INPUT.sourceReference,
+        instruction: GENERATED_INPUT.instruction,
+        userMessageId: USER_MESSAGE_ID,
+        assistantMessageId: ASSISTANT_MESSAGE_ID,
+      }),
+      p_source_generated_image_id: GENERATED_SOURCE_ID,
+      p_source_uploaded_message_id: null,
+      p_source_uploaded_ordinal: null,
+    });
+    expect(result).toEqual({
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      generatedImageId: GENERATED_IMAGE_ID,
+    });
+  });
+
+  it("fails closed when the RPC result does not match the trusted existing message pair", async () => {
+    const { client } = makeRpcClient({
+      data: [{ ...SUCCESS_ROW, assistant_message_id: USER_MESSAGE_ID }],
+      error: null,
+    });
+    const finalizer = createImageEditFinalizerForExistingMessages(client, AUTHENTICATED_USER_ID, {
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+
+    await expectFinalizerError(finalizer(GENERATED_INPUT));
+  });
+
+  it("rejects malformed or aliased target message IDs before the RPC", () => {
+    const { client, rpc } = makeRpcClient();
+
+    expect(() => createImageEditFinalizerForExistingMessages(client, AUTHENTICATED_USER_ID, {
+      userMessageId: "not-a-uuid",
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    })).toThrow(ImageEditFinalizerError);
+    expect(() => createImageEditFinalizerForExistingMessages(client, AUTHENTICATED_USER_ID, {
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: USER_MESSAGE_ID,
+    })).toThrow(ImageEditFinalizerError);
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

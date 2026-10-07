@@ -44,6 +44,11 @@ export type ImageEditOrchestratorInput = Readonly<{
   idempotencyKey: string;
 }>;
 
+export type ImageEditExistingMessageOrchestratorInput = ImageEditOrchestratorInput & Readonly<{
+  userMessageId: string;
+  assistantMessageId: string;
+}>;
+
 export type ImageEditRequestDisposition =
   | "claimed"
   | "in_progress"
@@ -254,6 +259,12 @@ export type ImageEditOrchestratorDependencies = Readonly<{
   finalizeImageEdit: (
     input: ImageEditFinalizerInput,
   ) => Promise<ImageEditFinalizerResult>;
+  finalizeImageEditForExistingMessages?: (
+    input: ImageEditFinalizerInput & Readonly<{
+      userMessageId: string;
+      assistantMessageId: string;
+    }>,
+  ) => Promise<ImageEditFinalizerResult>;
   logger?: (event: string, metadata: Readonly<Record<string, string>>) => void;
 }>;
 
@@ -359,6 +370,30 @@ export function createImageEditRequestFingerprint(input: {
   });
 
   return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
+
+export function createImageEditRequestFingerprintForExistingMessages(input: {
+  conversationId: string;
+  sourceReference: unknown;
+  instruction: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}): string {
+  const userMessageId = normalizeUuid(input.userMessageId);
+  const assistantMessageId = normalizeUuid(input.assistantMessageId);
+  if (!userMessageId || !assistantMessageId || userMessageId === assistantMessageId) {
+    throw new ImageEditOrchestrationError("invalid_request");
+  }
+
+  const requestFingerprint = createImageEditRequestFingerprint(input);
+  return createHash("sha256")
+    .update(JSON.stringify({
+      version: 2,
+      requestFingerprint,
+      userMessageId,
+      assistantMessageId,
+    }), "utf8")
+    .digest("hex");
 }
 
 function safeString(value: unknown): string | null {
@@ -668,16 +703,23 @@ function validateFinalizerResult(value: ImageEditFinalizerResult): ImageEditFina
   };
 }
 
-export async function orchestrateImageEdit(
+async function orchestrateImageEditInternal(
   input: ImageEditOrchestratorInput,
   dependencies: ImageEditOrchestratorDependencies,
+  existingMessageTarget: Readonly<{ userMessageId: string; assistantMessageId: string }> | null,
 ): Promise<ImageEditOrchestrationResult> {
   const normalized = normalizeInput(input);
-  const fingerprint = createImageEditRequestFingerprint({
+  const fingerprintInput = {
     conversationId: normalized.conversationId,
     sourceReference: normalized.sourceReference,
     instruction: normalized.instruction,
-  });
+  };
+  const fingerprint = existingMessageTarget
+    ? createImageEditRequestFingerprintForExistingMessages({
+        ...fingerprintInput,
+        ...existingMessageTarget,
+      })
+    : createImageEditRequestFingerprint(fingerprintInput);
 
   let rawClaim: ImageEditClaim;
   try {
@@ -701,6 +743,19 @@ export async function orchestrateImageEdit(
         imageEditRequestId: claim.imageEditRequestId,
       };
     case "completed":
+      if (
+        existingMessageTarget &&
+        (claim.userMessageId !== existingMessageTarget.userMessageId ||
+          claim.assistantMessageId !== existingMessageTarget.assistantMessageId)
+      ) {
+        return {
+          kind: "conflict",
+          disposition: "conflict",
+          status: "completed",
+          conversationId: normalized.conversationId,
+          imageEditRequestId: claim.imageEditRequestId,
+        };
+      }
       return completedResult(normalized, claim, "completed");
     case "conflict":
       return {
@@ -954,27 +1009,46 @@ export async function orchestrateImageEdit(
   const sourceReference = normalized.sourceReference;
   let finalizerResult: ImageEditFinalizerResult;
   try {
-    finalizerResult = validateFinalizerResult(
-      await dependencies.finalizeImageEdit({
-        imageEditRequestId: claim.imageEditRequestId,
-        attemptId,
-        conversationId: normalized.conversationId,
-        sourceReference,
-        instruction: normalized.instruction,
-        storagePath,
-        mimeType: "image/png",
-        provider: RUNWARE_IMAGE_EDIT_PROVIDER,
-        model: RUNWARE_IMAGE_EDIT_MODEL,
-        sourceGeneratedImageId:
-          sourceReference.kind === "generated_image"
-            ? sourceReference.generatedImageId
-            : null,
-        sourceUploadedMessageId:
-          sourceReference.kind === "uploaded_image" ? sourceReference.messageId : null,
-        sourceUploadedOrdinal:
-          sourceReference.kind === "uploaded_image" ? sourceReference.ordinal : null,
-      }),
-    );
+    const finalizerInput = {
+      imageEditRequestId: claim.imageEditRequestId,
+      attemptId,
+      conversationId: normalized.conversationId,
+      sourceReference,
+      instruction: normalized.instruction,
+      storagePath,
+      mimeType: "image/png" as const,
+      provider: RUNWARE_IMAGE_EDIT_PROVIDER,
+      model: RUNWARE_IMAGE_EDIT_MODEL,
+      sourceGeneratedImageId:
+        sourceReference.kind === "generated_image"
+          ? sourceReference.generatedImageId
+          : null,
+      sourceUploadedMessageId:
+        sourceReference.kind === "uploaded_image" ? sourceReference.messageId : null,
+      sourceUploadedOrdinal:
+        sourceReference.kind === "uploaded_image" ? sourceReference.ordinal : null,
+    };
+    if (existingMessageTarget) {
+      if (!dependencies.finalizeImageEditForExistingMessages) {
+        throw new ImageEditOrchestrationError("persistence_failure");
+      }
+      finalizerResult = validateFinalizerResult(
+        await dependencies.finalizeImageEditForExistingMessages({
+          ...finalizerInput,
+          ...existingMessageTarget,
+        }),
+      );
+      if (
+        finalizerResult.userMessageId !== existingMessageTarget.userMessageId ||
+        finalizerResult.assistantMessageId !== existingMessageTarget.assistantMessageId
+      ) {
+        throw new ImageEditOrchestrationError("persistence_failure");
+      }
+    } else {
+      finalizerResult = validateFinalizerResult(
+        await dependencies.finalizeImageEdit(finalizerInput),
+      );
+    }
   } catch {
     return compensate(
       dependencies,
@@ -994,4 +1068,28 @@ export async function orchestrateImageEdit(
     assistantMessageId: finalizerResult.assistantMessageId,
     generatedImageId: finalizerResult.generatedImageId,
   };
+}
+
+export function orchestrateImageEdit(
+  input: ImageEditOrchestratorInput,
+  dependencies: ImageEditOrchestratorDependencies,
+): Promise<ImageEditOrchestrationResult> {
+  return orchestrateImageEditInternal(input, dependencies, null);
+}
+
+export function orchestrateImageEditForExistingMessages(
+  input: ImageEditExistingMessageOrchestratorInput,
+  dependencies: ImageEditOrchestratorDependencies,
+): Promise<ImageEditOrchestrationResult> {
+  const userMessageId = normalizeUuid(input.userMessageId);
+  const assistantMessageId = normalizeUuid(input.assistantMessageId);
+  if (!userMessageId || !assistantMessageId || userMessageId === assistantMessageId) {
+    return Promise.reject(new ImageEditOrchestrationError("invalid_request"));
+  }
+
+  return orchestrateImageEditInternal(
+    input,
+    dependencies,
+    { userMessageId, assistantMessageId },
+  );
 }
