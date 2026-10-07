@@ -52,7 +52,7 @@ function mockResult(input: CapabilityExecutionInput): ExecutionStepResult {
 }
 
 function runtimeInput(overrides: Partial<ExecutionRuntimeInput> = {}): ExecutionRuntimeInput {
-  return { authenticatedUserId: USER_ID, userInput: "sensitive input needed only until step-1 finishes", ...overrides };
+  return { authenticatedUserId: USER_ID, conversationId: "a1000000-0000-4000-8000-000000000099", userInput: "sensitive input needed only until step-1 finishes", ...overrides };
 }
 
 function runtime(store: ExecutionStore, executor: CapabilityExecutor["execute"], authorize: ExecutionAuthorizer["authorize"] = async () => ({ allowed: true })) {
@@ -82,6 +82,20 @@ function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["cla
 }
 
 describe("durable XState execution runtime", () => {
+  it("requires a conversation binding before creating a durable run", async () => {
+    const store = new InMemoryExecutionStore();
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const result = await runtime(store, executor).execute(
+      handoff(),
+      { authenticatedUserId: USER_ID } as ExecutionRuntimeInput,
+      "missing-conversation",
+    );
+
+    expect(result).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
+    expect(await store.getRun({ runId: RUN_ID, userId: USER_ID })).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
   it("resumes a safe completed checkpoint without re-executing step-1 and reauthorizes remaining steps", async () => {
     const store = new InMemoryExecutionStore();
     const firstCalls: CapabilityExecutionInput[] = [];
@@ -101,6 +115,7 @@ describe("durable XState execution runtime", () => {
     });
     const stopped = await firstRuntime.execute(handoff(), runtimeInput(), "resume-safe-key");
     expect(stopped).toMatchObject({ kind: "recovery_required", failure: { code: "snapshot_conflict" } });
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.runtimeContext.conversationId).toBe(runtimeInput().conversationId);
     expect(firstCalls.map(({ stepId }) => stepId)).toEqual(["step-1"]);
     expect(firstAuthorizations).toEqual(["step-1"]);
     const checkpoint = await store.getRun({ runId: RUN_ID, userId: USER_ID });
@@ -121,6 +136,7 @@ describe("durable XState execution runtime", () => {
     expect(resumed.kind).toBe("succeeded");
     if (resumed.kind !== "succeeded") return;
     expect(resumedCalls.map(({ stepId }) => stepId)).toEqual(["step-2", "step-3"]);
+    expect(resumedCalls.every(({ context }) => context.conversationId === runtimeInput().conversationId)).toBe(true);
     expect(resumedCalls.every(({ executionKey }) => typeof executionKey === "string")).toBe(true);
     expect(resumedAuthorizations).toEqual(["step-2", "step-3"]);
     expect(resumed.run.steps.map(({ status }) => status)).toEqual(["succeeded", "succeeded", "succeeded"]);

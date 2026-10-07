@@ -52,7 +52,12 @@ const joinPlan = () => handoff([
 ]);
 
 function runtimeInput(overrides: Partial<ExecutionRuntimeInput> = {}): ExecutionRuntimeInput {
-  return { authenticatedUserId: "user-1", userInput: "find current guidance", ...overrides };
+  return {
+    authenticatedUserId: "a1000000-0000-4000-8000-000000000001",
+    conversationId: "b1000000-0000-4000-8000-000000000001",
+    userInput: "find current guidance",
+    ...overrides,
+  };
 }
 
 function createRuntime(
@@ -110,6 +115,10 @@ describe("LVTChat XState execution adapter", () => {
     expect(executor).toHaveBeenCalledTimes(3);
     expect(authorizer).toHaveBeenCalledTimes(3);
     expect(calls[0]).toMatchObject({ executionId: "execution-test-1", stepId: "step-1", capabilityId: "web_search" });
+    expect(calls[0]?.context).toMatchObject({
+      authenticatedUserId: "a1000000-0000-4000-8000-000000000001",
+      conversationId: "b1000000-0000-4000-8000-000000000001",
+    });
     expect(result.run).toMatchObject({ status: "succeeded", handoffVersion: 1, orderedStepIds: ["step-1", "step-2", "step-3"] });
     expect(result.run.steps.map(({ status }) => status)).toEqual(["succeeded", "succeeded", "succeeded"]);
     expect(result.telemetry).toMatchObject({ execution_id: "execution-test-1", status: "succeeded", step_count: 3, completed_step_count: 3, failure_code: null });
@@ -214,6 +223,19 @@ describe("LVTChat XState execution adapter", () => {
 
     expect(wrongVersion).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
     expect(unsupported).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing conversation binding before authorization or capability execution", async () => {
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const authorizer = vi.fn(async () => ({ allowed: true as const }));
+    const result = await createRuntime(executor, authorizer).execute(
+      sequentialPlan(),
+      { authenticatedUserId: "a1000000-0000-4000-8000-000000000001", userInput: "find guidance" } as ExecutionRuntimeInput,
+    );
+
+    expect(result).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
+    expect(authorizer).not.toHaveBeenCalled();
     expect(executor).not.toHaveBeenCalled();
   });
 

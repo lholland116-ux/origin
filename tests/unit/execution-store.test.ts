@@ -32,7 +32,7 @@ function createInput(overrides: Partial<CreateDurableExecutionRunInput> = {}): C
     idempotencyKey: "idempotency-1",
     requestFingerprint: "a".repeat(64),
     executionPlan: plan,
-    runtimeContext: { userInput: "private user text", attachments: [], resourceReferences: [] },
+    runtimeContext: { conversationId: "a1000000-0000-4000-8000-000000000002", userInput: "private user text", attachments: [], resourceReferences: [] },
     snapshot: snapshot(),
     steps: [{ stepId: "step-1", capabilityId: "standard", dependencyIds: [], executionKey: KEY }],
     createdAt: "2026-10-06T12:00:00.000Z",

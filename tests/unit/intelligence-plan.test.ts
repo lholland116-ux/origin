@@ -8,6 +8,40 @@ function plan(steps: PlanStep[], objective = "Complete a useful task."): Intelli
 }
 
 describe("intelligence plan validation", () => {
+  it("preserves file-context, synthesis, and conversation-bound document DAG compatibility", () => {
+    const fileToStandard = plan([
+      { id: "file-context", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "text" },
+      { id: "standard", capability: "standard", dependsOn: ["file-context"], inputs: [{ source: "step", stepId: "file-context", output: "text" }], expectedOutput: "text" },
+    ]);
+    expect(validateIntelligencePlan(fileToStandard)).toMatchObject({ valid: true, orderedStepIds: ["file-context", "standard"] });
+
+    const fileToDocument = plan([
+      ...fileToStandard.steps,
+      { id: "document", capability: "document_generation", dependsOn: ["standard"], inputs: [{ source: "step", stepId: "standard", output: "text" }], expectedOutput: "document" },
+    ]);
+    expect(validateIntelligencePlan(fileToDocument)).toMatchObject({
+      valid: true,
+      orderedStepIds: ["file-context", "standard", "document"],
+    });
+
+    const joinedResearchAndFileContext = plan([
+      { id: "research", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
+      fileToStandard.steps[0]!,
+      { id: "standard", capability: "standard", dependsOn: ["research", "file-context"], inputs: [
+        { source: "step", stepId: "research", output: "search_results" },
+        { source: "step", stepId: "file-context", output: "text" },
+      ], expectedOutput: "text" },
+      { id: "document", capability: "document_generation", dependsOn: ["standard"], inputs: [{ source: "step", stepId: "standard", output: "text" }], expectedOutput: "document" },
+    ]);
+    const joined = validateIntelligencePlan(joinedResearchAndFileContext);
+    expect(joined.valid).toBe(true);
+    expect(joined.orderedStepIds.slice(-2)).toEqual(["standard", "document"]);
+    expect(joined.orderedStepIds).toHaveLength(4);
+    expect(joined.orderedStepIds.indexOf("research")).toBeLessThan(joined.orderedStepIds.indexOf("standard"));
+    expect(joined.orderedStepIds.indexOf("file-context")).toBeLessThan(joined.orderedStepIds.indexOf("standard"));
+    expect(joined.orderedStepIds).not.toContain("file-analysis-llm");
+  });
+
   it("accepts a valid one-step plan", () => {
     expect(validateIntelligencePlan(plan([
       { id: "answer", capability: "standard", dependsOn: [], inputs: [{ source: "user" }] },

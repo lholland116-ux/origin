@@ -27,6 +27,7 @@ export type PersistedExecutionPlan = {
 };
 
 export type PersistedExecutionContext = {
+  readonly conversationId: string;
   readonly userInput?: string;
   readonly attachments: readonly RuntimeAttachmentReference[];
   readonly resourceReferences: readonly string[];

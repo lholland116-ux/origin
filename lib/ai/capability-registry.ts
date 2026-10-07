@@ -101,7 +101,7 @@ const definitions = [
   },
   {
     id: "file_analysis",
-    description: "Analyze an attached file or image.",
+    description: "Prepare bounded context from an owned attachment for Standard synthesis.",
     acceptedInputs: ["file", "image", "text"],
     producedOutputs: ["text", "structured_data"],
     supportsAttachments: true,

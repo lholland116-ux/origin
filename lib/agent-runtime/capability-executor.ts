@@ -11,6 +11,8 @@ export type ExecutionRuntimeInput = {
   /** Identifiers and broad kinds only. File names, bytes, and extracted content are not accepted. */
   readonly attachments?: readonly RuntimeAttachmentReference[];
   readonly authenticatedUserId: string;
+  /** Runtime V1 capabilities that use chat semantics are bound to one conversation. */
+  readonly conversationId: string;
   readonly organizationId?: string;
   readonly resourceReferences?: readonly string[];
   readonly requestId?: string;
@@ -31,6 +33,7 @@ export type CapabilityExecutionInput = {
   readonly inputs: readonly ResolvedExecutionInput[];
   readonly context: {
     readonly authenticatedUserId: string;
+    readonly conversationId: string;
     readonly organizationId?: string;
     readonly resourceReferences: readonly string[];
     readonly requestId?: string;
@@ -52,6 +55,7 @@ export type ExecutionAuthorizationInput = {
   readonly stepId: string;
   readonly capabilityId: CapabilityId;
   readonly authenticatedUserId: string;
+  readonly conversationId: string;
   readonly organizationId?: string;
   readonly resourceReferences: readonly string[];
   readonly requestId?: string;

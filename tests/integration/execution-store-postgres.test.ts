@@ -53,7 +53,7 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
         plannerSource: "deterministic",
         governance: { maxSteps: 1, capabilityIds: ["standard"], modelPlanningAllowed: false, maxModelCalls: 0, maxRepairAttempts: 0, attachmentContextAllowed: false, handoffVersion: 1 },
       },
-      runtimeContext: { userInput: "local integration fixture", attachments: [], resourceReferences: [] },
+      runtimeContext: { conversationId: randomUUID(), userInput: "local integration fixture", attachments: [], resourceReferences: [] },
       snapshot: createSnapshot(runActor, stepActor),
       steps: [{ stepId: "store-step", capabilityId: "standard", dependencyIds: [], executionKey: stepKey }],
       createdAt: new Date().toISOString(),

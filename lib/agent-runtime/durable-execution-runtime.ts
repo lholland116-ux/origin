@@ -43,6 +43,7 @@ const STEP_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 function safeRuntimeInput(input: ExecutionRuntimeInput): boolean {
   const safeId = (value: string) => value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
   return UUID_PATTERN.test(input.authenticatedUserId)
+    && UUID_PATTERN.test(input.conversationId)
     && (input.userInput === undefined || typeof input.userInput === "string")
     && (input.organizationId === undefined || safeId(input.organizationId))
     && (input.requestId === undefined || safeId(input.requestId))
@@ -166,6 +167,7 @@ function persistedHandoff(record: DurableExecutionRun): PlannedExecutionHandoff 
 
 function isValidDurableRecord(record: DurableExecutionRun, handoff: PlannedExecutionHandoff): boolean {
   if (!UUID_PATTERN.test(record.id) || !UUID_PATTERN.test(record.userId)
+    || !UUID_PATTERN.test(record.runtimeContext.conversationId)
     || record.steps.some((step) => !UUID_PATTERN.test(step.executionKey))
     || !/^[0-9a-f]{64}$/.test(record.requestFingerprint)
     || record.idempotencyKey.length < 1 || record.idempotencyKey.length > 128
@@ -257,6 +259,7 @@ export class DurableXStateExecutionRuntime {
     const plan = safePlan(handoff);
     const needsUserInput = handoff.plan.steps.some((step) => step.inputs?.some((input) => input.source === "user"));
     const runtimeContext = {
+      conversationId: runtimeInput.conversationId,
       ...(needsUserInput ? { userInput: runtimeInput.userInput ?? handoff.objective } : {}),
       attachments: (runtimeInput.attachments ?? []).map(({ id, kind }) => ({ id, kind })),
       resourceReferences: [...(runtimeInput.resourceReferences ?? [])],
@@ -435,6 +438,7 @@ export class DurableXStateExecutionRuntime {
 
       const resolved = resolveExecutionInputs(step, handoff, {
         authenticatedUserId: current.userId,
+        conversationId: current.runtimeContext.conversationId,
         userInput: current.runtimeContext.userInput,
         attachments: current.runtimeContext.attachments,
         resourceReferences: current.runtimeContext.resourceReferences,
@@ -464,6 +468,7 @@ export class DurableXStateExecutionRuntime {
           inputs: resolved.inputs,
           context: {
             authenticatedUserId: current.userId,
+            conversationId: current.runtimeContext.conversationId,
             ...(current.runtimeContext.organizationId ? { organizationId: current.runtimeContext.organizationId } : {}),
             resourceReferences: resolved.resourceReferences,
             ...(input.requestId ? { requestId: input.requestId } : {}),
@@ -569,6 +574,7 @@ export class DurableXStateExecutionRuntime {
         stepId,
         capabilityId,
         authenticatedUserId: record.userId,
+        conversationId: record.runtimeContext.conversationId,
         ...(record.runtimeContext.organizationId ? { organizationId: record.runtimeContext.organizationId } : {}),
         resourceReferences,
         ...(context.requestId ? { requestId: context.requestId } : {}),

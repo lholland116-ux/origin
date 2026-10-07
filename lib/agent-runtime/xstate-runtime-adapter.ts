@@ -12,6 +12,7 @@ import type {
   ResolvedExecutionInput,
   RuntimeAttachmentReference,
 } from "@/lib/agent-runtime/capability-executor";
+import { conversationExecutionContextSchema } from "@/lib/agent-runtime/application-contracts";
 import {
   isJsonValue,
   type ExecutionFailure,
@@ -109,8 +110,8 @@ export function validateExecutionHandoff(input: unknown): { handoff: PlannedExec
   return { handoff: raw as PlannedExecutionHandoff };
 }
 
-function safeId(value: string): boolean {
-  return value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
+function safeId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function jsonBytes(value: unknown): number {
@@ -241,7 +242,10 @@ export class XStateExecutionAdapter {
     const checked = validateExecutionHandoff(handoffInput);
     if (!checked.handoff) return { kind: "rejected", failure: checked.failure };
     const handoff = checked.handoff;
-    if (!safeId(runtimeInput.authenticatedUserId)
+    if (!conversationExecutionContextSchema.safeParse({
+      authenticatedUserId: runtimeInput.authenticatedUserId,
+      conversationId: runtimeInput.conversationId,
+    }).success
       || (runtimeInput.userInput !== undefined && typeof runtimeInput.userInput !== "string")
       || (runtimeInput.organizationId !== undefined && !safeId(runtimeInput.organizationId))
       || (runtimeInput.requestId !== undefined && !safeId(runtimeInput.requestId))
@@ -324,6 +328,7 @@ export class XStateExecutionAdapter {
         stepId: step.id,
         capabilityId,
         authenticatedUserId: runtimeInput.authenticatedUserId,
+        conversationId: runtimeInput.conversationId,
         ...(runtimeInput.organizationId ? { organizationId: runtimeInput.organizationId } : {}),
         resourceReferences: resolved.resourceReferences,
         ...(runtimeInput.requestId ? { requestId: runtimeInput.requestId } : {}),
@@ -356,6 +361,7 @@ export class XStateExecutionAdapter {
         inputs: resolved.inputs,
         context: {
           authenticatedUserId: runtimeInput.authenticatedUserId,
+          conversationId: runtimeInput.conversationId,
           ...(runtimeInput.organizationId ? { organizationId: runtimeInput.organizationId } : {}),
           resourceReferences: resolved.resourceReferences,
           ...(runtimeInput.requestId ? { requestId: runtimeInput.requestId } : {}),
