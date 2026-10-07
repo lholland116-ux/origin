@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap;
 
-select plan(39);
+select plan(55);
 
 select has_table(
   'public',
@@ -51,14 +51,27 @@ select ok(
 );
 
 select ok(
+  not exists (
+    select 1
+    from pg_catalog.pg_indexes
+    where schemaname = 'public'
+      and tablename = 'message_generated_images'
+      and indexdef ilike '%unique% (message_id)%'
+  ),
+  'message_id is not unique so a message can reference multiple generated images'
+);
+
+select ok(
   exists (
     select 1
-    from pg_catalog.pg_constraint
-    where conrelid = 'public.message_generated_images'::regclass
-      and conname = 'message_generated_images_message_id_key'
-      and contype = 'u'
+    from pg_catalog.pg_indexes
+    where schemaname = 'public'
+      and tablename = 'message_generated_images'
+      and indexname = 'message_generated_images_message_id_idx'
+      and indexdef not ilike '%unique%'
+      and indexdef ilike '%(message_id)%'
   ),
-  'one generated image metadata record is linked to each assistant message'
+  'generated-image message lookup retains a non-unique index'
 );
 
 select ok(
@@ -114,6 +127,40 @@ select ok(
     where polrelid = 'public.message_generated_images'::regclass
   ),
   'every generated metadata policy binds the row to auth and its parent message'
+);
+
+select has_function(
+  'public',
+  'delete_generated_image_metadata',
+  array['uuid'],
+  'owned image deletion RPC exists'
+);
+
+select ok(
+  (
+    select prosecdef
+    from pg_catalog.pg_proc
+    where oid = 'public.delete_generated_image_metadata(uuid)'::regprocedure
+  ),
+  'image deletion RPC is SECURITY DEFINER with explicit owner filters'
+);
+
+select ok(
+  has_function_privilege(
+    'authenticated',
+    'public.delete_generated_image_metadata(uuid)',
+    'EXECUTE'
+  ),
+  'authenticated users can delete their own generated image metadata'
+);
+
+select ok(
+  not has_function_privilege(
+    'anon',
+    'public.delete_generated_image_metadata(uuid)',
+    'EXECUTE'
+  ),
+  'anonymous users cannot execute generated image deletion'
 );
 
 select has_function(
@@ -214,8 +261,66 @@ select is((select count(*)::integer from generated_exchange), 1, 'exchange RPC r
 select is((select count(*)::integer from public.messages where content = 'a durable generated prompt'), 1, 'exchange RPC persists the user prompt');
 select is((select count(*)::integer from public.messages where role = 'assistant' and content = ''), 1, 'exchange RPC persists an empty assistant message');
 select is((select count(*)::integer from public.message_generated_images where message_id = (select assistant_message_id from generated_exchange)), 1, 'generated metadata links to the assistant message');
-select is((select provider from public.message_generated_images where message_id = (select assistant_message_id from generated_exchange)), 'replicate', 'provider metadata persists');
-select is((select model from public.message_generated_images where message_id = (select assistant_message_id from generated_exchange)), 'black-forest-labs/flux-schnell', 'model metadata persists');
+select is((select provider from public.message_generated_images where storage_path like '%/one.webp'), 'replicate', 'provider metadata persists');
+select is((select model from public.message_generated_images where storage_path like '%/one.webp'), 'black-forest-labs/flux-schnell', 'model metadata persists');
+
+insert into public.message_generated_images (
+  id,
+  message_id,
+  conversation_id,
+  user_id,
+  storage_path,
+  mime_type,
+  provider,
+  model
+)
+values (
+  '40000000-0000-4000-8000-000000000002',
+  (select assistant_message_id from generated_exchange),
+  '20000000-0000-4000-8000-000000000001',
+  '10000000-0000-4000-8000-000000000001',
+  'generated/10000000-0000-4000-8000-000000000001/20000000-0000-4000-8000-000000000001/two.png',
+  'image/png',
+  'runware',
+  'runware:400@4'
+);
+
+reset role;
+insert into public.image_edit_lineage (
+  derivative_generated_image_id,
+  operation,
+  source_generated_image_id,
+  instruction
+)
+values (
+  '40000000-0000-4000-8000-000000000002',
+  'edit',
+  (select generated_image_id from generated_exchange),
+  'Add a small blue detail.'
+);
+
+select is(
+  (
+    select source_generated_image_id
+    from public.image_edit_lineage
+    where derivative_generated_image_id = '40000000-0000-4000-8000-000000000002'
+  ),
+  (select generated_image_id from generated_exchange),
+  'an edited image linked to the same message retains exact source lineage'
+);
+
+set local role authenticated;
+
+select ok(
+  (
+    select count(*) = 2
+      and count(distinct id) = 2
+      and count(distinct message_id) = 1
+    from public.message_generated_images
+    where message_id = (select assistant_message_id from generated_exchange)
+  ),
+  'two independently identifiable images can link to the same assistant message'
+);
 
 select throws_ok(
   $$select public.create_generated_image_chat_exchange(
@@ -276,6 +381,30 @@ select set_config(
 
 select is((select count(*)::integer from public.message_generated_images), 0, 'another authenticated user cannot read generated metadata');
 
+select throws_ok(
+  $$insert into public.message_generated_images (
+      id, message_id, conversation_id, user_id, storage_path, mime_type, provider, model
+    ) values (
+      '40000000-0000-4000-8000-000000000003',
+      (select assistant_message_id from generated_exchange),
+      '20000000-0000-4000-8000-000000000001',
+      '10000000-0000-4000-8000-000000000002',
+      'generated/10000000-0000-4000-8000-000000000002/20000000-0000-4000-8000-000000000001/forbidden.webp',
+      'image/webp',
+      'replicate',
+      'flux-schnell'
+    )$$,
+  '42501',
+  NULL,
+  'another authenticated user cannot attach an image to the owner message'
+);
+
+create temporary table denied_delete_attempt on commit drop as
+select *
+from public.delete_generated_image_metadata('40000000-0000-4000-8000-000000000002');
+
+select is((select image_deleted from denied_delete_attempt), false, 'cross-user image deletion is reported as not found');
+
 reset role;
 set local role authenticated;
 select set_config(
@@ -283,6 +412,36 @@ select set_config(
   '10000000-0000-4000-8000-000000000001',
   true
 );
+
+select is((select count(*)::integer from public.message_generated_images where message_id = (select assistant_message_id from generated_exchange)), 2, 'cross-user deletion leaves both owner image rows intact');
+
+create temporary table deleted_sibling_image on commit drop as
+select *
+from public.delete_generated_image_metadata('40000000-0000-4000-8000-000000000002');
+
+select is((select image_deleted from deleted_sibling_image), true, 'single-image deletion removes the requested metadata row');
+select is((select message_deleted from deleted_sibling_image), false, 'assistant message remains while another generated image is linked');
+select is((select count(*)::integer from public.message_generated_images where message_id = (select assistant_message_id from generated_exchange)), 1, 'deleting one image preserves its sibling metadata');
+
+update public.messages
+set sources = '[{"url":"https://example.test/source"}]'::jsonb,
+    source_count = 1,
+    widget = '{"type":"table"}'::jsonb
+where id = (select assistant_message_id from generated_exchange);
+
+create temporary table deleted_last_image_with_message_data on commit drop as
+select *
+from public.delete_generated_image_metadata((select generated_image_id from generated_exchange));
+
+select is((select image_deleted from deleted_last_image_with_message_data), true, 'last image metadata can be deleted while preserving assistant data');
+select is((select message_deleted from deleted_last_image_with_message_data), false, 'assistant message with sources, source count, or widget is preserved');
+select is((select count(*)::integer from public.messages where id = (select assistant_message_id from generated_exchange)), 1, 'assistant message with non-image content remains after image deletion');
+
+update public.messages
+set sources = NULL,
+    source_count = NULL,
+    widget = NULL
+where id = (select assistant_message_id from generated_exchange);
 
 delete from public.messages
 where id = (select assistant_message_id from generated_exchange);

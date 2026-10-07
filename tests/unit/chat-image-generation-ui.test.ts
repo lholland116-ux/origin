@@ -386,7 +386,7 @@ describe("chat image-generation presentation", () => {
   });
 
   it("keeps generated images responsive and preloads only the latest candidate", () => {
-    expect(clientSource).toContain('priority={isLatestMessage}');
+    expect(clientSource).toContain('priority={isLatestMessage && generatedImageIndex === generatedImages.length - 1}');
     expect(clientSource).toContain('sizes="(max-width: 768px) calc(100vw - 2rem), 768px"');
     expect(clientSource).toContain("max-h-[min(70vh,640px)] max-w-full object-contain");
     expect(clientSource).toContain('aria-label="Download image"');
@@ -437,15 +437,16 @@ describe("chat image-generation presentation", () => {
     expect(darkMarkup).toContain("Created with LVTChat");
     expect(darkMarkup).toContain("text-white/50");
 
-    const generatedResultStart = clientSource.indexOf("{message.generatedImage ? (");
+    const generatedResultStart = clientSource.indexOf("{generatedImagesForMessage(message).map(");
     const generatedResultEnd = clientSource.indexOf(
-      '{message.role === "assistant" && message.generatedImage?.id ? (',
+      '{messageImageSource === "children"',
       generatedResultStart
     );
     const generatedResultSource = clientSource.slice(generatedResultStart, generatedResultEnd);
 
     expect(generatedResultSource).toContain("<GeneratedImageAttribution theme={activeTheme} />");
-    expect(generatedResultSource).toContain("src={message.generatedImage.url}");
+    expect(generatedResultSource).toContain("src={generatedImage.url}");
+    expect(generatedResultSource).toContain("message.role === \"assistant\" && generatedImage.id");
     expect(
       clientSource.split("<GeneratedImageAttribution theme={activeTheme} />")
     ).toHaveLength(2);
@@ -477,7 +478,7 @@ describe("chat image-generation presentation", () => {
 
   it("preserves generated-action ownership and uploaded-image rendering paths", () => {
     expect(clientSource).toContain(
-      'message.role === "assistant" && message.generatedImage?.id',
+      'message.role === "assistant" && generatedImage.id ?',
     );
     expect(clientSource).toContain('messageImageSource === "children"');
     expect(clientSource).toContain('alt={image.image_name || "Uploaded image"}');
@@ -495,7 +496,7 @@ describe("chat image-generation presentation", () => {
       '"max-w-full rounded-2xl border px-3 py-2.5 break-words [overflow-wrap:anywhere]"',
     );
     expect(clientSource).toContain(
-      'message.role === "assistant" && message.generatedImage?.id',
+      'message.role === "assistant" && generatedImage.id ?',
     );
     expect(clientSource).toContain("params.forceWebSearch || !useStandardCapability");
     expect(clientSource).toContain('aria-label="Download image"');

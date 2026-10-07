@@ -254,6 +254,7 @@ describe("chat image-generation mode", () => {
       id: "30000000-0000-4000-8000-000000000003",
       url: "https://signed.example/generated.webp",
     });
+    expect(normalized[0]?.generatedImages).toEqual([normalized[0]?.generatedImage]);
   });
 
   it("removes only the generated-image assistant message after deletion", () => {
@@ -293,6 +294,35 @@ describe("chat image-generation mode", () => {
       messages[2],
       messages[3],
       messages[4],
+    ]);
+  });
+
+  it("removes one image while retaining its assistant message and sibling images", () => {
+    const sibling = {
+      id: "sibling-image",
+      url: "https://signed.example/sibling.webp",
+      mimeType: "image/webp",
+    };
+    const message = {
+      id: "shared-assistant",
+      role: "assistant" as const,
+      content: "",
+      generatedImages: [
+        {
+          id: "selected-image",
+          url: "https://signed.example/selected.webp",
+          mimeType: "image/webp",
+        },
+        sibling,
+      ],
+    };
+
+    expect(removeGeneratedImageMessage([message], "selected-image", false)).toEqual([
+      {
+        ...message,
+        generatedImages: [sibling],
+        generatedImage: sibling,
+      },
     ]);
   });
 
@@ -392,7 +422,7 @@ describe("chat image-generation mode", () => {
     expect(clientSource).toContain("if (!confirmed) return;");
     expect(clientSource).toContain("deletingGeneratedImageId");
     expect(clientSource).toContain("getGeneratedImageDeleteErrorMessage");
-    expect(clientSource).toContain("message.role === \"assistant\" && message.generatedImage?.id");
+    expect(clientSource).toContain("message.role === \"assistant\" && generatedImage.id ? (");
   });
 
   it("keeps Delete scoped to generated-image actions and preserves other image actions", () => {

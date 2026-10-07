@@ -225,6 +225,7 @@ type Message = {
   has_child_images?: boolean;
   documents?: UploadedDocument[];
   generatedImage?: GeneratedImage;
+  generatedImages?: GeneratedImage[];
   generatedDocuments?: GeneratedDocumentAttachment[];
 };
 
@@ -1900,18 +1901,37 @@ export function normalizeInitialMessages(messages: Message[]): Message[] {
     documents: Array.isArray(message.documents)
       ? cloneDocuments(message.documents)
       : [],
+    generatedImages: generatedImagesForMessage(message),
     generatedDocuments: normalizeGeneratedDocumentAttachments(message.generatedDocuments),
   }));
+}
+
+function generatedImagesForMessage(
+  message: Pick<Message, "generatedImage" | "generatedImages">,
+): GeneratedImage[] {
+  if (Array.isArray(message.generatedImages)) return message.generatedImages;
+  return message.generatedImage ? [message.generatedImage] : [];
 }
 
 export function removeGeneratedImageMessage(
   messages: Message[],
   generatedImageId: string,
+  messageDeleted = true,
 ): Message[] {
-  return messages.filter(
-    (message) =>
-      message.role !== "assistant" || message.generatedImage?.id !== generatedImageId,
-  );
+  return messages.flatMap((message) => {
+    if (message.role !== "assistant") return [message];
+
+    const generatedImages = generatedImagesForMessage(message);
+    if (!generatedImages.some((image) => image.id === generatedImageId)) return [message];
+    if (messageDeleted) return [];
+
+    const remainingImages = generatedImages.filter((image) => image.id !== generatedImageId);
+    return [{
+      ...message,
+      generatedImages: remainingImages,
+      ...(remainingImages.length === 1 ? { generatedImage: remainingImages[0] } : { generatedImage: undefined }),
+    }];
+  });
 }
 
 export function removeGeneratedDocumentAttachment(
@@ -1986,6 +2006,7 @@ export function reconcileGeneratedImageMessages(
       ...message,
       id: assistantMessageId ?? message.id,
       generatedImage,
+      generatedImages: [...generatedImagesForMessage(message), generatedImage],
     };
   });
 }
@@ -2076,19 +2097,21 @@ export function getLatestEditableImageContext(
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
     const message = messages[messageIndex];
 
-    if (
-      message.role === "assistant" &&
-      message.generatedImage?.id &&
-      message.generatedImage.url
-    ) {
-      return {
-        sourceReference: {
-          kind: "generated_image",
-          generatedImageId: message.generatedImage.id,
-        },
-        sourcePreview: message.generatedImage.url,
-        sourceLabel: "Generated image",
-      };
+    if (message.role === "assistant") {
+      const generatedImages = generatedImagesForMessage(message);
+      for (let imageIndex = generatedImages.length - 1; imageIndex >= 0; imageIndex -= 1) {
+        const image = generatedImages[imageIndex];
+        if (!image.id || !image.url) continue;
+
+        return {
+          sourceReference: {
+            kind: "generated_image",
+            generatedImageId: image.id,
+          },
+          sourcePreview: image.url,
+          sourceLabel: "Generated image",
+        };
+      }
     }
 
     if (message.role !== "user" || !Array.isArray(message.images)) continue;
@@ -3003,7 +3026,7 @@ export default function ChatClient({
   useEffect(() => {
     const displayedUrls = new Set(
       messages
-        .map((message) => message.generatedImage?.url)
+        .flatMap((message) => generatedImagesForMessage(message).map((image) => image.url))
         .filter((url): url is string => Boolean(url))
     );
 
@@ -5410,7 +5433,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         { method: "DELETE", cache: "no-store" },
       );
       const data = (await response.json().catch(() => null)) as
-        | { error?: string; code?: string }
+        | { error?: string; code?: string; messageDeleted?: boolean }
         | null;
 
       if (!response.ok) {
@@ -5419,7 +5442,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         );
       }
 
-      setMessages((prev) => removeGeneratedImageMessage(prev, generatedImageId));
+      setMessages((prev) =>
+        removeGeneratedImageMessage(prev, generatedImageId, data?.messageDeleted === true),
+      );
     } catch (error) {
       setUiError(
         error instanceof Error
@@ -6117,153 +6142,152 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                             />
                           ))}
 
-                          {message.generatedImage ? (
-                            <div className="mt-3 flex w-fit min-w-0 max-w-full flex-col items-start">
+                          {generatedImagesForMessage(message).map((generatedImage, generatedImageIndex, generatedImages) => (
+                            <div
+                              key={generatedImage.id ?? `${message.id}-generated-image-${generatedImageIndex}`}
+                              className="mt-3 flex w-fit min-w-0 max-w-full flex-col items-start"
+                            >
                               <div className="overflow-hidden rounded-xl">
                                 <NextImage
-                                src={message.generatedImage.url}
-                                alt="Generated image"
-                                width={768}
-                                height={768}
-                                unoptimized
-                                priority={isLatestMessage}
-                                sizes="(max-width: 768px) calc(100vw - 2rem), 768px"
-                                className="block h-auto w-auto max-h-[min(70vh,640px)] max-w-full object-contain"
-                              />
+                                  src={generatedImage.url}
+                                  alt="Generated image"
+                                  width={768}
+                                  height={768}
+                                  unoptimized
+                                  priority={isLatestMessage && generatedImageIndex === generatedImages.length - 1}
+                                  sizes="(max-width: 768px) calc(100vw - 2rem), 768px"
+                                  className="block h-auto w-auto max-h-[min(70vh,640px)] max-w-full object-contain"
+                                />
                               </div>
                               <GeneratedImageAttribution theme={activeTheme} />
-                            </div>
-                          ) : null}
 
-                          {message.role === "assistant" && message.generatedImage?.id ? (
-                            <div
-                              className="mt-2 flex flex-wrap items-center gap-1.5"
-                              role="group"
-                              aria-label="Generated image actions"
-                            >
-                              <Tooltip theme={activeTheme} content="Edit image" touchSafe>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleOpenImageEdit(
-                                      {
-                                        kind: "generated_image",
-                                        generatedImageId: message.generatedImage!.id!,
-                                      },
-                                      message.generatedImage!.url,
-                                      "Generated image",
-                                    )
-                                  }
-                                  disabled={loading || imageEditOperation?.status === "submitting"}
-                                  className={cx(
-                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
-                                    getGeneratedImageActionClass(activeTheme, "default")
-                                  )}
-                                  aria-label="Edit image"
+                              {message.role === "assistant" && generatedImage.id ? (
+                                <div
+                                  className="mt-2 flex flex-wrap items-center gap-1.5"
+                                  role="group"
+                                  aria-label="Generated image actions"
                                 >
-                                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                                  <span className="sr-only">Edit image</span>
-                                </button>
-                              </Tooltip>
+                                  <Tooltip theme={activeTheme} content="Edit image" touchSafe>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleOpenImageEdit(
+                                          {
+                                            kind: "generated_image",
+                                            generatedImageId: generatedImage.id!,
+                                          },
+                                          generatedImage.url,
+                                          "Generated image",
+                                        )
+                                      }
+                                      disabled={loading || imageEditOperation?.status === "submitting"}
+                                      className={cx(
+                                        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                        getGeneratedImageActionClass(activeTheme, "default")
+                                      )}
+                                      aria-label="Edit image"
+                                    >
+                                      <Pencil className="h-4 w-4" aria-hidden="true" />
+                                      <span className="sr-only">Edit image</span>
+                                    </button>
+                                  </Tooltip>
 
-                              <Tooltip theme={activeTheme} content="Download image" touchSafe>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void handleDownloadGeneratedImage(message.generatedImage!.id!)
-                                  }
-                                  disabled={
-                                    loading ||
-                                    downloadingGeneratedImageId !== null ||
-                                    deletingGeneratedImageId !== null
-                                  }
-                                  className={cx(
-                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
-                                    getGeneratedImageActionClass(activeTheme, "default")
-                                  )}
-                                  aria-label="Download image"
-                                >
-                                  {downloadingGeneratedImageId === message.generatedImage.id ? (
-                                    <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
-                                  ) : (
-                                    <Download className="h-4 w-4" aria-hidden="true" />
-                                  )}
-                                  <span className="sr-only">Download image</span>
-                                </button>
-                              </Tooltip>
+                                  <Tooltip theme={activeTheme} content="Download image" touchSafe>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDownloadGeneratedImage(generatedImage.id!)}
+                                      disabled={
+                                        loading ||
+                                        downloadingGeneratedImageId !== null ||
+                                        deletingGeneratedImageId !== null
+                                      }
+                                      className={cx(
+                                        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                        getGeneratedImageActionClass(activeTheme, "default")
+                                      )}
+                                      aria-label="Download image"
+                                    >
+                                      {downloadingGeneratedImageId === generatedImage.id ? (
+                                        <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                      ) : (
+                                        <Download className="h-4 w-4" aria-hidden="true" />
+                                      )}
+                                      <span className="sr-only">Download image</span>
+                                    </button>
+                                  </Tooltip>
 
-                              <Tooltip
-                                content={isRegeneratingImage ? "Regenerating image…" : "Regenerate image"}
-                                touchSafe
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => void handleRegenerateImage(message.id)}
-                                  disabled={loading || deletingGeneratedImageId !== null}
-                                  aria-busy={isRegeneratingImage}
-                                  className={cx(
-                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
-                                    getGeneratedImageActionClass(activeTheme, "default")
-                                  )}
-                                  aria-label="Regenerate image"
-                                >
-                                  <RefreshCw
-                                    className={cx("h-4 w-4", isRegeneratingImage && "animate-spin")}
-                                    aria-hidden="true"
-                                  />
-                                  <span className="sr-only">
-                                    {isRegeneratingImage ? "Regenerating image" : "Regenerate image"}
-                                  </span>
-                                </button>
-                              </Tooltip>
+                                  {generatedImageIndex === 0 ? (
+                                    <Tooltip
+                                      content={isRegeneratingImage ? "Regenerating image…" : "Regenerate image"}
+                                      touchSafe
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleRegenerateImage(message.id)}
+                                        disabled={loading || deletingGeneratedImageId !== null}
+                                        aria-busy={isRegeneratingImage}
+                                        className={cx(
+                                          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                          getGeneratedImageActionClass(activeTheme, "default")
+                                        )}
+                                        aria-label="Regenerate image"
+                                      >
+                                        <RefreshCw
+                                          className={cx("h-4 w-4", isRegeneratingImage && "animate-spin")}
+                                          aria-hidden="true"
+                                        />
+                                        <span className="sr-only">
+                                          {isRegeneratingImage ? "Regenerating image" : "Regenerate image"}
+                                        </span>
+                                      </button>
+                                    </Tooltip>
+                                  ) : null}
 
-                              <Tooltip
-                                content={
-                                  deletingGeneratedImageId === message.generatedImage.id
-                                    ? "Deleting image…"
-                                    : "Delete image"
-                                }
-                                touchSafe
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void handleDeleteGeneratedImage(message.generatedImage!.id!)
-                                  }
-                                  disabled={
-                                    loading ||
-                                    downloadingGeneratedImageId !== null ||
-                                    deletingGeneratedImageId !== null
-                                  }
-                                  aria-busy={
-                                    deletingGeneratedImageId === message.generatedImage.id
-                                  }
-                                  className={cx(
-                                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-50",
-                                    getGeneratedImageActionClass(activeTheme, "delete")
-                                  )}
-                                  aria-label="Delete image"
-                                >
-                                  {deletingGeneratedImageId === message.generatedImage.id ? (
-                                    <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
-                                  ) : (
-                                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                                  )}
-                                  <span className="sr-only">
-                                    {deletingGeneratedImageId === message.generatedImage.id
-                                      ? "Deleting image"
-                                      : "Delete image"}
-                                  </span>
-                                </button>
-                              </Tooltip>
+                                  <Tooltip
+                                    content={
+                                      deletingGeneratedImageId === generatedImage.id
+                                        ? "Deleting image…"
+                                        : "Delete image"
+                                    }
+                                    touchSafe
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDeleteGeneratedImage(generatedImage.id!)}
+                                      disabled={
+                                        loading ||
+                                        downloadingGeneratedImageId !== null ||
+                                        deletingGeneratedImageId !== null
+                                      }
+                                      aria-busy={deletingGeneratedImageId === generatedImage.id}
+                                      className={cx(
+                                        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-50",
+                                        getGeneratedImageActionClass(activeTheme, "delete")
+                                      )}
+                                      aria-label="Delete image"
+                                    >
+                                      {deletingGeneratedImageId === generatedImage.id ? (
+                                        <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                      ) : (
+                                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                      )}
+                                      <span className="sr-only">
+                                        {deletingGeneratedImageId === generatedImage.id
+                                          ? "Deleting image"
+                                          : "Delete image"}
+                                      </span>
+                                    </button>
+                                  </Tooltip>
 
-                              {isRegeneratingImage ? (
-                                <span className="text-xs text-white/50" aria-live="polite">
-                                  Regenerating…
-                                </span>
+                                  {generatedImageIndex === 0 && isRegeneratingImage ? (
+                                    <span className="text-xs text-white/50" aria-live="polite">
+                                      Regenerating…
+                                    </span>
+                                  ) : null}
+                                </div>
                               ) : null}
                             </div>
-                          ) : null}
+                          ))}
 
                           {messageImageSource === "children" && messageImages.length > 0 ? (
                             <div

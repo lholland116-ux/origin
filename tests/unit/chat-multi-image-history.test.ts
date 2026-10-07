@@ -12,6 +12,7 @@ import {
   type MessageImage,
   type PendingImage,
 } from "@/app/chat/ChatClient";
+import { selectIntelligenceRoute } from "@/lib/ai/intelligence-router";
 
 const pendingImage = (id: string): PendingImage => ({
   id,
@@ -202,5 +203,67 @@ describe("durable multi-image chat history", () => {
         },
       ]),
     ).toBeNull();
+  });
+
+  it("selects the deterministic newest generated image when a message has multiple images", () => {
+    expect(
+      getLatestEditableImageContext([
+        {
+          id: "assistant-with-images",
+          role: "assistant",
+          content: "",
+          generatedImages: [
+            {
+              id: "older-generated-image",
+              url: "https://signed.example/older.webp",
+              mimeType: "image/webp",
+            },
+            {
+              id: "newer-generated-image",
+              url: "https://signed.example/newer.webp",
+              mimeType: "image/png",
+            },
+          ],
+        },
+      ]),
+    ).toEqual({
+      sourceReference: {
+        kind: "generated_image",
+        generatedImageId: "newer-generated-image",
+      },
+      sourcePreview: "https://signed.example/newer.webp",
+      sourceLabel: "Generated image",
+    });
+  });
+
+  it("does not turn passive multi-image history into edit intent for unrelated prompts", () => {
+    const imageContext = getLatestEditableImageContext([
+      {
+        id: "assistant-with-images",
+        role: "assistant",
+        content: "",
+        generatedImages: [
+          {
+            id: "generated-a",
+            url: "https://signed.example/a.webp",
+            mimeType: "image/webp",
+          },
+          {
+            id: "generated-b",
+            url: "https://signed.example/b.webp",
+            mimeType: "image/png",
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      selectIntelligenceRoute({
+        mode: "auto",
+        prompt: "What should I change on my website?",
+        hasImageContext: Boolean(imageContext),
+        hasImageAttachment: false,
+      }),
+    ).toEqual({ route: "standard", reason: "default_standard" });
   });
 });

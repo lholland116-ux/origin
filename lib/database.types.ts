@@ -1161,7 +1161,7 @@ export type Database = {
           {
             foreignKeyName: "message_generated_images_message_id_fkey"
             columns: ["message_id"]
-            isOneToOne: true
+            isOneToOne: false
             referencedRelation: "messages"
             referencedColumns: ["id"]
           },
@@ -1361,6 +1361,13 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      delete_generated_image_metadata: {
+        Args: { p_generated_image_id: string }
+        Returns: {
+          image_deleted: boolean
+          message_deleted: boolean
+        }[]
+      }
       create_generated_image_chat_exchange: {
         Args: {
           p_conversation_id: string

@@ -14,6 +14,7 @@ type InitialMessage = {
   image_path?: string | null;
   image_name?: string | null;
   generatedImage?: GeneratedImageHistory;
+  generatedImages?: GeneratedImageHistory[];
 };
 
 type ConversationItem = {
@@ -139,7 +140,7 @@ export default async function ChatPage() {
     }));
 
   const initialMessageIds = initialMessages.map((message) => message.id);
-  let generatedImagesByMessageId = new Map<string, GeneratedImageHistory>();
+  let generatedImagesByMessageId = new Map<string, GeneratedImageHistory[]>();
 
   if (initialMessageIds.length > 0) {
     const { data: generatedRows, error: generatedRowsError } = await supabase
@@ -159,7 +160,8 @@ export default async function ChatPage() {
       .in("message_id", initialMessageIds)
       .eq("conversation_id", activeConversationId)
       .eq("user_id", user.id)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true });
 
     if (generatedRowsError) {
       console.error("Failed to load generated image metadata:", generatedRowsError);
@@ -186,7 +188,12 @@ export default async function ChatPage() {
   const hydratedInitialMessages = initialMessages.map((message) => ({
     ...message,
     ...(generatedImagesByMessageId.has(message.id)
-      ? { generatedImage: generatedImagesByMessageId.get(message.id) }
+      ? {
+          generatedImages: generatedImagesByMessageId.get(message.id),
+          ...(generatedImagesByMessageId.get(message.id)?.length === 1
+            ? { generatedImage: generatedImagesByMessageId.get(message.id)?.[0] }
+            : {}),
+        }
       : {}),
   }));
 

@@ -98,10 +98,10 @@ export async function hydrateGeneratedImageRows(params: {
   userId: string;
   conversationId: string;
   sign: (storagePath: string) => Promise<string | null>;
-}): Promise<Map<string, GeneratedImageHistory>> {
-  const hydrated = new Map<string, GeneratedImageHistory>();
+}): Promise<Map<string, GeneratedImageHistory[]>> {
+  const hydrated = new Map<string, GeneratedImageHistory[]>();
 
-  await Promise.all(
+  const signedRows = await Promise.all(
     params.rows.map(async (rawRow) => {
       const row = normalizeGeneratedImageRow(
         rawRow,
@@ -111,17 +111,27 @@ export async function hydrateGeneratedImageRows(params: {
       if (!row) return;
 
       const url = await params.sign(row.storage_path);
-      if (!url || !/^https:\/\//i.test(url)) return;
+      if (!url || !/^https:\/\//i.test(url)) return null;
 
-      hydrated.set(row.message_id, {
-        id: row.id,
-        url,
-        mimeType: row.mime_type,
-        provider: row.provider,
-        model: row.model,
-      });
+      return {
+        messageId: row.message_id,
+        image: {
+          id: row.id,
+          url,
+          mimeType: row.mime_type,
+          provider: row.provider,
+          model: row.model,
+        },
+      };
     }),
   );
+
+  for (const signedRow of signedRows) {
+    if (!signedRow) continue;
+    const images = hydrated.get(signedRow.messageId) ?? [];
+    images.push(signedRow.image);
+    hydrated.set(signedRow.messageId, images);
+  }
 
   return hydrated;
 }

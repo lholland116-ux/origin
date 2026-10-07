@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   supabase: null as unknown as {
     auth: { getUser: ReturnType<typeof vi.fn> };
     from: ReturnType<typeof vi.fn>;
+    rpc: ReturnType<typeof vi.fn>;
   },
   admin: null as unknown as {
     storage: { from: ReturnType<typeof vi.fn> };
@@ -84,7 +85,7 @@ function configure(options: {
   metadata?: QueryResult;
   message?: QueryResult;
   lineage?: QueryResult;
-  deletedMessage?: QueryResult;
+  deletion?: QueryResult;
   download?: QueryResult;
   remove?: QueryResult;
   upload?: QueryResult;
@@ -108,12 +109,6 @@ function configure(options: {
         query(
           options.message ?? {
             data: imageOnlyMessage(),
-            error: null,
-          },
-        ),
-        query(
-          options.deletedMessage ?? {
-            data: [{ id: MESSAGE_ID }],
             error: null,
           },
         ),
@@ -144,6 +139,14 @@ function configure(options: {
       const tableQuery = tableQueries?.shift();
       if (!tableQuery) throw new Error(`Unexpected query for ${table}`);
       return tableQuery;
+    }),
+    rpc: vi.fn(async (functionName: string, args: Record<string, unknown>) => {
+      expect(functionName).toBe("delete_generated_image_metadata");
+      expect(args.p_generated_image_id).toEqual(expect.any(String));
+      return options.deletion ?? {
+        data: [{ image_deleted: true, message_deleted: true }],
+        error: null,
+      };
     }),
   };
 
@@ -315,12 +318,32 @@ describe("DELETE /api/generated-images/[generatedImageId]", () => {
     expect(await responseBody(response)).toEqual({
       ok: true,
       generatedImageId: DERIVATIVE_IMAGE_ID,
+      messageDeleted: true,
     });
     expect(storage.remove).toHaveBeenCalledWith([STORAGE_PATH]);
     expect(storage.upload).not.toHaveBeenCalled();
   });
 
-  it("removes storage before the owned assistant message and cascaded metadata", async () => {
+  it("deletes only the selected image metadata when its assistant message has siblings", async () => {
+    const { storage } = configure({
+      deletion: {
+        data: [{ image_deleted: true, message_deleted: false }],
+        error: null,
+      },
+    });
+
+    const response = await DELETE(request(), context());
+
+    expect(response.status).toBe(200);
+    expect(await responseBody(response)).toMatchObject({ messageDeleted: false });
+    expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+      "delete_generated_image_metadata",
+      { p_generated_image_id: GENERATED_IMAGE_ID },
+    );
+    expect(storage.remove).toHaveBeenCalledWith([STORAGE_PATH]);
+  });
+
+  it("removes storage before atomically deleting the image and its empty assistant message", async () => {
     const { storage } = configure();
 
     const response = await DELETE(request(), context());
@@ -332,7 +355,7 @@ describe("DELETE /api/generated-images/[generatedImageId]", () => {
     expect(mocks.supabase.from).toHaveBeenNthCalledWith(1, "message_generated_images");
     expect(mocks.supabase.from).toHaveBeenNthCalledWith(2, "messages");
     expect(mocks.supabase.from).toHaveBeenNthCalledWith(3, "image_edit_lineage");
-    expect(mocks.supabase.from).toHaveBeenNthCalledWith(4, "messages");
+    expect(mocks.supabase.rpc).toHaveBeenCalledOnce();
   });
 
   it("does not involve image quota or attempt state", async () => {
@@ -372,11 +395,11 @@ describe("DELETE /api/generated-images/[generatedImageId]", () => {
     expect(mocks.supabase.from).toHaveBeenCalledTimes(3);
   });
 
-  it("restores the exact downloaded bytes when message deletion fails", async () => {
+  it("restores the exact downloaded bytes when metadata deletion fails", async () => {
     const bytes = new Uint8Array([9, 8, 7, 6]);
     const { storage } = configure({
       download: { data: new Blob([bytes], { type: "image/webp" }), error: null },
-      deletedMessage: { data: null, error: { message: "deferred lineage constraint" } },
+      deletion: { data: null, error: { message: "deferred lineage constraint" } },
     });
 
     const response = await DELETE(request(), context());
@@ -393,9 +416,9 @@ describe("DELETE /api/generated-images/[generatedImageId]", () => {
     );
   });
 
-  it("restores storage when the deferred source-lineage FK rejects a concurrent delete", async () => {
+  it("restores storage when the deferred source-lineage FK rejects metadata deletion", async () => {
     const { storage } = configure({
-      deletedMessage: {
+      deletion: {
         data: null,
         error: { message: "insert or update on table image_edit_lineage violates foreign key" },
       },
@@ -414,9 +437,12 @@ describe("DELETE /api/generated-images/[generatedImageId]", () => {
     );
   });
 
-  it("does not report success when the guarded message delete affects no row", async () => {
+  it("does not report success when the generated-image row was not deleted", async () => {
     const { storage } = configure({
-      deletedMessage: { data: [], error: null },
+      deletion: {
+        data: [{ image_deleted: false, message_deleted: false }],
+        error: null,
+      },
     });
 
     const response = await DELETE(request(), context());

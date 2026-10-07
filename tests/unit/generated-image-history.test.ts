@@ -36,22 +36,49 @@ describe("durable generated-image history normalization", () => {
         sign,
       })
     ).resolves.toEqual(
-      new Map([
-        [
-          MESSAGE_ID,
-          {
-            id: IMAGE_ID,
-            url: "https://signed.example/generated.webp",
-            mimeType: "image/webp",
-            provider: "replicate",
-            model: "black-forest-labs/flux-schnell",
-          },
-        ],
-      ])
+        new Map([
+          [
+            MESSAGE_ID,
+            [
+              {
+                id: IMAGE_ID,
+                url: "https://signed.example/generated.webp",
+                mimeType: "image/webp",
+                provider: "replicate",
+                model: "black-forest-labs/flux-schnell",
+              },
+            ],
+          ],
+        ])
     );
     expect(sign).toHaveBeenCalledWith(
       `generated/${USER_ID}/${CONVERSATION_ID}/image.webp`
     );
+  });
+
+  it("retains multiple image records for one message in input order despite signing completion order", async () => {
+    let resolveFirst: (url: string) => void = () => undefined;
+    let resolveSecond: (url: string) => void = () => undefined;
+    const firstUrl = new Promise<string>((resolve) => { resolveFirst = resolve; });
+    const secondUrl = new Promise<string>((resolve) => { resolveSecond = resolve; });
+    const hydration = hydrateGeneratedImageRows({
+      rows: [
+        row({ id: "40000000-0000-4000-8000-000000000002", storage_path: `generated/${USER_ID}/${CONVERSATION_ID}/first.webp` }),
+        row({ id: "40000000-0000-4000-8000-000000000003", storage_path: `generated/${USER_ID}/${CONVERSATION_ID}/second.webp` }),
+      ],
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      sign: (path) => path.endsWith("first.webp") ? firstUrl : secondUrl,
+    });
+
+    resolveSecond("https://signed.example/second.webp");
+    resolveFirst("https://signed.example/first.webp");
+
+    const hydrated = await hydration;
+    expect(hydrated.get(MESSAGE_ID)?.map((image) => image.id)).toEqual([
+      "40000000-0000-4000-8000-000000000002",
+      "40000000-0000-4000-8000-000000000003",
+    ]);
   });
 
   it.each([

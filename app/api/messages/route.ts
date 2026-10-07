@@ -391,7 +391,7 @@ async function loadGeneratedImages(
   rows: unknown[],
   userId: string,
   conversationId: string,
-): Promise<Map<string, GeneratedImageHistory>> {
+): Promise<Map<string, GeneratedImageHistory[]>> {
   if (rows.length === 0) return new Map();
 
   let admin: ReturnType<typeof createAdminClient>;
@@ -595,7 +595,7 @@ export async function GET(req: NextRequest) {
       )
     );
 
-    const generatedImagesByMessageId = new Map<string, GeneratedImageHistory>();
+    const generatedImagesByMessageId = new Map<string, GeneratedImageHistory[]>();
 
     if (parentMessageIds.length > 0) {
       const { data: generatedData, error: generatedError } = await supabase
@@ -615,7 +615,8 @@ export async function GET(req: NextRequest) {
         .in("message_id", parentMessageIds)
         .eq("conversation_id", conversationId)
         .eq("user_id", user.id)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true });
 
       if (generatedError) {
         console.error("GET /api/messages generated image query failed", {
@@ -628,9 +629,9 @@ export async function GET(req: NextRequest) {
           user.id,
           conversationId,
         );
-        for (const [messageId, image] of hydratedGeneratedImages) {
+        for (const [messageId, images] of hydratedGeneratedImages) {
           if (parentMessageIdSet.has(messageId)) {
-            generatedImagesByMessageId.set(messageId, image);
+            generatedImagesByMessageId.set(messageId, images);
           }
         }
       }
@@ -655,7 +656,12 @@ export async function GET(req: NextRequest) {
         has_child_images: childMessageIds.has(message.id),
         generatedDocuments: generatedDocumentsByMessageId.get(message.id) ?? [],
         ...(generatedImagesByMessageId.has(message.id)
-          ? { generatedImage: generatedImagesByMessageId.get(message.id) }
+          ? {
+              generatedImages: generatedImagesByMessageId.get(message.id),
+              ...(generatedImagesByMessageId.get(message.id)?.length === 1
+                ? { generatedImage: generatedImagesByMessageId.get(message.id)?.[0] }
+                : {}),
+            }
           : {}),
       };
     });

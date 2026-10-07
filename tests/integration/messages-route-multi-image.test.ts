@@ -9,6 +9,7 @@ type MockQuery = {
   eq: ReturnType<typeof vi.fn>;
   in: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
+  then: Promise<{ data: unknown; error: { message: string } | null }> ["then"];
 };
 
 type MockSupabase = {
@@ -46,7 +47,8 @@ function queryResult(data: unknown, error: { message: string } | null = null) {
   query.select = vi.fn(() => query);
   query.eq = vi.fn(() => query);
   query.in = vi.fn(() => query);
-  query.order = vi.fn(async () => ({ data, error }));
+  query.order = vi.fn(() => query);
+  query.then = (resolve, reject) => Promise.resolve({ data, error }).then(resolve, reject);
   return query;
 }
 
@@ -151,6 +153,7 @@ function setupSupabase(params: {
     fromCalls,
     adminFromCalls,
     messageQuery,
+    generatedQuery,
     generatedDocumentQuery,
   };
 }
@@ -487,6 +490,61 @@ describe("GET /api/messages durable multi-image reads", () => {
       model: "runware:400@4",
     });
     expect(setup.createSignedUrl).toHaveBeenCalledWith(storagePath, 3600);
+  });
+
+  it("returns every generated image linked to one assistant message in deterministic order", async () => {
+    const assistantMessage = {
+      ...parentMessage(
+        "30000000-0000-4000-8000-000000000015",
+        "2026-09-13T12:00:00.000Z",
+      ),
+      role: "assistant",
+      content: "",
+    };
+    const firstImageId = "40000000-0000-4000-8000-000000000015";
+    const secondImageId = "40000000-0000-4000-8000-000000000016";
+    const firstPath = `generated/${USER_ID}/${CONVERSATION_ID}/first.webp`;
+    const secondPath = `generated/${USER_ID}/${CONVERSATION_ID}/second.webp`;
+    const setup = setupSupabase({
+      parents: [assistantMessage],
+      generatedRows: [
+        {
+          id: firstImageId,
+          message_id: assistantMessage.id,
+          conversation_id: CONVERSATION_ID,
+          user_id: USER_ID,
+          storage_path: firstPath,
+          mime_type: "image/webp",
+          provider: "replicate",
+          model: "flux-schnell",
+        },
+        {
+          id: secondImageId,
+          message_id: assistantMessage.id,
+          conversation_id: CONVERSATION_ID,
+          user_id: USER_ID,
+          storage_path: secondPath,
+          mime_type: "image/png",
+          provider: "runware",
+          model: "runware:400@4",
+        },
+      ],
+    });
+
+    const response = await request();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.messages[0].generatedImages.map((image: { id: string }) => image.id)).toEqual([
+      firstImageId,
+      secondImageId,
+    ]);
+    expect(body.messages[0]).not.toHaveProperty("generatedImage");
+    expect(setup.generatedQuery.order.mock.calls).toEqual([
+      ["created_at", { ascending: true }],
+      ["id", { ascending: true }],
+    ]);
+    expect(setup.createSignedUrl).toHaveBeenCalledTimes(2);
   });
 
   it("hydrates generated documents onto their exact assistant message without exposing storage paths", async () => {

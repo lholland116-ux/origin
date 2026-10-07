@@ -242,6 +242,7 @@ export async function DELETE(
     return errorResponse(502, "The generated image could not be deleted.");
   }
 
+  let messageDeleted = false;
   try {
     const admin = createAdminClient();
     const { error } = await admin.storage.from("chat-images").remove([storagePath]);
@@ -254,26 +255,33 @@ export async function DELETE(
   }
 
   try {
-    const { data: deletedMessages, error } = await supabase
-      .from("messages")
-      .delete()
-      .eq("id", messageId)
-      .eq("conversation_id", conversationId)
-      .eq("user_id", userId)
-      .eq("role", "assistant")
-      .select("id");
+    const { data: deletionRows, error } = await supabase.rpc(
+      "delete_generated_image_metadata",
+      { p_generated_image_id: generatedImageId },
+    );
+    const deletion = Array.isArray(deletionRows) ? deletionRows[0] : null;
 
-    if (error || !Array.isArray(deletedMessages) || deletedMessages.length !== 1) {
+    if (
+      error ||
+      !deletion ||
+      deletion.image_deleted !== true ||
+      typeof deletion.message_deleted !== "boolean"
+    ) {
       await restoreStorageObject(storagePath, mimeType, bytes);
       return errorResponse(500, "The generated image could not be deleted.");
     }
+    messageDeleted = deletion.message_deleted;
   } catch {
     await restoreStorageObject(storagePath, mimeType, bytes);
     return errorResponse(500, "The generated image could not be deleted.");
   }
 
   return NextResponse.json(
-    { ok: true, generatedImageId },
+    {
+      ok: true,
+      generatedImageId,
+      messageDeleted,
+    },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
