@@ -5,6 +5,7 @@ import type {
   ExecutionStepStatus,
 } from "@/lib/agent-runtime/runtime-contracts";
 import type { RuntimeAttachmentReference } from "@/lib/agent-runtime/capability-executor";
+import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
 
 export const EXECUTION_RUNTIME_VERSION = 1 as const;
 export const EXECUTION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
@@ -28,6 +29,8 @@ export type PersistedExecutionPlan = {
 
 export type PersistedExecutionContext = {
   readonly conversationId: string;
+  /** Immutable for the lifetime of a durable run; legacy rows may omit it. */
+  readonly requestMessageBinding?: RequestMessageBinding;
   readonly userInput?: string;
   readonly attachments: readonly RuntimeAttachmentReference[];
   readonly resourceReferences: readonly string[];

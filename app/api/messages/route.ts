@@ -9,6 +9,7 @@ import {
   hydrateGeneratedImageRows,
   type GeneratedImageHistory,
 } from "@/lib/chat/generated-image-history";
+import { omitPendingAssistantMessages } from "@/lib/chat/request-message-visibility";
 
 const MAX_CONVERSATION_ID_LENGTH = 200;
 const SIGNED_IMAGE_URL_LIFETIME_SECONDS = 60 * 60;
@@ -519,7 +520,7 @@ export async function GET(req: NextRequest) {
       return jsonError("Failed to load messages.", 500);
     }
 
-    const parentMessages = (data ?? []) as MessageRow[];
+    const parentMessages = omitPendingAssistantMessages((data ?? []) as MessageRow[]);
     const parentMessageIds = parentMessages.map((message) => message.id);
     const parentMessageIdSet = new Set(parentMessageIds);
     const childRowsByMessageId = new Map<string, MessageImageRow[]>();

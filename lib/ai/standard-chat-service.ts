@@ -54,6 +54,7 @@ import {
   requestTransactionContextSchema,
   type FileContextResult,
 } from "@/lib/agent-runtime/application-contracts";
+import { omitPendingAssistantMessages, PENDING_ASSISTANT_MESSAGE_PREFIX } from "@/lib/chat/request-message-visibility";
 
 const DAILY_USAGE_LIMITS = resolveDailyUsageLimits();
 
@@ -821,6 +822,7 @@ async function executeStandardChatService(input: {
         .eq("conversation_id", conversationId)
         .eq("user_id", userId)
         .eq("role", "assistant")
+        .not("content", "like", `${PENDING_ASSISTANT_MESSAGE_PREFIX}%`)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -937,7 +939,7 @@ async function executeStandardChatService(input: {
       );
     }
 
-    const recentHistory = (history as DbMessage[]).slice(-MAX_HISTORY_MESSAGES);
+    const recentHistory = omitPendingAssistantMessages(history as DbMessage[]).slice(-MAX_HISTORY_MESSAGES);
 
     if (recentHistory.length === 0) {
       return jsonResponse({ error: "Conversation history is empty." }, 400);

@@ -8,6 +8,13 @@ import { ExecutionSnapshotError, validateExecutionSnapshot } from "@/lib/agent-r
 const USER_ID = "a1000000-0000-4000-8000-000000000001";
 const RUN_ID = "b1000000-0000-4000-8000-000000000001";
 const KEY = "c1000000-0000-4000-8000-000000000001";
+const REQUEST_MESSAGE_BINDING = {
+  requestId: "d1000000-0000-4000-8000-000000000001",
+  userId: USER_ID,
+  conversationId: "a1000000-0000-4000-8000-000000000002",
+  userMessageId: "d1000000-0000-4000-8000-000000000002",
+  assistantMessageId: "d1000000-0000-4000-8000-000000000003",
+};
 
 const steps: PlanStep[] = [{ id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" }];
 const plan: PersistedExecutionPlan = {
@@ -32,7 +39,7 @@ function createInput(overrides: Partial<CreateDurableExecutionRunInput> = {}): C
     idempotencyKey: "idempotency-1",
     requestFingerprint: "a".repeat(64),
     executionPlan: plan,
-    runtimeContext: { conversationId: "a1000000-0000-4000-8000-000000000002", userInput: "private user text", attachments: [], resourceReferences: [] },
+    runtimeContext: { conversationId: "a1000000-0000-4000-8000-000000000002", requestMessageBinding: REQUEST_MESSAGE_BINDING, userInput: "private user text", attachments: [], resourceReferences: [] },
     snapshot: snapshot(),
     steps: [{ stepId: "step-1", capabilityId: "standard", dependencyIds: [], executionKey: KEY }],
     createdAt: "2026-10-06T12:00:00.000Z",
@@ -56,6 +63,7 @@ describe("durable execution store contract and snapshot envelope", () => {
     const loaded = await store.getRun({ runId: RUN_ID, userId: USER_ID });
     expect(loaded).toMatchObject({ status: "pending", snapshotRevision: 0, executionPlan: { version: 1 } });
     expect(loaded?.steps).toMatchObject([{ status: "pending", attempt: 1, executionKey: KEY }]);
+    expect(loaded?.runtimeContext.requestMessageBinding).toEqual(REQUEST_MESSAGE_BINDING);
     expect(JSON.stringify(loaded?.executionPlan)).not.toContain("private user text");
     expect(await store.getRun({ runId: RUN_ID, userId: "a1000000-0000-4000-8000-000000000002" })).toBeNull();
   });
@@ -115,6 +123,7 @@ describe("durable execution store contract and snapshot envelope", () => {
     expect(saved).toMatchObject({ status: "saved", snapshotRevision: 3 });
     const loaded = await store.getRun({ runId: RUN_ID, userId: USER_ID });
     expect(loaded).toMatchObject({ status: "succeeded", steps: [{ status: "succeeded", result: { kind: "text", value: "result" } }] });
+    expect(loaded?.runtimeContext.requestMessageBinding).toEqual(REQUEST_MESSAGE_BINDING);
     expect(loaded?.runtimeContext).not.toHaveProperty("userInput");
   });
 

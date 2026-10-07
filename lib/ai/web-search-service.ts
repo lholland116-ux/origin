@@ -27,6 +27,7 @@ import {
 } from "@/lib/capabilities/daily-usage";
 import { createWebSearchOperationService } from "@/lib/ai/web-search-operation-service";
 import { requestTransactionContextSchema } from "@/lib/agent-runtime/application-contracts";
+import { omitPendingAssistantMessages, PENDING_ASSISTANT_MESSAGE_PREFIX } from "@/lib/chat/request-message-visibility";
 
 const DAILY_USAGE_LIMITS = resolveDailyUsageLimits();
 
@@ -512,6 +513,7 @@ async function executeWebSearchService(input: {
         .eq("conversation_id", conversationId)
         .eq("user_id", userId)
         .eq("role", "assistant")
+        .not("content", "like", `${PENDING_ASSISTANT_MESSAGE_PREFIX}%`)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -566,7 +568,7 @@ async function executeWebSearchService(input: {
       );
     }
 
-    const recentMessages: ModelInputMessage[] = (history as DbMessage[])
+    const recentMessages: ModelInputMessage[] = omitPendingAssistantMessages(history as DbMessage[])
       .slice(-MAX_HISTORY_MESSAGES)
       .map((msg) => ({
         role: msg.role,

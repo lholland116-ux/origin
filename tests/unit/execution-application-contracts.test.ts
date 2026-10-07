@@ -3,7 +3,10 @@ import {
   conversationExecutionContextSchema,
   fileContextMatchesExecutionContext,
   fileContextResultSchema,
+  generatedImageReferenceSchema,
   generatedDocumentReferenceSchema,
+  requestMessageBindingSchema,
+  requestTransactionContextSchema,
 } from "@/lib/agent-runtime/application-contracts";
 import { MAX_DOCUMENT_CONTEXT_CHARS } from "@/lib/documents/prepare-context";
 
@@ -12,6 +15,8 @@ const OTHER_USER_ID = "a1000000-0000-4000-8000-000000000002";
 const CONVERSATION_ID = "b1000000-0000-4000-8000-000000000001";
 const OTHER_CONVERSATION_ID = "b1000000-0000-4000-8000-000000000002";
 const DOCUMENT_ID = "c1000000-0000-4000-8000-000000000001";
+const USER_MESSAGE_ID = "d1000000-0000-4000-8000-000000000001";
+const ASSISTANT_MESSAGE_ID = "d1000000-0000-4000-8000-000000000002";
 
 const executionContext = {
   authenticatedUserId: USER_ID,
@@ -35,6 +40,37 @@ function fileContext(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Execution Engine V1 application semantic contracts", () => {
+  it("accepts a strict UUID request-message binding while preserving direct request contexts", () => {
+    const binding = {
+      requestId: "e1000000-0000-4000-8000-000000000001",
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    };
+    expect(requestMessageBindingSchema.safeParse(binding).success).toBe(true);
+    expect(JSON.parse(JSON.stringify(binding))).toEqual(binding);
+    expect(requestMessageBindingSchema.safeParse({ ...binding, assistantMessageId: "invalid" }).success).toBe(false);
+    expect(requestMessageBindingSchema.safeParse({ ...binding, assistantMessageId: USER_MESSAGE_ID }).success).toBe(false);
+    expect(requestMessageBindingSchema.safeParse({ ...binding, unexpected: true }).success).toBe(false);
+    expect(requestMessageBindingSchema.safeParse({ ...binding, userMessageId: undefined }).success).toBe(false);
+    expect(requestMessageBindingSchema.safeParse({ ...binding, assistantMessageId: undefined }).success).toBe(false);
+
+    expect(requestTransactionContextSchema.safeParse({
+      requestId: binding.requestId,
+      userId: binding.userId,
+      conversationId: binding.conversationId,
+      userMessageId: null,
+    }).success).toBe(true);
+    expect(requestTransactionContextSchema.safeParse({
+      requestId: binding.requestId,
+      userId: binding.userId,
+      conversationId: binding.conversationId,
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    }).success).toBe(true);
+  });
+
   it("requires trusted user and conversation identifiers together", () => {
     expect(conversationExecutionContextSchema.safeParse(executionContext).success).toBe(true);
     expect(conversationExecutionContextSchema.safeParse({ authenticatedUserId: USER_ID }).success).toBe(false);
@@ -77,7 +113,7 @@ describe("Execution Engine V1 application semantic contracts", () => {
       kind: "generated_document",
       artifactId: DOCUMENT_ID,
       conversationId: CONVERSATION_ID,
-      messageId: "d1000000-0000-4000-8000-000000000001",
+      messageId: ASSISTANT_MESSAGE_ID,
       filename: "report.txt",
       format: "txt",
       mimeType: "text/plain",
@@ -89,5 +125,18 @@ describe("Execution Engine V1 application semantic contracts", () => {
     expect(JSON.parse(JSON.stringify(reference))).toEqual(reference);
     expect(generatedDocumentReferenceSchema.safeParse({ ...reference, bytes: "private" }).success).toBe(false);
     expect(generatedDocumentReferenceSchema.safeParse({ ...reference, storagePath: "private/path" }).success).toBe(false);
+
+    const imageReference = {
+      kind: "generated_image",
+      imageId: "e1000000-0000-4000-8000-000000000001",
+      conversationId: CONVERSATION_ID,
+      userMessageId: USER_MESSAGE_ID,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+      mimeType: "image/webp",
+      provider: "runware",
+      model: "test-model",
+    };
+    expect(generatedImageReferenceSchema.safeParse(imageReference).success).toBe(true);
+    expect(imageReference).toMatchObject({ userMessageId: USER_MESSAGE_ID, assistantMessageId: ASSISTANT_MESSAGE_ID });
   });
 });

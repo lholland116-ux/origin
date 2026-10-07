@@ -9,10 +9,14 @@ import type {
   ExecutionAuthorizationInput,
   ExecutionAuthorizer,
   ExecutionRuntimeInput,
+  RequestMessageBindingValidator,
   ResolvedExecutionInput,
   RuntimeAttachmentReference,
 } from "@/lib/agent-runtime/capability-executor";
-import { conversationExecutionContextSchema } from "@/lib/agent-runtime/application-contracts";
+import {
+  conversationExecutionContextSchema,
+  requestMessageBindingSchema,
+} from "@/lib/agent-runtime/application-contracts";
 import {
   isJsonValue,
   type ExecutionFailure,
@@ -228,6 +232,7 @@ function makeTelemetry(run: ExecutionRun, failureCode: ExecutionFailureCode | nu
 export type XStateExecutionAdapterOptions = {
   readonly createExecutionId: () => string;
   readonly now: () => Date;
+  readonly requestMessageBindingValidator: RequestMessageBindingValidator;
 };
 
 export class XStateExecutionAdapter {
@@ -242,10 +247,19 @@ export class XStateExecutionAdapter {
     const checked = validateExecutionHandoff(handoffInput);
     if (!checked.handoff) return { kind: "rejected", failure: checked.failure };
     const handoff = checked.handoff;
+    const requestBinding = requestMessageBindingSchema.safeParse(runtimeInput.requestMessageBinding);
+    const stableRequestBinding = requestBinding.success
+      ? Object.freeze({ ...requestBinding.data })
+      : null;
     if (!conversationExecutionContextSchema.safeParse({
       authenticatedUserId: runtimeInput.authenticatedUserId,
       conversationId: runtimeInput.conversationId,
     }).success
+      || !requestBinding.success
+      || !stableRequestBinding
+      || stableRequestBinding.userId !== runtimeInput.authenticatedUserId
+      || stableRequestBinding.conversationId !== runtimeInput.conversationId
+      || (runtimeInput.requestId !== undefined && runtimeInput.requestId !== stableRequestBinding.requestId)
       || (runtimeInput.userInput !== undefined && typeof runtimeInput.userInput !== "string")
       || (runtimeInput.organizationId !== undefined && !safeId(runtimeInput.organizationId))
       || (runtimeInput.requestId !== undefined && !safeId(runtimeInput.requestId))
@@ -256,6 +270,14 @@ export class XStateExecutionAdapter {
         && (!Array.isArray(runtimeInput.attachments) || runtimeInput.attachments.some((item) => !item || !safeId(item.id) || !["file", "image"].includes(item.kind))))) {
       return { kind: "rejected", failure: executionFailure("invalid_handoff") };
     }
+
+    let bindingIsValid = false;
+    try {
+      bindingIsValid = await this.options.requestMessageBindingValidator.validate(stableRequestBinding);
+    } catch {
+      bindingIsValid = false;
+    }
+    if (!bindingIsValid) return { kind: "rejected", failure: executionFailure("ownership_denied") };
 
     const executionId = this.options.createExecutionId();
     const createdAt = this.options.now().toISOString();
@@ -329,9 +351,10 @@ export class XStateExecutionAdapter {
         capabilityId,
         authenticatedUserId: runtimeInput.authenticatedUserId,
         conversationId: runtimeInput.conversationId,
+        requestMessageBinding: stableRequestBinding,
         ...(runtimeInput.organizationId ? { organizationId: runtimeInput.organizationId } : {}),
         resourceReferences: resolved.resourceReferences,
-        ...(runtimeInput.requestId ? { requestId: runtimeInput.requestId } : {}),
+        requestId: stableRequestBinding.requestId,
         ...(runtimeInput.correlationId ? { correlationId: runtimeInput.correlationId } : {}),
       };
 
@@ -362,9 +385,10 @@ export class XStateExecutionAdapter {
         context: {
           authenticatedUserId: runtimeInput.authenticatedUserId,
           conversationId: runtimeInput.conversationId,
+          requestMessageBinding: stableRequestBinding,
           ...(runtimeInput.organizationId ? { organizationId: runtimeInput.organizationId } : {}),
           resourceReferences: resolved.resourceReferences,
-          ...(runtimeInput.requestId ? { requestId: runtimeInput.requestId } : {}),
+          requestId: stableRequestBinding.requestId,
           ...(runtimeInput.correlationId ? { correlationId: runtimeInput.correlationId } : {}),
         },
       };

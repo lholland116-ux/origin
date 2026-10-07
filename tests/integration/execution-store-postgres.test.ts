@@ -40,6 +40,7 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
   function input(): CreateDurableExecutionRunInput {
     const runActor = createExecutionRunLifecycle();
     const stepActor = createExecutionStepLifecycle();
+    const conversationId = randomUUID();
     return {
       id: runId,
       userId,
@@ -53,7 +54,19 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
         plannerSource: "deterministic",
         governance: { maxSteps: 1, capabilityIds: ["standard"], modelPlanningAllowed: false, maxModelCalls: 0, maxRepairAttempts: 0, attachmentContextAllowed: false, handoffVersion: 1 },
       },
-      runtimeContext: { conversationId: randomUUID(), userInput: "local integration fixture", attachments: [], resourceReferences: [] },
+      runtimeContext: {
+        conversationId,
+        requestMessageBinding: {
+          requestId: randomUUID(),
+          userId,
+          conversationId,
+          userMessageId: randomUUID(),
+          assistantMessageId: randomUUID(),
+        },
+        userInput: "local integration fixture",
+        attachments: [],
+        resourceReferences: [],
+      },
       snapshot: createSnapshot(runActor, stepActor),
       steps: [{ stepId: "store-step", capabilityId: "standard", dependencyIds: [], executionKey: stepKey }],
       createdAt: new Date().toISOString(),
@@ -80,8 +93,21 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
   it("enforces owner-scoped idempotent creation and a single concurrent atomic claim", async () => {
     const requested = input();
     expect((await store.createRun(requested)).status).toBe("created");
-    expect((await store.createRun({ ...requested, id: randomUUID() })).status).toBe("existing");
+    const idempotentReplay = await store.createRun({ ...requested, id: randomUUID() });
+    expect(idempotentReplay.status).toBe("existing");
+    if (idempotentReplay.status === "existing") {
+      expect(idempotentReplay.run.runtimeContext.requestMessageBinding).toEqual(requested.runtimeContext.requestMessageBinding);
+    }
     expect(await store.getRun({ runId, userId: otherUserId })).toBeNull();
+    await expect(sql`
+      UPDATE public.execution_runs
+      SET runtime_context = jsonb_set(
+        runtime_context,
+        '{requestMessageBinding,assistantMessageId}',
+        to_jsonb(${randomUUID()}::text)
+      )
+      WHERE id = ${runId}::uuid AND user_id = ${userId}::uuid
+    `).rejects.toThrow("Execution plan identity is immutable");
 
     const runActor = createExecutionRunLifecycle();
     const stepActor = createExecutionStepLifecycle();
@@ -108,6 +134,7 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
     expect(checkpoint.status).toBe("saved");
     const loaded = await store.getRun({ runId, userId });
     expect(loaded).toMatchObject({ status: "succeeded", snapshotRevision: 3, steps: [{ status: "succeeded", result: { kind: "text", value: "mock result" } }] });
+    expect(loaded?.runtimeContext.requestMessageBinding).toEqual(requested.runtimeContext.requestMessageBinding);
     expect(loaded?.runtimeContext).not.toHaveProperty("userInput");
   });
 });

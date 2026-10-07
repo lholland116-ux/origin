@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CapabilityExecutor, ExecutionAuthorizer, ExecutionRuntimeInput } from "@/lib/agent-runtime/capability-executor";
+import type { CapabilityExecutor, ExecutionAuthorizer, ExecutionRuntimeInput, RequestMessageBindingValidator } from "@/lib/agent-runtime/capability-executor";
 import { XStateExecutionAdapter } from "@/lib/agent-runtime/xstate-runtime-adapter";
 import type { ExecutionOutcome } from "@/lib/agent-runtime/runtime-contracts";
 
@@ -10,6 +10,7 @@ if (typeof window !== "undefined") {
 export type LvtChatExecutionRuntimeOptions = {
   readonly executor: CapabilityExecutor;
   readonly authorizer: ExecutionAuthorizer;
+  readonly requestMessageBindingValidator: RequestMessageBindingValidator;
   readonly createExecutionId?: () => string;
   readonly now?: () => Date;
 };
@@ -19,6 +20,7 @@ export function createLvtChatExecutionRuntime(options: LvtChatExecutionRuntimeOp
   const adapter = new XStateExecutionAdapter({
     createExecutionId: options.createExecutionId ?? randomUUID,
     now: options.now ?? (() => new Date()),
+    requestMessageBindingValidator: options.requestMessageBindingValidator,
   });
 
   return Object.freeze({

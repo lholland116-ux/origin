@@ -19,9 +19,24 @@ export const requestTransactionContextSchema = z.object({
   userId: uuidSchema,
   conversationId: uuidSchema,
   userMessageId: uuidSchema.nullable(),
+  assistantMessageId: uuidSchema.optional(),
 }).strict();
 
 export type RequestTransactionContext = z.infer<typeof requestTransactionContextSchema>;
+
+/** Immutable, persisted message binding for one durable request execution. */
+export const requestMessageBindingSchema = z.object({
+  requestId: uuidSchema,
+  userId: uuidSchema,
+  conversationId: uuidSchema,
+  userMessageId: uuidSchema,
+  assistantMessageId: uuidSchema,
+}).strict().refine((value) => value.userMessageId !== value.assistantMessageId, {
+  message: "The request user and assistant messages must be distinct.",
+  path: ["assistantMessageId"],
+});
+
+export type RequestMessageBinding = z.infer<typeof requestMessageBindingSchema>;
 
 const fileContextDocumentSchema = z.object({
   documentId: uuidSchema,

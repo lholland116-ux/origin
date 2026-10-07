@@ -5,6 +5,7 @@ import {
   hydrateGeneratedImageRows,
   type GeneratedImageHistory,
 } from "@/lib/chat/generated-image-history";
+import { omitPendingAssistantMessages } from "@/lib/chat/request-message-visibility";
 import ChatClient from "./ChatClient";
 
 type InitialMessage = {
@@ -123,8 +124,8 @@ export default async function ChatPage() {
     throw new Error("Failed to load messages.");
   }
 
-  const initialMessages: InitialMessage[] = (rawMessages ?? [])
-    .filter(isInitialMessage)
+  const initialMessages: InitialMessage[] = omitPendingAssistantMessages((rawMessages ?? [])
+    .filter(isInitialMessage))
     .map((message) => ({
       id: message.id,
       role: message.role,

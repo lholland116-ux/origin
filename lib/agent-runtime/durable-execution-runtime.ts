@@ -7,7 +7,9 @@ import type {
   CapabilityExecutor,
   ExecutionAuthorizer,
   ExecutionRuntimeInput,
+  RequestMessageBindingValidator,
 } from "@/lib/agent-runtime/capability-executor";
+import { requestMessageBindingSchema } from "@/lib/agent-runtime/application-contracts";
 import {
   EXECUTION_RUNTIME_VERSION,
   EXECUTION_SNAPSHOT_SCHEMA_VERSION,
@@ -44,6 +46,10 @@ function safeRuntimeInput(input: ExecutionRuntimeInput): boolean {
   const safeId = (value: string) => value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
   return UUID_PATTERN.test(input.authenticatedUserId)
     && UUID_PATTERN.test(input.conversationId)
+    && requestMessageBindingSchema.safeParse(input.requestMessageBinding).success
+    && input.requestMessageBinding.userId === input.authenticatedUserId
+    && input.requestMessageBinding.conversationId === input.conversationId
+    && (input.requestId === undefined || input.requestId === input.requestMessageBinding.requestId)
     && (input.userInput === undefined || typeof input.userInput === "string")
     && (input.organizationId === undefined || safeId(input.organizationId))
     && (input.requestId === undefined || safeId(input.requestId))
@@ -166,8 +172,12 @@ function persistedHandoff(record: DurableExecutionRun): PlannedExecutionHandoff 
 }
 
 function isValidDurableRecord(record: DurableExecutionRun, handoff: PlannedExecutionHandoff): boolean {
+  const binding = record.runtimeContext.requestMessageBinding;
   if (!UUID_PATTERN.test(record.id) || !UUID_PATTERN.test(record.userId)
     || !UUID_PATTERN.test(record.runtimeContext.conversationId)
+    || (binding !== undefined && (!requestMessageBindingSchema.safeParse(binding).success
+      || binding.userId !== record.userId
+      || binding.conversationId !== record.runtimeContext.conversationId))
     || record.steps.some((step) => !UUID_PATTERN.test(step.executionKey))
     || !/^[0-9a-f]{64}$/.test(record.requestFingerprint)
     || record.idempotencyKey.length < 1 || record.idempotencyKey.length > 128
@@ -228,6 +238,7 @@ export type DurableExecutionRuntimeOptions = {
   readonly store: ExecutionStore;
   readonly executor: CapabilityExecutor;
   readonly authorizer: ExecutionAuthorizer;
+  readonly requestMessageBindingValidator: RequestMessageBindingValidator;
   readonly createExecutionId?: () => string;
   readonly createExecutionKey?: () => string;
   readonly now?: () => Date;
@@ -252,18 +263,34 @@ export class DurableXStateExecutionRuntime {
   ): Promise<ExecutionOutcome> {
     const checked = validateExecutionHandoff(handoffInput);
     if (!checked.handoff) return { kind: "rejected", failure: checked.failure };
-    if (!safeRuntimeInput(runtimeInput) || idempotencyKey.length < 1 || idempotencyKey.length > 128 || idempotencyKey !== idempotencyKey.trim()) {
+    const parsedBinding = requestMessageBindingSchema.safeParse(runtimeInput.requestMessageBinding);
+    if (!parsedBinding.success) return { kind: "rejected", failure: executionFailure("invalid_handoff") };
+    const stableInput: ExecutionRuntimeInput = {
+      ...runtimeInput,
+      requestMessageBinding: Object.freeze({ ...parsedBinding.data }),
+      ...(runtimeInput.attachments ? { attachments: runtimeInput.attachments.map((item) => Object.freeze({ ...item })) } : {}),
+      ...(runtimeInput.resourceReferences ? { resourceReferences: [...runtimeInput.resourceReferences] } : {}),
+    };
+    if (!safeRuntimeInput(stableInput) || idempotencyKey.length < 1 || idempotencyKey.length > 128 || idempotencyKey !== idempotencyKey.trim()) {
       return { kind: "rejected", failure: executionFailure("invalid_handoff") };
     }
+    let bindingIsValid = false;
+    try {
+      bindingIsValid = await this.options.requestMessageBindingValidator.validate(stableInput.requestMessageBinding);
+    } catch {
+      bindingIsValid = false;
+    }
+    if (!bindingIsValid) return { kind: "rejected", failure: executionFailure("ownership_denied") };
     const handoff = checked.handoff;
     const plan = safePlan(handoff);
     const needsUserInput = handoff.plan.steps.some((step) => step.inputs?.some((input) => input.source === "user"));
     const runtimeContext = {
-      conversationId: runtimeInput.conversationId,
-      ...(needsUserInput ? { userInput: runtimeInput.userInput ?? handoff.objective } : {}),
-      attachments: (runtimeInput.attachments ?? []).map(({ id, kind }) => ({ id, kind })),
-      resourceReferences: [...(runtimeInput.resourceReferences ?? [])],
-      ...(runtimeInput.organizationId ? { organizationId: runtimeInput.organizationId } : {}),
+      conversationId: stableInput.conversationId,
+      requestMessageBinding: stableInput.requestMessageBinding,
+      ...(needsUserInput ? { userInput: stableInput.userInput ?? handoff.objective } : {}),
+      attachments: (stableInput.attachments ?? []).map(({ id, kind }) => ({ id, kind })),
+      resourceReferences: [...(stableInput.resourceReferences ?? [])],
+      ...(stableInput.organizationId ? { organizationId: stableInput.organizationId } : {}),
     };
     const requestFingerprint = fingerprint({ plan, runtimeContext });
     const runActor = createExecutionRunLifecycle();
@@ -274,7 +301,7 @@ export class DurableXStateExecutionRuntime {
     try {
       created = await this.options.store.createRun({
       id: this.createExecutionId(),
-      userId: runtimeInput.authenticatedUserId,
+      userId: stableInput.authenticatedUserId,
       handoffVersion: handoff.version,
       idempotencyKey,
       requestFingerprint,
@@ -301,7 +328,7 @@ export class DurableXStateExecutionRuntime {
     }
     for (const actor of stepActors.values()) actor.stop();
     runActor.stop();
-    return this.resume({ runId: created.run.id, authenticatedUserId: runtimeInput.authenticatedUserId });
+    return this.resume({ runId: created.run.id, authenticatedUserId: stableInput.authenticatedUserId });
   }
 
   async resume(input: {
@@ -345,6 +372,28 @@ export class DurableXStateExecutionRuntime {
       handoff = null;
     }
     if (!handoff || !isValidDurableRecord(record, handoff)) return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
+    const parsedPersistedBinding = record.runtimeContext.requestMessageBinding
+      ? requestMessageBindingSchema.safeParse(record.runtimeContext.requestMessageBinding)
+      : null;
+    const persistedBinding = parsedPersistedBinding?.success
+      ? Object.freeze({ ...parsedPersistedBinding.data })
+      : undefined;
+    if (persistedBinding) {
+      if (input.requestId !== undefined && input.requestId !== persistedBinding.requestId) {
+        return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
+      }
+      let bindingIsValid = false;
+      try {
+        bindingIsValid = await this.options.requestMessageBindingValidator.validate(persistedBinding);
+      } catch {
+        bindingIsValid = false;
+      }
+      if (!bindingIsValid) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+      record = {
+        ...record,
+        runtimeContext: { ...record.runtimeContext, requestMessageBinding: persistedBinding },
+      };
+    }
 
     const stepStatuses = Object.fromEntries(record.steps.map((step) => [step.stepId, step.status]));
     let envelope: ExecutionSnapshotEnvelope;
@@ -380,6 +429,9 @@ export class DurableXStateExecutionRuntime {
       const run = executionRun(record);
       return { kind: "recovery_required", run, failure: executionFailure("indeterminate_step"), stepId: inFlight.stepId };
     }
+    if (!persistedBinding) {
+      return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
+    }
 
     let revision = record.snapshotRevision;
     let current = record;
@@ -397,7 +449,11 @@ export class DurableXStateExecutionRuntime {
       });
       if (started.status !== "saved") return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId: "" };
       revision = started.snapshotRevision;
-      current = (await this.options.store.getRun({ runId: current.id, userId: current.userId }))!;
+      const reloaded = (await this.options.store.getRun({ runId: current.id, userId: current.userId }))!;
+      current = {
+        ...reloaded,
+        runtimeContext: { ...reloaded.runtimeContext, requestMessageBinding: persistedBinding },
+      };
     }
 
     const stepById = new Map(handoff.plan.steps.map((step) => [step.id, step]));
@@ -439,11 +495,12 @@ export class DurableXStateExecutionRuntime {
       const resolved = resolveExecutionInputs(step, handoff, {
         authenticatedUserId: current.userId,
         conversationId: current.runtimeContext.conversationId,
+        requestMessageBinding: current.runtimeContext.requestMessageBinding!,
         userInput: current.runtimeContext.userInput,
         attachments: current.runtimeContext.attachments,
         resourceReferences: current.runtimeContext.resourceReferences,
         organizationId: current.runtimeContext.organizationId,
-        requestId: input.requestId,
+        requestId: current.runtimeContext.requestMessageBinding!.requestId,
         correlationId: input.correlationId,
       }, results);
       let stepFailure: ExecutionFailure | null = resolved.inputs ? null : resolved.failure;
@@ -454,7 +511,9 @@ export class DurableXStateExecutionRuntime {
 
       const capabilityId = step.capability;
       if (!stepFailure) {
-        const authorization = await this.authorize(current, stepId, capabilityId, resolved.resourceReferences ?? [], input);
+        const authorization = await this.authorize(current, stepId, capabilityId, resolved.resourceReferences ?? [], {
+          correlationId: input.correlationId,
+        });
         if (!authorization.allowed) stepFailure = authorization.failure;
       }
 
@@ -469,9 +528,10 @@ export class DurableXStateExecutionRuntime {
           context: {
             authenticatedUserId: current.userId,
             conversationId: current.runtimeContext.conversationId,
+            requestMessageBinding: current.runtimeContext.requestMessageBinding!,
             ...(current.runtimeContext.organizationId ? { organizationId: current.runtimeContext.organizationId } : {}),
             resourceReferences: resolved.resourceReferences,
-            ...(input.requestId ? { requestId: input.requestId } : {}),
+            requestId: current.runtimeContext.requestMessageBinding!.requestId,
             ...(input.correlationId ? { correlationId: input.correlationId } : {}),
           },
         };
@@ -575,9 +635,10 @@ export class DurableXStateExecutionRuntime {
         capabilityId,
         authenticatedUserId: record.userId,
         conversationId: record.runtimeContext.conversationId,
+        requestMessageBinding: record.runtimeContext.requestMessageBinding!,
         ...(record.runtimeContext.organizationId ? { organizationId: record.runtimeContext.organizationId } : {}),
         resourceReferences,
-        ...(context.requestId ? { requestId: context.requestId } : {}),
+        requestId: record.runtimeContext.requestMessageBinding!.requestId,
         ...(context.correlationId ? { correlationId: context.correlationId } : {}),
       });
       if (!decision || typeof decision.allowed !== "boolean") return { allowed: false, failure: executionFailure("authorization_failed") };

@@ -9,6 +9,7 @@ type QueryResult = { data: unknown; error: unknown };
 type MockQuery = {
   select: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  not: ReturnType<typeof vi.fn>;
   in: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
@@ -55,6 +56,7 @@ function query(config: {
   const insertResults = [...(config.insertResults ?? [])];
   builder.select = vi.fn(() => builder);
   builder.eq = vi.fn(() => builder);
+  builder.not = vi.fn(() => builder);
   builder.in = vi.fn(() => builder);
   builder.order = vi.fn(() => builder);
   builder.limit = vi.fn(() => builder);

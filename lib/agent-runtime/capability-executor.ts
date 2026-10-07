@@ -1,4 +1,5 @@
 import type { CapabilityId, CapabilityOutputKind } from "@/lib/ai/capability-registry";
+import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
 import type { ExecutionStepResult, JsonValue } from "@/lib/agent-runtime/runtime-contracts";
 
 export type RuntimeAttachmentReference = {
@@ -13,6 +14,8 @@ export type ExecutionRuntimeInput = {
   readonly authenticatedUserId: string;
   /** Runtime V1 capabilities that use chat semantics are bound to one conversation. */
   readonly conversationId: string;
+  /** Server-verified IDs for the one request's persisted user/assistant message pair. */
+  readonly requestMessageBinding: RequestMessageBinding;
   readonly organizationId?: string;
   readonly resourceReferences?: readonly string[];
   readonly requestId?: string;
@@ -34,6 +37,7 @@ export type CapabilityExecutionInput = {
   readonly context: {
     readonly authenticatedUserId: string;
     readonly conversationId: string;
+    readonly requestMessageBinding: RequestMessageBinding;
     readonly organizationId?: string;
     readonly resourceReferences: readonly string[];
     readonly requestId?: string;
@@ -56,6 +60,7 @@ export type ExecutionAuthorizationInput = {
   readonly capabilityId: CapabilityId;
   readonly authenticatedUserId: string;
   readonly conversationId: string;
+  readonly requestMessageBinding: RequestMessageBinding;
   readonly organizationId?: string;
   readonly resourceReferences: readonly string[];
   readonly requestId?: string;
@@ -68,4 +73,8 @@ export type ExecutionAuthorizationDecision =
 
 export interface ExecutionAuthorizer {
   authorize(input: ExecutionAuthorizationInput): Promise<ExecutionAuthorizationDecision>;
+}
+
+export interface RequestMessageBindingValidator {
+  validate(input: RequestMessageBinding): Promise<boolean>;
 }

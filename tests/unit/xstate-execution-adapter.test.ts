@@ -5,6 +5,7 @@ import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coo
 import type {
   CapabilityExecutionInput,
   CapabilityExecutor,
+  ExecutionAuthorizationInput,
   ExecutionAuthorizer,
   ExecutionRuntimeInput,
 } from "@/lib/agent-runtime/capability-executor";
@@ -55,6 +56,13 @@ function runtimeInput(overrides: Partial<ExecutionRuntimeInput> = {}): Execution
   return {
     authenticatedUserId: "a1000000-0000-4000-8000-000000000001",
     conversationId: "b1000000-0000-4000-8000-000000000001",
+    requestMessageBinding: {
+      requestId: "c1000000-0000-4000-8000-000000000001",
+      userId: "a1000000-0000-4000-8000-000000000001",
+      conversationId: "b1000000-0000-4000-8000-000000000001",
+      userMessageId: "c1000000-0000-4000-8000-000000000002",
+      assistantMessageId: "c1000000-0000-4000-8000-000000000003",
+    },
     userInput: "find current guidance",
     ...overrides,
   };
@@ -63,10 +71,12 @@ function runtimeInput(overrides: Partial<ExecutionRuntimeInput> = {}): Execution
 function createRuntime(
   executor: CapabilityExecutor["execute"],
   authorize: ExecutionAuthorizer["authorize"] = async () => ({ allowed: true as const }),
+  validateBinding: (input: ExecutionRuntimeInput["requestMessageBinding"]) => Promise<boolean> = async () => true,
 ) {
   return createLvtChatExecutionRuntime({
     executor: { execute: executor as CapabilityExecutor["execute"] },
     authorizer: { authorize },
+    requestMessageBindingValidator: { validate: validateBinding },
     createExecutionId: () => "execution-test-1",
     now: (() => {
       let tick = 0;
@@ -91,13 +101,19 @@ describe("LVTChat XState execution adapter", () => {
   it("executes a sequential three-step handoff once per step and passes outputs downstream", async () => {
     const order: string[] = [];
     const calls: CapabilityExecutionInput[] = [];
-    const authorizer = vi.fn(async ({ stepId }: { stepId: string }) => {
+    const mutationAttempts: boolean[] = [];
+    const authorizer = vi.fn(async ({ stepId }: ExecutionAuthorizationInput) => {
       order.push(`authorize:${stepId}`);
       return { allowed: true as const };
     });
     const executor = vi.fn(async (input: CapabilityExecutionInput) => {
       order.push(`execute:${input.stepId}`);
       calls.push(input);
+      mutationAttempts.push(!Reflect.set(
+        input.context.requestMessageBinding as unknown as { assistantMessageId: string },
+        "assistantMessageId",
+        "c1000000-0000-4000-8000-000000000004",
+      ));
       return mockResult(input);
     });
     const result = await createRuntime(executor, authorizer).execute(sequentialPlan(), runtimeInput());
@@ -113,12 +129,20 @@ describe("LVTChat XState execution adapter", () => {
     expect(calls[1]?.inputs).toEqual([{ source: "step", stepId: "step-1", result: result.stepResults["step-1"] }]);
     expect(calls[2]?.inputs[0]).toMatchObject({ source: "step", stepId: "step-2", result: result.stepResults["step-2"] });
     expect(executor).toHaveBeenCalledTimes(3);
+    expect(mutationAttempts).toEqual([true, true, true]);
     expect(authorizer).toHaveBeenCalledTimes(3);
     expect(calls[0]).toMatchObject({ executionId: "execution-test-1", stepId: "step-1", capabilityId: "web_search" });
     expect(calls[0]?.context).toMatchObject({
       authenticatedUserId: "a1000000-0000-4000-8000-000000000001",
       conversationId: "b1000000-0000-4000-8000-000000000001",
+      requestMessageBinding: {
+        requestId: "c1000000-0000-4000-8000-000000000001",
+        userMessageId: "c1000000-0000-4000-8000-000000000002",
+        assistantMessageId: "c1000000-0000-4000-8000-000000000003",
+      },
     });
+    expect(authorizer.mock.calls.every(([input]) => input.requestMessageBinding.userMessageId === "c1000000-0000-4000-8000-000000000002"
+      && input.requestMessageBinding.assistantMessageId === "c1000000-0000-4000-8000-000000000003")).toBe(true);
     expect(result.run).toMatchObject({ status: "succeeded", handoffVersion: 1, orderedStepIds: ["step-1", "step-2", "step-3"] });
     expect(result.run.steps.map(({ status }) => status)).toEqual(["succeeded", "succeeded", "succeeded"]);
     expect(result.telemetry).toMatchObject({ execution_id: "execution-test-1", status: "succeeded", step_count: 3, completed_step_count: 3, failure_code: null });
@@ -226,15 +250,29 @@ describe("LVTChat XState execution adapter", () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
-  it("rejects a missing conversation binding before authorization or capability execution", async () => {
+  it("rejects a missing conversation or message binding before authorization or capability execution", async () => {
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
     const authorizer = vi.fn(async () => ({ allowed: true as const }));
-    const result = await createRuntime(executor, authorizer).execute(
+    const runtime = createRuntime(executor, authorizer);
+    const result = await runtime.execute(
       sequentialPlan(),
       { authenticatedUserId: "a1000000-0000-4000-8000-000000000001", userInput: "find guidance" } as ExecutionRuntimeInput,
     );
+    const missingMessages = await runtime.execute(sequentialPlan(), {
+      authenticatedUserId: "a1000000-0000-4000-8000-000000000001",
+      conversationId: "b1000000-0000-4000-8000-000000000001",
+      userInput: "find guidance",
+    } as ExecutionRuntimeInput);
+    const wrongOwner = await runtime.execute(sequentialPlan(), runtimeInput({
+      requestMessageBinding: {
+        ...runtimeInput().requestMessageBinding,
+        userId: "a1000000-0000-4000-8000-000000000002",
+      },
+    }));
 
     expect(result).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
+    expect(missingMessages).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
+    expect(wrongOwner).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
     expect(authorizer).not.toHaveBeenCalled();
     expect(executor).not.toHaveBeenCalled();
   });
@@ -244,6 +282,15 @@ describe("LVTChat XState execution adapter", () => {
     const result = await createRuntime(executor, async () => ({ allowed: false, reasonCode: "BILLING_DENIED" }))
       .execute(sequentialPlan(), runtimeInput());
     expect(result.kind).toBe("failed");
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("validates persisted message ownership before accepting an in-memory execution", async () => {
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const authorizer = vi.fn(async () => ({ allowed: true as const }));
+    const result = await createRuntime(executor, authorizer, async () => false).execute(sequentialPlan(), runtimeInput());
+    expect(result).toMatchObject({ kind: "rejected", failure: { code: "ownership_denied" } });
+    expect(authorizer).not.toHaveBeenCalled();
     expect(executor).not.toHaveBeenCalled();
   });
 
