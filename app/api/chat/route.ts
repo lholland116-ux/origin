@@ -35,6 +35,11 @@ import {
   type StoredImageReference,
 } from "@/lib/chat/chat-image-attachments";
 import { generateTemplateOutput } from "@/lib/documents/generation";
+import { resolveAccountPlan, type AccountPlanResolution } from "@/lib/capabilities/account-plan";
+import {
+  reserveDailyUsage,
+  resolveDailyUsageLimits,
+} from "@/lib/capabilities/daily-usage";
 import type { DocumentFormat } from "@/lib/documents/generation/contracts";
 import { DocumentGenerationIntentValidationError, resolveDocumentGenerationIntent } from "@/lib/documents/generation/intent";
 import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
@@ -49,8 +54,7 @@ import {
 
 export const runtime = "nodejs";
 
-const FREE_DAILY_LIMIT = Number(process.env.FREE_DAILY_MESSAGE_LIMIT ?? 20);
-const PRO_DAILY_LIMIT = Number(process.env.PRO_DAILY_MESSAGE_LIMIT ?? 300);
+const DAILY_USAGE_LIMITS = resolveDailyUsageLimits();
 
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
@@ -251,14 +255,6 @@ function isLikelyStoragePath(value: string): boolean {
   return value.length > 0 && !value.startsWith("/") && !value.includes("..");
 }
 
-function getPlanLimit(plan: Plan): number {
-  return plan === "pro" ? PRO_DAILY_LIMIT : FREE_DAILY_LIMIT;
-}
-
-function normalizePlan(plan: ProfileRow["plan"]): Plan {
-  return plan === "pro" ? "pro" : "free";
-}
-
 function buildStoredUserContent(params: {
   message: string;
   hasImage: boolean;
@@ -400,44 +396,54 @@ async function generateConversationTitle(message: string): Promise<string> {
   }
 }
 
-async function getUserPlan(params: {
+async function getAccountPlan(params: {
   supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
   userId: string;
-}): Promise<Plan> {
+}): Promise<AccountPlanResolution> {
   const { supabase, userId } = params;
-
-  const { data: profile, error } = await supabase
-    .from("profiles")
-    .select("plan")
-    .eq("id", userId)
-    .single<ProfileRow>();
-
-  if (error || !profile) {
-    console.error("Profile lookup error:", error);
-    return "free";
-  }
-
-  return normalizePlan(profile.plan);
+  return resolveAccountPlan({
+    userId,
+    lookup: async (id) => {
+      const { data: profile, error } = await supabase
+        .from("profiles")
+        .select("plan")
+        .eq("id", id)
+        .maybeSingle<ProfileRow>();
+      return { plan: profile?.plan ?? null, error };
+    },
+  });
 }
 
-async function getAuthoritativeUserPlan(params: {
-  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
-  userId: string;
-}): Promise<Plan | null> {
-  const { supabase, userId } = params;
-
-  const { data: profile, error } = await supabase
-    .from("profiles")
-    .select("plan")
-    .eq("id", userId)
-    .maybeSingle<ProfileRow>();
-
-  if (error || !profile || (profile.plan !== "free" && profile.plan !== "pro")) {
-    console.error("Authoritative profile lookup error:", error);
-    return null;
+function accountPlanFailureResponse(
+  resolution: Exclude<AccountPlanResolution, { readonly kind: "resolved" }>,
+) {
+  if (resolution.kind === "invalid_account") {
+    return jsonResponse(
+      { error: "The account plan is invalid.", code: "INVALID_ACCOUNT_STATE" },
+      503,
+    );
   }
 
-  return profile.plan;
+  return jsonResponse(
+    { error: "Unable to verify the account plan. Please try again.", code: "ACCOUNT_STATE_UNAVAILABLE" },
+    503,
+  );
+}
+
+function dailyUsageFailureResponse(
+  result: Exclude<Awaited<ReturnType<typeof reserveDailyUsage>>, { readonly kind: "reserved" | "limit_reached" }>,
+) {
+  if (result.kind === "account_unavailable") {
+    return jsonResponse(
+      { error: "Unable to verify the account plan. Please try again.", code: "ACCOUNT_STATE_UNAVAILABLE" },
+      503,
+    );
+  }
+
+  return jsonResponse(
+    { error: "Daily usage is temporarily unavailable. Please try again.", code: "USAGE_UNAVAILABLE" },
+    500,
+  );
 }
 
 async function resolveStoredImageUrls(params: {
@@ -768,25 +774,22 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Conversation not found." }, 404);
     }
 
-    let plan: Plan;
+    const accountPlan = await getAccountPlan({ supabase, userId: user.id });
+    if (accountPlan.kind !== "resolved") {
+      if (hasStoredImages && accountPlan.kind !== "invalid_account") {
+        return jsonResponse(
+          { error: "Unable to verify image attachment eligibility.", code: "PLAN_UNAVAILABLE" },
+          503,
+        );
+      }
+      return accountPlanFailureResponse(accountPlan);
+    }
+
+    const plan = accountPlan.plan;
     let storedImageUrls: string[] = [];
     let persistedUserMessageId: string | null = null;
 
     if (hasStoredImages) {
-      const authoritativePlan = await getAuthoritativeUserPlan({
-        supabase,
-        userId: user.id,
-      });
-
-      if (!authoritativePlan) {
-        return jsonResponse(
-          { error: "Unable to verify image attachment eligibility.", code: "PLAN_UNAVAILABLE" },
-          503
-        );
-      }
-
-      plan = authoritativePlan;
-
       try {
         assertStoredImageCount(storedImages, plan);
       } catch (error) {
@@ -816,8 +819,6 @@ export async function POST(req: Request) {
       }
 
       storedImageUrls = resolvedImages.urls;
-    } else {
-      plan = await getUserPlan({ supabase, userId: user.id });
     }
 
     let adaptiveMessage = message;
@@ -895,7 +896,7 @@ export async function POST(req: Request) {
       }
     }
 
-    const dailyLimit = getPlanLimit(plan);
+    const dailyLimit = DAILY_USAGE_LIMITS[plan];
     const documentLimits = getDocumentLimits(plan);
 
     if (documentIds.length > documentLimits.maxFilesPerMessage) {
@@ -909,23 +910,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    const usageReservation = await reserveDailyUsage({
+      client: supabase,
+      userId: user.id,
+      account: accountPlan,
+      limits: DAILY_USAGE_LIMITS,
+      enforceLimit: !IS_DEV,
+    });
 
-    const { data: usageRow, error: usageError } = await supabase
-      .from("usage")
-      .select("message_count")
-      .eq("user_id", user.id)
-      .eq("date", today)
-      .maybeSingle();
-
-    if (usageError) {
-      console.error("Usage read error:", usageError);
-      return jsonResponse({ error: "Failed to read usage." }, 500);
-    }
-
-    const currentCount = usageRow?.message_count ?? 0;
-
-    if (!IS_DEV && currentCount >= dailyLimit) {
+    if (usageReservation.kind === "limit_reached") {
       return jsonResponse(
         {
           error:
@@ -940,18 +933,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { error: usageWriteError } = await supabase.from("usage").upsert(
-      {
-        user_id: user.id,
-        date: today,
-        message_count: currentCount + 1,
-      },
-      { onConflict: "user_id,date" }
-    );
-
-    if (usageWriteError) {
-      console.error("Usage write error:", usageWriteError);
-      return jsonResponse({ error: "Failed to update usage." }, 500);
+    if (usageReservation.kind !== "reserved") {
+      return dailyUsageFailureResponse(usageReservation);
     }
 
     let persistedDocuments: StoredDocument[] = [];

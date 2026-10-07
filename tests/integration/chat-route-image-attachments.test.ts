@@ -136,14 +136,16 @@ function setupSupabase(params: {
     storage: {
       from: vi.fn(() => ({ createSignedUrl: storageCreateSignedUrl })),
     },
-    rpc: vi.fn(async () => ({
-      data: [{
-        assistant_message_id: "350e8400-e29b-41d4-a716-446655440000",
-        generated_document_id: "450e8400-e29b-41d4-a716-446655440000",
-        was_existing: false,
-      }],
-      error: null,
-    })),
+    rpc: vi.fn(async (functionName: string) => functionName === "reserve_daily_usage"
+      ? { data: [{ allowed: true, message_count: 1 }], error: null }
+      : {
+          data: [{
+            assistant_message_id: "350e8400-e29b-41d4-a716-446655440000",
+            generated_document_id: "450e8400-e29b-41d4-a716-446655440000",
+            was_existing: false,
+          }],
+          error: null,
+        }),
   };
 
   return { fromCalls, storageCreateSignedUrl };
@@ -235,7 +237,7 @@ describe("POST /api/chat stored image validation", () => {
     const response = await request({ images: [image("one.jpg")] });
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ code: "PLAN_UNAVAILABLE" });
+    expect(await response.json()).toMatchObject({ code: "INVALID_ACCOUNT_STATE" });
     expect(fromCalls).toEqual(["conversations", "profiles"]);
     expect(mocks.supabase.storage.from).not.toHaveBeenCalled();
     expect(mocks.supabase.rpc).not.toHaveBeenCalled();
@@ -343,7 +345,11 @@ describe("POST /api/chat document generation integration", () => {
     });
     expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).not.toHaveBeenCalled();
     expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
-    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+      "reserve_daily_usage",
+      expect.objectContaining({ p_user_id: USER_ID, p_limit: 20 }),
+    );
   });
 
   it("does not fall through to ordinary chat when an explicit planner result is none", async () => {
@@ -362,7 +368,11 @@ describe("POST /api/chat document generation integration", () => {
     });
     expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
     expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).not.toHaveBeenCalled();
-    expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc).toHaveBeenCalledOnce();
+    expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+      "reserve_daily_usage",
+      expect.objectContaining({ p_user_id: USER_ID, p_limit: 20 }),
+    );
   });
 
   it("keeps informational format questions on ordinary chat", async () => {
@@ -422,10 +432,13 @@ describe("POST /api/chat document generation integration", () => {
   it("removes an uploaded object when atomic metadata persistence fails", async () => {
     setupSupabase({});
     configureDocumentPlanner();
-    mocks.supabase.rpc.mockResolvedValue({ data: null, error: { message: "db failure" } });
+    mocks.supabase.rpc.mockImplementation(async (functionName: string) => functionName === "reserve_daily_usage"
+      ? { data: [{ allowed: true, message_count: 1 }], error: null }
+      : { data: null, error: { message: "db failure" } });
     const response = await request({ message: "Create a TXT summary." });
 
     expect(response.status).toBe(500);
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(2);
     expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).toHaveBeenCalledOnce();
     expect(mocks.generatedDocumentServer.removeGeneratedDocumentObjectByPath).toHaveBeenCalledOnce();
   });

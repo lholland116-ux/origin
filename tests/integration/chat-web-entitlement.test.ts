@@ -28,6 +28,7 @@ type MockSupabase = {
     getUser: ReturnType<typeof vi.fn>;
   };
   from: ReturnType<typeof vi.fn>;
+  rpc: ReturnType<typeof vi.fn>;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -106,12 +107,15 @@ function query(config: {
 }
 
 function setup(params: {
-  plan?: "free" | "pro";
+  plan?: string | null;
+  profileError?: unknown;
+  profileMissing?: boolean;
   usageCount?: number;
   usageError?: unknown;
   documentRows?: unknown[];
   conversationTitle?: string;
 }) {
+  let currentUsageCount = params.usageCount ?? 0;
   const messages = [
     {
       id: "message-1",
@@ -122,7 +126,14 @@ function setup(params: {
   ];
   const queries = {
     profiles: query({
-      awaitResult: { data: { plan: params.plan ?? "free" }, error: null },
+      awaitResult: {
+        data: params.profileMissing ? null : { plan: params.plan ?? "free" },
+        error: params.profileError ?? null,
+      },
+      maybeSingleResult: {
+        data: params.profileMissing ? null : { plan: params.plan ?? "free" },
+        error: params.profileError ?? null,
+      },
     }),
     conversations: query({
       awaitResult: { data: { error: null }, error: null },
@@ -169,6 +180,23 @@ function setup(params: {
       getUser: vi.fn(async () => ({ data: { user: { id: USER_ID } }, error: null })),
     },
     from: vi.fn((table: string) => queries[table as keyof typeof queries]),
+    rpc: vi.fn(async (functionName: string, args: { p_limit: number }) => {
+      if (functionName !== "reserve_daily_usage") {
+        return { data: null, error: { message: "unexpected RPC" } };
+      }
+      if (params.usageError) return { data: null, error: params.usageError };
+      if (currentUsageCount >= args.p_limit) {
+        return {
+          data: [{ allowed: false, message_count: currentUsageCount }],
+          error: null,
+        };
+      }
+      currentUsageCount += 1;
+      return {
+        data: [{ allowed: true, message_count: currentUsageCount }],
+        error: null,
+      };
+    }),
   };
 
   mocks.openai.responses.create.mockResolvedValue({
@@ -182,7 +210,7 @@ function setup(params: {
     })(),
   );
 
-  return { queries };
+  return { queries, supabase: mocks.supabase };
 }
 
 function request(body: Record<string, unknown> = {}) {
@@ -214,6 +242,78 @@ describe("Free Web Search entitlement", () => {
     vi.clearAllMocks();
     mocks.writeAiRequestTelemetry.mockResolvedValue(undefined);
   });
+
+  it.each(["standard", "web_search"] as const)(
+    "%s fails closed when profile lookup infrastructure fails",
+    async (route) => {
+      setup({ profileError: { message: "private profile database error" } });
+      const response = route === "standard"
+        ? await postStandard(standardRequest())
+        : await postWebSearch(request());
+      const body = await response.text();
+
+      expect(response.status).toBe(503);
+      expect(body).toContain("ACCOUNT_STATE_UNAVAILABLE");
+      expect(body).not.toContain("private profile database error");
+      expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+      expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+      expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["standard", "web_search"] as const)(
+    "%s fails closed when the profile is missing",
+    async (route) => {
+      setup({ profileMissing: true });
+      const response = route === "standard"
+        ? await postStandard(standardRequest())
+        : await postWebSearch(request());
+
+      expect(response.status).toBe(503);
+      expect(await response.text()).toContain("ACCOUNT_STATE_UNAVAILABLE");
+      expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+      expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+      expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["standard", "web_search"] as const)(
+    "%s rejects an unknown plan without granting Pro or falling back to Free",
+    async (route) => {
+      setup({ plan: "enterprise" });
+      const response = route === "standard"
+        ? await postStandard(standardRequest())
+        : await postWebSearch(request());
+
+      expect(response.status).toBe(503);
+      expect(await response.text()).toContain("INVALID_ACCOUNT_STATE");
+      expect(mocks.supabase.rpc).not.toHaveBeenCalled();
+      expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+      expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["standard", "web_search"] as const)(
+    "%s fails safely when atomic usage reservation storage fails",
+    async (route) => {
+      setup({ usageError: { message: "private usage database error" } });
+      const response = route === "standard"
+        ? await postStandard(standardRequest())
+        : await postWebSearch(request());
+      const body = await response.text();
+
+      expect(response.status).toBe(500);
+      expect(body).toContain("USAGE_UNAVAILABLE");
+      expect(body).not.toContain("private usage database error");
+      expect(mocks.supabase.rpc).toHaveBeenCalledTimes(1);
+      expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+        "reserve_daily_usage",
+        expect.objectContaining({ p_user_id: USER_ID }),
+      );
+      expect(mocks.openai.responses.stream).not.toHaveBeenCalled();
+      expect(mocks.openai.responses.create).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["standard", "free", "instant", "none"],
@@ -321,11 +421,12 @@ describe("Free Web Search entitlement", () => {
       reply: "Web answer with current information.",
       web: true,
     });
-    expect(queries.usage.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ user_id: USER_ID, message_count: 1 }),
-      { onConflict: "user_id,date" },
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+      "reserve_daily_usage",
+      expect.objectContaining({ p_user_id: USER_ID, p_limit: 20 }),
     );
-    expect(queries.usage.upsert).toHaveBeenCalledTimes(1);
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
     expect(mocks.openai.responses.create).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -468,14 +569,15 @@ describe("Free Web Search entitlement", () => {
   });
 
   it("accepts Free Web Search at 19 of 20 messages", async () => {
-    const { queries } = setup({ plan: "free", usageCount: 19 });
+    setup({ plan: "free", usageCount: 19 });
 
     const response = await postWebSearch(request());
 
     expect(response.status).toBe(200);
-    expect(queries.usage.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ message_count: 20 }),
-      { onConflict: "user_id,date" },
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+      "reserve_daily_usage",
+      expect.objectContaining({ p_user_id: USER_ID, p_limit: 20 }),
     );
   });
 
@@ -487,7 +589,9 @@ describe("Free Web Search entitlement", () => {
 
     expect(response.status).toBe(403);
     expect(body).toMatchObject({ code: "LIMIT_REACHED", plan: "free", limit: 20 });
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(1);
     expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.create).not.toHaveBeenCalled();
     expect(JSON.stringify(body)).not.toContain("database");
   });
@@ -511,11 +615,12 @@ describe("Free Web Search entitlement", () => {
     await response.text();
 
     expect(response.status).toBe(200);
-    expect(queries.usage.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ message_count: 20 }),
-      { onConflict: "user_id,date" },
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+      "reserve_daily_usage",
+      expect.objectContaining({ p_user_id: USER_ID, p_limit: 20 }),
     );
-    expect(queries.usage.upsert).toHaveBeenCalledTimes(1);
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
     expect(mocks.openai.responses.stream).toHaveBeenCalledTimes(1);
     expect(mocks.openai.responses.stream).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-6-luna" }),
@@ -676,14 +781,10 @@ describe("Free Web Search entitlement", () => {
     const webResponse = await postWebSearch(request());
     expect(webResponse.status).toBe(200);
 
-    queries.usage.maybeSingle.mockResolvedValue({
-      data: { message_count: 20 },
-      error: null,
-    });
-
     const standardResponse = await postStandard(standardRequest());
     expect(standardResponse.status).toBe(403);
-    expect(queries.usage.upsert).toHaveBeenCalledTimes(1);
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(2);
+    expect(queries.usage.upsert).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -696,9 +797,9 @@ describe("Free Web Search entitlement", () => {
 
     expect(response.status).toBe(status);
     if (status === 200) {
-      expect(queries.usage.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({ message_count: 300 }),
-        { onConflict: "user_id,date" },
+      expect(mocks.supabase.rpc).toHaveBeenCalledWith(
+        "reserve_daily_usage",
+        expect.objectContaining({ p_user_id: USER_ID, p_limit: 300 }),
       );
       expect(mocks.openai.responses.create).toHaveBeenCalledTimes(1);
     } else {
@@ -717,8 +818,10 @@ describe("Free Web Search entitlement", () => {
     const body = await response.text();
 
     expect(response.status).toBe(500);
-    expect(body).toContain("Failed to read usage.");
+    expect(body).toContain("USAGE_UNAVAILABLE");
     expect(body).not.toContain("secret quota database detail");
     expect(queries.usage.upsert).not.toHaveBeenCalled();
+    expect(mocks.supabase.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.openai.responses.create).not.toHaveBeenCalled();
   });
 });

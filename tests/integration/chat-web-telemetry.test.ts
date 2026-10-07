@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   supabase: null as unknown as {
     auth: { getUser: ReturnType<typeof vi.fn> };
     from: ReturnType<typeof vi.fn>;
+    rpc: ReturnType<typeof vi.fn>;
   },
   writeAiRequestTelemetry: vi.fn(),
 }));
@@ -121,6 +122,10 @@ function setup(params: {
   mocks.supabase = {
     auth: { getUser: vi.fn(async () => ({ data: { user: { id: USER_ID } }, error: null })) },
     from: vi.fn((table: string) => queries[table as keyof typeof queries]),
+    rpc: vi.fn(async () => ({
+      data: [{ allowed: true, message_count: 1 }],
+      error: null,
+    })),
   };
 }
 

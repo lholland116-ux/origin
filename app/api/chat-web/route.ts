@@ -25,11 +25,15 @@ import {
   DocumentContextLimitError,
 } from "@/lib/documents/prepare-context";
 import { formatMaxDocumentCount, getDocumentLimits } from "@/lib/documents/config";
+import { resolveAccountPlan, type AccountPlanResolution } from "@/lib/capabilities/account-plan";
+import {
+  reserveDailyUsage,
+  resolveDailyUsageLimits,
+} from "@/lib/capabilities/daily-usage";
 
 export const runtime = "nodejs";
 
-const FREE_DAILY_LIMIT = Number(process.env.FREE_DAILY_MESSAGE_LIMIT ?? 20);
-const PRO_DAILY_LIMIT = Number(process.env.PRO_DAILY_MESSAGE_LIMIT ?? 300);
+const DAILY_USAGE_LIMITS = resolveDailyUsageLimits();
 
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_DOCUMENT_IDS = 10;
@@ -138,8 +142,6 @@ type ChatRequestBody = {
 
 type WebSearchMode = "auto" | "force";
 
-type Plan = "free" | "pro";
-
 type DbMessage = {
   id: string;
   role: "user" | "assistant";
@@ -211,16 +213,40 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
+function accountPlanFailureResponse(
+  resolution: Exclude<AccountPlanResolution, { readonly kind: "resolved" }>,
+) {
+  if (resolution.kind === "invalid_account") {
+    return jsonResponse(
+      { error: "The account plan is invalid.", code: "INVALID_ACCOUNT_STATE" },
+      503,
+    );
+  }
+
+  return jsonResponse(
+    { error: "Unable to verify the account plan. Please try again.", code: "ACCOUNT_STATE_UNAVAILABLE" },
+    503,
+  );
+}
+
+function dailyUsageFailureResponse(
+  result: Exclude<Awaited<ReturnType<typeof reserveDailyUsage>>, { readonly kind: "reserved" | "limit_reached" }>,
+) {
+  if (result.kind === "account_unavailable") {
+    return jsonResponse(
+      { error: "Unable to verify the account plan. Please try again.", code: "ACCOUNT_STATE_UNAVAILABLE" },
+      503,
+    );
+  }
+
+  return jsonResponse(
+    { error: "Daily usage is temporarily unavailable. Please try again.", code: "USAGE_UNAVAILABLE" },
+    500,
+  );
+}
+
 function normalizeMessage(input: unknown): string {
   return typeof input === "string" ? input.trim() : "";
-}
-
-function getPlanLimit(plan: ProfileRow["plan"]): number {
-  return plan === "pro" ? PRO_DAILY_LIMIT : FREE_DAILY_LIMIT;
-}
-
-function normalizePlan(plan: ProfileRow["plan"]): Plan {
-  return plan === "pro" ? "pro" : "free";
 }
 
 function normalizeDocumentIds(input: unknown): string[] {
@@ -598,15 +624,20 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Unauthorized." }, 401);
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("plan")
-      .eq("id", user.id)
-      .single<ProfileRow>();
+    const accountPlan = await resolveAccountPlan({
+      userId: user.id,
+      lookup: async (id) => {
+        const { data: profile, error } = await supabase
+          .from("profiles")
+          .select("plan")
+          .eq("id", id)
+          .maybeSingle<ProfileRow>();
+        return { plan: profile?.plan ?? null, error };
+      },
+    });
 
-    if (profileError || !profile) {
-      console.error("Profile lookup error:", profileError);
-      return jsonResponse({ error: "Failed to verify subscription plan." }, 500);
+    if (accountPlan.kind !== "resolved") {
+      return accountPlanFailureResponse(accountPlan);
     }
 
     let body: ChatRequestBody;
@@ -648,7 +679,7 @@ export async function POST(req: Request) {
     const message = normalizeMessage(body.message);
     const regenerate = Boolean(body.regenerate);
     const documentIds = normalizeDocumentIds(body.documentIds);
-    const plan = normalizePlan(profile.plan);
+    const plan = accountPlan.plan;
     const adaptiveEffort = parsedReasoningMode.kind === "absent"
       ? selectReasoningEffort({
           route: "web_search",
@@ -702,22 +733,7 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Conversation not found." }, 404);
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-
-    const { data: usageRow, error: usageError } = await supabase
-      .from("usage")
-      .select("message_count")
-      .eq("user_id", user.id)
-      .eq("date", today)
-      .maybeSingle();
-
-    if (usageError) {
-      console.error("Usage read error:", usageError);
-      return jsonResponse({ error: "Failed to read usage." }, 500);
-    }
-
-    const currentCount = usageRow?.message_count ?? 0;
-    const dailyLimit = getPlanLimit(plan);
+    const dailyLimit = DAILY_USAGE_LIMITS[plan];
     const documentLimits = getDocumentLimits(plan);
 
     if (documentIds.length > documentLimits.maxFilesPerMessage) {
@@ -728,21 +744,6 @@ export async function POST(req: Request) {
           plan,
         },
         400,
-      );
-    }
-
-    if (!IS_DEV && currentCount >= dailyLimit) {
-      return jsonResponse(
-        {
-          error:
-            profile.plan === "pro"
-              ? "Daily Pro message limit reached. Please try again tomorrow."
-              : "Daily free message limit reached. Upgrade to Pro to continue.",
-          code: "LIMIT_REACHED",
-          plan: profile.plan,
-          limit: dailyLimit,
-        },
-        403
       );
     }
 
@@ -771,18 +772,31 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "Failed to load document context." }, 500);
     }
 
-    const { error: usageWriteError } = await supabase.from("usage").upsert(
-      {
-        user_id: user.id,
-        date: today,
-        message_count: currentCount + 1,
-      },
-      { onConflict: "user_id,date" }
-    );
+    const usageReservation = await reserveDailyUsage({
+      client: supabase,
+      userId: user.id,
+      account: accountPlan,
+      limits: DAILY_USAGE_LIMITS,
+      enforceLimit: !IS_DEV,
+    });
 
-    if (usageWriteError) {
-      console.error("Usage write error:", usageWriteError);
-      return jsonResponse({ error: "Failed to update usage." }, 500);
+    if (usageReservation.kind === "limit_reached") {
+      return jsonResponse(
+        {
+          error:
+            plan === "pro"
+              ? "Daily Pro message limit reached. Please try again tomorrow."
+              : "Daily free message limit reached. Upgrade to Pro to continue.",
+          code: "LIMIT_REACHED",
+          plan,
+          limit: dailyLimit,
+        },
+        403,
+      );
+    }
+
+    if (usageReservation.kind !== "reserved") {
+      return dailyUsageFailureResponse(usageReservation);
     }
 
     if (regenerate) {
@@ -856,8 +870,8 @@ export async function POST(req: Request) {
     if (IS_DEV) {
       console.log("🌐 WEB ROUTE ACTIVE");
       console.log("MODEL IN USE:", GENERAL_CHAT_MODEL);
-      console.log("PLAN:", profile.plan);
-      console.log("USAGE:", `${currentCount + 1}/${dailyLimit}`);
+      console.log("PLAN:", plan);
+      console.log("USAGE:", `${usageReservation.messageCount}/${dailyLimit}`);
     }
 
     const chatConfig = getGeneralChatConfig(reasoningEffort);

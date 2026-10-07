@@ -321,7 +321,8 @@ describe("composer large-input handling", () => {
     expect(uploadRouteSource).not.toContain("File uploads are a Pro feature");
     expect(chatRouteSource).toContain("const documentLimits = getDocumentLimits(plan)");
     expect(chatRouteSource).toContain("DOCUMENT_LIMIT_EXCEEDED");
-    expect(chatRouteSource).toContain("FREE_DAILY_MESSAGE_LIMIT ?? 20");
+    expect(chatRouteSource).toContain("resolveDailyUsageLimits");
+    expect(chatRouteSource).toContain("reserveDailyUsage({");
     expect(clientSource).toContain("Document upload is not available in Create Image mode.");
     expect(clientSource).toContain("Image generation mode does not support file upload.");
     expect(clientSource).toContain("disabled={composerDisabled}");
