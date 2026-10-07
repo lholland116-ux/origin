@@ -13,6 +13,16 @@ export const conversationExecutionContextSchema = z.object({
 
 export type ConversationExecutionContext = z.infer<typeof conversationExecutionContextSchema>;
 
+/** One authenticated, conversation-bound top-level request transaction. */
+export const requestTransactionContextSchema = z.object({
+  requestId: uuidSchema,
+  userId: uuidSchema,
+  conversationId: uuidSchema,
+  userMessageId: uuidSchema.nullable(),
+}).strict();
+
+export type RequestTransactionContext = z.infer<typeof requestTransactionContextSchema>;
+
 const fileContextDocumentSchema = z.object({
   documentId: uuidSchema,
   fileName: z.string().min(1).max(255),
@@ -42,6 +52,91 @@ export const fileContextResultSchema = z.object({
 });
 
 export type FileContextResult = z.infer<typeof fileContextResultSchema>;
+
+const operationTokenUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative().nullable(),
+  cachedInputTokens: z.number().int().nonnegative().nullable(),
+  outputTokens: z.number().int().nonnegative().nullable(),
+  reasoningTokens: z.number().int().nonnegative().nullable(),
+  totalTokens: z.number().int().nonnegative().nullable(),
+}).strict();
+
+const operationMeasurementSchema = z.object({
+  attemptKind: z.enum(["primary", "image_retry"]),
+  model: z.string().min(1).max(100),
+  outcome: z.enum(["success", "api_error", "cancelled", "incomplete"]),
+  latencyMs: z.number().int().nonnegative().max(10_000_000),
+  hadImage: z.boolean(),
+  usage: operationTokenUsageSchema,
+}).strict();
+
+/** Bounded, persistence-free Standard completion data for transaction/runtime callers. */
+export const standardOperationResultSchema = z.object({
+  kind: z.literal("standard_operation"),
+  requestId: uuidSchema,
+  userId: uuidSchema,
+  conversationId: uuidSchema,
+  reply: z.string().max(200_000),
+  model: z.string().min(1).max(100),
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "xhigh", "max"]),
+  measurements: z.array(operationMeasurementSchema).max(2),
+}).strict();
+
+export type StandardOperationResult = z.infer<typeof standardOperationResultSchema>;
+
+const webSearchSourceSchema = z.object({
+  title: z.string().min(1).max(255),
+  url: z.string().min(1).max(2_048),
+  snippet: z.string().max(4_000).optional(),
+}).strict();
+
+const timeWidgetSchema = z.object({
+  type: z.literal("time"),
+  location: z.string().min(1).max(100),
+  timezone: z.string().min(1).max(100),
+}).strict().nullable();
+
+/** Provider-independent and bounded result passed from web_search to Standard. */
+export const webSearchOperationResultSchema = z.object({
+  kind: z.literal("web_search_operation"),
+  requestId: uuidSchema,
+  userId: uuidSchema,
+  conversationId: uuidSchema,
+  reply: z.string().max(100_000),
+  sources: z.array(webSearchSourceSchema).max(5),
+  sourceCount: z.number().int().nonnegative().max(10_000),
+  widget: timeWidgetSchema,
+  web: z.literal(true),
+  webSearchCalls: z.number().int().nonnegative().max(100),
+  model: z.string().min(1).max(100),
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "xhigh", "max"]),
+  outcome: z.enum(["success", "api_error", "cancelled", "incomplete"]),
+  latencyMs: z.number().int().nonnegative().max(10_000_000),
+  usage: operationTokenUsageSchema,
+}).strict();
+
+export type WebSearchOperationResult = z.infer<typeof webSearchOperationResultSchema>;
+
+export function webSearchResultMatchesRequestTransaction(
+  value: unknown,
+  context: RequestTransactionContext,
+): value is WebSearchOperationResult {
+  const parsed = webSearchOperationResultSchema.safeParse(value);
+  return parsed.success
+    && parsed.data.requestId === context.requestId
+    && parsed.data.userId === context.userId
+    && parsed.data.conversationId === context.conversationId;
+}
+
+export function fileContextMatchesRequestTransaction(
+  value: unknown,
+  context: RequestTransactionContext,
+): value is FileContextResult {
+  return fileContextMatchesExecutionContext(value, {
+    authenticatedUserId: context.userId,
+    conversationId: context.conversationId,
+  });
+}
 
 /** Ensures context produced for one trusted run is not consumed by another. */
 export function fileContextMatchesExecutionContext(

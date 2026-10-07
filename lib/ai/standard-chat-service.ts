@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { openai } from "@/lib/openai";
-import {
-  GENERAL_CHAT_MODEL,
-  getGeneralChatConfig,
-} from "@/lib/ai/general-chat-config";
+import { GENERAL_CHAT_MODEL } from "@/lib/ai/general-chat-config";
 import {
   selectReasoningEffort,
 } from "@/lib/ai/reasoning-effort";
@@ -13,13 +10,10 @@ import {
   resolveProviderReasoningEffort,
 } from "@/lib/ai/reasoning-mode";
 import {
-  mapOpenAIResponseUsage,
   type AiRequestTelemetryRecord,
   type AiTelemetryOutcome,
-  type OpenAIResponseUsage,
 } from "@/lib/ai/request-telemetry";
 import { writeAiRequestTelemetry } from "@/lib/ai/request-telemetry-writer";
-import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 import { buildConversationTitle } from "@/lib/utils";
 import {
   buildDocumentContext,
@@ -28,7 +22,6 @@ import { DocumentContextLimitError } from "@/lib/documents/context-limits";
 import { formatMaxDocumentCount, getDocumentLimits } from "@/lib/documents/config";
 import {
   assertStoredImageCount,
-  buildImageInputContent,
   ChatImageValidationError,
   normalizeChatImageInput,
   type NormalizedChatImageInput,
@@ -56,6 +49,11 @@ import {
   GeneratedDocumentPersistenceError,
   persistGeneratedDocument,
 } from "@/lib/ai/generated-document-persistence-service";
+import { createStandardOperationService } from "@/lib/ai/standard-operation-service";
+import {
+  requestTransactionContextSchema,
+  type FileContextResult,
+} from "@/lib/agent-runtime/application-contracts";
 
 const DAILY_USAGE_LIMITS = resolveDailyUsageLimits();
 
@@ -63,34 +61,11 @@ const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_IMAGE_BASE64_LENGTH = 8_000_000;
 const MIN_IMAGE_BASE64_LENGTH = 1_000;
-const MIN_ACCEPTABLE_REPLY_LENGTH = 10;
 const MAX_IMAGE_PATH_LENGTH = 500;
 const MAX_IMAGE_NAME_LENGTH = 255;
 const MODEL_IMAGE_URL_TTL_SECONDS = 5 * 60;
 const IS_DEV = process.env.NODE_ENV === "development";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const TONE_LAYER = `
-Tone and style requirements:
-- Be warm, calm, friendly, and supportive.
-- Sound approachable and human, not robotic or overly formal.
-- Use clear, natural language with a soft, respectful tone.
-- Be encouraging when helpful, especially if the user seems uncertain or frustrated.
-- Stay professional and concise, but not cold.
-- Avoid harsh phrasing, unnecessary jargon, or stiff corporate wording.
-- When giving steps or instructions, make them feel easy and manageable.
-- When you do not know something, say so clearly and kindly.
-- Prioritize clarity, usefulness, and a positive user experience.
-`.trim();
-
-const MODEL_LAYER = `
-Model behavior requirements:
-- Do not claim to be GPT-4, GPT-5, GPT-5.3, or any other specific model version.
-- Do not speculate about model availability.
-- If asked what model powers LVTChat, respond:
-  "LVTChat is powered by OpenAI technology. This application uses the OpenAI model configured for LVTChat."
-- Focus on answering the user's question instead of discussing model versions.
-`.trim();
 
 const TITLE_INSTRUCTIONS = `
 Generate a short conversation title based ONLY on the user's request.
@@ -185,17 +160,6 @@ type StoredDocument = {
   extraction_status: "uploading" | "processing" | "ready" | "failed";
   extraction_error?: string | null;
   conversation_id: string | null;
-};
-
-type ResponsesStreamEvent = {
-  type: string;
-  delta?: string;
-  error?: {
-    message?: string;
-  } | null;
-  response?: {
-    usage?: OpenAIResponseUsage | null;
-  };
 };
 
 export type StandardChatEvent = Readonly<{ type: "text_delta"; text: string }>;
@@ -298,100 +262,6 @@ function buildStoredUserContent(params: {
   }
 
   return parts.join("\n\n").trim();
-}
-
-function isWeakReply(reply: string): boolean {
-  return reply.trim().length < MIN_ACCEPTABLE_REPLY_LENGTH;
-}
-
-function buildImageAnalysisInstruction(latestMessage: string): string {
-  if (latestMessage.trim()) {
-    return latestMessage;
-  }
-
-  return "Carefully analyze this image. Describe everything you can see in detail. If there is text, extract it clearly. If the image is unclear, explain what might be happening and note any uncertainty.";
-}
-
-function buildSystemInstructions(hasDocumentContext: boolean): string {
-  const base = [SYSTEM_PROMPT.trim(), TONE_LAYER, MODEL_LAYER];
-
-  if (hasDocumentContext) {
-    base.push(
-      "When document context is provided, use it as the primary source of truth.",
-      "If the answer is not contained in the document context, say so clearly.",
-      "Do not fabricate document details, quotations, findings, or conclusions.",
-      "If multiple documents are provided, synthesize them carefully and mention disagreements or missing information when relevant."
-    );
-  }
-
-  return base.join("\n\n");
-}
-
-function buildLatestUserContent(params: {
-  latestMessage: string;
-  imageBase64: string;
-  imageUrls: string[];
-  documentContext: string;
-}) {
-  const { latestMessage, imageBase64, imageUrls, documentContext } = params;
-  const modelImageUrls = imageBase64 ? [imageBase64] : imageUrls;
-
-  const effectiveText = modelImageUrls.length > 0
-    ? buildImageAnalysisInstruction(latestMessage)
-    : latestMessage;
-
-  const userText = documentContext
-    ? `${documentContext}\n\nUser question:\n${effectiveText}`
-    : effectiveText;
-
-  if (modelImageUrls.length > 0) {
-    return buildImageInputContent(userText, modelImageUrls);
-  }
-
-  return userText;
-}
-
-function buildResponsesInput(params: {
-  history: DbMessage[];
-  latestMessage: string;
-  imageBase64: string;
-  imageUrls: string[];
-  documentContext: string;
-}) {
-  const { history, latestMessage, imageBase64, imageUrls, documentContext } = params;
-
-  const priorMessages = history.slice(0, -1).map((msg) => ({
-    role: msg.role,
-    content: msg.content,
-  }));
-
-  const latestUserInput = {
-    role: "user" as const,
-    content: buildLatestUserContent({
-      latestMessage,
-      imageBase64,
-      imageUrls,
-      documentContext,
-    }),
-  };
-
-  return [...priorMessages, latestUserInput];
-}
-
-async function createRetryResponse(params: {
-  input: ReturnType<typeof buildResponsesInput>;
-  hasDocumentContext: boolean;
-  chatConfig: ReturnType<typeof getGeneralChatConfig>;
-  provider: typeof openai;
-}) {
-  const { input, hasDocumentContext, chatConfig } = params;
-
-  return params.provider.responses.create({
-    ...chatConfig,
-    instructions: buildSystemInstructions(hasDocumentContext),
-    input,
-    store: false,
-  } as never);
 }
 
 async function generateConversationTitle(message: string, provider: typeof openai): Promise<string> {
@@ -510,6 +380,7 @@ async function loadDocumentArtifacts(params: {
     return {
       persistedDocuments: [] as StoredDocument[],
       documentContext: "",
+      fileContext: undefined as FileContextResult | undefined,
     };
   }
 
@@ -537,6 +408,7 @@ async function loadDocumentArtifacts(params: {
   return {
     persistedDocuments,
     documentContext,
+    fileContext,
   };
 }
 
@@ -921,6 +793,7 @@ async function executeStandardChatService(input: {
 
     let persistedDocuments: StoredDocument[] = [];
     let documentContext = "";
+    let fileContext: FileContextResult | undefined;
 
     try {
       const artifacts = await loadDocumentArtifacts({
@@ -931,6 +804,7 @@ async function executeStandardChatService(input: {
 
       persistedDocuments = artifacts.persistedDocuments;
       documentContext = artifacts.documentContext;
+      fileContext = artifacts.fileContext;
     } catch (error) {
       console.error("Document context load error:", error);
       if (error instanceof DocumentContextLimitError
@@ -1072,6 +946,15 @@ async function executeStandardChatService(input: {
     const latestUserMessage = regenerate
       ? recentHistory[recentHistory.length - 1]?.content ?? ""
       : message || recentHistory[recentHistory.length - 1]?.content || "";
+    const requestContext = requestTransactionContextSchema.parse({
+      requestId: randomUUID(),
+      userId,
+      conversationId,
+      userMessageId: (() => {
+        const id = [...recentHistory].reverse().find((historyMessage) => historyMessage.role === "user")?.id;
+        return id && isValidUuid(id) ? id : null;
+      })(),
+    });
 
     let documentIntent: Awaited<ReturnType<typeof resolveDocumentGenerationIntent>>;
     try {
@@ -1138,15 +1021,16 @@ async function executeStandardChatService(input: {
       }
     }
 
-    const input = buildResponsesInput({
-      history: recentHistory,
-      latestMessage: latestUserMessage,
-      imageBase64,
-      imageUrls: storedImageUrls,
-      documentContext,
-    }) as never;
-    const chatConfig = getGeneralChatConfig(reasoningEffort);
-    const primaryHadImage = Boolean(imageBase64) || storedImageUrls.length > 0;
+    const operation = createStandardOperationService({ provider: dependencies.provider });
+    const operationInput = {
+      requestContext,
+      objective: latestUserMessage,
+      reasoningEffort,
+      history: recentHistory.map(({ role, content }) => ({ role, content })),
+      ...(imageBase64 ? { imageDataUrl: imageBase64 } : {}),
+      ...(storedImageUrls.length > 0 ? { imageUrls: storedImageUrls } : {}),
+      ...(fileContext ? { fileContext } : {}),
+    } as const;
     const telemetryWrites: Promise<unknown>[] = [];
     let primaryAttemptStartedAt: number | null = null;
     let primaryAttemptStarted = false;
@@ -1156,9 +1040,15 @@ async function executeStandardChatService(input: {
       attemptKind: "primary" | "image_retry";
       model: string;
       outcome: AiTelemetryOutcome;
-      startedAt: number;
+      latencyMs: number;
       hadImage: boolean;
-      usage?: OpenAIResponseUsage | null;
+      usage: {
+        inputTokens: number | null;
+        cachedInputTokens: number | null;
+        outputTokens: number | null;
+        reasoningTokens: number | null;
+        totalTokens: number | null;
+      };
     }): void {
       const record: AiRequestTelemetryRecord = {
         route: "standard",
@@ -1168,9 +1058,9 @@ async function executeStandardChatService(input: {
         reasoningEffort,
         plan,
         outcome: params.outcome,
-        latencyMs: Math.max(0, Math.round(performance.now() - params.startedAt)),
+        latencyMs: params.latencyMs,
         hadImage: params.hadImage,
-        ...mapOpenAIResponseUsage(params.usage),
+        ...params.usage,
       };
 
       telemetryWrites.push(
@@ -1180,10 +1070,7 @@ async function executeStandardChatService(input: {
       );
     }
 
-    function schedulePrimaryTelemetry(
-      outcome: AiTelemetryOutcome,
-      usage?: OpenAIResponseUsage | null,
-    ): void {
+    function schedulePrimaryTelemetry(outcome: AiTelemetryOutcome): void {
       if (
         !primaryAttemptStarted ||
         primaryAttemptStartedAt === null ||
@@ -1195,11 +1082,17 @@ async function executeStandardChatService(input: {
       primaryTelemetryRecorded = true;
       scheduleTelemetry({
         attemptKind: "primary",
-        model: chatConfig.model,
+        model: GENERAL_CHAT_MODEL,
         outcome,
-        startedAt: primaryAttemptStartedAt,
-        hadImage: primaryHadImage,
-        usage,
+        latencyMs: Math.max(0, Math.round(performance.now() - primaryAttemptStartedAt)),
+        hadImage: Boolean(imageBase64) || storedImageUrls.length > 0,
+        usage: {
+          inputTokens: null,
+          cachedInputTokens: null,
+          outputTokens: null,
+          reasoningTokens: null,
+          totalTokens: null,
+        },
       });
     }
 
@@ -1208,100 +1101,25 @@ async function executeStandardChatService(input: {
     const events = async function* (): AsyncGenerator<StandardChatEvent> {
       let streamCompleted = false;
       try {
-          primaryAttemptStarted = true;
-          primaryAttemptStartedAt = performance.now();
-          const responseStream = (await dependencies.provider.responses.stream({
-            ...chatConfig,
-            instructions: buildSystemInstructions(Boolean(documentContext)),
-            input,
-            store: false,
-          } as never)) as unknown as AsyncIterable<ResponsesStreamEvent>;
-
-          for await (const event of responseStream) {
-            if (event.type === "response.output_text.delta") {
-              const delta = event.delta ?? "";
-
-              if (delta) {
-                fullReply += delta;
-                yield { type: "text_delta", text: delta };
-              }
-            }
-
-            if (event.type === "response.failed") {
-              schedulePrimaryTelemetry("api_error", event.response?.usage);
-              throw new Error(
-                event.error?.message ?? "OpenAI response failed."
-              );
-            }
-
-            if (event.type === "error") {
-              schedulePrimaryTelemetry("api_error");
-              throw new Error(event.error?.message ?? "OpenAI stream error.");
-            }
-
-            if (event.type === "response.completed") {
-              schedulePrimaryTelemetry("success", event.response?.usage);
-            }
-
-            if (event.type === "response.incomplete") {
-              schedulePrimaryTelemetry("incomplete", event.response?.usage);
+          let completedReply: string | undefined;
+          for await (const event of operation.run(operationInput)) {
+            if (event.type === "attempt_started" && event.attemptKind === "primary") {
+              primaryAttemptStarted = true;
+              primaryAttemptStartedAt = event.startedAt;
+            } else if (event.type === "measurement") {
+              const { measurement } = event;
+              scheduleTelemetry({ ...measurement });
+              if (measurement.attemptKind === "primary") primaryTelemetryRecorded = true;
+            } else if (event.type === "text_delta") {
+              fullReply += event.text;
+              yield { type: "text_delta", text: event.text };
+            } else if (event.type === "completion") {
+              completedReply = event.result.reply;
             }
           }
 
-          schedulePrimaryTelemetry("api_error");
-
-          const streamedReply = fullReply.trim();
-          let finalReply = streamedReply;
-
-          if ((imageBase64 || storedImageUrls.length > 0) && isWeakReply(finalReply)) {
-            const retryStartedAt = performance.now();
-            try {
-              const retry = await createRetryResponse({
-                input,
-                hasDocumentContext: Boolean(documentContext),
-                chatConfig,
-                provider: dependencies.provider,
-              });
-
-              const retryOutcome: AiTelemetryOutcome =
-                retry.status === "incomplete"
-                  ? "incomplete"
-                  : retry.status === "failed" || retry.status === "cancelled" || retry.error
-                    ? "api_error"
-                    : "success";
-              scheduleTelemetry({
-                attemptKind: "image_retry",
-                model: chatConfig.model,
-                outcome: retryOutcome,
-                startedAt: retryStartedAt,
-                hadImage: true,
-                usage: retry.usage,
-              });
-
-              const retryText = retry.output_text?.trim() ?? "";
-
-              if (!isWeakReply(retryText)) {
-                finalReply = retryText;
-              }
-            } catch (retryError) {
-              scheduleTelemetry({
-                attemptKind: "image_retry",
-                model: chatConfig.model,
-                outcome: "api_error",
-                startedAt: retryStartedAt,
-                hadImage: true,
-              });
-              console.error("Retry failed:", retryError);
-            }
-          }
-
-          const persistedReply =
-            finalReply ||
-            "I couldn’t generate a complete response. Try again, upload a clearer image, or ask a more specific question.";
-
-          if (isWeakReply(streamedReply) && persistedReply !== streamedReply) {
-            yield { type: "text_delta", text: `\n\n${persistedReply}` };
-          }
+          const persistedReply = completedReply
+            ?? "I couldn’t generate a complete response. Try again, upload a clearer image, or ask a more specific question.";
 
           await persistAssistantMessage({
             supabase,
@@ -1331,7 +1149,7 @@ async function executeStandardChatService(input: {
           streamCompleted = true;
       } catch (error) {
           schedulePrimaryTelemetry("api_error");
-          console.error("/api/chat streaming error:", error);
+          console.error("/api/chat streaming error:", error instanceof Error ? error.name : "unknown");
 
           const fallback =
             fullReply.trim() ||
