@@ -163,7 +163,9 @@ function deterministicPlan(
     id: synthesisId,
     capability: "standard",
     dependsOn: [...sourceStepIds],
-    inputs: sourceStepIds.map((stepId) => ({ source: "step", stepId })),
+    // Preserve the original objective alongside the predecessor results so
+    // synthesis remains anchored to what the user actually requested.
+    inputs: [{ source: "user" }, ...sourceStepIds.map((stepId) => ({ source: "step" as const, stepId }))],
     expectedOutput: "text",
   });
   steps.push({

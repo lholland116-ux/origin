@@ -1,5 +1,6 @@
 import type { CapabilityId, CapabilityOutputKind } from "@/lib/ai/capability-registry";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
+import type { UserReasoningMode } from "@/lib/ai/reasoning-mode";
 import type { ExecutionStepResult, JsonValue } from "@/lib/agent-runtime/runtime-contracts";
 
 export type RuntimeAttachmentReference = {
@@ -16,6 +17,7 @@ export type ExecutionRuntimeInput = {
   readonly conversationId: string;
   /** Server-verified IDs for the one request's persisted user/assistant message pair. */
   readonly requestMessageBinding: RequestMessageBinding;
+  readonly reasoningMode?: UserReasoningMode;
   readonly organizationId?: string;
   readonly resourceReferences?: readonly string[];
   readonly requestId?: string;
@@ -38,6 +40,7 @@ export type CapabilityExecutionInput = {
     readonly authenticatedUserId: string;
     readonly conversationId: string;
     readonly requestMessageBinding: RequestMessageBinding;
+    readonly reasoningMode?: UserReasoningMode;
     readonly organizationId?: string;
     readonly resourceReferences: readonly string[];
     readonly requestId?: string;
@@ -66,6 +69,7 @@ export type ExecutionAuthorizationInput = {
   readonly requestFingerprint?: string;
   readonly conversationId: string;
   readonly requestMessageBinding: RequestMessageBinding;
+  readonly reasoningMode?: UserReasoningMode;
   /** Typed, resolved inputs are transient authorization evidence, never caller authority. */
   readonly resolvedInputs: readonly ResolvedExecutionInput[];
   readonly organizationId?: string;

@@ -186,14 +186,20 @@ describe("concrete execution authorizer", () => {
   });
 
   it("uses the current plan for reasoning permission after downgrade", async () => {
-    const highReasoning = association({ requestOptions: { routingMode: "auto", reasoningMode: "high" } });
-    expect(await fixture({ plan: "free", association: highReasoning }).authorizer.authorize(input())).toMatchObject({ allowed: false, reasonCode: "denied" });
-    expect(await fixture({ plan: "pro", association: highReasoning }).authorizer.authorize(input())).toEqual({ allowed: true });
+    const highReasoning = association({ requestOptions: { routingMode: "auto", reasoningMode: "high" }, runContext: {
+      conversationId: CONVERSATION,
+      requestMessageBinding: { requestId: REQUEST, userId: USER, conversationId: CONVERSATION, userMessageId: USER_MESSAGE, assistantMessageId: ASSISTANT_MESSAGE },
+      reasoningMode: "high", attachments: [], resourceReferences: [],
+    } });
+    const highInput = { ...input(), reasoningMode: "high" as const };
+    expect(await fixture({ plan: "free", association: highReasoning }).authorizer.authorize(highInput)).toMatchObject({ allowed: false, reasonCode: "denied" });
+    expect(await fixture({ plan: "pro", association: highReasoning }).authorizer.authorize(highInput)).toEqual({ allowed: true });
     let currentPlan: "free" | "pro" = "pro";
     const deps = fixture({ association: highReasoning, overrides: { loadAccountPlan: async () => ({ plan: currentPlan }) } });
-    expect(await deps.authorizer.authorize(input())).toEqual({ allowed: true });
+    expect(await deps.authorizer.authorize(highInput)).toEqual({ allowed: true });
     currentPlan = "free";
-    expect(await deps.authorizer.authorize(input())).toMatchObject({ allowed: false, reasonCode: "denied" });
+    expect(await deps.authorizer.authorize(highInput)).toMatchObject({ allowed: false, reasonCode: "denied" });
+    expect(await fixture({ plan: "pro", association: highReasoning }).authorizer.authorize(input())).toMatchObject({ allowed: false, reasonCode: "denied" });
   });
 
   it("rechecks session, plan, binding, and ownership on each resume or retry authorization", async () => {

@@ -110,6 +110,7 @@ function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["cla
   return {
     createRun: (input) => base.createRun(input),
     associateAcceptedRequest: (input) => base.associateAcceptedRequest(input),
+    lookupAcceptedRequestRun: (input) => base.lookupAcceptedRequestRun(input),
     getRun: (input) => base.getRun(input),
     getControlEvents: (input) => base.getControlEvents(input),
     pauseRun: (input) => base.pauseRun(input),
@@ -130,7 +131,7 @@ describe("durable XState execution runtime", () => {
     const store = new InMemoryExecutionStore();
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
     const result = await runtime(store, executor).associateAcceptedRequest(
-      handoff(), runtimeInput(), ACCEPTED_REQUEST,
+      handoff(), runtimeInput({ reasoningMode: "high" }), ACCEPTED_REQUEST,
     );
 
     expect(result).toMatchObject({ kind: "associated", status: "created", runId: RUN_ID });
@@ -140,8 +141,12 @@ describe("durable XState execution runtime", () => {
       acceptanceFingerprint: ACCEPTED_REQUEST.requestFingerprint,
       idempotencyKey: ACCEPTED_REQUEST.idempotencyKey,
       requestFingerprint: result.planFingerprint,
+      runtimeContext: { reasoningMode: "high" },
       status: "pending",
       steps: [{ status: "pending" }, { status: "pending" }, { status: "pending" }],
+    });
+    expect(await store.lookupAcceptedRequestRun(ACCEPTED_REQUEST)).toMatchObject({
+      status: "found", run: { id: RUN_ID, runtimeContext: { reasoningMode: "high" } },
     });
     expect(executor).not.toHaveBeenCalled();
   });

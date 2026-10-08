@@ -8,6 +8,7 @@ import {
 } from "@/lib/agent-runtime/application-contracts";
 import type { CapabilityExecutionInput, CapabilityExecutionResult, CapabilityExecutor, ResolvedExecutionInput } from "@/lib/agent-runtime/capability-executor";
 import { runStandardOperation, StandardOperationError, type StandardOperationEvent, type StandardOperationInput } from "@/lib/ai/standard-operation-service";
+import { mapUserReasoningModeToProviderEffort } from "@/lib/ai/reasoning-mode";
 import {
   assertAdapterInput,
   CapabilityAdapterError,
@@ -70,7 +71,7 @@ export function createStandardCapabilityAdapter(
       const operationInput: StandardOperationInput = {
         requestContext: requestContextFromBinding(binding),
         objective,
-        reasoningEffort: "medium",
+        reasoningEffort: mapUserReasoningModeToProviderEffort(input.context.reasoningMode ?? "medium"),
         history: [{ role: "user", content: objective }],
         executionMode: "durable_runtime_single_attempt",
         ...(fileContext ? { fileContext } : {}),

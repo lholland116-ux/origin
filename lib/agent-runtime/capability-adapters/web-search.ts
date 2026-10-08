@@ -4,6 +4,7 @@ import {
 } from "@/lib/agent-runtime/application-contracts";
 import type { CapabilityExecutionInput, CapabilityExecutionResult, CapabilityExecutor } from "@/lib/agent-runtime/capability-executor";
 import { runWebSearchOperation, type WebSearchOperationExecution, type WebSearchOperationInput } from "@/lib/ai/web-search-operation-service";
+import { mapUserReasoningModeToProviderEffort } from "@/lib/ai/reasoning-mode";
 import {
   assertAdapterInput,
   fail,
@@ -37,7 +38,7 @@ export function createWebSearchCapabilityAdapter(
         execution = await runOperation({
           requestContext: requestContextFromBinding(binding),
           objective,
-          reasoningEffort: "medium",
+          reasoningEffort: mapUserReasoningModeToProviderEffort(input.context.reasoningMode ?? "medium"),
           history: [{ role: "user", content: objective }],
           mode: "force",
           executionMode: "durable_runtime_single_attempt",

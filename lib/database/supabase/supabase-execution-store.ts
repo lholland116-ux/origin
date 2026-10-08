@@ -23,6 +23,8 @@ import type {
   ExecutionStore,
   ExecutionStoreWriteResult,
   HumanApprovalWriteResult,
+  AcceptedRequestExecutionIdentity,
+  LookupAcceptedExecutionRunResult,
 } from "@/lib/agent-runtime/execution-store";
 import type { ExecutionControlEvent, ExecutionControlState, HumanApprovalCheckpoint } from "@/lib/agent-runtime/runtime-contracts";
 import { EXECUTION_CONTROL_STATES, HUMAN_APPROVAL_STATUSES, MAX_EXECUTION_STEP_ATTEMPTS } from "@/lib/agent-runtime/runtime-contracts";
@@ -379,6 +381,41 @@ export class SupabaseExecutionStore implements ExecutionStore {
 
   async getRun(input: { readonly runId: string; readonly userId: string }): Promise<DurableExecutionRun | null> {
     return this.sql.begin("isolation level repeatable read", (tx) => loadRun(tx, input.runId, input.userId));
+  }
+
+  async lookupAcceptedRequestRun(input: AcceptedRequestExecutionIdentity): Promise<LookupAcceptedExecutionRunResult> {
+    const rows = await this.sql`
+      SELECT acceptance.request_id, acceptance.user_id, acceptance.conversation_id,
+        acceptance.user_message_id, acceptance.assistant_message_id,
+        acceptance.idempotency_key, acceptance.request_fingerprint,
+        acceptance.request_options, run.id AS run_id
+      FROM public.agent_request_acceptances AS acceptance
+      LEFT JOIN public.execution_runs AS run
+        ON run.accepted_request_id = acceptance.request_id
+       AND run.user_id = acceptance.user_id
+      WHERE acceptance.request_id = ${input.requestId}::uuid
+        AND acceptance.user_id = ${input.userId}::uuid
+    ` as readonly Row[];
+    const row = rows[0];
+    if (!row || row.conversation_id !== input.conversationId
+      || row.user_message_id !== input.userMessageId || row.assistant_message_id !== input.assistantMessageId
+      || row.idempotency_key !== input.idempotencyKey || row.request_fingerprint !== input.requestFingerprint) {
+      return { status: "conflict" };
+    }
+    if (row.run_id === null || row.run_id === undefined) return { status: "not_found" };
+    if (typeof row.run_id !== "string") return { status: "conflict" };
+    const run = await this.getRun({ runId: row.run_id, userId: input.userId });
+    if (!run || run.acceptedRequestId !== input.requestId
+      || run.acceptanceFingerprint !== input.requestFingerprint
+      || run.idempotencyKey !== input.idempotencyKey
+      || run.runtimeContext.requestMessageBinding?.requestId !== input.requestId
+      || run.runtimeContext.requestMessageBinding?.conversationId !== input.conversationId
+      || run.runtimeContext.requestMessageBinding?.userMessageId !== input.userMessageId
+      || run.runtimeContext.requestMessageBinding?.assistantMessageId !== input.assistantMessageId
+      || run.runtimeContext.reasoningMode !== (isRecord(row.request_options) ? row.request_options.reasoningMode : undefined)) {
+      return { status: "conflict" };
+    }
+    return { status: "found", run };
   }
 
   async getControlEvents(input: { readonly runId: string; readonly userId: string }): Promise<readonly ExecutionControlEvent[]> {

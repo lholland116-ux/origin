@@ -184,6 +184,23 @@ describeDatabase("accepted request execution association (isolated local Postgre
     expect(persisted?.steps.every((step) => step.status === "pending")).toBe(true);
   });
 
+  it("looks up only the durable run whose complete accepted identity matches", async () => {
+    const accepted = await accept();
+    expect(await store.lookupAcceptedRequestRun(accepted.identity)).toEqual({ status: "not_found" });
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    expect(associated.kind).toBe("associated");
+    if (associated.kind !== "associated") return;
+    const found = await store.lookupAcceptedRequestRun(accepted.identity);
+    expect(found).toMatchObject({ status: "found", run: {
+      id: associated.runId,
+      acceptedRequestId: accepted.identity.requestId,
+      acceptanceFingerprint: accepted.identity.requestFingerprint,
+      executionPlan: { steps: [{ id: "synthesis" }, { id: "document" }] },
+    } });
+    expect(await store.lookupAcceptedRequestRun({ ...accepted.identity, userId: otherUserId })).toEqual({ status: "conflict" });
+    expect(await store.lookupAcceptedRequestRun({ ...accepted.identity, userMessageId: randomUUID() })).toEqual({ status: "conflict" });
+  });
+
   it("converges twelve concurrent identical associations to exactly one run", async () => {
     const accepted = await accept();
     const engine = makeRuntime(store);

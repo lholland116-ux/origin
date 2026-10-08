@@ -5,6 +5,7 @@ import type {
   AssociateAcceptedExecutionRunInput,
   AssociateAcceptedExecutionRunResult,
   AcceptedRequestExecutionIdentity,
+  LookupAcceptedExecutionRunResult,
   DurableExecutionRun,
   DurableExecutionStep,
   DurableStepCheckpoint,
@@ -153,6 +154,19 @@ export class InMemoryExecutionStore implements ExecutionStore {
   async getRun(input: { readonly runId: string; readonly userId: string }): Promise<DurableExecutionRun | null> {
     const run = this.runs.get(input.runId);
     return run?.userId === input.userId ? structuredClone(run) : null;
+  }
+
+  async lookupAcceptedRequestRun(input: AcceptedRequestExecutionIdentity): Promise<LookupAcceptedExecutionRunResult> {
+    const run = [...this.runs.values()].find((candidate) => candidate.acceptedRequestId === input.requestId
+      || (candidate.userId === input.userId && candidate.idempotencyKey === input.idempotencyKey));
+    if (!run) return { status: "not_found" };
+    const binding = run.runtimeContext.requestMessageBinding;
+    if (run.userId !== input.userId || run.acceptanceFingerprint !== input.requestFingerprint
+      || run.idempotencyKey !== input.idempotencyKey || !binding
+      || binding.requestId !== input.requestId || binding.userId !== input.userId
+      || binding.conversationId !== input.conversationId || binding.userMessageId !== input.userMessageId
+      || binding.assistantMessageId !== input.assistantMessageId) return { status: "conflict" };
+    return { status: "found", run: structuredClone(run) };
   }
 
   async getControlEvents(input: { readonly runId: string; readonly userId: string }): Promise<readonly ExecutionControlEvent[]> {

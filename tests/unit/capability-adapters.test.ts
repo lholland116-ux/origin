@@ -209,6 +209,16 @@ describe("six independent capability adapters", () => {
     expect(new TextEncoder().encode(JSON.stringify(output)).byteLength).toBeGreaterThan(65_536);
   });
 
+  it.each([["instant", "none"], ["medium", "medium"], ["high", "high"]] as const)(
+    "propagates accepted %s reasoning to Standard",
+    async (reasoningMode, reasoningEffort) => {
+      const runOperation = standardRunner(standardResult());
+      await createStandardCapabilityAdapter({ runOperation: runOperation as unknown as StandardOperationRunner })
+        .execute(executionInput("standard", undefined, { context: { ...executionInput("standard").context, reasoningMode } }));
+      expect(runOperation.mock.calls[0]![0].reasoningEffort).toBe(reasoningEffort);
+    },
+  );
+
   it("accepts a validated File Context predecessor", async () => {
     const context = fileResult();
     const runOperation = standardRunner(standardResult());
@@ -276,6 +286,20 @@ describe("six independent capability adapters", () => {
     expect(output).toEqual({ kind: "search_results", value: research });
     expect(new TextEncoder().encode(JSON.stringify(output)).byteLength).toBeGreaterThan(65_536);
   });
+
+  it.each([["instant", "none"], ["medium", "medium"], ["high", "high"]] as const)(
+    "propagates accepted %s reasoning to Web Search",
+    async (reasoningMode, reasoningEffort) => {
+      const runOperation = vi.fn<WebSearchOperationRunner>(async () => ({
+        ok: true as const,
+        result: webResult(),
+        measurement: { model: "test-model", webSearchCalls: 1, outcome: "success" as const, latencyMs: 1, usage: webResult().usage },
+      }));
+      await createWebSearchCapabilityAdapter({ runOperation: runOperation as unknown as WebSearchOperationRunner })
+        .execute(executionInput("web_search", undefined, { context: { ...executionInput("web_search").context, reasoningMode } }));
+      expect(runOperation.mock.calls[0]![0].reasoningEffort).toBe(reasoningEffort);
+    },
+  );
 
   it("normalizes Web Search failures and rejects mismatched runtime identity", async () => {
     const runOperation = vi.fn(async () => ({
@@ -869,6 +893,7 @@ describe("six independent capability adapters", () => {
     const reopenStore = (): ExecutionStore => ({
       createRun: (input) => persistentBackend.createRun(input),
       associateAcceptedRequest: (input) => persistentBackend.associateAcceptedRequest(input),
+      lookupAcceptedRequestRun: (input) => persistentBackend.lookupAcceptedRequestRun(input),
       getRun: (input) => persistentBackend.getRun(input),
       getControlEvents: (input) => persistentBackend.getControlEvents(input),
       pauseRun: (input) => persistentBackend.pauseRun(input),

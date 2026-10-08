@@ -49,6 +49,8 @@ function associationMatches(value: DurableExecutionAssociation | null, input: Ex
   if (!value || !input.acceptedRequestId || !input.acceptanceFingerprint || !input.idempotencyKey || !input.requestFingerprint) return false;
   const { run, acceptance } = value;
   const context = run.runtime_context;
+  const requestOptions = acceptance.request_options;
+  const acceptedReasoningMode = record(requestOptions) ? requestOptions.reasoningMode : undefined;
   return run.id === input.executionId && run.user_id === input.authenticatedUserId
     && run.accepted_request_id === input.acceptedRequestId && input.acceptedRequestId === input.requestMessageBinding.requestId
     && run.acceptance_fingerprint === input.acceptanceFingerprint
@@ -60,6 +62,8 @@ function associationMatches(value: DurableExecutionAssociation | null, input: Ex
     && acceptance.idempotency_key === input.idempotencyKey
     && acceptance.request_fingerprint === input.acceptanceFingerprint
     && record(context) && context.conversationId === input.conversationId
+    && context.reasoningMode === acceptedReasoningMode
+    && input.reasoningMode === acceptedReasoningMode
     && bindingMatches(context.requestMessageBinding, input.requestMessageBinding)
     && record(run.execution_plan)
     && Array.isArray(run.execution_plan.steps)

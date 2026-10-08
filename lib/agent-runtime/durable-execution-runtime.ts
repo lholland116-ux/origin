@@ -64,6 +64,7 @@ function safeRuntimeInput(input: ExecutionRuntimeInput): boolean {
     && input.requestMessageBinding.conversationId === input.conversationId
     && (input.requestId === undefined || input.requestId === input.requestMessageBinding.requestId)
     && (input.userInput === undefined || typeof input.userInput === "string")
+    && (input.reasoningMode === undefined || ["instant", "medium", "high"].includes(input.reasoningMode))
     && (input.organizationId === undefined || safeId(input.organizationId))
     && (input.requestId === undefined || safeId(input.requestId))
     && (input.correlationId === undefined || safeId(input.correlationId))
@@ -378,6 +379,7 @@ export class DurableXStateExecutionRuntime {
       conversationId: stableInput.conversationId,
       requestMessageBinding: stableInput.requestMessageBinding,
       ...(needsUserInput ? { userInput: stableInput.userInput ?? handoff.objective } : {}),
+      ...(stableInput.reasoningMode ? { reasoningMode: stableInput.reasoningMode } : {}),
       attachments: (stableInput.attachments ?? []).map(({ id, kind }) => ({ id, kind })),
       resourceReferences: [...(stableInput.resourceReferences ?? [])],
       ...(stableInput.organizationId ? { organizationId: stableInput.organizationId } : {}),
@@ -507,6 +509,7 @@ export class DurableXStateExecutionRuntime {
       conversationId: stableInput.conversationId,
       requestMessageBinding: stableInput.requestMessageBinding,
       ...(needsUserInput ? { userInput: stableInput.userInput ?? handoff.objective } : {}),
+      ...(stableInput.reasoningMode ? { reasoningMode: stableInput.reasoningMode } : {}),
       attachments: (stableInput.attachments ?? []).map(({ id, kind }) => ({ id, kind })),
       resourceReferences: [...(stableInput.resourceReferences ?? [])],
       ...(stableInput.organizationId ? { organizationId: stableInput.organizationId } : {}),
@@ -1087,6 +1090,7 @@ export class DurableXStateExecutionRuntime {
             authenticatedUserId: current.userId,
             conversationId: current.runtimeContext.conversationId,
             requestMessageBinding: current.runtimeContext.requestMessageBinding!,
+            ...(current.runtimeContext.reasoningMode ? { reasoningMode: current.runtimeContext.reasoningMode } : {}),
             ...(current.runtimeContext.organizationId ? { organizationId: current.runtimeContext.organizationId } : {}),
             resourceReferences: resolved.resourceReferences,
             requestId: current.runtimeContext.requestMessageBinding!.requestId,
@@ -1261,6 +1265,7 @@ export class DurableXStateExecutionRuntime {
         requestFingerprint: record.requestFingerprint,
         conversationId: record.runtimeContext.conversationId,
         requestMessageBinding: record.runtimeContext.requestMessageBinding!,
+        ...(record.runtimeContext.reasoningMode ? { reasoningMode: record.runtimeContext.reasoningMode } : {}),
         resolvedInputs,
         ...(record.runtimeContext.organizationId ? { organizationId: record.runtimeContext.organizationId } : {}),
         resourceReferences,

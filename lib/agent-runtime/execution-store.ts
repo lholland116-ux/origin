@@ -9,6 +9,7 @@ import type {
 } from "@/lib/agent-runtime/runtime-contracts";
 import type { RuntimeAttachmentReference } from "@/lib/agent-runtime/capability-executor";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
+import type { UserReasoningMode } from "@/lib/ai/reasoning-mode";
 
 export const EXECUTION_RUNTIME_VERSION = 1 as const;
 export const EXECUTION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
@@ -35,6 +36,7 @@ export type PersistedExecutionContext = {
   /** Immutable for the lifetime of a durable run; legacy rows may omit it. */
   readonly requestMessageBinding?: RequestMessageBinding;
   readonly userInput?: string;
+  readonly reasoningMode?: UserReasoningMode;
   readonly attachments: readonly RuntimeAttachmentReference[];
   readonly resourceReferences: readonly string[];
   readonly organizationId?: string;
@@ -138,6 +140,10 @@ export type AssociateAcceptedExecutionRunResult =
   | { readonly status: "created" | "existing"; readonly runId: string; readonly planFingerprint: string }
   | { readonly status: "conflict" };
 
+export type LookupAcceptedExecutionRunResult =
+  | { readonly status: "found"; readonly run: DurableExecutionRun }
+  | { readonly status: "not_found" | "conflict" };
+
 export type DurableStepCheckpoint = {
   readonly stepId: string;
   readonly status: Exclude<ExecutionStepStatus, "pending" | "running" | "retry_pending">;
@@ -210,6 +216,8 @@ export interface ExecutionStore {
   createRun(input: CreateDurableExecutionRunInput): Promise<CreateDurableExecutionRunResult>;
   /** Atomically verifies immutable acceptance identity and creates/retrieves its sole run. */
   associateAcceptedRequest(input: AssociateAcceptedExecutionRunInput): Promise<AssociateAcceptedExecutionRunResult>;
+  /** Owner-scoped, immutable acceptance lookup used before any replay replans. */
+  lookupAcceptedRequestRun(input: AcceptedRequestExecutionIdentity): Promise<LookupAcceptedExecutionRunResult>;
   getRun(input: { readonly runId: string; readonly userId: string }): Promise<DurableExecutionRun | null>;
   getControlEvents(input: { readonly runId: string; readonly userId: string }): Promise<readonly ExecutionControlEvent[]>;
   pauseRun(input: { readonly runId: string; readonly userId: string; readonly expectedControlRevision: number; readonly actorUserId: string; readonly createdAt: string }): Promise<ExecutionControlWriteResult>;
