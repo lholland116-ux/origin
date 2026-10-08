@@ -869,6 +869,12 @@ describe("six independent capability adapters", () => {
     const reopenStore = (): ExecutionStore => ({
       createRun: (input) => persistentBackend.createRun(input),
       getRun: (input) => persistentBackend.getRun(input),
+      getControlEvents: (input) => persistentBackend.getControlEvents(input),
+      pauseRun: (input) => persistentBackend.pauseRun(input),
+      resumeRun: (input) => persistentBackend.resumeRun(input),
+      stopRun: (input) => persistentBackend.stopRun(input),
+      createApprovalCheckpoint: (input) => persistentBackend.createApprovalCheckpoint(input),
+      decideApprovalCheckpoint: (input) => persistentBackend.decideApprovalCheckpoint(input),
       saveRunState: (input) => persistentBackend.saveRunState(input),
       claimStep: (input) => persistentBackend.claimStep(input),
       scheduleStepRetry: (input) => persistentBackend.scheduleStepRetry(input),

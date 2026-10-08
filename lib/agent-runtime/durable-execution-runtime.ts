@@ -41,8 +41,11 @@ import {
   type ExecutionRun,
   type ExecutionStepResult,
   type ExecutionOperationalMetadata,
+  type ExecutionControlCommandResult,
+  type HumanApprovalCheckpoint,
   executionRunSchema,
   executionStepSchema,
+  EXECUTION_CONTROL_STATES,
   EXECUTION_FAILURE_CODES,
   MAX_EXECUTION_STEP_ATTEMPTS,
 } from "@/lib/agent-runtime/runtime-contracts";
@@ -109,6 +112,7 @@ function executionRun(record: DurableExecutionRun): ExecutionRun {
     handoffVersion: record.handoffVersion,
     objective: "",
     status: record.status,
+    controlState: record.controlState,
     createdAt: record.createdAt,
     ...(record.startedAt ? { startedAt: record.startedAt } : {}),
     ...(record.completedAt ? { completedAt: record.completedAt } : {}),
@@ -126,6 +130,21 @@ function executionRun(record: DurableExecutionRun): ExecutionRun {
       ...(step.failureCode ? { errorCode: step.failureCode } : {}),
     })),
   };
+}
+
+function controlOutcome(record: DurableExecutionRun): ExecutionOutcome | null {
+  switch (record.controlState) {
+    case "paused": return { kind: "paused", run: executionRun(record) };
+    case "pause_requested": return { kind: "pause_requested", run: executionRun(record) };
+    case "stopped": return { kind: "stopped", run: executionRun(record) };
+    case "stop_requested": return { kind: "stop_requested", run: executionRun(record) };
+    case "returned": return { kind: "returned", run: executionRun(record) };
+    default: return null;
+  }
+}
+
+function approvalOutcome(record: DurableExecutionRun, checkpoint: HumanApprovalCheckpoint): ExecutionOutcome {
+  return { kind: "awaiting_human_approval", run: executionRun(record), checkpoint };
 }
 
 function telemetry(run: ExecutionRun, failureCode: ExecutionFailure["code"] | null, snapshotRevision: number, resumed: boolean): ExecutionOperationalMetadata & { readonly snapshot_revision: number; readonly resumed: boolean } {
@@ -194,6 +213,28 @@ function isValidDurableRecord(record: DurableExecutionRun, handoff: PlannedExecu
     || record.runtimeContext.attachments.some((item) => !item || typeof item.id !== "string" || !["file", "image"].includes(item.kind))
     || !Array.isArray(record.runtimeContext.resourceReferences)
     || record.runtimeContext.resourceReferences.some((ref) => typeof ref !== "string")) return false;
+  if (!EXECUTION_CONTROL_STATES.includes(record.controlState)
+    || !Number.isSafeInteger(record.controlRevision) || record.controlRevision < 0
+    || !Array.isArray(record.approvalCheckpoints)
+    || new Set(record.approvalCheckpoints.map((checkpoint) => checkpoint.stepId)).size !== record.approvalCheckpoints.length
+    || record.approvalCheckpoints.some((checkpoint) => {
+      const step = handoff.plan.steps.find((candidate) => candidate.id === checkpoint.stepId);
+      return checkpoint.runId !== record.id || checkpoint.userId !== record.userId
+        || !["pending", "approved", "returned"].includes(checkpoint.status)
+        || !["runtime_policy", "owner_request"].includes(checkpoint.source)
+        || checkpoint.planFingerprint !== record.requestFingerprint || !step
+        || checkpoint.stepFingerprint !== fingerprint(step)
+        || !/^[0-9a-f]{64}$/.test(checkpoint.planFingerprint)
+        || !/^[0-9a-f]{64}$/.test(checkpoint.stepFingerprint)
+        || (checkpoint.status === "pending" && (checkpoint.decidedBy !== undefined || checkpoint.decidedAt !== undefined || checkpoint.rationale !== undefined))
+        || (checkpoint.status !== "pending" && (checkpoint.decidedBy !== record.userId || !checkpoint.decidedAt))
+        || (checkpoint.status === "returned" && (!checkpoint.rationale || checkpoint.rationale.trim().length < 1 || checkpoint.rationale.length > 1000))
+        || (checkpoint.status === "approved" && checkpoint.rationale !== undefined)
+        || (checkpoint.source === "runtime_policy" && checkpoint.requestedBy !== undefined)
+        || (checkpoint.source === "owner_request" && checkpoint.requestedBy !== record.userId);
+    })) return false;
+  if (record.approvalCheckpoints.some((checkpoint) => checkpoint.status === "returned") && record.controlState !== "returned") return false;
+  if ((record.controlState === "returned") !== record.approvalCheckpoints.some((checkpoint) => checkpoint.status === "returned")) return false;
   if (!executionRunSchema.safeParse(executionRun(record)).success) return false;
   if (record.steps.length !== handoff.plan.steps.length) return false;
   for (const step of record.steps) {
@@ -254,6 +295,13 @@ export type DurableExecutionRuntimeOptions = {
   readonly requestMessageBindingValidator: RequestMessageBindingValidator;
   readonly createExecutionId?: () => string;
   readonly createExecutionKey?: () => string;
+  readonly createControlId?: () => string;
+  /** Trusted server-owned governance hook; this is not read from the plan or request payload. */
+  readonly approvalPolicy?: (input: {
+    readonly steps: readonly PlanStep[];
+    readonly authenticatedUserId: string;
+    readonly conversationId: string;
+  }) => readonly string[];
   readonly now?: () => Date;
 };
 
@@ -261,11 +309,13 @@ export type DurableExecutionRuntimeOptions = {
 export class DurableXStateExecutionRuntime {
   private readonly createExecutionId: () => string;
   private readonly createExecutionKey: () => string;
+  private readonly createControlId: () => string;
   private readonly now: () => Date;
 
   constructor(private readonly options: DurableExecutionRuntimeOptions) {
     this.createExecutionId = options.createExecutionId ?? randomUUID;
     this.createExecutionKey = options.createExecutionKey ?? randomUUID;
+    this.createControlId = options.createControlId ?? randomUUID;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -296,6 +346,22 @@ export class DurableXStateExecutionRuntime {
     if (!bindingIsValid) return { kind: "rejected", failure: executionFailure("ownership_denied") };
     const handoff = checked.handoff;
     const plan = safePlan(handoff);
+    let approvalStepIds: string[];
+    try {
+      const configured = this.options.approvalPolicy?.({
+        steps: handoff.plan.steps,
+        authenticatedUserId: stableInput.authenticatedUserId,
+        conversationId: stableInput.conversationId,
+      }) ?? [];
+      if (!Array.isArray(configured) || configured.some((id) => typeof id !== "string")
+        || new Set(configured).size !== configured.length
+        || configured.some((id) => !handoff.orderedStepIds.includes(id))) {
+        return { kind: "rejected", failure: executionFailure("invalid_handoff") };
+      }
+      approvalStepIds = [...configured].sort();
+    } catch {
+      return { kind: "rejected", failure: executionFailure("authorization_failed") };
+    }
     const needsUserInput = handoff.plan.steps.some((step) => step.inputs?.some((input) => input.source === "user"));
     const runtimeContext = {
       conversationId: stableInput.conversationId,
@@ -305,7 +371,9 @@ export class DurableXStateExecutionRuntime {
       resourceReferences: [...(stableInput.resourceReferences ?? [])],
       ...(stableInput.organizationId ? { organizationId: stableInput.organizationId } : {}),
     };
-    const requestFingerprint = fingerprint({ plan, runtimeContext });
+    const requestFingerprint = approvalStepIds.length === 0
+      ? fingerprint({ plan, runtimeContext })
+      : fingerprint({ plan, runtimeContext, approvalStepIds });
     const runActor = createExecutionRunLifecycle();
     const stepActors = new Map(handoff.orderedStepIds.map((id) => [id, createExecutionStepLifecycle()]));
     const snapshot = initialEnvelope(runActor, stepActors);
@@ -327,6 +395,11 @@ export class DurableXStateExecutionRuntime {
         dependencyIds: step.dependsOn,
         executionKey: this.createExecutionKey(),
       })),
+        approvalCheckpoints: approvalStepIds.map((stepId) => ({
+          id: this.createControlId(),
+          stepId,
+          stepFingerprint: fingerprint(handoff.plan.steps.find((step) => step.id === stepId)),
+        })),
         createdAt,
       });
     } catch {
@@ -344,6 +417,184 @@ export class DurableXStateExecutionRuntime {
     return this.resume({ runId: created.run.id, authenticatedUserId: stableInput.authenticatedUserId });
   }
 
+  async pause(input: { readonly runId: string; readonly authenticatedUserId: string }): Promise<ExecutionControlCommandResult> {
+    const target = await this.loadAuthorizedControlTarget(input.runId, input.authenticatedUserId);
+    if (!target) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+    let result;
+    try {
+      result = await this.options.store.pauseRun({
+        runId: target.record.id, userId: target.record.userId, actorUserId: target.record.userId,
+        expectedControlRevision: target.record.controlRevision, createdAt: this.now().toISOString(),
+      });
+    } catch {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    if (result.status === "not_found" || result.status === "terminal" || result.status === "conflict") {
+      return { kind: "rejected", failure: executionFailure(result.status === "conflict" ? "snapshot_conflict" : "authorization_denied") };
+    }
+    if (result.status === "saved" || result.status === "approval_pending" || result.status === "unsafe_boundary") {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    const updated = await this.options.store.getRun({ runId: target.record.id, userId: target.record.userId });
+    if (!updated) return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    return {
+      kind: result.status === "already_applied" ? "already_applied" : result.status,
+      run: executionRun(updated),
+    };
+  }
+
+  async stop(input: { readonly runId: string; readonly authenticatedUserId: string }): Promise<ExecutionControlCommandResult> {
+    const target = await this.loadAuthorizedControlTarget(input.runId, input.authenticatedUserId);
+    if (!target) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+    let result;
+    try {
+      result = await this.options.store.stopRun({
+        runId: target.record.id, userId: target.record.userId, actorUserId: target.record.userId,
+        expectedControlRevision: target.record.controlRevision, createdAt: this.now().toISOString(),
+      });
+    } catch {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    if (result.status === "not_found" || result.status === "terminal" || result.status === "conflict") {
+      return { kind: "rejected", failure: executionFailure(result.status === "conflict" ? "snapshot_conflict" : "authorization_denied") };
+    }
+    if (result.status === "saved" || result.status === "approval_pending" || result.status === "unsafe_boundary") {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    const updated = await this.options.store.getRun({ runId: target.record.id, userId: target.record.userId });
+    if (!updated) return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    return {
+      kind: result.status === "already_applied" ? "already_applied" : result.status,
+      run: executionRun(updated),
+    };
+  }
+
+  async requireApproval(input: {
+    readonly runId: string;
+    readonly authenticatedUserId: string;
+    readonly stepId: string;
+  }): Promise<ExecutionControlCommandResult> {
+    const target = await this.loadAuthorizedControlTarget(input.runId, input.authenticatedUserId);
+    if (!target) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+    const step = target.handoff.plan.steps.find((candidate) => candidate.id === input.stepId);
+    if (!step) return { kind: "rejected", failure: executionFailure("invalid_handoff") };
+    let result;
+    try {
+      result = await this.options.store.createApprovalCheckpoint({
+        runId: target.record.id,
+        userId: target.record.userId,
+        expectedControlRevision: target.record.controlRevision,
+        checkpointId: this.createControlId(),
+        stepId: input.stepId,
+        planFingerprint: target.record.requestFingerprint,
+        stepFingerprint: fingerprint(step),
+        source: "owner_request",
+        actorUserId: target.record.userId,
+        createdAt: this.now().toISOString(),
+      });
+    } catch {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    if (result.status !== "created" && result.status !== "existing"
+      && result.status !== "approved" && result.status !== "returned" && result.status !== "already_decided") {
+      return { kind: "rejected", failure: executionFailure(result.status === "conflict" ? "snapshot_conflict" : "invalid_handoff") };
+    }
+    const updated = await this.options.store.getRun({ runId: target.record.id, userId: target.record.userId });
+    if (!updated) return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    const checkpoint = result.checkpoint;
+    if (checkpoint.status === "returned") return { kind: "returned", run: executionRun(updated), checkpoint };
+    if (checkpoint.status === "approved") return { kind: "approved", run: executionRun(updated), checkpoint };
+    return { kind: "awaiting_human_approval", run: executionRun(updated), checkpoint };
+  }
+
+  async approveCheckpoint(input: {
+    readonly runId: string;
+    readonly authenticatedUserId: string;
+    readonly checkpointId: string;
+  }): Promise<ExecutionControlCommandResult> {
+    return this.decideCheckpoint({ ...input, decision: "approve" });
+  }
+
+  async returnCheckpoint(input: {
+    readonly runId: string;
+    readonly authenticatedUserId: string;
+    readonly checkpointId: string;
+    readonly rationale: string;
+  }): Promise<ExecutionControlCommandResult> {
+    return this.decideCheckpoint({ ...input, decision: "return", rationale: input.rationale });
+  }
+
+  private async decideCheckpoint(input: {
+    readonly runId: string;
+    readonly authenticatedUserId: string;
+    readonly checkpointId: string;
+    readonly decision: "approve" | "return";
+    readonly rationale?: string;
+  }): Promise<ExecutionControlCommandResult> {
+    const target = await this.loadAuthorizedControlTarget(input.runId, input.authenticatedUserId);
+    if (!target) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+    const knownCheckpoint = target.record.approvalCheckpoints.find((checkpoint) => checkpoint.id === input.checkpointId);
+    if (!knownCheckpoint) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+    if (knownCheckpoint.planFingerprint !== target.record.requestFingerprint) {
+      return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
+    }
+    let result;
+    try {
+      result = await this.options.store.decideApprovalCheckpoint({
+        runId: target.record.id, userId: target.record.userId,
+        expectedControlRevision: target.record.controlRevision,
+        checkpointId: input.checkpointId, decision: input.decision,
+        ...(input.rationale === undefined ? {} : { rationale: input.rationale }),
+        actorUserId: target.record.userId, decidedAt: this.now().toISOString(),
+      });
+    } catch {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    if (result.status !== "approved" && result.status !== "returned" && result.status !== "already_decided") {
+      return { kind: "rejected", failure: executionFailure(result.status === "conflict" ? "snapshot_conflict" : "authorization_denied") };
+    }
+    const updated = await this.options.store.getRun({ runId: target.record.id, userId: target.record.userId });
+    if (!updated) return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    if (result.status === "already_decided") {
+      const requestedStatus = input.decision === "approve" ? "approved" : "returned";
+      if (result.checkpoint.status !== requestedStatus) {
+        return { kind: "rejected", failure: executionFailure("snapshot_conflict") };
+      }
+      return requestedStatus === "returned"
+        ? { kind: "returned", run: executionRun(updated), checkpoint: result.checkpoint }
+        : { kind: "already_applied", run: executionRun(updated) };
+    }
+    return result.status === "returned"
+      ? { kind: "returned", run: executionRun(updated), checkpoint: result.checkpoint }
+      : { kind: "approved", run: executionRun(updated), checkpoint: result.checkpoint };
+  }
+
+  private async loadAuthorizedControlTarget(runId: string, authenticatedUserId: string): Promise<{
+    readonly record: DurableExecutionRun;
+    readonly handoff: PlannedExecutionHandoff;
+  } | null> {
+    if (!UUID_PATTERN.test(runId) || !UUID_PATTERN.test(authenticatedUserId)) return null;
+    let record: DurableExecutionRun | null;
+    try {
+      record = await this.options.store.getRun({ runId, userId: authenticatedUserId });
+    } catch {
+      return null;
+    }
+    if (!record || record.userId !== authenticatedUserId) return null;
+    const handoff = persistedHandoff(record);
+    if (!handoff || !isValidDurableRecord(record, handoff)) return null;
+    const binding = record.runtimeContext.requestMessageBinding;
+    const parsed = requestMessageBindingSchema.safeParse(binding);
+    if (!parsed.success || parsed.data.userId !== authenticatedUserId
+      || parsed.data.conversationId !== record.runtimeContext.conversationId) return null;
+    try {
+      if (!await this.options.requestMessageBindingValidator.validate(parsed.data)) return null;
+    } catch {
+      return null;
+    }
+    return { record, handoff };
+  }
+
   async resume(input: {
     readonly runId: string;
     readonly authenticatedUserId: string;
@@ -355,6 +606,58 @@ export class DurableXStateExecutionRuntime {
     } catch {
       return { kind: "rejected", failure: executionFailure("persistence_failed") };
     }
+  }
+
+  /** Explicit owner-authorized control transition; ordinary runtime continuation never clears a pause. */
+  async resumeControl(input: {
+    readonly runId: string;
+    readonly authenticatedUserId: string;
+    readonly requestId?: string;
+    readonly correlationId?: string;
+  }): Promise<ExecutionOutcome> {
+    const target = await this.loadAuthorizedControlTarget(input.runId, input.authenticatedUserId);
+    if (!target) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+    const runningStep = target.record.steps.find((step) => step.status === "running");
+    if (runningStep) {
+      return { kind: "recovery_required", run: executionRun(target.record), failure: executionFailure("indeterminate_step"), stepId: runningStep.stepId };
+    }
+    let result;
+    try {
+      result = await this.options.store.resumeRun({
+        runId: target.record.id,
+        userId: target.record.userId,
+        expectedControlRevision: target.record.controlRevision,
+        actorUserId: target.record.userId,
+        createdAt: this.now().toISOString(),
+      });
+    } catch {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    if (result.status === "approval_pending") {
+      const checkpoint = target.record.approvalCheckpoints.find((candidate) => candidate.status === "pending");
+      return checkpoint ? approvalOutcome(target.record, checkpoint)
+        : { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
+    }
+    if (result.status === "unsafe_boundary") {
+      const latest = await this.options.store.getRun({ runId: target.record.id, userId: target.record.userId });
+      const activeStep = latest?.steps.find((step) => step.status === "running");
+      return { kind: "recovery_required", run: executionRun(latest ?? target.record), failure: executionFailure("indeterminate_step"), stepId: activeStep?.stepId ?? "" };
+    }
+    if (result.status === "terminal") {
+      const latest = await this.options.store.getRun({ runId: target.record.id, userId: target.record.userId });
+      return { kind: "rejected", failure: latest ? executionFailure("snapshot_conflict") : executionFailure("ownership_denied") };
+    }
+    if (result.status === "conflict" || result.status === "not_found") {
+      const latest = await this.options.store.getRun({ runId: target.record.id, userId: target.record.userId });
+      if (!latest) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+      if (latest.controlState !== "active") return controlOutcome(latest) ?? { kind: "rejected", failure: executionFailure("snapshot_conflict") };
+    }
+    return this.resume({
+      runId: target.record.id,
+      authenticatedUserId: target.record.userId,
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+    });
   }
 
   private async resumeExisting(input: {
@@ -445,6 +748,9 @@ export class DurableXStateExecutionRuntime {
     if (!persistedBinding) {
       return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
     }
+    if (record.controlState !== "active") {
+      return controlOutcome(record)!;
+    }
     let revision = record.snapshotRevision;
     let current = record;
     let claimedRetryStepId: string | undefined;
@@ -482,6 +788,14 @@ export class DurableXStateExecutionRuntime {
       if (claimed.status === "not_eligible") {
         stopActors();
         return { kind: "retry_pending", run: executionRun(current), stepId: retryPending.stepId, nextRetryAt: claimed.nextRetryAt };
+      }
+      if (claimed.status === "approval_required") {
+        stopActors();
+        return approvalOutcome(current, claimed.checkpoint);
+      }
+      if (claimed.status === "control_blocked") {
+        stopActors();
+        return controlOutcome({ ...current, controlState: claimed.controlState })!;
       }
       if (claimed.status !== "claimed") {
         stopActors();
@@ -523,7 +837,11 @@ export class DurableXStateExecutionRuntime {
         snapshot: pendingEnvelope,
         startedAt,
       });
-      if (started.status !== "saved") return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId: "" };
+      if (started.status !== "saved") {
+        const latest = await this.options.store.getRun({ runId: current.id, userId: current.userId });
+        if (latest && latest.controlState !== "active") return controlOutcome(latest)!;
+        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId: "" };
+      }
       revision = started.snapshotRevision;
       const reloaded = (await this.options.store.getRun({ runId: current.id, userId: current.userId }))!;
       current = {
@@ -576,6 +894,8 @@ export class DurableXStateExecutionRuntime {
           lifecycle.stop();
           for (const actor of stepActors.values()) actor.stop();
           runActor.stop();
+          if (claimed.status === "approval_required") return approvalOutcome(current, claimed.checkpoint);
+          if (claimed.status === "control_blocked") return controlOutcome({ ...current, controlState: claimed.controlState })!;
           return claimed.status === "already_claimed"
             ? { kind: "recovery_required", run: executionRun(current), failure: executionFailure("indeterminate_step"), stepId }
             : { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId };
@@ -679,10 +999,13 @@ export class DurableXStateExecutionRuntime {
               ...current,
               snapshot: retrySnapshot,
               snapshotRevision: scheduled.snapshotRevision,
+              controlState: scheduled.controlState ?? current.controlState,
+              controlRevision: scheduled.controlRevision ?? current.controlRevision,
               steps: current.steps.map((item) => item.stepId === stepId
                 ? { ...item, status: "retry_pending", nextRetryAt }
                 : item),
             };
+            if (retryRun.controlState !== "active") return controlOutcome(retryRun)!;
             return { kind: "retry_pending", run: executionRun(retryRun), stepId, nextRetryAt };
           }
           stepFailure = executionFailure(failure.retrySafety === "SAFE_RETRY" ? "retry_exhausted" : failure.code);
@@ -744,6 +1067,8 @@ export class DurableXStateExecutionRuntime {
       current = {
         ...current,
         status: allDone ? "succeeded" : "running",
+        controlState: saved.controlState ?? current.controlState,
+        controlRevision: saved.controlRevision ?? current.controlRevision,
         snapshot: checkpointSnapshot,
         snapshotRevision: revision,
         ...(allDone ? { completedAt } : {}),
@@ -759,6 +1084,11 @@ export class DurableXStateExecutionRuntime {
         runActor.stop();
         const run = executionRun(current);
         return { kind: "succeeded", run, stepResults: outputResults(current.steps), telemetry: telemetry(run, null, revision, true) };
+      }
+      if (current.controlState !== "active") {
+        for (const actor of stepActors.values()) actor.stop();
+        runActor.stop();
+        return controlOutcome(current)!;
       }
     }
 

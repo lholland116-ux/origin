@@ -3,6 +3,8 @@ import type { CapabilityOutputKind } from "@/lib/ai/capability-registry";
 
 export const EXECUTION_RUN_STATUSES = ["pending", "running", "succeeded", "failed"] as const;
 export const EXECUTION_STEP_STATUSES = ["pending", "running", "retry_pending", "succeeded", "failed", "skipped"] as const;
+export const EXECUTION_CONTROL_STATES = ["active", "pause_requested", "paused", "stop_requested", "stopped", "returned"] as const;
+export const HUMAN_APPROVAL_STATUSES = ["pending", "approved", "returned"] as const;
 export const MAX_EXECUTION_STEP_ATTEMPTS = 3 as const;
 
 export const executionStepSchema = z.object({
@@ -34,13 +36,48 @@ export const executionRunSchema = z.object({
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
   orderedStepIds: z.array(z.string()),
+  controlState: z.enum(EXECUTION_CONTROL_STATES).optional(),
   steps: z.array(executionStepSchema),
 }).strict();
 
 export type ExecutionRunStatus = (typeof EXECUTION_RUN_STATUSES)[number];
 export type ExecutionStepStatus = (typeof EXECUTION_STEP_STATUSES)[number];
+export type ExecutionControlState = (typeof EXECUTION_CONTROL_STATES)[number];
+export type HumanApprovalStatus = (typeof HUMAN_APPROVAL_STATUSES)[number];
 export type ExecutionStep = z.infer<typeof executionStepSchema>;
 export type ExecutionRun = z.infer<typeof executionRunSchema>;
+
+export type HumanApprovalCheckpoint = Readonly<{
+  id: string;
+  runId: string;
+  userId: string;
+  stepId: string;
+  planFingerprint: string;
+  stepFingerprint: string;
+  status: HumanApprovalStatus;
+  source: "runtime_policy" | "owner_request";
+  requestedBy?: string;
+  createdAt: string;
+  decidedBy?: string;
+  decidedAt?: string;
+  rationale?: string;
+}>;
+
+export type ExecutionControlEvent = Readonly<{
+  id: string;
+  runId: string;
+  userId: string;
+  action: "approval_required" | "approved" | "returned" | "pause_requested" | "paused" | "resumed" | "stop_requested" | "stopped";
+  actorUserId?: string;
+  checkpointId?: string;
+  priorState: ExecutionControlState;
+  newState: ExecutionControlState;
+  priorControlRevision: number;
+  controlRevision: number;
+  snapshotRevision: number;
+  rationale?: string;
+  createdAt: string;
+}>;
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -154,7 +191,23 @@ export type ExecutionOutcome =
       readonly run: ExecutionRun;
       readonly stepId: string;
       readonly nextRetryAt: string;
+    }
+  | {
+      readonly kind: "paused" | "pause_requested" | "stopped" | "stop_requested" | "returned";
+      readonly run: ExecutionRun;
+    }
+  | {
+      readonly kind: "awaiting_human_approval";
+      readonly run: ExecutionRun;
+      readonly checkpoint: HumanApprovalCheckpoint;
     };
+
+export type ExecutionControlCommandResult =
+  | { readonly kind: "paused" | "pause_requested" | "resumed" | "stopped" | "stop_requested" | "already_applied"; readonly run: ExecutionRun }
+  | { readonly kind: "awaiting_human_approval" | "approved"; readonly run: ExecutionRun; readonly checkpoint: HumanApprovalCheckpoint }
+  | { readonly kind: "returned"; readonly run: ExecutionRun; readonly checkpoint: HumanApprovalCheckpoint }
+  | { readonly kind: "recovery_required"; readonly run: ExecutionRun; readonly failure: ExecutionFailure; readonly stepId: string }
+  | { readonly kind: "rejected"; readonly failure: ExecutionFailure };
 
 export function isJsonValue(value: unknown): value is JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;

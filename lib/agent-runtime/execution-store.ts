@@ -1,8 +1,11 @@
 import type { PlanStep } from "@/lib/ai/intelligence-plan";
 import type {
+  ExecutionControlEvent,
+  ExecutionControlState,
   ExecutionRunStatus,
   ExecutionStepResult,
   ExecutionStepStatus,
+  HumanApprovalCheckpoint,
 } from "@/lib/agent-runtime/runtime-contracts";
 import type { RuntimeAttachmentReference } from "@/lib/agent-runtime/capability-executor";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
@@ -72,6 +75,8 @@ export type DurableExecutionRun = {
   readonly executionPlan: PersistedExecutionPlan;
   readonly runtimeContext: PersistedExecutionContext;
   readonly status: ExecutionRunStatus;
+  readonly controlState: ExecutionControlState;
+  readonly controlRevision: number;
   readonly failureCode?: string;
   readonly snapshotSchemaVersion: number;
   readonly snapshotRevision: number;
@@ -80,6 +85,7 @@ export type DurableExecutionRun = {
   readonly startedAt?: string;
   readonly completedAt?: string;
   readonly steps: readonly DurableExecutionStep[];
+  readonly approvalCheckpoints: readonly HumanApprovalCheckpoint[];
 };
 
 export type CreateDurableExecutionRunInput = {
@@ -97,6 +103,11 @@ export type CreateDurableExecutionRunInput = {
     readonly dependencyIds: readonly string[];
     readonly executionKey: string;
   }[];
+  readonly approvalCheckpoints?: readonly {
+    readonly id: string;
+    readonly stepId: string;
+    readonly stepFingerprint: string;
+  }[];
   readonly createdAt: string;
 };
 
@@ -113,31 +124,74 @@ export type DurableStepCheckpoint = {
 };
 
 export type ExecutionStoreWriteResult =
-  | { readonly status: "saved"; readonly snapshotRevision: number }
+  | { readonly status: "saved"; readonly snapshotRevision: number; readonly controlState?: ExecutionControlState; readonly controlRevision?: number }
   | { readonly status: "result_too_large" }
   | { readonly status: "conflict" | "not_found" };
 
 export type ClaimDurableStepResult =
   | { readonly status: "claimed"; readonly executionKey: string; readonly snapshotRevision: number }
+  | { readonly status: "approval_required"; readonly checkpoint: HumanApprovalCheckpoint }
+  | { readonly status: "control_blocked"; readonly controlState: ExecutionControlState }
   | { readonly status: "already_claimed"; readonly stepStatus: ExecutionStepStatus }
   | { readonly status: "conflict" | "not_found" };
 
 export type ScheduleDurableStepRetryResult =
-  | { readonly status: "saved"; readonly snapshotRevision: number }
+  | { readonly status: "saved"; readonly snapshotRevision: number; readonly controlState?: ExecutionControlState; readonly controlRevision?: number }
   | { readonly status: "attempt_limit" }
   | { readonly status: "conflict" | "not_found" };
 
 export type ClaimRetryableStepResult =
   | { readonly status: "claimed"; readonly executionKey: string; readonly attempt: number; readonly snapshotRevision: number }
+  | { readonly status: "approval_required"; readonly checkpoint: HumanApprovalCheckpoint }
+  | { readonly status: "control_blocked"; readonly controlState: ExecutionControlState }
   | { readonly status: "not_eligible"; readonly nextRetryAt: string }
   | { readonly status: "attempt_limit" }
   | { readonly status: "already_claimed"; readonly stepStatus: ExecutionStepStatus }
   | { readonly status: "conflict" | "not_found" };
 
+export type ExecutionControlWriteResult =
+  | { readonly status: "saved"; readonly controlState: "active"; readonly controlRevision: number }
+  | { readonly status: "pause_requested" | "paused" | "stop_requested" | "stopped"; readonly controlState: "pause_requested" | "paused" | "stop_requested" | "stopped"; readonly controlRevision: number }
+  | { readonly status: "already_applied"; readonly controlState: ExecutionControlState; readonly controlRevision: number }
+  | { readonly status: "conflict" | "not_found" | "terminal" | "approval_pending" | "unsafe_boundary" };
+
+export type HumanApprovalWriteResult =
+  | { readonly status: "created" | "existing"; readonly checkpoint: HumanApprovalCheckpoint; readonly controlRevision: number }
+  | { readonly status: "approved" | "returned"; readonly checkpoint: HumanApprovalCheckpoint; readonly controlState: ExecutionControlState; readonly controlRevision: number }
+  | { readonly status: "already_decided"; readonly checkpoint: HumanApprovalCheckpoint; readonly controlState: ExecutionControlState; readonly controlRevision: number }
+  | { readonly status: "conflict" | "not_found" | "terminal" | "unsafe_boundary" | "invalid_checkpoint" };
+
+export type CreateHumanApprovalCheckpointInput = {
+  readonly runId: string;
+  readonly userId: string;
+  readonly expectedControlRevision: number;
+  readonly checkpointId: string;
+  readonly stepId: string;
+  readonly planFingerprint: string;
+  readonly stepFingerprint: string;
+  readonly source: "runtime_policy" | "owner_request";
+};
+
+export type DecideHumanApprovalInput = {
+  readonly runId: string;
+  readonly userId: string;
+  readonly expectedControlRevision: number;
+  readonly checkpointId: string;
+  readonly decision: "approve" | "return";
+  readonly rationale?: string;
+  readonly decidedAt: string;
+};
+
 /** LVTChat-owned persistence boundary; no Supabase/Postgres client types escape this interface. */
 export interface ExecutionStore {
   createRun(input: CreateDurableExecutionRunInput): Promise<CreateDurableExecutionRunResult>;
   getRun(input: { readonly runId: string; readonly userId: string }): Promise<DurableExecutionRun | null>;
+  getControlEvents(input: { readonly runId: string; readonly userId: string }): Promise<readonly ExecutionControlEvent[]>;
+  pauseRun(input: { readonly runId: string; readonly userId: string; readonly expectedControlRevision: number; readonly actorUserId: string; readonly createdAt: string }): Promise<ExecutionControlWriteResult>;
+  resumeRun(input: { readonly runId: string; readonly userId: string; readonly expectedControlRevision: number; readonly actorUserId: string; readonly createdAt: string }): Promise<ExecutionControlWriteResult>;
+  stopRun(input: { readonly runId: string; readonly userId: string; readonly expectedControlRevision: number; readonly actorUserId: string; readonly createdAt: string }): Promise<ExecutionControlWriteResult>;
+  createApprovalCheckpoint(input: CreateHumanApprovalCheckpointInput & { readonly createdAt: string; readonly actorUserId?: string }): Promise<HumanApprovalWriteResult>;
+  decideApprovalCheckpoint(input: DecideHumanApprovalInput & { readonly actorUserId: string }): Promise<HumanApprovalWriteResult>;
   saveRunState(input: {
     readonly runId: string;
     readonly userId: string;

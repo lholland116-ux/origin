@@ -36,12 +36,20 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
   const retryStepKey = randomUUID();
   const claimRunId = randomUUID();
   const claimStepKey = randomUUID();
+  const controlRunId = randomUUID();
+  const controlStepKey = randomUUID();
+  const gatedRunId = randomUUID();
+  const gatedStepKey = randomUUID();
+  const decisionRaceRunId = randomUUID();
+  const decisionRaceStepKey = randomUUID();
+  const stoppedRunId = randomUUID();
+  const stoppedStepKey = randomUUID();
 
   function createSnapshot(runActor: ReturnType<typeof createExecutionRunLifecycle>, stepActor: ReturnType<typeof createExecutionStepLifecycle>): ExecutionSnapshotEnvelope {
     return { version: 1, runtimeVersion: 1, snapshot: { run: runActor.getPersistedSnapshot(), steps: { "store-step": stepActor.getPersistedSnapshot() } } };
   }
 
-  function input(ids: { readonly runId?: string; readonly stepKey?: string } = {}): CreateDurableExecutionRunInput {
+  function input(ids: { readonly runId?: string; readonly stepKey?: string; readonly approvalCheckpoint?: boolean } = {}): CreateDurableExecutionRunInput {
     const runActor = createExecutionRunLifecycle();
     const stepActor = createExecutionStepLifecycle();
     const conversationId = randomUUID();
@@ -74,6 +82,7 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
       },
       snapshot: createSnapshot(runActor, stepActor),
       steps: [{ stepId: "store-step", capabilityId: "standard", dependencyIds: [], executionKey: ids.stepKey ?? stepKey }],
+      ...(ids.approvalCheckpoint ? { approvalCheckpoints: [{ id: randomUUID(), stepId: "store-step", stepFingerprint: "e".repeat(64) }] } : {}),
       createdAt: new Date().toISOString(),
     };
   }
@@ -196,6 +205,24 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
     });
 
     stepActor.claimRetry();
+    expect(await restartedStore.pauseRun({
+      runId: retryRunId, userId, actorUserId: userId, expectedControlRevision: 0, createdAt: new Date().toISOString(),
+    })).toMatchObject({ status: "paused", controlState: "paused", controlRevision: 1 });
+    expect(await restartedStore.claimRetryableStep({
+      runId: retryRunId,
+      userId,
+      stepId: "store-step",
+      expectedRevision: 3,
+      snapshot: createSnapshot(runActor, stepActor),
+    })).toMatchObject({ status: "control_blocked", controlState: "paused" });
+    expect(await restartedStore.getRun({ runId: retryRunId, userId })).toMatchObject({
+      controlState: "paused",
+      snapshotRevision: 3,
+      steps: [{ status: "retry_pending", attempt: 1, nextRetryAt }],
+    });
+    expect(await restartedStore.resumeRun({
+      runId: retryRunId, userId, actorUserId: userId, expectedControlRevision: 1, createdAt: new Date().toISOString(),
+    })).toMatchObject({ status: "saved", controlState: "active", controlRevision: 2 });
     expect(await restartedStore.claimRetryableStep({
       runId: retryRunId,
       userId,
@@ -280,5 +307,130 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
       snapshotRevision: 6,
       steps: [{ status: "running", attempt: 3 }],
     });
+  });
+
+  it("serializes pause against a PostgreSQL step claim and preserves truthful in-flight state", async () => {
+    expect((await store.createRun(input({ runId: controlRunId, stepKey: controlStepKey }))).status).toBe("created");
+    const runActor = createExecutionRunLifecycle();
+    const stepActor = createExecutionStepLifecycle();
+    runActor.start();
+    expect((await store.saveRunState({
+      runId: controlRunId, userId, expectedRevision: 0, status: "running",
+      snapshot: createSnapshot(runActor, stepActor), startedAt: new Date().toISOString(),
+    })).status).toBe("saved");
+    stepActor.start();
+    const [pause, claim] = await Promise.all([
+      store.pauseRun({ runId: controlRunId, userId, actorUserId: userId, expectedControlRevision: 0, createdAt: new Date().toISOString() }),
+      new SupabaseExecutionStore(sql).claimStep({
+        runId: controlRunId, userId, stepId: "store-step", expectedRevision: 1,
+        snapshot: createSnapshot(runActor, stepActor), startedAt: new Date().toISOString(),
+      }),
+    ]);
+    const persisted = await new SupabaseExecutionStore(sql).getRun({ runId: controlRunId, userId });
+    expect(pause.status === "paused" || pause.status === "pause_requested").toBe(true);
+    expect(claim.status === "claimed" || claim.status === "control_blocked").toBe(true);
+    if (claim.status === "claimed") {
+      expect(pause.status).toBe("pause_requested");
+      expect(persisted).toMatchObject({ controlState: "pause_requested", steps: [{ status: "running" }] });
+    } else {
+      expect(pause.status).toBe("paused");
+      expect(persisted).toMatchObject({ controlState: "paused", steps: [{ status: "pending" }] });
+    }
+    const events = await store.getControlEvents({ runId: controlRunId, userId });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ action: claim.status === "claimed" ? "pause_requested" : "paused", actorUserId: userId, priorControlRevision: 0, controlRevision: 1 });
+  });
+
+  it("durably gates a specific step, records one winning decision, and blocks claims until approval", async () => {
+    const requested = input({ runId: gatedRunId, stepKey: gatedStepKey, approvalCheckpoint: true });
+    const created = await store.createRun(requested);
+    expect(created.status).toBe("created");
+    if (created.status !== "created") return;
+    const checkpoint = created.run.approvalCheckpoints[0]!;
+    const runActor = createExecutionRunLifecycle();
+    const stepActor = createExecutionStepLifecycle();
+    runActor.start();
+    expect((await store.saveRunState({
+      runId: gatedRunId, userId, expectedRevision: 0, status: "running",
+      snapshot: createSnapshot(runActor, stepActor), startedAt: new Date().toISOString(),
+    })).status).toBe("saved");
+    stepActor.start();
+    const blocked = await store.claimStep({
+      runId: gatedRunId, userId, stepId: "store-step", expectedRevision: 1,
+      snapshot: createSnapshot(runActor, stepActor), startedAt: new Date().toISOString(),
+    });
+    expect(blocked).toMatchObject({ status: "approval_required", checkpoint: { id: checkpoint.id, stepId: "store-step" } });
+
+    const approval = await store.decideApprovalCheckpoint({
+      runId: gatedRunId, userId, actorUserId: userId, expectedControlRevision: 1,
+      checkpointId: checkpoint.id, decision: "approve", decidedAt: new Date().toISOString(),
+    });
+    expect(approval).toMatchObject({ status: "approved", checkpoint: { status: "approved" } });
+    const replay = await new SupabaseExecutionStore(sql).decideApprovalCheckpoint({
+      runId: gatedRunId, userId, actorUserId: userId, expectedControlRevision: 1,
+      checkpointId: checkpoint.id, decision: "return", rationale: "Not ready for this step.", decidedAt: new Date().toISOString(),
+    });
+    expect(replay).toMatchObject({ status: "already_decided", checkpoint: { status: "approved" } });
+    const restarted = new SupabaseExecutionStore(sql);
+    const loaded = await restarted.getRun({ runId: gatedRunId, userId });
+    expect(loaded?.approvalCheckpoints[0]?.status).toBe("approved");
+    expect(await restarted.getControlEvents({ runId: gatedRunId, userId })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "approved", actorUserId: userId, checkpointId: checkpoint.id }),
+    ]));
+    expect(await restarted.claimStep({
+      runId: gatedRunId, userId, stepId: "store-step", expectedRevision: 1,
+      snapshot: createSnapshot(runActor, stepActor), startedAt: new Date().toISOString(),
+    })).toMatchObject({ status: "claimed" });
+
+    const raceCreated = await store.createRun(input({ runId: decisionRaceRunId, stepKey: decisionRaceStepKey, approvalCheckpoint: true }));
+    expect(raceCreated.status).toBe("created");
+    if (raceCreated.status !== "created") return;
+    const raceCheckpoint = raceCreated.run.approvalCheckpoints[0]!;
+    const [raceApproval, raceReturn] = await Promise.all([
+      store.decideApprovalCheckpoint({ runId: decisionRaceRunId, userId, actorUserId: userId, expectedControlRevision: 1, checkpointId: raceCheckpoint.id, decision: "approve", decidedAt: new Date().toISOString() }),
+      new SupabaseExecutionStore(sql).decideApprovalCheckpoint({ runId: decisionRaceRunId, userId, actorUserId: userId, expectedControlRevision: 1, checkpointId: raceCheckpoint.id, decision: "return", rationale: "Not ready for this step.", decidedAt: new Date().toISOString() }),
+    ]);
+    expect([raceApproval, raceReturn].filter((result) => result.status === "approved" || result.status === "returned")).toHaveLength(1);
+    expect([raceApproval, raceReturn].filter((result) => result.status === "already_decided")).toHaveLength(1);
+  });
+
+  it("rejects stale control revisions and stop atomically blocks claims without changing request binding", async () => {
+    const requested = input({ runId: stoppedRunId, stepKey: stoppedStepKey, approvalCheckpoint: true });
+    const created = await store.createRun(requested);
+    expect(created.status).toBe("created");
+    if (created.status !== "created") return;
+    const runActor = createExecutionRunLifecycle();
+    const stepActor = createExecutionStepLifecycle();
+    runActor.start();
+    expect(await store.saveRunState({
+      runId: stoppedRunId, userId, expectedRevision: 0, status: "running",
+      snapshot: createSnapshot(runActor, stepActor), startedAt: new Date().toISOString(),
+    })).toMatchObject({ status: "saved", snapshotRevision: 1 });
+
+    expect(await store.pauseRun({
+      runId: stoppedRunId, userId, actorUserId: userId, expectedControlRevision: 0, createdAt: new Date().toISOString(),
+    })).toMatchObject({ status: "conflict" });
+    expect(await store.stopRun({
+      runId: stoppedRunId, userId, actorUserId: userId, expectedControlRevision: 1, createdAt: new Date().toISOString(),
+    })).toMatchObject({ status: "stopped", controlState: "stopped", controlRevision: 2 });
+
+    stepActor.start();
+    expect(await store.claimStep({
+      runId: stoppedRunId, userId, stepId: "store-step", expectedRevision: 1,
+      snapshot: createSnapshot(runActor, stepActor), startedAt: new Date().toISOString(),
+    })).toMatchObject({ status: "control_blocked", controlState: "stopped" });
+    const loaded = await store.getRun({ runId: stoppedRunId, userId });
+    expect(loaded).toMatchObject({
+      controlState: "stopped",
+      controlRevision: 2,
+      snapshotRevision: 1,
+      steps: [{ status: "pending", attempt: 1, executionKey: stoppedStepKey }],
+      approvalCheckpoints: [{ status: "pending" }],
+    });
+    expect(loaded?.runtimeContext.requestMessageBinding).toEqual(requested.runtimeContext.requestMessageBinding);
+    expect(await store.getControlEvents({ runId: stoppedRunId, userId })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "approval_required", controlRevision: 1 }),
+      expect.objectContaining({ action: "stopped", priorControlRevision: 1, controlRevision: 2 }),
+    ]));
   });
 });

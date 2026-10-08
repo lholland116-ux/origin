@@ -5,9 +5,13 @@ import type {
   DurableExecutionRun,
   DurableExecutionStep,
   DurableStepCheckpoint,
+  ExecutionControlWriteResult,
+  HumanApprovalWriteResult,
   ExecutionStore,
   ExecutionStoreWriteResult,
 } from "@/lib/agent-runtime/execution-store";
+import type { ExecutionControlEvent, ExecutionControlState, HumanApprovalCheckpoint } from "@/lib/agent-runtime/runtime-contracts";
+import { randomUUID } from "node:crypto";
 import {
   executionResultJsonBytes,
   executionResultsEqual,
@@ -22,6 +26,7 @@ type MutableRun = Mutable<Omit<DurableExecutionRun, "steps">> & { steps: Mutable
 /** Deterministic store fake for adapter tests; production claims use PostgreSQL conditional updates. */
 export class InMemoryExecutionStore implements ExecutionStore {
   private readonly runs = new Map<string, MutableRun>();
+  private readonly controlEvents = new Map<string, ExecutionControlEvent[]>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -42,6 +47,8 @@ export class InMemoryExecutionStore implements ExecutionStore {
       executionPlan: structuredClone(input.executionPlan),
       runtimeContext: structuredClone(input.runtimeContext),
       status: "pending",
+      controlState: "active",
+      controlRevision: 0,
       snapshotSchemaVersion: 1,
       snapshotRevision: 0,
       snapshot: structuredClone(input.snapshot),
@@ -53,7 +60,31 @@ export class InMemoryExecutionStore implements ExecutionStore {
         attempt: 1,
         status: "pending",
       })),
+      approvalCheckpoints: [],
     };
+    for (const checkpoint of input.approvalCheckpoints ?? []) {
+      run.controlRevision += 1;
+      run.approvalCheckpoints = [...run.approvalCheckpoints, {
+        id: checkpoint.id,
+        runId: input.id,
+        userId: input.userId,
+        stepId: checkpoint.stepId,
+        planFingerprint: input.requestFingerprint,
+        stepFingerprint: checkpoint.stepFingerprint,
+        status: "pending",
+        source: "runtime_policy",
+        createdAt: input.createdAt,
+      }];
+      this.appendControlEvent(run, {
+        action: "approval_required",
+        checkpointId: checkpoint.id,
+        priorState: "active",
+        newState: "active",
+        priorControlRevision: run.controlRevision - 1,
+        controlRevision: run.controlRevision,
+        createdAt: input.createdAt,
+      });
+    }
     this.runs.set(run.id, run);
     return { status: "created", run: structuredClone(run) };
   }
@@ -63,11 +94,16 @@ export class InMemoryExecutionStore implements ExecutionStore {
     return run?.userId === input.userId ? structuredClone(run) : null;
   }
 
+  async getControlEvents(input: { readonly runId: string; readonly userId: string }): Promise<readonly ExecutionControlEvent[]> {
+    const run = this.ownedRun(input.runId, input.userId);
+    return run ? structuredClone(this.controlEvents.get(run.id) ?? []) : [];
+  }
+
   async saveRunState(input: Parameters<ExecutionStore["saveRunState"]>[0]): Promise<ExecutionStoreWriteResult> {
     const run = this.ownedRun(input.runId, input.userId);
     if (!run) return { status: "not_found" };
     if (run.snapshotRevision !== input.expectedRevision) return { status: "conflict" };
-    if (run.status !== "pending" || input.status !== "running") return { status: "conflict" };
+    if (run.status !== "pending" || input.status !== "running" || run.controlState !== "active") return { status: "conflict" };
     run.status = input.status;
     run.snapshot = structuredClone(input.snapshot);
     run.snapshotRevision += 1;
@@ -89,6 +125,9 @@ export class InMemoryExecutionStore implements ExecutionStore {
     if (run.snapshotRevision !== input.expectedRevision) return { status: "conflict" };
     const step = run.steps.find((candidate) => candidate.stepId === input.stepId);
     if (!step) return { status: "not_found" };
+    if (run.controlState !== "active") return { status: "control_blocked", controlState: run.controlState };
+    const checkpoint = run.approvalCheckpoints.find((candidate) => candidate.stepId === input.stepId);
+    if (checkpoint?.status === "pending") return { status: "approval_required", checkpoint: structuredClone(checkpoint) };
     if (step.status !== "pending") return { status: "already_claimed", stepStatus: step.status };
     if (run.status !== "running") return { status: "conflict" };
     step.status = "running";
@@ -105,6 +144,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
     const step = run.steps.find((candidate) => candidate.stepId === input.stepId);
     if (!step) return { status: "not_found" } as const;
     if (step.status !== "running") return { status: "conflict" } as const;
+    if (["paused", "stopped", "returned"].includes(run.controlState)) return { status: "conflict" } as const;
     if (step.attempt >= MAX_EXECUTION_STEP_ATTEMPTS) return { status: "attempt_limit" } as const;
     const timestamp = new Date(input.nextRetryAt);
     if (!Number.isFinite(timestamp.getTime())) return { status: "conflict" } as const;
@@ -115,19 +155,27 @@ export class InMemoryExecutionStore implements ExecutionStore {
     delete step.failureCode;
     run.snapshot = structuredClone(input.snapshot);
     run.snapshotRevision += 1;
-    return { status: "saved", snapshotRevision: run.snapshotRevision } as const;
+    const priorControlRevision = run.controlRevision;
+    this.setBoundaryControlState(run, this.now().toISOString());
+    return {
+      status: "saved", snapshotRevision: run.snapshotRevision,
+      ...(run.controlRevision !== priorControlRevision ? { controlState: run.controlState, controlRevision: run.controlRevision } : {}),
+    } as const;
   }
 
   async claimRetryableStep(input: Parameters<ExecutionStore["claimRetryableStep"]>[0]) {
     const run = this.ownedRun(input.runId, input.userId);
     if (!run) return { status: "not_found" } as const;
     if (run.snapshotRevision !== input.expectedRevision || run.status !== "running") return { status: "conflict" } as const;
+    if (run.controlState !== "active") return { status: "control_blocked", controlState: run.controlState } as const;
     const step = run.steps.find((candidate) => candidate.stepId === input.stepId);
     if (!step) return { status: "not_found" } as const;
     if (step.status !== "retry_pending" || !step.nextRetryAt) {
       return { status: "already_claimed", stepStatus: step.status } as const;
     }
     if (step.attempt >= MAX_EXECUTION_STEP_ATTEMPTS) return { status: "attempt_limit" } as const;
+    const checkpoint = run.approvalCheckpoints.find((candidate) => candidate.stepId === input.stepId);
+    if (checkpoint?.status === "pending") return { status: "approval_required", checkpoint: structuredClone(checkpoint) } as const;
     const now = this.now();
     const nextRetryAt = new Date(step.nextRetryAt);
     if (!Number.isFinite(now.getTime()) || nextRetryAt.getTime() > now.getTime()) {
@@ -191,7 +239,163 @@ export class InMemoryExecutionStore implements ExecutionStore {
       void userInput;
       run.runtimeContext = rest;
     }
-    return { status: "saved", snapshotRevision: run.snapshotRevision };
+    const priorControlRevision = run.controlRevision;
+    this.setBoundaryControlState(run, input.completedAt ?? new Date().toISOString());
+    return {
+      status: "saved", snapshotRevision: run.snapshotRevision,
+      ...(run.controlRevision !== priorControlRevision ? { controlState: run.controlState, controlRevision: run.controlRevision } : {}),
+    };
+  }
+
+  async pauseRun(input: Parameters<ExecutionStore["pauseRun"]>[0]): Promise<ExecutionControlWriteResult> {
+    const run = this.ownedRun(input.runId, input.userId);
+    if (!run) return { status: "not_found" };
+    if (run.controlState === "paused" || run.controlState === "pause_requested") {
+      return { status: "already_applied", controlState: run.controlState, controlRevision: run.controlRevision };
+    }
+    if (run.status === "succeeded" || run.status === "failed" || run.controlState !== "active") return { status: "terminal" };
+    if (run.controlRevision !== input.expectedControlRevision) return { status: "conflict" };
+    const nextState: ExecutionControlState = run.steps.some((step) => step.status === "running") ? "pause_requested" : "paused";
+    const priorState = run.controlState;
+    const priorControlRevision = run.controlRevision;
+    run.controlState = nextState;
+    run.controlRevision += 1;
+    this.appendControlEvent(run, {
+      action: nextState === "paused" ? "paused" : "pause_requested", actorUserId: input.actorUserId,
+      priorState, newState: nextState, priorControlRevision, controlRevision: run.controlRevision,
+      createdAt: input.createdAt,
+    });
+    return { status: nextState, controlState: nextState, controlRevision: run.controlRevision };
+  }
+
+  async resumeRun(input: Parameters<ExecutionStore["resumeRun"]>[0]): Promise<ExecutionControlWriteResult> {
+    const run = this.ownedRun(input.runId, input.userId);
+    if (!run) return { status: "not_found" };
+    if (run.controlState === "active") return { status: "already_applied", controlState: "active", controlRevision: run.controlRevision };
+    if (run.status === "succeeded" || run.status === "failed" || ["stop_requested", "stopped", "returned"].includes(run.controlState)) return { status: "terminal" };
+    if (run.controlRevision !== input.expectedControlRevision) return { status: "conflict" };
+    if (run.steps.some((step) => step.status === "running")) return { status: "unsafe_boundary" };
+    if (run.approvalCheckpoints.some((checkpoint) => checkpoint.status === "pending")) return { status: "approval_pending" };
+    if (run.controlState !== "paused" && run.controlState !== "pause_requested") return { status: "terminal" };
+    const priorState = run.controlState;
+    const priorControlRevision = run.controlRevision;
+    run.controlState = "active";
+    run.controlRevision += 1;
+    this.appendControlEvent(run, {
+      action: "resumed", actorUserId: input.actorUserId, priorState, newState: "active",
+      priorControlRevision, controlRevision: run.controlRevision, createdAt: input.createdAt,
+    });
+    return { status: "saved", controlState: "active", controlRevision: run.controlRevision };
+  }
+
+  async stopRun(input: Parameters<ExecutionStore["stopRun"]>[0]): Promise<ExecutionControlWriteResult> {
+    const run = this.ownedRun(input.runId, input.userId);
+    if (!run) return { status: "not_found" };
+    if (run.controlState === "stopped" || run.controlState === "stop_requested") {
+      return { status: "already_applied", controlState: run.controlState, controlRevision: run.controlRevision };
+    }
+    if (run.status === "succeeded" || run.status === "failed" || run.controlState === "returned") return { status: "terminal" };
+    if (run.controlRevision !== input.expectedControlRevision) return { status: "conflict" };
+    const nextState: ExecutionControlState = run.steps.some((step) => step.status === "running") ? "stop_requested" : "stopped";
+    const priorState = run.controlState;
+    const priorControlRevision = run.controlRevision;
+    run.controlState = nextState;
+    run.controlRevision += 1;
+    this.appendControlEvent(run, {
+      action: nextState === "stopped" ? "stopped" : "stop_requested", actorUserId: input.actorUserId,
+      priorState, newState: nextState, priorControlRevision, controlRevision: run.controlRevision,
+      createdAt: input.createdAt,
+    });
+    return { status: nextState, controlState: nextState, controlRevision: run.controlRevision };
+  }
+
+  async createApprovalCheckpoint(input: Parameters<ExecutionStore["createApprovalCheckpoint"]>[0]): Promise<HumanApprovalWriteResult> {
+    const run = this.ownedRun(input.runId, input.userId);
+    if (!run) return { status: "not_found" };
+    const existing = run.approvalCheckpoints.find((candidate) => candidate.stepId === input.stepId);
+    if (existing) {
+      return existing.planFingerprint === input.planFingerprint && existing.stepFingerprint === input.stepFingerprint
+        ? { status: "existing", checkpoint: structuredClone(existing), controlRevision: run.controlRevision }
+        : { status: "conflict" };
+    }
+    if (run.status === "succeeded" || run.status === "failed" || ["stop_requested", "stopped", "returned"].includes(run.controlState)) return { status: "terminal" };
+    if (run.controlRevision !== input.expectedControlRevision || run.requestFingerprint !== input.planFingerprint) return { status: "conflict" };
+    if (input.source === "owner_request" && input.actorUserId !== input.userId) return { status: "terminal" };
+    const step = run.steps.find((candidate) => candidate.stepId === input.stepId);
+    if (!step) return { status: "not_found" };
+    if (step.status !== "pending" && step.status !== "retry_pending") return { status: "unsafe_boundary" };
+    const checkpoint: HumanApprovalCheckpoint = {
+      id: input.checkpointId, runId: input.runId, userId: input.userId, stepId: input.stepId,
+      planFingerprint: input.planFingerprint, stepFingerprint: input.stepFingerprint,
+      status: "pending", source: input.source,
+      ...(input.source === "owner_request" ? { requestedBy: input.userId } : {}),
+      createdAt: input.createdAt,
+    };
+    run.approvalCheckpoints = [...run.approvalCheckpoints, checkpoint];
+    const priorControlRevision = run.controlRevision;
+    run.controlRevision += 1;
+    this.appendControlEvent(run, {
+      action: "approval_required", ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}),
+      checkpointId: input.checkpointId, priorState: run.controlState, newState: run.controlState,
+      priorControlRevision, controlRevision: run.controlRevision, createdAt: input.createdAt,
+    });
+    return { status: "created", checkpoint: structuredClone(checkpoint), controlRevision: run.controlRevision };
+  }
+
+  async decideApprovalCheckpoint(input: Parameters<ExecutionStore["decideApprovalCheckpoint"]>[0]): Promise<HumanApprovalWriteResult> {
+    const run = this.ownedRun(input.runId, input.userId);
+    if (!run) return { status: "not_found" };
+    const checkpoint = run.approvalCheckpoints.find((candidate) => candidate.id === input.checkpointId);
+    if (!checkpoint) return { status: "not_found" };
+    if (checkpoint.status !== "pending") return { status: "already_decided", checkpoint: structuredClone(checkpoint), controlState: run.controlState, controlRevision: run.controlRevision };
+    if (input.actorUserId !== input.userId || run.status === "succeeded" || run.status === "failed"
+      || ["stop_requested", "stopped", "returned"].includes(run.controlState)) return { status: "terminal" };
+    if (run.controlRevision !== input.expectedControlRevision) return { status: "conflict" };
+    if (input.decision === "return" && (!input.rationale || input.rationale.trim().length < 1 || input.rationale.trim().length > 1000)) return { status: "invalid_checkpoint" };
+    const step = run.steps.find((candidate) => candidate.stepId === checkpoint.stepId);
+    if (!step || (step.status !== "pending" && step.status !== "retry_pending")) return { status: "unsafe_boundary" };
+    const priorState = run.controlState;
+    const priorControlRevision = run.controlRevision;
+    const decision = input.decision === "approve" ? "approved" : "returned";
+    const nextState: ExecutionControlState = decision === "returned" ? "returned" : priorState;
+    const updatedCheckpoint: HumanApprovalCheckpoint = {
+      ...checkpoint,
+      status: decision,
+      decidedBy: input.actorUserId,
+      decidedAt: input.decidedAt,
+      ...(decision === "returned" ? { rationale: input.rationale!.trim() } : {}),
+    };
+    run.approvalCheckpoints = run.approvalCheckpoints.map((candidate) => candidate.id === checkpoint.id ? updatedCheckpoint : candidate);
+    run.controlState = nextState;
+    run.controlRevision += 1;
+    this.appendControlEvent(run, {
+      action: decision, actorUserId: input.actorUserId, checkpointId: checkpoint.id,
+      priorState, newState: nextState, priorControlRevision, controlRevision: run.controlRevision,
+      ...(decision === "returned" ? { rationale: input.rationale!.trim() } : {}), createdAt: input.decidedAt,
+    });
+    return { status: decision, checkpoint: structuredClone(updatedCheckpoint), controlState: nextState, controlRevision: run.controlRevision };
+  }
+
+  private appendControlEvent(run: MutableRun, input: Omit<ExecutionControlEvent, "id" | "runId" | "userId" | "snapshotRevision"> & { readonly snapshotRevision?: number }): void {
+    const events = this.controlEvents.get(run.id) ?? [];
+    events.push({
+      id: randomUUID(), runId: run.id, userId: run.userId,
+      ...input, snapshotRevision: input.snapshotRevision ?? run.snapshotRevision,
+    });
+    this.controlEvents.set(run.id, events);
+  }
+
+  private setBoundaryControlState(run: MutableRun, createdAt: string): void {
+    if (run.controlState !== "pause_requested" && run.controlState !== "stop_requested") return;
+    const priorState = run.controlState;
+    const priorControlRevision = run.controlRevision;
+    const nextState: ExecutionControlState = priorState === "pause_requested" ? "paused" : "stopped";
+    run.controlState = nextState;
+    run.controlRevision += 1;
+    this.appendControlEvent(run, {
+      action: nextState, priorState, newState: nextState, priorControlRevision,
+      controlRevision: run.controlRevision, createdAt,
+    });
   }
 
   private ownedRun(runId: string, userId: string): MutableRun | undefined {

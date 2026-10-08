@@ -105,6 +105,12 @@ function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["cla
   return {
     createRun: (input) => base.createRun(input),
     getRun: (input) => base.getRun(input),
+    getControlEvents: (input) => base.getControlEvents(input),
+    pauseRun: (input) => base.pauseRun(input),
+    resumeRun: (input) => base.resumeRun(input),
+    stopRun: (input) => base.stopRun(input),
+    createApprovalCheckpoint: (input) => base.createApprovalCheckpoint(input),
+    decideApprovalCheckpoint: (input) => base.decideApprovalCheckpoint(input),
     saveRunState: (input) => base.saveRunState(input),
     claimStep: claim,
     scheduleStepRetry: (input) => base.scheduleStepRetry(input),
