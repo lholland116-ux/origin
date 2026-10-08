@@ -32,12 +32,14 @@ export type FileContextPreparationErrorCode =
   | "invalid_reference"
   | "document_unavailable"
   | "context_too_large"
+  | "temporary_lookup_failure"
   | "lookup_failed";
 
 const ERROR_MESSAGES: Readonly<Record<FileContextPreparationErrorCode, string>> = {
   invalid_reference: "The attached document reference is invalid.",
   document_unavailable: "One or more attached documents are unavailable.",
   context_too_large: "Attached document content exceeds the supported context size. Please remove a document or use a shorter file.",
+  temporary_lookup_failure: "Document context is temporarily unavailable.",
   lookup_failed: "Failed to load document context.",
 };
 
@@ -59,7 +61,13 @@ async function loadOwnedReadyDocuments(input: FileContextServiceInput): Promise<
     .in("id", [...input.documentIds])
     .eq("extraction_status", "ready");
 
-  if (error) throw new Error("Document lookup failed.");
+  if (error) {
+    const lookupStatus = (error as unknown as { readonly status?: unknown }).status;
+    if (lookupStatus === 0 || lookupStatus === 503) {
+      throw new FileContextPreparationError("temporary_lookup_failure");
+    }
+    throw new Error("Document lookup failed.");
+  }
   return (data ?? []) as unknown as FileContextRow[];
 }
 
@@ -79,7 +87,8 @@ export function createFileContextService(dependencies: FileContextServiceDepende
     let rows: readonly FileContextRow[];
     try {
       rows = await dependencies.loadDocuments(input);
-    } catch {
+    } catch (error) {
+      if (error instanceof FileContextPreparationError && error.code === "temporary_lookup_failure") throw error;
       throw new FileContextPreparationError("lookup_failed");
     }
 

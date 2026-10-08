@@ -262,6 +262,7 @@ export class SupabaseExecutionStore implements ExecutionStore {
         WHERE run_id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid AND step_id = ${input.stepId} FOR UPDATE` as readonly Row[];
       if (steps.length !== 1) return { status: "not_found" };
       if (steps[0]!.status !== "running") return { status: "conflict" };
+      if (Number(steps[0]!.attempt) >= MAX_EXECUTION_STEP_ATTEMPTS) return { status: "attempt_limit" };
       const scheduled = await tx`UPDATE public.execution_steps SET
           status = 'retry_pending', next_retry_at = ${input.nextRetryAt}::timestamptz,
           result_envelope = NULL, result_payload_id = NULL, failure_code = NULL, completed_at = NULL

@@ -124,6 +124,7 @@ export type ClaimDurableStepResult =
 
 export type ScheduleDurableStepRetryResult =
   | { readonly status: "saved"; readonly snapshotRevision: number }
+  | { readonly status: "attempt_limit" }
   | { readonly status: "conflict" | "not_found" };
 
 export type ClaimRetryableStepResult =

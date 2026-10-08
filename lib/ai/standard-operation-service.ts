@@ -1,4 +1,5 @@
 import { openai } from "@/lib/openai";
+import { isTemporaryProviderDnsFailure } from "@/lib/ai/provider-failure-normalization";
 import {
   GENERAL_CHAT_MODEL,
   getGeneralChatConfig,
@@ -20,6 +21,7 @@ import {
   type StandardOperationResult,
   type WebSearchOperationResult,
 } from "@/lib/agent-runtime/application-contracts";
+import type { ExecutionFailureDescriptor } from "@/lib/agent-runtime/runtime-contracts";
 import {
   buildDocumentContext,
 } from "@/lib/documents/prepare-context";
@@ -81,6 +83,8 @@ export type StandardOperationInput = Readonly<{
   imageUrls?: readonly string[];
   fileContext?: FileContextResult;
   webSearchResult?: WebSearchOperationResult;
+  /** Runtime-owned: disable provider SDK retries for one durable attempt. */
+  executionMode?: "durable_runtime_single_attempt";
 }>;
 
 export type StandardOperationEvent =
@@ -103,7 +107,10 @@ export type StandardOperationErrorCode =
 
 /** Safe operation failure: no raw provider, database, or credential detail. */
 export class StandardOperationError extends Error {
-  constructor(readonly code: StandardOperationErrorCode) {
+  constructor(
+    readonly code: StandardOperationErrorCode,
+    readonly failureMetadata?: Omit<ExecutionFailureDescriptor, "code">,
+  ) {
     super("The Standard operation could not be completed.");
     this.name = "StandardOperationError";
   }
@@ -218,13 +225,17 @@ async function createRetryResponse(params: {
   hasWebContext: boolean;
   chatConfig: ReturnType<typeof getGeneralChatConfig>;
   provider: typeof openai;
+  executionMode?: StandardOperationInput["executionMode"];
 }) {
-  return params.provider.responses.create({
+  const request = {
     ...params.chatConfig,
     instructions: buildSystemInstructions(params.hasDocumentContext, params.hasWebContext),
     input: params.input,
     store: false,
-  } as never);
+  } as never;
+  return params.executionMode === "durable_runtime_single_attempt"
+    ? params.provider.responses.create(request, { maxRetries: 0 })
+    : params.provider.responses.create(request);
 }
 
 async function* executeStandardOperation(
@@ -255,6 +266,8 @@ async function* executeStandardOperation(
   const measurements: OperationMeasurement[] = [];
   let fullReply = "";
   let primaryMeasurementRecorded = false;
+  let primaryCompleted = false;
+  let primaryIncomplete = false;
 
   const makeMeasurement = (
     attemptKind: "primary" | "image_retry",
@@ -284,13 +297,18 @@ async function* executeStandardOperation(
     startedAt: primaryStartedAt,
   };
 
+  let providerStreamOpened = false;
   try {
-    const responseStream = (await dependencies.provider.responses.stream({
+    const request = {
       ...config,
       instructions: buildSystemInstructions(hasDocumentContext, hasWebContext),
       input: operationInput,
       store: false,
-    } as never)) as unknown as AsyncIterable<ResponsesStreamEvent>;
+    } as never;
+    const responseStream = (await (input.executionMode === "durable_runtime_single_attempt"
+      ? dependencies.provider.responses.stream(request, { maxRetries: 0 })
+      : dependencies.provider.responses.stream(request))) as unknown as AsyncIterable<ResponsesStreamEvent>;
+    providerStreamOpened = true;
 
     for await (const event of responseStream) {
       if (event.type === "response.output_text.delta") {
@@ -323,6 +341,7 @@ async function* executeStandardOperation(
         throw new StandardOperationError("provider_failed");
       }
 
+      if (event.type === "response.completed") primaryCompleted = true;
       if (event.type === "response.completed" && !primaryMeasurementRecorded) {
         primaryMeasurementRecorded = true;
         yield {
@@ -331,6 +350,7 @@ async function* executeStandardOperation(
         };
       }
 
+      if (event.type === "response.incomplete") primaryIncomplete = true;
       if (event.type === "response.incomplete" && !primaryMeasurementRecorded) {
         primaryMeasurementRecorded = true;
         yield {
@@ -340,6 +360,10 @@ async function* executeStandardOperation(
       }
     }
 
+    if (input.executionMode === "durable_runtime_single_attempt" && (!primaryCompleted || primaryIncomplete)) {
+      throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+    }
+
     if (!primaryMeasurementRecorded) {
       primaryMeasurementRecorded = true;
       yield {
@@ -347,7 +371,7 @@ async function* executeStandardOperation(
         measurement: makeMeasurement("primary", "api_error", primaryStartedAt, hasImage),
       };
     }
-  } catch {
+  } catch (error) {
     if (!primaryMeasurementRecorded) {
       primaryMeasurementRecorded = true;
       yield {
@@ -355,7 +379,12 @@ async function* executeStandardOperation(
         measurement: makeMeasurement("primary", "api_error", primaryStartedAt, hasImage),
       };
     }
-    throw new StandardOperationError("provider_failed");
+    if (error instanceof StandardOperationError && error.failureMetadata) throw error;
+    const safePreProviderFailure = input.executionMode === "durable_runtime_single_attempt"
+      && !providerStreamOpened && isTemporaryProviderDnsFailure(error);
+    throw new StandardOperationError("provider_failed", safePreProviderFailure
+      ? { phase: "pre_provider", retrySafety: "SAFE_RETRY" }
+      : { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" });
   }
 
   const streamedReply = fullReply.trim();
@@ -378,6 +407,7 @@ async function* executeStandardOperation(
         hasWebContext,
         chatConfig: config,
         provider: dependencies.provider,
+        executionMode: input.executionMode,
       });
       const outcome: OperationOutcome = retry.status === "incomplete"
         ? "incomplete"
@@ -396,6 +426,9 @@ async function* executeStandardOperation(
         type: "measurement",
         measurement: makeMeasurement("image_retry", "api_error", retryStartedAt, true),
       };
+      if (input.executionMode === "durable_runtime_single_attempt") {
+        throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+      }
     }
   }
 

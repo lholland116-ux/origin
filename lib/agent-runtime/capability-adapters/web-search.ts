@@ -7,6 +7,7 @@ import { runWebSearchOperation, type WebSearchOperationExecution, type WebSearch
 import {
   assertAdapterInput,
   fail,
+  failWithMetadata,
   normalizedInputs,
   predecessorInputs,
   requestContextFromBinding,
@@ -39,15 +40,20 @@ export function createWebSearchCapabilityAdapter(
           reasoningEffort: "medium",
           history: [{ role: "user", content: objective }],
           mode: "force",
+          executionMode: "durable_runtime_single_attempt",
         });
       } catch {
-        return fail("executor_failed");
+        return failWithMetadata("executor_failed", { phase: "unknown", retrySafety: "RECOVERY_REQUIRED" });
       }
       if (!execution.ok) {
         if (execution.error.code === "invalid_request_context") return fail("ownership_denied");
         if (execution.error.code === "invalid_predecessor_context") return fail("missing_predecessor_result");
         if (execution.error.code === "invalid_provider_result") return fail("invalid_executor_result");
-        return fail("executor_failed");
+        if (execution.error.failureMetadata?.retrySafety === "SAFE_RETRY") {
+          return failWithMetadata("transient_dependency_failure", execution.error.failureMetadata);
+        }
+        return failWithMetadata("executor_failed", execution.error.failureMetadata
+          ?? { phase: "unknown", retrySafety: "RECOVERY_REQUIRED" });
       }
       const parsed = webSearchOperationResultSchema.safeParse(execution.result);
       if (!parsed.success || !matchesBinding(parsed.data, binding)) return fail("invalid_executor_result");

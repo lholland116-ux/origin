@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { APIConnectionError, APIConnectionTimeoutError } from "openai";
 
 const mocks = vi.hoisted(() => ({
   provider: {
@@ -216,6 +217,52 @@ describe("Standard core operation", () => {
     ]));
     expectNoRequestSideEffects();
   });
+
+  it("classifies only a pre-request DNS failure as retry-safe and disables SDK retries per durable attempt", async () => {
+    const cause = Object.assign(new Error("private resolver detail"), { code: "EAI_AGAIN" });
+    mocks.provider.responses.stream.mockRejectedValue(new APIConnectionError({ cause }));
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    let caught: unknown;
+    try {
+      for await (const event of operation.run(standardInput({ executionMode: "durable_runtime_single_attempt" }))) void event;
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0 });
+    expect(caught).toBeInstanceOf(StandardOperationError);
+    expect(caught).toMatchObject({ failureMetadata: { phase: "pre_provider", retrySafety: "SAFE_RETRY" } });
+    expect(JSON.stringify(caught)).not.toContain("private resolver detail");
+
+    mocks.provider.responses.stream.mockRejectedValue(new APIConnectionTimeoutError());
+    caught = undefined;
+    try {
+      for await (const event of operation.run(standardInput({ executionMode: "durable_runtime_single_attempt" }))) void event;
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ failureMetadata: { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" } });
+    expectNoRequestSideEffects();
+  });
+
+  it("treats an incomplete durable Standard response as ambiguous recovery, not as a retry", async () => {
+    mocks.provider.responses.stream.mockResolvedValue(responseStream(
+      { type: "response.output_text.delta", delta: "Partial response." },
+      { type: "response.incomplete", response: { usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 } } },
+    ));
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    let caught: unknown;
+    try {
+      for await (const event of operation.run(standardInput({ executionMode: "durable_runtime_single_attempt" }))) void event;
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ failureMetadata: { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" } });
+    expect(mocks.provider.responses.stream).toHaveBeenCalledOnce();
+    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0 });
+    expectNoRequestSideEffects();
+  });
 });
 
 describe("Web Search core operation", () => {
@@ -266,6 +313,39 @@ describe("Web Search core operation", () => {
     expect(execution).toMatchObject({ ok: false, error: { code: "provider_failed" }, measurement: { outcome: "api_error" } });
     expect(JSON.stringify(execution)).not.toContain("private provider detail");
     expectNoRequestSideEffects();
+  });
+
+  it("classifies pre-request DNS failure as retry-safe and disables SDK retries for durable search", async () => {
+    const cause = Object.assign(new Error("private resolver detail"), { code: "EAI_AGAIN" });
+    mocks.provider.responses.create.mockRejectedValue(new APIConnectionError({ cause }));
+    const operation = createWebSearchOperationService({ provider: mocks.provider as never });
+    const execution = await operation.run(webInput({ executionMode: "durable_runtime_single_attempt" }));
+
+    expect(mocks.provider.responses.create).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0 });
+    expect(execution).toMatchObject({
+      ok: false,
+      error: { code: "provider_failed", failureMetadata: { phase: "pre_provider", retrySafety: "SAFE_RETRY" } },
+    });
+    expect(JSON.stringify(execution)).not.toContain("private resolver detail");
+    expectNoRequestSideEffects();
+  });
+
+  it("does not treat an incomplete provider response as a replay-safe Web result", async () => {
+    mocks.provider.responses.create.mockResolvedValue({
+      status: "incomplete",
+      error: null,
+      output_text: "Partial result that may have incurred provider side effects.",
+      output: [{ id: "search-1", type: "web_search_call", action: { type: "search", sources: [] } }],
+    });
+    const operation = createWebSearchOperationService({ provider: mocks.provider as never });
+    const execution = await operation.run(webInput({ executionMode: "durable_runtime_single_attempt" }));
+
+    expect(execution).toMatchObject({
+      ok: false,
+      error: { code: "provider_failed", failureMetadata: { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" } },
+      measurement: { outcome: "incomplete", webSearchCalls: 1 },
+    });
+    expect(mocks.provider.responses.create).toHaveBeenCalledOnce();
   });
 });
 

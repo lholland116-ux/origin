@@ -11,6 +11,7 @@ import type { TemplateOutputFormat } from "@/lib/documents/generation/templates/
 import {
   assertAdapterInput,
   fail,
+  failWithMetadata,
   normalizedInputs,
   predecessorInputs,
   requireExecutionKey,
@@ -90,10 +91,12 @@ export function createDocumentGenerationCapabilityAdapter(
         });
       } catch (error) {
         if (error instanceof DocumentGenerationValidationError) return fail("missing_input");
-        return fail("executor_failed");
+        return failWithMetadata("executor_failed", { phase: "pre_execution", retrySafety: "TERMINAL" });
       }
 
       let persisted: Awaited<ReturnType<ExistingMessageDocumentPersister>>;
+      // Persistence acknowledgement can be lost after the object/row write. The stable
+      // generation key is not sufficient proof that replay cannot duplicate or orphan data.
       try {
         persisted = await persist({
           userId: binding.userId,
@@ -105,14 +108,18 @@ export function createDocumentGenerationCapabilityAdapter(
         });
       } catch (error) {
         if (error instanceof GeneratedDocumentPersistenceError) {
-          if (error.code === "invalid_output") return fail("invalid_executor_result");
-          return fail("persistence_failed");
+          if (error.code === "invalid_output") {
+            return failWithMetadata("invalid_executor_result", { phase: "pre_persistence", retrySafety: "TERMINAL" });
+          }
+          return failWithMetadata("persistence_failed", { phase: "persistence", retrySafety: "RECOVERY_REQUIRED" });
         }
-        return fail("persistence_failed");
+        return failWithMetadata("persistence_failed", { phase: "persistence", retrySafety: "RECOVERY_REQUIRED" });
       }
       const reference = generatedDocumentReferenceSchema.safeParse(persisted.reference);
       if (!reference.success || reference.data.conversationId !== binding.conversationId
-        || reference.data.messageId !== binding.assistantMessageId) return fail("persistence_failed");
+        || reference.data.messageId !== binding.assistantMessageId) {
+        return failWithMetadata("persistence_failed", { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" });
+      }
       // Keep delivery bytes transient. Only the existing durable reference crosses this boundary.
       return { kind: "document", value: reference.data };
     },

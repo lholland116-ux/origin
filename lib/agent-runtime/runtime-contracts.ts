@@ -61,6 +61,9 @@ export const EXECUTION_FAILURE_CODES = [
   "authorization_denied",
   "authorization_failed",
   "executor_failed",
+  "transient_dependency_failure",
+  "retry_exhausted",
+  "quota_exhausted",
   "invalid_executor_result",
   "result_too_large",
   "ownership_denied",
@@ -75,6 +78,32 @@ export const EXECUTION_FAILURE_CODES = [
 ] as const;
 
 export type ExecutionFailureCode = (typeof EXECUTION_FAILURE_CODES)[number];
+
+export const EXECUTION_FAILURE_PHASES = [
+  "pre_execution",
+  "pre_provider",
+  "provider_in_flight",
+  "post_provider",
+  "read_only_lookup",
+  "pre_persistence",
+  "persistence",
+  "post_persistence",
+  "unknown",
+] as const;
+
+export const RETRY_SAFETY_CLASSES = ["SAFE_RETRY", "TERMINAL", "RECOVERY_REQUIRED"] as const;
+
+export type ExecutionFailurePhase = (typeof EXECUTION_FAILURE_PHASES)[number];
+export type RetrySafetyClass = (typeof RETRY_SAFETY_CLASSES)[number];
+
+/** Safe, normalized metadata only; never contains provider/SQL exception details. */
+export type ExecutionFailureDescriptor = Readonly<{
+  code: ExecutionFailureCode;
+  phase: ExecutionFailurePhase;
+  retrySafety: RetrySafetyClass;
+  retryAfterMs?: number;
+}>;
+
 export type ExecutionFailure = {
   readonly code: ExecutionFailureCode;
   readonly message: string;

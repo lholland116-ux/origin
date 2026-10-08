@@ -275,15 +275,10 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
     expect(await store.scheduleStepRetry({
       runId: claimRunId, userId, stepId: "store-step", expectedRevision: 6,
       snapshot: createSnapshot(runActor, stepActor), nextRetryAt: eligibleAt,
-    })).toEqual({ status: "saved", snapshotRevision: 7 });
-    stepActor.claimRetry();
-    expect(await store.claimRetryableStep({
-      runId: claimRunId, userId, stepId: "store-step", expectedRevision: 7,
-      snapshot: createSnapshot(runActor, stepActor),
     })).toEqual({ status: "attempt_limit" });
     expect(await store.getRun({ runId: claimRunId, userId })).toMatchObject({
-      snapshotRevision: 7,
-      steps: [{ status: "retry_pending", attempt: 3, nextRetryAt: eligibleAt }],
+      snapshotRevision: 6,
+      steps: [{ status: "running", attempt: 3 }],
     });
   });
 });

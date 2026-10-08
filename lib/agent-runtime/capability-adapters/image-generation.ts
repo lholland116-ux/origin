@@ -13,6 +13,7 @@ import { IMAGE_GENERATION_PROMPT_MAX_LENGTH } from "@/lib/image-generation/confi
 import {
   assertAdapterInput,
   fail,
+  failWithMetadata,
   normalizedInputs,
   predecessorInputs,
   userObjective,
@@ -38,6 +39,7 @@ export function createImageGenerationCapabilityAdapter(
       const prompt = userObjective(inputs);
       if (prompt.length > IMAGE_GENERATION_PROMPT_MAX_LENGTH) return fail("missing_input");
       let generated: ImageGenerationServiceResult;
+      // Quota reservation and provider/storage writes make every ambiguous outcome non-replayable.
       try {
         generated = await generate({
           userId: binding.userId,
@@ -50,13 +52,18 @@ export function createImageGenerationCapabilityAdapter(
         if (error instanceof ImageGenerationServiceError) {
           if (error.code === "unauthorized" || error.code === "conversation_not_found") return fail("ownership_denied");
           if (error.code === "invalid_request") return fail("missing_input");
-          if (error.code === "storage_failure" || error.code === "persistence_failure") return fail("persistence_failed");
-          return fail("executor_failed");
+          if (error.code === "daily_limit_reached" || error.code === "monthly_limit_reached") return fail("quota_exhausted");
+          if (error.code === "configuration") return failWithMetadata("executor_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+          if (error.code === "storage_failure") return failWithMetadata("persistence_failed", { phase: "persistence", retrySafety: "RECOVERY_REQUIRED" });
+          if (error.code === "persistence_failure") return failWithMetadata("persistence_failed", { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" });
+          return failWithMetadata("executor_failed", { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" });
         }
-        return fail("executor_failed");
+        return failWithMetadata("executor_failed", { phase: "unknown", retrySafety: "RECOVERY_REQUIRED" });
       }
       const reference = generatedImageReferenceSchema.safeParse(generated.reference);
-      if (!reference.success || !matchesBinding(reference.data, binding)) return fail("invalid_executor_result");
+      if (!reference.success || !matchesBinding(reference.data, binding)) {
+        return failWithMetadata("invalid_executor_result", { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" });
+      }
       // responseBytes are transient delivery data; only the service's safe reference is durable.
       return { kind: "image", value: reference.data };
     },

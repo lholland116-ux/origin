@@ -17,6 +17,7 @@ import { validateImageEditLineage, type ImageEditLineage } from "@/lib/image-gen
 import {
   assertAdapterInput,
   fail,
+  failWithMetadata,
   normalizedInputs,
   predecessorInputs,
   requireExecutionKey,
@@ -73,10 +74,14 @@ function safeResult(result: ImageEditOrchestrationResult,
   binding: ReturnType<typeof assertAdapterInput>, source: GeneratedImageReference, instruction: string): ImageEditingCapabilityResult {
   if (result.kind === "in_progress") return fail("indeterminate_step");
   if (result.kind === "conflict") return fail("idempotency_conflict");
-  if (result.kind === "completed_result_unavailable") return fail("persistence_failed");
+  if (result.kind === "completed_result_unavailable") {
+    return failWithMetadata("persistence_failed", { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" });
+  }
   if (result.conversationId !== binding.conversationId || result.userMessageId !== binding.userMessageId
     || result.assistantMessageId !== binding.assistantMessageId || !result.generatedImageId
-    || !z.string().uuid().safeParse(result.imageEditRequestId).success) return fail("persistence_failed");
+    || !z.string().uuid().safeParse(result.imageEditRequestId).success) {
+    return failWithMetadata("persistence_failed", { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" });
+  }
 
   const reference = generatedImageReferenceSchema.safeParse({
     kind: "generated_image",
@@ -88,7 +93,7 @@ function safeResult(result: ImageEditOrchestrationResult,
     provider: RUNWARE_IMAGE_EDIT_PROVIDER,
     model: RUNWARE_IMAGE_EDIT_MODEL,
   });
-  if (!reference.success) return fail("persistence_failed");
+  if (!reference.success) return failWithMetadata("persistence_failed", { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" });
   const lineageResult = validateImageEditLineage({
     operation: "edit",
     source: { kind: "generated_image", generatedImageId: source.imageId },
@@ -127,6 +132,8 @@ export function createImageEditingCapabilityAdapter(
       if (predecessors.length !== 1 || predecessors[0]!.result.kind !== "image") return fail("missing_predecessor_result");
       const sourceReference = referenceFromPredecessor(predecessors[0]!.result.value, binding);
       const idempotencyKey = requireExecutionKey(input);
+      // The orchestrator exposes in-progress/completed states, but not a proof that every
+      // provider/storage failure is safely replayable; none are classified SAFE_RETRY here.
       const request: ImageEditExistingMessageOrchestratorInput = {
         authenticatedUserId: binding.userId,
         conversationId: binding.conversationId,
@@ -156,10 +163,15 @@ export function createImageEditingCapabilityAdapter(
           if (error.code === "idempotency_conflict") return fail("idempotency_conflict");
           if (error.code === "operation_in_progress" || error.code === "completed_replay") return fail("indeterminate_step");
           if (error.code === "source_forbidden" || error.code === "source_not_found") return fail("ownership_denied");
-          if (error.code === "persistence_failure" || error.code === "storage_failure" || error.code === "completed_result_unavailable") return fail("persistence_failed");
-          return fail("executor_failed");
+          if (error.code === "quota_exhausted") return fail("quota_exhausted");
+          if (error.code === "provider_configuration") return failWithMetadata("executor_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+          if (error.code === "attempt_start_failed") return failWithMetadata("persistence_failed", { phase: "pre_persistence", retrySafety: "RECOVERY_REQUIRED" });
+          if (error.code === "persistence_failure" || error.code === "storage_failure" || error.code === "completed_result_unavailable") {
+            return failWithMetadata("persistence_failed", { phase: "persistence", retrySafety: "RECOVERY_REQUIRED" });
+          }
+          return failWithMetadata("executor_failed", { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" });
         }
-        return fail("executor_failed");
+        return failWithMetadata("executor_failed", { phase: "unknown", retrySafety: "RECOVERY_REQUIRED" });
       }
       return { kind: "image", value: safeResult(result, binding, sourceReference, instruction) };
     },

@@ -1,4 +1,5 @@
 import { openai } from "@/lib/openai";
+import { isTemporaryProviderDnsFailure } from "@/lib/ai/provider-failure-normalization";
 import {
   GENERAL_CHAT_MODEL,
   getGeneralChatConfig,
@@ -18,6 +19,7 @@ import {
   type RequestTransactionContext,
   type WebSearchOperationResult,
 } from "@/lib/agent-runtime/application-contracts";
+import type { ExecutionFailureDescriptor } from "@/lib/agent-runtime/runtime-contracts";
 import { buildDocumentContext } from "@/lib/documents/prepare-context";
 import { SYSTEM_PROMPT } from "@/lib/system-prompt";
 
@@ -72,6 +74,8 @@ export type WebSearchOperationInput = Readonly<{
   documentContext?: string;
   fileContext?: FileContextResult;
   mode?: "auto" | "force";
+  /** Runtime-owned: disable provider SDK retries for one durable attempt. */
+  executionMode?: "durable_runtime_single_attempt";
 }>;
 
 export type WebSearchOperationMeasurement = Readonly<{
@@ -90,7 +94,10 @@ export type WebSearchOperationExecution =
     }>
   | Readonly<{
       ok: false;
-      error: Readonly<{ code: "invalid_request_context" | "invalid_predecessor_context" | "provider_failed" | "invalid_provider_result" }>;
+      error: Readonly<{
+        code: "invalid_request_context" | "invalid_predecessor_context" | "provider_failed" | "invalid_provider_result";
+        failureMetadata?: Omit<ExecutionFailureDescriptor, "code">;
+      }>;
       measurement: WebSearchOperationMeasurement;
     }>;
 
@@ -282,7 +289,7 @@ async function executeWebSearchOperation(
     usage?: ProviderResponseUsage | null;
   };
   try {
-    response = await dependencies.provider.responses.create({
+    const request = {
       ...config,
       instructions: buildWebInstructions(),
       input: buildWebInput(input.history, input.objective, preparedContext),
@@ -290,11 +297,21 @@ async function executeWebSearchOperation(
       ...(input.mode === undefined ? {} : { tool_choice: input.mode === "force" ? "required" : "auto" }),
       include: ["web_search_call.action.sources"],
       store: false,
-    });
-  } catch {
+    } as never;
+    response = await (input.executionMode === "durable_runtime_single_attempt"
+      ? dependencies.provider.responses.create(request, { maxRetries: 0 })
+      : dependencies.provider.responses.create(request));
+  } catch (error) {
+    const safePreProviderFailure = input.executionMode === "durable_runtime_single_attempt"
+      && isTemporaryProviderDnsFailure(error);
     return {
       ok: false,
-      error: { code: "provider_failed" },
+      error: {
+        code: "provider_failed",
+        failureMetadata: safePreProviderFailure
+          ? { phase: "pre_provider", retrySafety: "SAFE_RETRY" }
+          : { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" },
+      },
       measurement: makeMeasurement({ startedAt, outcome: "api_error", webSearchCalls: 0 }),
     };
   }
@@ -315,6 +332,17 @@ async function executeWebSearchOperation(
     webSearchCalls,
     usage: response.usage,
   });
+
+  if (input.executionMode === "durable_runtime_single_attempt" && outcome !== "success") {
+    return {
+      ok: false,
+      error: {
+        code: "provider_failed",
+        failureMetadata: { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" },
+      },
+      measurement,
+    };
+  }
 
   const providerReply = response.output_text?.trim() || "";
   const reply = providerReply || "I'm having trouble generating a response right now. Please try again.";

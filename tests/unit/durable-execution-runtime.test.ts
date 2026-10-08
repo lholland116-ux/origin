@@ -15,6 +15,7 @@ import type { RequestMessageBinding } from "@/lib/agent-runtime/application-cont
 import { createExecutionRunLifecycle, createExecutionStepLifecycle } from "@/lib/agent-runtime/execution-lifecycle";
 import { InMemoryExecutionStore } from "@/lib/agent-runtime/in-memory-execution-store";
 import { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-execution-runtime";
+import { CapabilityAdapterError } from "@/lib/agent-runtime/capability-adapters/common";
 import type { ExecutionStepResult } from "@/lib/agent-runtime/runtime-contracts";
 
 const USER_ID = "a2000000-0000-4000-8000-000000000001";
@@ -82,6 +83,7 @@ function runtime(
   executor: CapabilityExecutor["execute"],
   authorize: ExecutionAuthorizer["authorize"] = async () => ({ allowed: true }),
   validateBinding: RequestMessageBindingValidator["validate"] = async () => true,
+  nowOverride?: () => Date,
 ) {
   let keyCounter = 0;
   let runCounter = 0;
@@ -92,7 +94,7 @@ function runtime(
     requestMessageBindingValidator: { validate: validateBinding },
     createExecutionId: () => `b2000000-0000-4000-8000-${String(++runCounter).padStart(12, "0")}`,
     createExecutionKey: () => `c2000000-0000-4000-8000-${String(++keyCounter).padStart(12, "0")}`,
-    now: (() => {
+    now: nowOverride ?? (() => {
       let tick = 0;
       return () => new Date(Date.UTC(2026, 9, 6, 12, 0, tick++));
     })(),
@@ -277,7 +279,7 @@ describe("durable XState execution runtime", () => {
       return claimed;
     });
     const interrupted = await runtime(crashingStore, executor).execute(handoff(), runtimeInput(), "uncertain-key");
-    expect(interrupted).toMatchObject({ kind: "rejected", failure: { code: "persistence_failed" } });
+    expect(interrupted).toMatchObject({ kind: "recovery_required", failure: { code: "persistence_failed" } });
     expect(executor).not.toHaveBeenCalled();
     const recovered = await runtime(store, executor).resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
     expect(recovered).toMatchObject({ kind: "recovery_required", stepId: "step-1", failure: { code: "indeterminate_step" } });
@@ -289,7 +291,8 @@ describe("durable XState execution runtime", () => {
   });
 
   it("resumes retry-pending state without claiming or dispatching it, while a claimed running retry stays fail-closed", async () => {
-    const store = new InMemoryExecutionStore(() => new Date("2026-10-07T15:00:00.000Z"));
+    let storeNow = new Date("1999-12-31T23:59:59.000Z");
+    const store = new InMemoryExecutionStore(() => new Date(storeNow));
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
     const crashingStore = storeWithClaim(store, async (input) => {
       const claimed = await store.claimStep(input);
@@ -297,7 +300,7 @@ describe("durable XState execution runtime", () => {
       return claimed;
     });
     const interrupted = await runtime(crashingStore, executor).execute(handoff(), runtimeInput(), "retry-state-resume-key");
-    expect(interrupted).toMatchObject({ kind: "rejected", failure: { code: "persistence_failed" } });
+    expect(interrupted).toMatchObject({ kind: "recovery_required", failure: { code: "persistence_failed" } });
     expect(executor).not.toHaveBeenCalled();
 
     const persisted = await store.getRun({ runId: RUN_ID, userId: USER_ID });
@@ -336,6 +339,7 @@ describe("durable XState execution runtime", () => {
     }
     expect(executor).not.toHaveBeenCalled();
 
+    storeNow = new Date("2000-01-01T00:00:00.000Z");
     stepActors["step-1"]!.claimRetry();
     const retryClaimSnapshot: ExecutionSnapshotEnvelope = {
       ...retryPendingSnapshot,
@@ -396,18 +400,129 @@ describe("durable XState execution runtime", () => {
     expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.runtimeContext.requestMessageBinding).toEqual(REQUEST_BINDING);
   });
 
-  it("denies cross-user resume and does not restart failed terminal runs", async () => {
+  it("denies cross-user resume and does not retry ambiguous provider outcomes", async () => {
     const store = new InMemoryExecutionStore();
     const executor = vi.fn(async (input: CapabilityExecutionInput) => {
       if (input.stepId === "step-2") throw new Error("private provider error");
       return mockResult(input);
     });
     const service = runtime(store, executor);
-    const failed = await service.execute(handoff(), runtimeInput(), "failed-key");
-    expect(failed.kind).toBe("failed");
+    const ambiguous = await service.execute(handoff(), runtimeInput(), "ambiguous-key");
+    expect(ambiguous).toMatchObject({ kind: "recovery_required", stepId: "step-2", failure: { code: "executor_failed" } });
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps.map(({ status }) => status))
+      .toEqual(["succeeded", "running", "pending"]);
     const callsBefore = executor.mock.calls.length;
     expect(await service.resume({ runId: RUN_ID, authenticatedUserId: OTHER_USER_ID })).toMatchObject({ kind: "rejected", failure: { code: "ownership_denied" } });
-    expect(await service.resume({ runId: RUN_ID, authenticatedUserId: USER_ID })).toMatchObject({ kind: "failed", failure: { code: "executor_failed" } });
+    expect(await service.resume({ runId: RUN_ID, authenticatedUserId: USER_ID })).toMatchObject({ kind: "recovery_required", failure: { code: "indeterminate_step" } });
     expect(executor).toHaveBeenCalledTimes(callsBefore);
+  });
+
+  it("durably schedules a proven-safe retry, reclaims atomically, reauthorizes, and keeps the same bindings and execution key", async () => {
+    const store = new InMemoryExecutionStore(() => new Date("2026-10-08T12:00:00.000Z"));
+    const calls: CapabilityExecutionInput[] = [];
+    const authorizations: string[] = [];
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => {
+      calls.push(input);
+      if (input.stepId === "step-1" && calls.filter((call) => call.stepId === "step-1").length === 1) {
+        throw new CapabilityAdapterError("transient_dependency_failure", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+      }
+      return mockResult(input);
+    });
+    const now = () => new Date("2026-10-07T12:00:00.000Z");
+    const plan = handoff([
+      { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+      { id: "step-2", capability: "document_generation", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "document" },
+    ]);
+    const first = await runtime(store, executor, async ({ stepId }) => {
+      authorizations.push(stepId);
+      return { allowed: true };
+    }, async () => true, now).execute(plan, runtimeInput(), "safe-retry-key");
+
+    expect(first).toMatchObject({ kind: "retry_pending", stepId: "step-1" });
+    expect(first.kind === "retry_pending" ? Date.parse(first.nextRetryAt) - now().getTime() : null).toBe(1_000);
+    expect(calls.map(({ stepId }) => stepId)).toEqual(["step-1"]);
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps.map(({ status, attempt }) => [status, attempt]))
+      .toEqual([["retry_pending", 1], ["pending", 1]]);
+
+    // A reconstructed runtime claims the durable retry; the store remains the persistence authority.
+    const resumed = await runtime(store, executor, async ({ stepId }) => {
+      authorizations.push(stepId);
+      return { allowed: true };
+    }, async () => true, now).resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+
+    expect(resumed.kind).toBe("succeeded");
+    expect(calls.map(({ stepId }) => stepId)).toEqual(["step-1", "step-1", "step-2"]);
+    expect(calls[1]?.executionKey).toBe(calls[0]?.executionKey);
+    expect(calls.every(({ context }) => context.requestMessageBinding === REQUEST_BINDING
+      || JSON.stringify(context.requestMessageBinding) === JSON.stringify(REQUEST_BINDING))).toBe(true);
+    expect(calls.every(({ context }) => context.requestMessageBinding.assistantMessageId === REQUEST_BINDING.assistantMessageId
+      && context.requestMessageBinding.userMessageId === REQUEST_BINDING.userMessageId)).toBe(true);
+    expect(authorizations).toEqual(["step-1", "step-1", "step-2"]);
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps.map(({ status, attempt }) => [status, attempt]))
+      .toEqual([["succeeded", 2], ["succeeded", 1]]);
+  });
+
+  it("fails a retry after reauthorization denial without invoking the executor again", async () => {
+    const store = new InMemoryExecutionStore(() => new Date("2026-10-08T12:00:00.000Z"));
+    let calls = 0;
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => {
+      calls += 1;
+      if (calls === 1) throw new CapabilityAdapterError("transient_dependency_failure", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+      return mockResult(input);
+    });
+    const now = () => new Date("2026-10-07T12:00:00.000Z");
+    const plan = handoff([{ id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" }]);
+    expect((await runtime(store, executor, undefined, undefined, now).execute(plan, runtimeInput(), "retry-auth-key")).kind).toBe("retry_pending");
+
+    const denied = await runtime(store, executor, async () => ({ allowed: false }), async () => true, now)
+      .resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+    expect(denied).toMatchObject({ kind: "failed", failure: { code: "authorization_denied" } });
+    expect(executor).toHaveBeenCalledOnce();
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps[0]).toMatchObject({ status: "failed", attempt: 2 });
+  });
+
+  it("stops after exactly three proven-safe attempts and does not schedule a fourth", async () => {
+    const store = new InMemoryExecutionStore(() => new Date("2026-10-08T12:00:00.000Z"));
+    const attemptedSteps: string[] = [];
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => {
+      attemptedSteps.push(input.stepId);
+      throw new CapabilityAdapterError("transient_dependency_failure", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+    });
+    const now = () => new Date("2026-10-07T12:00:00.000Z");
+    const plan = handoff([
+      { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+      { id: "step-2", capability: "document_generation", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "document" },
+    ]);
+    let outcome = await runtime(store, executor, undefined, undefined, now).execute(plan, runtimeInput(), "retry-ceiling-key");
+    expect(outcome.kind).toBe("retry_pending");
+    outcome = await runtime(store, executor, undefined, undefined, now).resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+    expect(outcome.kind).toBe("retry_pending");
+    outcome = await runtime(store, executor, undefined, undefined, now).resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+
+    expect(outcome).toMatchObject({ kind: "failed", failure: { code: "retry_exhausted" } });
+    expect(executor).toHaveBeenCalledTimes(3);
+    expect(attemptedSteps).toEqual(["step-1", "step-1", "step-1"]);
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps.map(({ status, attempt }) => [status, attempt]))
+      .toEqual([["failed", 3], ["skipped", 1]]);
+  });
+
+  it("allows only one concurrent resume to dispatch an eligible retry", async () => {
+    const store = new InMemoryExecutionStore(() => new Date("2026-10-08T12:00:00.000Z"));
+    let calls = 0;
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => {
+      calls += 1;
+      if (calls === 1) throw new CapabilityAdapterError("transient_dependency_failure", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+      return mockResult(input);
+    });
+    const now = () => new Date("2026-10-07T12:00:00.000Z");
+    const plan = handoff([{ id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" }]);
+    expect((await runtime(store, executor, undefined, undefined, now).execute(plan, runtimeInput(), "concurrent-retry-key")).kind).toBe("retry_pending");
+    const concurrent = await Promise.all([
+      runtime(store, executor, undefined, undefined, now).resume({ runId: RUN_ID, authenticatedUserId: USER_ID }),
+      runtime(store, executor, undefined, undefined, now).resume({ runId: RUN_ID, authenticatedUserId: USER_ID }),
+    ]);
+    expect(concurrent.filter((item) => item.kind === "succeeded")).toHaveLength(1);
+    expect(executor).toHaveBeenCalledTimes(2);
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps[0]).toMatchObject({ status: "succeeded", attempt: 2 });
   });
 });

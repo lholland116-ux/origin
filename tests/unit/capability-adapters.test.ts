@@ -3,6 +3,7 @@ import type { PlanStep } from "@/lib/ai/intelligence-plan";
 import { validateIntelligencePlan } from "@/lib/ai/plan-validator";
 import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coordinator";
 import type { CapabilityExecutionInput, CapabilityExecutor, ExecutionRuntimeInput } from "@/lib/agent-runtime/capability-executor";
+import type { ExecutionStore } from "@/lib/agent-runtime/execution-store";
 import type { RequestMessageBinding, StandardOperationResult, WebSearchOperationResult, FileContextResult, GeneratedDocumentReference, GeneratedImageReference } from "@/lib/agent-runtime/application-contracts";
 import { FileContextPreparationError } from "@/lib/ai/file-context-service";
 import type { FileContextServiceInput } from "@/lib/ai/file-context-service";
@@ -10,7 +11,7 @@ import { ImageGenerationServiceError } from "@/lib/ai/image-generation-service";
 import { GeneratedDocumentPersistenceError } from "@/lib/ai/generated-document-persistence-service";
 import { ImageEditOrchestrationError } from "@/lib/image-generation/image-edit-orchestrator";
 import type { ImageEditExistingMessageOrchestratorInput } from "@/lib/image-generation/image-edit-orchestrator";
-import type { StandardOperationInput } from "@/lib/ai/standard-operation-service";
+import { StandardOperationError, type StandardOperationInput } from "@/lib/ai/standard-operation-service";
 import type { GeneratedArtifact } from "@/lib/documents/generation/contracts";
 import type { DocumentRenderer, ExistingMessageDocumentPersister } from "@/lib/agent-runtime/capability-adapters/document-generation";
 import type { ExistingMessageImageGenerator } from "@/lib/agent-runtime/capability-adapters/image-generation";
@@ -325,6 +326,23 @@ describe("six independent capability adapters", () => {
     expect(boundedMock.mock.calls[0]![0].documentIds).toHaveLength(11);
   });
 
+  it("marks only a normalized temporary File Context lookup failure retry-safe", async () => {
+    const temporary = vi.fn(async () => { throw new FileContextPreparationError("temporary_lookup_failure"); });
+    await expect(createFileAnalysisCapabilityAdapter({ prepareFileContext: temporary as unknown as FileContextPreparer }).execute(
+      executionInput("file_analysis", [{ source: "attachment", reference: { id: fileResult().documents[0]!.documentId, kind: "file" } }]),
+    )).rejects.toMatchObject({
+      code: "transient_dependency_failure",
+      descriptor: { phase: "read_only_lookup", retrySafety: "SAFE_RETRY" },
+    });
+    const ambiguous = vi.fn(async () => { throw new FileContextPreparationError("lookup_failed"); });
+    await expect(createFileAnalysisCapabilityAdapter({ prepareFileContext: ambiguous as unknown as FileContextPreparer }).execute(
+      executionInput("file_analysis", [{ source: "attachment", reference: { id: fileResult().documents[0]!.documentId, kind: "file" } }]),
+    )).rejects.toMatchObject({
+      code: "persistence_failed",
+      descriptor: { phase: "read_only_lookup", retrySafety: "RECOVERY_REQUIRED" },
+    });
+  });
+
   it("renders once and links a safe document reference only to the bound assistant destination", async () => {
     const standard = standardResult("Validated document body.");
     const artifact = { bytes: new Uint8Array([1, 2, 3]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 3 } as GeneratedArtifact;
@@ -376,7 +394,10 @@ describe("six independent capability adapters", () => {
     }).execute(executionInput("document_generation", [
       { source: "user", value: "Create a PDF." },
       { source: "step", stepId: "standard", result: { kind: "text", value: standard } },
-    ]))).rejects.toMatchObject({ code: "persistence_failed" });
+    ]))).rejects.toMatchObject({
+      code: "persistence_failed",
+      descriptor: { phase: "persistence", retrySafety: "RECOVERY_REQUIRED" },
+    });
     expect(persistFailure).toHaveBeenCalledTimes(1);
   });
 
@@ -430,8 +451,24 @@ describe("six independent capability adapters", () => {
     const generateMock = vi.fn(async () => { throw new ImageGenerationServiceError("daily_limit_reached"); });
     const generate = generateMock as unknown as ExistingMessageImageGenerator;
     await expect(createImageGenerationCapabilityAdapter({ generate }).execute(executionInput("image_generation")))
-      .rejects.toMatchObject({ code: "executor_failed" });
+      .rejects.toMatchObject({ code: "quota_exhausted" });
     expect(generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks ambiguous Image Generation provider and persistence outcomes recovery-required", async () => {
+    const providerFailure = vi.fn(async () => { throw new ImageGenerationServiceError("provider_failure"); });
+    await expect(createImageGenerationCapabilityAdapter({ generate: providerFailure as unknown as ExistingMessageImageGenerator })
+      .execute(executionInput("image_generation"))).rejects.toMatchObject({
+      descriptor: { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" },
+    });
+    expect(providerFailure).toHaveBeenCalledOnce();
+
+    const persistenceFailure = vi.fn(async () => { throw new ImageGenerationServiceError("persistence_failure"); });
+    await expect(createImageGenerationCapabilityAdapter({ generate: persistenceFailure as unknown as ExistingMessageImageGenerator })
+      .execute(executionInput("image_generation"))).rejects.toMatchObject({
+      descriptor: { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" },
+    });
+    expect(persistenceFailure).toHaveBeenCalledOnce();
   });
 
   it("uses the exact generated predecessor, stable key, bound messages, and safe lineage for Image Editing", async () => {
@@ -605,7 +642,14 @@ describe("six independent capability adapters", () => {
     ]));
     await expect(call(new ImageEditOrchestrationError("idempotency_conflict"))).rejects.toMatchObject({ code: "idempotency_conflict" });
     await expect(call(new ImageEditOrchestrationError("source_forbidden"))).rejects.toMatchObject({ code: "ownership_denied" });
-    await expect(call(new ImageEditOrchestrationError("persistence_failure"))).rejects.toMatchObject({ code: "persistence_failed" });
+    await expect(call(new ImageEditOrchestrationError("persistence_failure"))).rejects.toMatchObject({
+      code: "persistence_failed",
+      descriptor: { phase: "persistence", retrySafety: "RECOVERY_REQUIRED" },
+    });
+    await expect(call(new ImageEditOrchestrationError("provider_timeout"))).rejects.toMatchObject({
+      code: "executor_failed",
+      descriptor: { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" },
+    });
   });
 
   it("rejects duplicated context identity overrides and unexpected input fields for all six adapters", async () => {
@@ -726,6 +770,240 @@ describe("six independent capability adapters", () => {
     expect(saved?.status).toBe("succeeded");
     expect(saved?.runtimeContext.requestMessageBinding).toEqual(runtimeBinding);
     expect(saved?.steps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+  });
+
+  it("resumes a safe Standard retry through the same static registry and adapter", async () => {
+    const result = standardResult("The same Standard result after a retry.");
+    const operationInputs: StandardOperationInput[] = [];
+    const runStandard = vi.fn(async function* (input: StandardOperationInput) {
+      operationInputs.push(input);
+      if (operationInputs.length === 1) {
+        throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+      }
+      yield* standardEvents(result);
+    });
+    const registry = registryExecutor({
+      standardExecutor: createStandardCapabilityAdapter({ runOperation: runStandard as unknown as StandardOperationRunner }),
+    });
+    const store = new InMemoryExecutionStore(() => new Date("2026-10-08T12:00:00.000Z"));
+    const dispatches: CapabilityExecutionInput[] = [];
+    const observedRegistry: CapabilityExecutor = {
+      async execute(input) {
+        dispatches.push(input);
+        return registry.execute(input);
+      },
+    };
+    const makeRuntime = () => new DurableXStateExecutionRuntime({
+      store,
+      executor: observedRegistry,
+      authorizer: { authorize: async () => ({ allowed: true }) },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: () => "a3100000-0000-4000-8000-000000000070",
+      createExecutionKey: () => "a3100000-0000-4000-8000-000000000071",
+      now: () => new Date("2026-10-07T12:00:00.000Z"),
+    });
+    const plan = runtimeHandoff([
+      { id: "answer", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+    ]);
+    const input: ExecutionRuntimeInput = {
+      authenticatedUserId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      requestMessageBinding: REQUEST_BINDING,
+      userInput: "Explain the matter.",
+    };
+    const first = await makeRuntime().execute(plan, input, "registry-safe-retry");
+    expect(first).toMatchObject({ kind: "retry_pending", stepId: "answer" });
+    expect(operationInputs[0]).toMatchObject({ executionMode: "durable_runtime_single_attempt", objective: "Explain the matter." });
+    expect(dispatches).toHaveLength(1);
+
+    const resumed = await makeRuntime().resume({ runId: "a3100000-0000-4000-8000-000000000070", authenticatedUserId: USER_ID });
+    expect(resumed.kind).toBe("succeeded");
+    expect(dispatches).toHaveLength(2);
+    expect(dispatches[1]?.executionKey).toBe(dispatches[0]?.executionKey);
+    expect(dispatches.every(({ context }) => context.requestMessageBinding.assistantMessageId === REQUEST_BINDING.assistantMessageId
+      && context.requestMessageBinding.userMessageId === REQUEST_BINDING.userMessageId)).toBe(true);
+    expect(operationInputs).toHaveLength(2);
+    expect(operationInputs[1]).toMatchObject({ executionMode: "durable_runtime_single_attempt", objective: "Explain the matter." });
+    expect(runStandard).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only normalized File and Web failures through reconstructed runtime/store wrappers", async () => {
+    const prepared = fileResult("Stable read-only predecessor.");
+    const prepare = vi.fn(async () => {
+      if (prepare.mock.calls.length === 1) throw new FileContextPreparationError("temporary_lookup_failure");
+      return prepared;
+    });
+    const research = { ...webResult("Stable approved research.") };
+    const runWeb = vi.fn(async () => {
+      if (runWeb.mock.calls.length === 1) {
+        return {
+          ok: false as const,
+          error: { code: "provider_failed" as const, failureMetadata: { phase: "pre_provider" as const, retrySafety: "SAFE_RETRY" as const } },
+          measurement: { model: "test-model", webSearchCalls: 0, outcome: "api_error" as const, latencyMs: 1,
+            usage: { inputTokens: null, cachedInputTokens: null, outputTokens: null, reasoningTokens: null, totalTokens: null } },
+        };
+      }
+      return { ok: true as const, result: research, measurement: { model: research.model, webSearchCalls: 1,
+        outcome: "success" as const, latencyMs: 1, usage: research.usage } };
+    });
+    const standardResultValue = standardResult("Combined stable predecessor answer.");
+    const runStandard = vi.fn(async function* (input: StandardOperationInput) {
+      expect(input.fileContext).toEqual(prepared);
+      expect(input.webSearchResult).toEqual(research);
+      yield* standardEvents(standardResultValue);
+    });
+    const registry = registryExecutor({
+      fileAnalysisExecutor: createFileAnalysisCapabilityAdapter({ prepareFileContext: prepare as unknown as FileContextPreparer }),
+      webSearchExecutor: createWebSearchCapabilityAdapter({ runOperation: runWeb as unknown as WebSearchOperationRunner }),
+      standardExecutor: createStandardCapabilityAdapter({ runOperation: runStandard as unknown as StandardOperationRunner }),
+    });
+    const persistentBackend = new InMemoryExecutionStore(() => new Date("2026-10-08T12:00:00.000Z"));
+    const dispatches: CapabilityExecutionInput[] = [];
+    const recordingRegistry: CapabilityExecutor = {
+      async execute(input) {
+        dispatches.push(input);
+        return registry.execute(input);
+      },
+    };
+    const authorizedSteps: string[] = [];
+    const reopenStore = (): ExecutionStore => ({
+      createRun: (input) => persistentBackend.createRun(input),
+      getRun: (input) => persistentBackend.getRun(input),
+      saveRunState: (input) => persistentBackend.saveRunState(input),
+      claimStep: (input) => persistentBackend.claimStep(input),
+      scheduleStepRetry: (input) => persistentBackend.scheduleStepRetry(input),
+      claimRetryableStep: (input) => persistentBackend.claimRetryableStep(input),
+      checkpoint: (input) => persistentBackend.checkpoint(input),
+    });
+    const now = () => new Date("2026-10-07T12:00:00.000Z");
+    const makeRuntime = (store: ExecutionStore) => new DurableXStateExecutionRuntime({
+      store,
+      executor: recordingRegistry,
+      authorizer: { authorize: async ({ stepId }) => { authorizedSteps.push(stepId); return { allowed: true }; } },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: () => "a3100000-0000-4000-8000-000000000090",
+      createExecutionKey: (() => {
+        let key = 90;
+        return () => `a3100000-0000-4000-8000-${String(++key).padStart(12, "0")}`;
+      })(),
+      now,
+    });
+    const plan = runtimeHandoff([
+      { id: "files", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
+      { id: "web", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
+      { id: "answer", capability: "standard", dependsOn: ["files", "web"], inputs: [
+        { source: "user" }, { source: "step", stepId: "files", output: "structured_data" },
+        { source: "step", stepId: "web", output: "search_results" },
+      ], expectedOutput: "text" },
+    ]);
+    const input: ExecutionRuntimeInput = {
+      authenticatedUserId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      requestMessageBinding: REQUEST_BINDING,
+      userInput: "Compare the file with current research.",
+      attachments: [{ id: prepared.documents[0]!.documentId, kind: "file" }],
+    };
+
+    const first = await makeRuntime(persistentBackend).execute(plan, input, "file-web-retry-key");
+    expect(first).toMatchObject({ kind: "retry_pending", stepId: "files" });
+    expect(runWeb).not.toHaveBeenCalled();
+    expect(runStandard).not.toHaveBeenCalled();
+
+    // A new runtime and new store wrapper read the same durable backend after file eligibility.
+    const second = await makeRuntime(reopenStore())
+      .resume({ runId: "a3100000-0000-4000-8000-000000000090", authenticatedUserId: USER_ID });
+    expect(second).toMatchObject({ kind: "retry_pending", stepId: "web" });
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(runWeb).toHaveBeenCalledOnce();
+    expect(runStandard).not.toHaveBeenCalled();
+
+    const final = await makeRuntime(reopenStore())
+      .resume({ runId: "a3100000-0000-4000-8000-000000000090", authenticatedUserId: USER_ID });
+    expect(final.kind).toBe("succeeded");
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(runWeb).toHaveBeenCalledTimes(2);
+    expect(runStandard).toHaveBeenCalledOnce();
+    expect(dispatches.map(({ stepId }) => stepId)).toEqual(["files", "files", "web", "web", "answer"]);
+    expect(dispatches[0]?.executionKey).toBe(dispatches[1]?.executionKey);
+    expect(dispatches[2]?.executionKey).toBe(dispatches[3]?.executionKey);
+    expect(authorizedSteps).toEqual(["files", "files", "web", "web", "answer"]);
+    expect(dispatches.every(({ context }) => context.requestMessageBinding.requestId === REQUEST_BINDING.requestId
+      && context.requestMessageBinding.userId === REQUEST_BINDING.userId
+      && context.requestMessageBinding.conversationId === REQUEST_BINDING.conversationId
+      && context.requestMessageBinding.userMessageId === REQUEST_BINDING.userMessageId
+      && context.requestMessageBinding.assistantMessageId === REQUEST_BINDING.assistantMessageId)).toBe(true);
+  });
+
+  it("does not replay ambiguous image-provider or document-persistence outcomes after restart", async () => {
+    const store = new InMemoryExecutionStore();
+    const makeRuntime = (executor: CapabilityExecutor) => new DurableXStateExecutionRuntime({
+      store,
+      executor,
+      authorizer: { authorize: async () => ({ allowed: true }) },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: () => "a3100000-0000-4000-8000-000000000080",
+      createExecutionKey: () => "a3100000-0000-4000-8000-000000000081",
+      now: () => new Date("2026-10-07T12:00:00.000Z"),
+    });
+
+    const generate = vi.fn(async () => { throw new ImageGenerationServiceError("provider_failure"); });
+    const imageRegistry = registryExecutor({
+      imageGenerationExecutor: createImageGenerationCapabilityAdapter({ generate }),
+    });
+    const imagePlan = runtimeHandoff([
+      { id: "image", capability: "image_generation", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "image" },
+    ]);
+    const imageInput: ExecutionRuntimeInput = {
+      authenticatedUserId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      requestMessageBinding: REQUEST_BINDING,
+      userInput: "Create a mountain landscape.",
+    };
+    const imageRuntime = makeRuntime(imageRegistry);
+    const imageOutcome = await imageRuntime.execute(imagePlan, imageInput, "ambiguous-image-provider");
+    expect(imageOutcome).toMatchObject({ kind: "recovery_required", stepId: "image" });
+    expect(generate).toHaveBeenCalledOnce();
+    expect(await imageRuntime.resume({ runId: "a3100000-0000-4000-8000-000000000080", authenticatedUserId: USER_ID }))
+      .toMatchObject({ kind: "recovery_required", stepId: "image", failure: { code: "indeterminate_step" } });
+    expect(generate).toHaveBeenCalledOnce();
+
+    const documentStore = new InMemoryExecutionStore();
+    const artifact = { bytes: new Uint8Array([1]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 1 } as GeneratedArtifact;
+    const persist = vi.fn(async () => { throw new GeneratedDocumentPersistenceError("persistence_failure"); });
+    const documentRegistry = registryExecutor({
+      standardExecutor: createStandardCapabilityAdapter({ runOperation: standardRunner(standardResult()) as unknown as StandardOperationRunner }),
+      documentGenerationExecutor: createDocumentGenerationCapabilityAdapter({
+        render: vi.fn(async () => artifact) as unknown as DocumentRenderer,
+        persist: persist as unknown as ExistingMessageDocumentPersister,
+      }),
+    });
+    const documentRuntime = new DurableXStateExecutionRuntime({
+      store: documentStore,
+      executor: documentRegistry,
+      authorizer: { authorize: async () => ({ allowed: true }) },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: () => "a3100000-0000-4000-8000-000000000082",
+      createExecutionKey: () => "a3100000-0000-4000-8000-000000000083",
+      now: () => new Date("2026-10-07T12:00:00.000Z"),
+    });
+    const documentPlan = runtimeHandoff([
+      { id: "answer", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+      { id: "document", capability: "document_generation", dependsOn: ["answer"], inputs: [
+        { source: "user" }, { source: "step", stepId: "answer", output: "text" },
+      ], expectedOutput: "document" },
+    ]);
+    const documentInput: ExecutionRuntimeInput = {
+      authenticatedUserId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      requestMessageBinding: REQUEST_BINDING,
+      userInput: "Create a PDF document.",
+    };
+    const documentOutcome = await documentRuntime.execute(documentPlan, documentInput, "ambiguous-document-persistence");
+    expect(documentOutcome).toMatchObject({ kind: "recovery_required", stepId: "document" });
+    expect(persist).toHaveBeenCalledOnce();
+    expect(await documentRuntime.resume({ runId: "a3100000-0000-4000-8000-000000000082", authenticatedUserId: USER_ID }))
+      .toMatchObject({ kind: "recovery_required", stepId: "document", failure: { code: "indeterminate_step" } });
+    expect(persist).toHaveBeenCalledOnce();
   });
 
   it("runs Web -> Standard and File + Web -> Standard through the static registry and durable runtime", async () => {

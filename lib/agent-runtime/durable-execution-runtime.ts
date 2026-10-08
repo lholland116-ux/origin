@@ -10,6 +10,7 @@ import type {
   RequestMessageBindingValidator,
 } from "@/lib/agent-runtime/capability-executor";
 import { CapabilityAdapterError } from "@/lib/agent-runtime/capability-adapters/common";
+import { decideRetry } from "@/lib/agent-runtime/retry-policy";
 import { requestMessageBindingSchema } from "@/lib/agent-runtime/application-contracts";
 import {
   EXECUTION_RUNTIME_VERSION,
@@ -43,6 +44,7 @@ import {
   executionRunSchema,
   executionStepSchema,
   EXECUTION_FAILURE_CODES,
+  MAX_EXECUTION_STEP_ATTEMPTS,
 } from "@/lib/agent-runtime/runtime-contracts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -443,18 +445,72 @@ export class DurableXStateExecutionRuntime {
     if (!persistedBinding) {
       return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
     }
-    const retryPending = record.steps.find((step) => step.status === "retry_pending");
+    let revision = record.snapshotRevision;
+    let current = record;
+    let claimedRetryStepId: string | undefined;
+    let claimedRetryExecutionKey: string | undefined;
+
+    const retryPending = current.steps.find((step) => step.status === "retry_pending");
     if (retryPending) {
-      return {
-        kind: "retry_pending",
-        run: executionRun(record),
-        stepId: retryPending.stepId,
-        nextRetryAt: retryPending.nextRetryAt!,
+      const retryActor = stepActors.get(retryPending.stepId)!;
+      const stopActors = () => {
+        for (const actor of stepActors.values()) actor.stop();
+        runActor.stop();
+      };
+      if (retryPending.attempt >= MAX_EXECUTION_STEP_ATTEMPTS) {
+        stopActors();
+        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("retry_exhausted"), stepId: retryPending.stepId };
+      }
+      retryActor.claimRetry();
+      const retryClaimSnapshot = snapshotForActors(runActor, stepActors, Object.fromEntries(current.steps.map((item) => [
+        item.stepId,
+        item.stepId === retryPending.stepId ? "running" : item.status,
+      ])));
+      let claimed: Awaited<ReturnType<ExecutionStore["claimRetryableStep"]>>;
+      try {
+        claimed = await this.options.store.claimRetryableStep({
+          runId: current.id,
+          userId: current.userId,
+          stepId: retryPending.stepId,
+          expectedRevision: revision,
+          snapshot: retryClaimSnapshot,
+        });
+      } catch {
+        stopActors();
+        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("persistence_failed"), stepId: retryPending.stepId };
+      }
+      if (claimed.status === "not_eligible") {
+        stopActors();
+        return { kind: "retry_pending", run: executionRun(current), stepId: retryPending.stepId, nextRetryAt: claimed.nextRetryAt };
+      }
+      if (claimed.status !== "claimed") {
+        stopActors();
+        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure(
+          claimed.status === "attempt_limit" ? "retry_exhausted" : "snapshot_conflict",
+        ), stepId: retryPending.stepId };
+      }
+      claimedRetryStepId = retryPending.stepId;
+      claimedRetryExecutionKey = claimed.executionKey;
+      revision = claimed.snapshotRevision;
+      let reloaded: DurableExecutionRun | null;
+      try {
+        reloaded = await this.options.store.getRun({ runId: current.id, userId: current.userId });
+      } catch {
+        reloaded = null;
+      }
+      const reloadedStep = reloaded?.steps.find((step) => step.stepId === claimedRetryStepId);
+      if (!reloaded || !reloadedStep || reloadedStep.status !== "running"
+        || reloadedStep.attempt !== claimed.attempt || reloadedStep.executionKey !== claimed.executionKey
+        || reloaded.snapshotRevision !== revision) {
+        stopActors();
+        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("indeterminate_step"), stepId: retryPending.stepId };
+      }
+      current = {
+        ...reloaded,
+        runtimeContext: { ...reloaded.runtimeContext, requestMessageBinding: persistedBinding },
       };
     }
 
-    let revision = record.snapshotRevision;
-    let current = record;
     if (current.status === "pending") {
       runActor.start();
       const startedAt = this.now().toISOString();
@@ -477,11 +533,12 @@ export class DurableXStateExecutionRuntime {
     }
 
     const stepById = new Map(handoff.plan.steps.map((step) => [step.id, step]));
-      const results: Record<string, ExecutionStepResult> = { ...outputResults(current.steps) };
+    const results: Record<string, ExecutionStepResult> = { ...outputResults(current.steps) };
     for (const stepId of handoff.orderedStepIds) {
       const persistedStep = current.steps.find((step) => step.stepId === stepId)!;
       if (persistedStep.status === "succeeded" || persistedStep.status === "skipped") continue;
-      if (persistedStep.status !== "pending") {
+      const isClaimedRetry = persistedStep.status === "running" && claimedRetryStepId === stepId;
+      if (persistedStep.status !== "pending" && !isClaimedRetry) {
         return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("indeterminate_step"), stepId };
       }
       const step = stepById.get(stepId)!;
@@ -492,25 +549,41 @@ export class DurableXStateExecutionRuntime {
         return { kind: "failed", run: executionRun(current), failure: executionFailure("invalid_persisted_state"), stepResults: results, telemetry: telemetry(executionRun(current), "invalid_persisted_state", revision, true) };
       }
 
-      lifecycle.start();
-      const startedAt = this.now().toISOString();
-      const claimSnapshot = snapshotForActors(runActor, stepActors, Object.fromEntries(current.steps.map((item) => [item.stepId, item.stepId === stepId ? lifecycle.status : item.status])));
-      const claimed = await this.options.store.claimStep({
-        runId: current.id,
-        userId: current.userId,
-        stepId,
-        expectedRevision: revision,
-        snapshot: claimSnapshot,
-        startedAt,
-      });
-      if (claimed.status !== "claimed") {
-        lifecycle.stop();
-        return claimed.status === "already_claimed"
-          ? { kind: "recovery_required", run: executionRun(current), failure: executionFailure("indeterminate_step"), stepId }
-          : { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId };
+      let executionKey: string;
+      if (isClaimedRetry) {
+        executionKey = claimedRetryExecutionKey!;
+      } else {
+        lifecycle.start();
+        const startedAt = this.now().toISOString();
+        const claimSnapshot = snapshotForActors(runActor, stepActors, Object.fromEntries(current.steps.map((item) => [item.stepId, item.stepId === stepId ? lifecycle.status : item.status])));
+        let claimed: Awaited<ReturnType<ExecutionStore["claimStep"]>>;
+        try {
+          claimed = await this.options.store.claimStep({
+            runId: current.id,
+            userId: current.userId,
+            stepId,
+            expectedRevision: revision,
+            snapshot: claimSnapshot,
+            startedAt,
+          });
+        } catch {
+          lifecycle.stop();
+          for (const actor of stepActors.values()) actor.stop();
+          runActor.stop();
+          return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("persistence_failed"), stepId };
+        }
+        if (claimed.status !== "claimed") {
+          lifecycle.stop();
+          for (const actor of stepActors.values()) actor.stop();
+          runActor.stop();
+          return claimed.status === "already_claimed"
+            ? { kind: "recovery_required", run: executionRun(current), failure: executionFailure("indeterminate_step"), stepId }
+            : { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId };
+        }
+        executionKey = claimed.executionKey;
+        revision = claimed.snapshotRevision;
+        current = { ...current, snapshotRevision: revision, snapshot: claimSnapshot, steps: current.steps.map((item) => item.stepId === stepId ? { ...item, status: "running", startedAt } : item) };
       }
-      revision = claimed.snapshotRevision;
-      current = { ...current, snapshotRevision: revision, snapshot: claimSnapshot, steps: current.steps.map((item) => item.stepId === stepId ? { ...item, status: "running", startedAt } : item) };
 
       const resolved = resolveExecutionInputs(step, handoff, {
         authenticatedUserId: current.userId,
@@ -542,7 +615,7 @@ export class DurableXStateExecutionRuntime {
         const executionInput: CapabilityExecutionInput = {
           executionId: current.id,
           stepId,
-          executionKey: claimed.executionKey,
+          executionKey,
           capabilityId,
           inputs: resolved.inputs,
           context: {
@@ -559,15 +632,60 @@ export class DurableXStateExecutionRuntime {
           const executorResult: unknown = await this.options.executor.execute(executionInput);
           if (!validateExecutionStepResult(executorResult, capabilityId)) {
             const byteLength = executionResultJsonBytes(executorResult);
-            stepFailure = byteLength !== null && byteLength > MAX_DURABLE_RESULT_PAYLOAD_BYTES
+            const failure = byteLength !== null && byteLength > MAX_DURABLE_RESULT_PAYLOAD_BYTES
               ? executionFailure("result_too_large")
               : executionFailure("invalid_executor_result");
+            for (const actor of stepActors.values()) actor.stop();
+            runActor.stop();
+            return { kind: "recovery_required", run: executionRun(current), failure, stepId };
           }
           else result = executorResult;
         } catch (error) {
-          stepFailure = error instanceof CapabilityAdapterError
-            ? executionFailure(error.code)
-            : executionFailure("executor_failed");
+          const failure = error instanceof CapabilityAdapterError
+            ? error.descriptor
+            : { code: "executor_failed" as const, phase: "unknown" as const, retrySafety: "RECOVERY_REQUIRED" as const };
+          const decision = decideRetry({ capabilityId, failure, attempt: current.steps.find((item) => item.stepId === stepId)!.attempt });
+          if (decision.action === "recovery_required") {
+            for (const actor of stepActors.values()) actor.stop();
+            runActor.stop();
+            return { kind: "recovery_required", run: executionRun(current), failure: executionFailure(failure.code), stepId };
+          }
+          if (decision.action === "retry") {
+            lifecycle.scheduleRetry();
+            const nextRetryAt = new Date(this.now().getTime() + decision.backoffMs).toISOString();
+            const retryStatuses = Object.fromEntries(current.steps.map((item) => [item.stepId,
+              item.stepId === stepId ? "retry_pending" : item.status,
+            ]));
+            const retrySnapshot = snapshotForActors(runActor, stepActors, retryStatuses);
+            let scheduled: Awaited<ReturnType<ExecutionStore["scheduleStepRetry"]>>;
+            try {
+              scheduled = await this.options.store.scheduleStepRetry({
+                runId: current.id,
+                userId: current.userId,
+                stepId,
+                expectedRevision: revision,
+                snapshot: retrySnapshot,
+                nextRetryAt,
+              });
+            } catch {
+              scheduled = { status: "conflict" };
+            }
+            for (const actor of stepActors.values()) actor.stop();
+            runActor.stop();
+            if (scheduled.status !== "saved") {
+              return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("snapshot_conflict"), stepId };
+            }
+            const retryRun: DurableExecutionRun = {
+              ...current,
+              snapshot: retrySnapshot,
+              snapshotRevision: scheduled.snapshotRevision,
+              steps: current.steps.map((item) => item.stepId === stepId
+                ? { ...item, status: "retry_pending", nextRetryAt }
+                : item),
+            };
+            return { kind: "retry_pending", run: executionRun(retryRun), stepId, nextRetryAt };
+          }
+          stepFailure = executionFailure(failure.retrySafety === "SAFE_RETRY" ? "retry_exhausted" : failure.code);
         }
       }
 

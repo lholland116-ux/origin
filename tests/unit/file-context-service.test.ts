@@ -98,4 +98,16 @@ describe("File Context Preparation Service", () => {
     const prepareNoop = createFileContextService({ loadDocuments: vi.fn(async () => []) });
     await expect(prepareNoop({ ...input, documentIds: [DOCUMENT_ID, DOCUMENT_ID] })).rejects.toMatchObject({ code: "invalid_reference" });
   });
+
+  it("preserves only an explicitly normalized temporary lookup failure", async () => {
+    const temporary = createFileContextService({
+      loadDocuments: async () => { throw new FileContextPreparationError("temporary_lookup_failure"); },
+    });
+    await expect(temporary(input)).rejects.toMatchObject({ code: "temporary_lookup_failure" });
+
+    const unclassified = createFileContextService({
+      loadDocuments: async () => { throw new FileContextPreparationError("lookup_failed"); },
+    });
+    await expect(unclassified(input)).rejects.toMatchObject({ code: "lookup_failed" });
+  });
 });

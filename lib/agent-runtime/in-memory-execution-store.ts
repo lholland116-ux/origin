@@ -105,6 +105,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
     const step = run.steps.find((candidate) => candidate.stepId === input.stepId);
     if (!step) return { status: "not_found" } as const;
     if (step.status !== "running") return { status: "conflict" } as const;
+    if (step.attempt >= MAX_EXECUTION_STEP_ATTEMPTS) return { status: "attempt_limit" } as const;
     const timestamp = new Date(input.nextRetryAt);
     if (!Number.isFinite(timestamp.getTime())) return { status: "conflict" } as const;
     step.status = "retry_pending";

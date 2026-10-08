@@ -1,19 +1,57 @@
 import { requestMessageBindingSchema, type RequestMessageBinding, type RequestTransactionContext } from "@/lib/agent-runtime/application-contracts";
 import type { CapabilityExecutionInput, ResolvedExecutionInput } from "@/lib/agent-runtime/capability-executor";
-import { isJsonValue, type ExecutionFailureCode, type ExecutionStepResult } from "@/lib/agent-runtime/runtime-contracts";
+import {
+  isJsonValue,
+  type ExecutionFailureCode,
+  type ExecutionFailureDescriptor,
+  type ExecutionStepResult,
+} from "@/lib/agent-runtime/runtime-contracts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/** Safe adapter failure. The runtime uses only `code` to select its public message. */
+const TERMINAL_FAILURE_CODES = new Set<ExecutionFailureCode>([
+  "invalid_handoff",
+  "unsupported_capability",
+  "missing_input",
+  "missing_predecessor_result",
+  "authorization_denied",
+  "authorization_failed",
+  "result_too_large",
+  "quota_exhausted",
+  "retry_exhausted",
+  "ownership_denied",
+  "idempotency_conflict",
+  "invalid_persisted_state",
+  "unsupported_handoff_version",
+  "unsupported_snapshot_version",
+  "invalid_snapshot",
+]);
+
+export type AdapterFailureMetadata = Omit<ExecutionFailureDescriptor, "code">;
+
+/** Safe adapter failure. Raw provider, storage, and database errors never cross this boundary. */
 export class CapabilityAdapterError extends Error {
-  constructor(readonly code: ExecutionFailureCode) {
+  readonly descriptor: ExecutionFailureDescriptor;
+
+  constructor(readonly code: ExecutionFailureCode, metadata?: AdapterFailureMetadata) {
     super("The requested step could not be completed.");
     this.name = "CapabilityAdapterError";
+    this.descriptor = Object.freeze({
+      code,
+      ...(metadata ?? {
+        phase: "unknown" as const,
+        retrySafety: TERMINAL_FAILURE_CODES.has(code) ? "TERMINAL" as const : "RECOVERY_REQUIRED" as const,
+      }),
+    });
   }
 }
 
 export function fail(code: ExecutionFailureCode): never {
   throw new CapabilityAdapterError(code);
+}
+
+export function failWithMetadata(code: ExecutionFailureCode, metadata: AdapterFailureMetadata): never {
+  throw new CapabilityAdapterError(code, metadata);
 }
 
 export function assertAdapterInput(input: CapabilityExecutionInput, capabilityId: string): RequestMessageBinding {

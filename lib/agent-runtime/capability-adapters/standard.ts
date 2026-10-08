@@ -12,6 +12,7 @@ import {
   assertAdapterInput,
   CapabilityAdapterError,
   fail,
+  failWithMetadata,
   normalizedInputs,
   predecessorInputs,
   requestContextFromBinding,
@@ -71,6 +72,7 @@ export function createStandardCapabilityAdapter(
         objective,
         reasoningEffort: "medium",
         history: [{ role: "user", content: objective }],
+        executionMode: "durable_runtime_single_attempt",
         ...(fileContext ? { fileContext } : {}),
         ...(webSearchResult ? { webSearchResult } : {}),
       };
@@ -98,14 +100,18 @@ export function createStandardCapabilityAdapter(
         if (error instanceof StandardOperationError) {
           if (error.code === "invalid_request_context") return fail("ownership_denied");
           if (error.code === "invalid_predecessor_context") return fail("missing_predecessor_result");
-          return fail("executor_failed");
+          if (error.failureMetadata?.retrySafety === "SAFE_RETRY") {
+            return failWithMetadata("transient_dependency_failure", error.failureMetadata);
+          }
+          return failWithMetadata("executor_failed", error.failureMetadata
+            ?? { phase: "unknown", retrySafety: "RECOVERY_REQUIRED" });
         }
-        return fail("executor_failed");
+        return failWithMetadata("executor_failed", { phase: "unknown", retrySafety: "RECOVERY_REQUIRED" });
       }
-      if (!completion) return fail("invalid_executor_result");
+      if (!completion) return failWithMetadata("invalid_executor_result", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
       // The core completion is authoritative (notably after its own image fallback).
       // For this text-only adapter, the collected stream must represent that reply.
-      if (deltas.trim() !== completion.reply.trim()) return fail("invalid_executor_result");
+      if (deltas.trim() !== completion.reply.trim()) return failWithMetadata("invalid_executor_result", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
       return { kind: "text", value: completion };
     },
   });

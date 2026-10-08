@@ -12,6 +12,7 @@ import {
   assertAdapterInput,
   attachmentInputs,
   fail,
+  failWithMetadata,
   normalizedInputs,
   predecessorInputs,
 } from "@/lib/agent-runtime/capability-adapters/common";
@@ -44,9 +45,12 @@ export function createFileAnalysisCapabilityAdapter(
           if (error.code === "invalid_reference") return fail("missing_input");
           if (error.code === "document_unavailable") return fail("ownership_denied");
           if (error.code === "context_too_large") return fail("result_too_large");
-          return fail("persistence_failed");
+          if (error.code === "temporary_lookup_failure") {
+            return failWithMetadata("transient_dependency_failure", { phase: "read_only_lookup", retrySafety: "SAFE_RETRY" });
+          }
+          return failWithMetadata("persistence_failed", { phase: "read_only_lookup", retrySafety: "RECOVERY_REQUIRED" });
         }
-        return fail("executor_failed");
+        return failWithMetadata("executor_failed", { phase: "read_only_lookup", retrySafety: "RECOVERY_REQUIRED" });
       }
       if (!fileContextMatchesExecutionContext(result, {
         authenticatedUserId: binding.userId,

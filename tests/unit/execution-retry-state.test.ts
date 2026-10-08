@@ -180,10 +180,7 @@ describe("durable retry state foundation", () => {
 
     step.scheduleRetry();
     expect(await store.scheduleStepRetry({ runId: RUN_ID, userId: USER_ID, stepId: "step-1", expectedRevision: 6, snapshot: envelope(run, step), nextRetryAt: now.toISOString() }))
-      .toEqual({ status: "saved", snapshotRevision: 7 });
-    step.claimRetry();
-    expect(await store.claimRetryableStep({ runId: RUN_ID, userId: USER_ID, stepId: "step-1", expectedRevision: 7, snapshot: envelope(run, step) }))
       .toEqual({ status: "attempt_limit" });
-    expect(await store.getRun({ runId: RUN_ID, userId: USER_ID })).toMatchObject({ snapshotRevision: 7, steps: [{ status: "retry_pending", attempt: MAX_EXECUTION_STEP_ATTEMPTS, nextRetryAt: now.toISOString() }] });
+    expect(await store.getRun({ runId: RUN_ID, userId: USER_ID })).toMatchObject({ snapshotRevision: 6, steps: [{ status: "running", attempt: MAX_EXECUTION_STEP_ATTEMPTS }] });
   });
 });
