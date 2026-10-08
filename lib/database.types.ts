@@ -34,6 +34,53 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_request_acceptances: {
+        Row: {
+          assistant_message_id: string
+          conversation_id: string
+          created_at: string
+          idempotency_key: string
+          request_fingerprint: string
+          request_id: string
+          request_options: Json
+          usage_date: string
+          user_id: string
+          user_message_id: string
+        }
+        Insert: {
+          assistant_message_id: string
+          conversation_id: string
+          created_at?: string
+          idempotency_key: string
+          request_fingerprint: string
+          request_id?: string
+          request_options?: Json
+          usage_date: string
+          user_id: string
+          user_message_id: string
+        }
+        Update: {
+          assistant_message_id?: string
+          conversation_id?: string
+          created_at?: string
+          idempotency_key?: string
+          request_fingerprint?: string
+          request_id?: string
+          request_options?: Json
+          usage_date?: string
+          user_id?: string
+          user_message_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_request_acceptances_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_request_telemetry: {
         Row: {
           attempt_kind: string
@@ -1361,6 +1408,22 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      accept_agent_request: {
+        Args: {
+          p_conversation_id: string
+          p_document_ids: string[]
+          p_free_daily_limit: number
+          p_idempotency_key: string
+          p_images: Json
+          p_message: string
+          p_pro_daily_limit: number
+          p_request_fingerprint: string
+          p_request_options: Json
+          p_usage_date: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       delete_generated_image_metadata: {
         Args: { p_generated_image_id: string }
         Returns: {
