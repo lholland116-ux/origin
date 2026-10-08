@@ -173,6 +173,110 @@ describe("Image Generation application service", () => {
     });
   });
 
+  it("requires durable cost admission before autonomous Replicate work and settles one scheduled image", async () => {
+    const { dependencies, generateImage } = setup();
+    const ledger = {
+      admit: vi.fn().mockResolvedValue({ id: "f1000000-0000-4000-8000-000000000001", mayDispatch: true }),
+      beginDispatch: vi.fn().mockResolvedValue(true),
+      settle: vi.fn().mockResolvedValue(undefined),
+      markUncertain: vi.fn().mockResolvedValue(undefined),
+      releaseBeforeDispatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const providerCost = {
+      context: {
+        runId: "f2000000-0000-4000-8000-000000000001",
+        stepId: "generate",
+        attemptId: "f3000000-0000-4000-8000-000000000001",
+        attemptNumber: 1,
+        capabilityId: "image_generation" as const,
+        reauthorize: vi.fn().mockResolvedValue(true),
+      },
+      ledger,
+    };
+    const run = createImageGenerationServiceForExistingMessages(dependencies);
+    await run({ ...input, userMessageId: USER_MESSAGE_ID, assistantMessageId: ASSISTANT_MESSAGE_ID, providerCost });
+
+    expect(ledger.admit).toHaveBeenCalledWith(providerCost.context, {
+      invocationSequence: 1,
+      provider: "replicate",
+      model: "flux-schnell",
+      requestedImages: 1,
+    });
+    expect(ledger.beginDispatch).toHaveBeenCalledOnce();
+    expect(generateImage).toHaveBeenCalledOnce();
+    expect(ledger.settle).toHaveBeenCalledWith({ admissionId: "f1000000-0000-4000-8000-000000000001", imageCount: 1 });
+    expect(dependencies.releaseQuota).not.toHaveBeenCalled();
+  });
+
+  it("does not call Replicate when autonomous cost admission is denied", async () => {
+    const { dependencies, generateImage } = setup();
+    const ledger = {
+      admit: vi.fn().mockRejectedValue(new Error("budget denied")),
+      beginDispatch: vi.fn(),
+      settle: vi.fn(),
+      markUncertain: vi.fn(),
+      releaseBeforeDispatch: vi.fn(),
+    };
+    const providerCost = {
+      context: {
+        runId: "f2000000-0000-4000-8000-000000000001",
+        stepId: "generate",
+        attemptId: "f3000000-0000-4000-8000-000000000001",
+        attemptNumber: 1,
+        capabilityId: "image_generation" as const,
+        reauthorize: vi.fn().mockResolvedValue(true),
+      },
+      ledger,
+    };
+    const run = createImageGenerationServiceForExistingMessages(dependencies);
+    await expect(run({ ...input, userMessageId: USER_MESSAGE_ID, assistantMessageId: ASSISTANT_MESSAGE_ID, providerCost }))
+      .rejects.toMatchObject({ code: "internal_failure" });
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(dependencies.releaseQuota).toHaveBeenCalledWith({ attemptId: ATTEMPT_ID, reason: "internal_failure" });
+  });
+
+  it("settles a provider-reported output-count overrun instead of understating its fixed per-image charge", async () => {
+    const { dependencies } = setup({
+      createProvider: (options) => ({
+        generateImage: async () => {
+          await options?.onPredictionId?.("prediction-two-images");
+          throw new ReplicateFluxSchnellProviderError("invalid_output", "multiple outputs", {
+            observedImageCount: 2,
+            providerOperationId: "prediction-two-images",
+          });
+        },
+      }),
+    });
+    const ledger = {
+      admit: vi.fn().mockResolvedValue({ id: "f1000000-0000-4000-8000-000000000002", mayDispatch: true }),
+      beginDispatch: vi.fn().mockResolvedValue(true),
+      settle: vi.fn().mockResolvedValue(undefined),
+      markUncertain: vi.fn().mockResolvedValue(undefined),
+      releaseBeforeDispatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const providerCost = {
+      context: {
+        runId: "f2000000-0000-4000-8000-000000000001",
+        stepId: "generate",
+        attemptId: "f3000000-0000-4000-8000-000000000001",
+        attemptNumber: 1,
+        capabilityId: "image_generation" as const,
+        reauthorize: vi.fn().mockResolvedValue(true),
+      },
+      ledger,
+    };
+    const run = createImageGenerationServiceForExistingMessages(dependencies);
+    await expect(run({ ...input, userMessageId: USER_MESSAGE_ID, assistantMessageId: ASSISTANT_MESSAGE_ID, providerCost }))
+      .rejects.toMatchObject({ code: "invalid_provider_output" });
+    expect(ledger.settle).toHaveBeenCalledWith({
+      admissionId: "f1000000-0000-4000-8000-000000000002",
+      imageCount: 2,
+      providerOperationId: "prediction-two-images",
+    });
+    expect(ledger.markUncertain).toHaveBeenCalledOnce();
+    expect(dependencies.uploadImage).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["malformed", "not-a-uuid", ASSISTANT_MESSAGE_ID],
     ["same user and assistant", USER_MESSAGE_ID, USER_MESSAGE_ID],

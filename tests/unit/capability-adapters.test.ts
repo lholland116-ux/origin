@@ -571,7 +571,7 @@ describe("six independent capability adapters", () => {
     });
   });
 
-  it("runs the image_generation -> image_editing handoff through the durable runtime using only the step image as source", async () => {
+  it("blocks autonomous image editing after image generation while preserving standalone adapter behavior", async () => {
     const generateMock = vi.fn(async () => ({ reference: generatedImage(), responseBytes: new Uint8Array([1]) }));
     const imageGeneration = createImageGenerationCapabilityAdapter({ generate: generateMock as unknown as ExistingMessageImageGenerator });
     const editDependencies: ExistingMessageImageEditDependenciesFactory = vi.fn(async () => ({} as never));
@@ -620,19 +620,10 @@ describe("six independent capability adapters", () => {
       userInput: "Generate a landscape, then make the generated image brighter.",
       attachments: [{ id: "a3100000-0000-4000-8000-000000000020", kind: "image" }],
     }, "durable-image-generation-edit-handoff");
-    expect(outcome.kind).toBe("succeeded");
-    if (outcome.kind !== "succeeded") return;
-    expect(generateMock).toHaveBeenCalledTimes(1);
-    expect(orchestrateMock).toHaveBeenCalledTimes(1);
-    expect(orchestrateMock.mock.calls[0]![0].sourceReference).toEqual({
-      kind: "generated_image", generatedImageId: generatedImage().imageId,
-    });
-    expect(orchestrateMock.mock.calls[0]![0].authenticatedUserId).toBe(USER_ID);
-    expect(orchestrateMock.mock.calls[0]![0].userMessageId).toBe(REQUEST_BINDING.userMessageId);
-    expect(orchestrateMock.mock.calls[0]![0].assistantMessageId).toBe(REQUEST_BINDING.assistantMessageId);
-    const saved = await store.getRun({ runId: outcome.run.id, userId: USER_ID });
-    expect(orchestrateMock.mock.calls[0]![0].idempotencyKey)
-      .toBe(saved?.steps.find(({ stepId }) => stepId === "edit")?.executionKey);
+    expect(outcome).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(orchestrateMock).not.toHaveBeenCalled();
+    expect(await store.getRun({ runId: "a3100000-0000-4000-8000-000000000042", userId: USER_ID })).toBeNull();
   });
 
   it("rejects arbitrary or cross-binding Image Editing predecessors before orchestration", async () => {
@@ -851,34 +842,20 @@ describe("six independent capability adapters", () => {
     expect(runStandard).toHaveBeenCalledTimes(2);
   });
 
-  it("retries only normalized File and Web failures through reconstructed runtime/store wrappers", async () => {
+  it("retries normalized File failures through reconstructed runtime/store wrappers", async () => {
     const prepared = fileResult("Stable read-only predecessor.");
     const prepare = vi.fn(async () => {
       if (prepare.mock.calls.length === 1) throw new FileContextPreparationError("temporary_lookup_failure");
       return prepared;
     });
-    const research = { ...webResult("Stable approved research.") };
-    const runWeb = vi.fn(async () => {
-      if (runWeb.mock.calls.length === 1) {
-        return {
-          ok: false as const,
-          error: { code: "provider_failed" as const, failureMetadata: { phase: "pre_provider" as const, retrySafety: "SAFE_RETRY" as const } },
-          measurement: { model: "test-model", webSearchCalls: 0, outcome: "api_error" as const, latencyMs: 1,
-            usage: { inputTokens: null, cachedInputTokens: null, outputTokens: null, reasoningTokens: null, totalTokens: null } },
-        };
-      }
-      return { ok: true as const, result: research, measurement: { model: research.model, webSearchCalls: 1,
-        outcome: "success" as const, latencyMs: 1, usage: research.usage } };
-    });
     const standardResultValue = standardResult("Combined stable predecessor answer.");
     const runStandard = vi.fn(async function* (input: StandardOperationInput) {
       expect(input.fileContext).toEqual(prepared);
-      expect(input.webSearchResult).toEqual(research);
+      expect(input.webSearchResult).toBeUndefined();
       yield* standardEvents(standardResultValue);
     });
     const registry = registryExecutor({
       fileAnalysisExecutor: createFileAnalysisCapabilityAdapter({ prepareFileContext: prepare as unknown as FileContextPreparer }),
-      webSearchExecutor: createWebSearchCapabilityAdapter({ runOperation: runWeb as unknown as WebSearchOperationRunner }),
       standardExecutor: createStandardCapabilityAdapter({ runOperation: runStandard as unknown as StandardOperationRunner }),
     });
     const persistentBackend = new InMemoryExecutionStore(() => new Date("2026-10-08T12:00:00.000Z"));
@@ -923,10 +900,8 @@ describe("six independent capability adapters", () => {
     });
     const plan = runtimeHandoff([
       { id: "files", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
-      { id: "web", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-      { id: "answer", capability: "standard", dependsOn: ["files", "web"], inputs: [
+      { id: "answer", capability: "standard", dependsOn: ["files"], inputs: [
         { source: "user" }, { source: "step", stepId: "files", output: "structured_data" },
-        { source: "step", stepId: "web", output: "search_results" },
       ], expectedOutput: "text" },
     ]);
     const input: ExecutionRuntimeInput = {
@@ -939,27 +914,17 @@ describe("six independent capability adapters", () => {
 
     const first = await makeRuntime(persistentBackend).execute(plan, input, "file-web-retry-key");
     expect(first).toMatchObject({ kind: "retry_pending", stepId: "files" });
-    expect(runWeb).not.toHaveBeenCalled();
     expect(runStandard).not.toHaveBeenCalled();
 
     // A new runtime and new store wrapper read the same durable backend after file eligibility.
     const second = await makeRuntime(reopenStore())
       .resume({ runId: "a3100000-0000-4000-8000-000000000090", authenticatedUserId: USER_ID });
-    expect(second).toMatchObject({ kind: "retry_pending", stepId: "web" });
+    expect(second.kind).toBe("succeeded");
     expect(prepare).toHaveBeenCalledTimes(2);
-    expect(runWeb).toHaveBeenCalledOnce();
-    expect(runStandard).not.toHaveBeenCalled();
-
-    const final = await makeRuntime(reopenStore())
-      .resume({ runId: "a3100000-0000-4000-8000-000000000090", authenticatedUserId: USER_ID });
-    expect(final.kind).toBe("succeeded");
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(runWeb).toHaveBeenCalledTimes(2);
     expect(runStandard).toHaveBeenCalledOnce();
-    expect(dispatches.map(({ stepId }) => stepId)).toEqual(["files", "files", "web", "web", "answer"]);
+    expect(dispatches.map(({ stepId }) => stepId)).toEqual(["files", "files", "answer"]);
     expect(dispatches[0]?.executionKey).toBe(dispatches[1]?.executionKey);
-    expect(dispatches[2]?.executionKey).toBe(dispatches[3]?.executionKey);
-    expect(authorizedSteps).toEqual(["files", "files", "web", "web", "answer"]);
+    expect(authorizedSteps).toEqual(["files", "files", "answer"]);
     expect(dispatches.every(({ context }) => context.requestMessageBinding.requestId === REQUEST_BINDING.requestId
       && context.requestMessageBinding.userId === REQUEST_BINDING.userId
       && context.requestMessageBinding.conversationId === REQUEST_BINDING.conversationId
@@ -1039,7 +1004,7 @@ describe("six independent capability adapters", () => {
     expect(persist).toHaveBeenCalledOnce();
   });
 
-  it("runs Web -> Standard and File + Web -> Standard through the static registry and durable runtime", async () => {
+  it("blocks autonomous Web Search while preserving the supported File -> Standard path", async () => {
     const runtimeBinding = { ...REQUEST_BINDING, requestId: RUNTIME_REQUEST_ID };
     const preparedDocuments: string[] = [];
     const prepareFileContext = vi.fn(async (input: FileContextServiceInput) => {
@@ -1107,29 +1072,26 @@ describe("six independent capability adapters", () => {
         { source: "user" }, { source: "step", stepId: "web", output: "search_results" },
       ], expectedOutput: "text" },
     ]), runtimeInput, "registry-web-standard");
-    expect(webOnly.kind).toBe("succeeded");
-    expect(runWebOperation).toHaveBeenCalledTimes(1);
-    expect(standardInputs[0]?.webSearchResult?.reply).toContain("Compare the uploaded material");
-    expect(standardInputs[0]?.fileContext).toBeUndefined();
+    expect(webOnly).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
+    expect(runWebOperation).not.toHaveBeenCalled();
+    expect(runStandard).not.toHaveBeenCalled();
 
     const joined = await runtime.execute(runtimeHandoff([
       { id: "files", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
-      { id: "web", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-      { id: "answer", capability: "standard", dependsOn: ["files", "web"], inputs: [
+      { id: "answer", capability: "standard", dependsOn: ["files"], inputs: [
         { source: "user" },
         { source: "step", stepId: "files", output: "structured_data" },
-        { source: "step", stepId: "web", output: "search_results" },
       ], expectedOutput: "text" },
     ]), runtimeInput, "registry-file-web-standard");
     expect(joined.kind).toBe("succeeded");
     expect(prepareFileContext).toHaveBeenCalledTimes(1);
-    expect(runWebOperation).toHaveBeenCalledTimes(2);
-    expect(standardInputs[1]?.fileContext?.documents[0]?.extractedText).toBe("Registry-routed owned file context.");
-    expect(standardInputs[1]?.webSearchResult?.reply).toContain("Compare the uploaded material");
+    expect(runWebOperation).not.toHaveBeenCalled();
+    expect(standardInputs[0]?.fileContext?.documents[0]?.extractedText).toBe("Registry-routed owned file context.");
+    expect(standardInputs[0]?.webSearchResult).toBeUndefined();
     expect(joined.kind === "succeeded" && joined.run.steps.map(({ status }) => status)).toEqual([
-      "succeeded", "succeeded", "succeeded",
+      "succeeded", "succeeded",
     ]);
-    expect(authorize).toHaveBeenCalledTimes(5);
+    expect(authorize).toHaveBeenCalledTimes(2);
     expect(preparedDocuments).toEqual(["a3100000-0000-4000-8000-000000000051"]);
   });
 

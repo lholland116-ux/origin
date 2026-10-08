@@ -24,6 +24,7 @@ type ReplicateRunOptions = {
 export type ReplicateRunner = (
   model: typeof REPLICATE_FLUX_SCHNELL_MODEL,
   options: ReplicateRunOptions,
+  onPredictionId?: (id: string) => Promise<void>,
 ) => Promise<unknown>;
 
 export type ReplicateFluxSchnellProviderErrorCode =
@@ -34,14 +35,19 @@ export type ReplicateFluxSchnellProviderErrorCode =
 
 export class ReplicateFluxSchnellProviderError extends Error {
   readonly code: ReplicateFluxSchnellProviderErrorCode;
+  readonly observedImageCount?: number;
+  readonly providerOperationId?: string;
 
   constructor(
     code: ReplicateFluxSchnellProviderErrorCode,
     message: string,
+    accounting: { observedImageCount?: number; providerOperationId?: string } = {},
   ) {
     super(message);
     this.name = "ReplicateFluxSchnellProviderError";
     this.code = code;
+    this.observedImageCount = accounting.observedImageCount;
+    this.providerOperationId = accounting.providerOperationId;
   }
 }
 
@@ -68,11 +74,12 @@ function isBlobLike(value: unknown): value is BlobLike {
   );
 }
 
-async function normalizeOutput(output: unknown): Promise<ImageGenerationResult> {
+async function normalizeOutput(output: unknown, providerOperationId?: string): Promise<ImageGenerationResult> {
   if (!Array.isArray(output) || output.length !== 1) {
     throw new ReplicateFluxSchnellProviderError(
       "invalid_output",
       "Replicate returned an unexpected image output",
+      { ...(Array.isArray(output) ? { observedImageCount: output.length } : {}), ...(providerOperationId ? { providerOperationId } : {}) },
     );
   }
 
@@ -138,8 +145,9 @@ export class ReplicateFluxSchnellProvider
   implements ImageGenerationProvider
 {
   private readonly runner: ReplicateRunner;
+  private providerOperationId?: string;
 
-  constructor(options: { runner?: ReplicateRunner } = {}) {
+  constructor(options: { runner?: ReplicateRunner; onPredictionId?: (id: string) => Promise<void> } = {}) {
     if (options.runner) {
       this.runner = options.runner;
       return;
@@ -153,7 +161,39 @@ export class ReplicateFluxSchnellProvider
       );
     }
 
-    const client = new Replicate({ auth: token });
+    let predictionPostAttempted = false;
+    const fetcher: typeof fetch = options.onPredictionId
+      ? async (input, init) => {
+        const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const url = new URL(rawUrl);
+        const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+        const isPredictionCreate = url.origin === "https://api.replicate.com"
+          && url.pathname.startsWith("/v1/models/") && url.pathname.endsWith("/predictions");
+        if (method === "POST") {
+          if (!isPredictionCreate || predictionPostAttempted) {
+            throw new Error("Autonomous Replicate permits one prediction-creation POST.");
+          }
+          predictionPostAttempted = true;
+        }
+        const response = await globalThis.fetch(input, init);
+        if (method === "POST" && isPredictionCreate && response.ok) {
+          let body: unknown;
+          try {
+            body = await response.clone().json();
+          } catch {
+            throw new Error("Replicate prediction identity was unavailable.");
+          }
+          const id = body && typeof body === "object" ? (body as { id?: unknown }).id : null;
+          if (typeof id !== "string" || id.length < 1 || id.length > 256) {
+            throw new Error("Replicate prediction identity was unavailable.");
+          }
+          this.providerOperationId = id;
+          await options.onPredictionId?.(id);
+        }
+        return response;
+      }
+      : globalThis.fetch;
+    const client = new Replicate({ auth: token, fetch: fetcher });
     this.runner = (model, options) => client.run(model, options);
   }
 
@@ -223,6 +263,7 @@ export class ReplicateFluxSchnellProvider
       );
     }
 
-    return normalizeOutput(output);
+    const normalized = await normalizeOutput(output, this.providerOperationId);
+    return { ...normalized, ...(this.providerOperationId ? { generationId: this.providerOperationId } : {}) };
   }
 }

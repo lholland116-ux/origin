@@ -71,6 +71,7 @@ export type FileContextResult = z.infer<typeof fileContextResultSchema>;
 const operationTokenUsageSchema = z.object({
   inputTokens: z.number().int().nonnegative().nullable(),
   cachedInputTokens: z.number().int().nonnegative().nullable(),
+  cacheWriteTokens: z.number().int().nonnegative().nullable().optional(),
   outputTokens: z.number().int().nonnegative().nullable(),
   reasoningTokens: z.number().int().nonnegative().nullable(),
   totalTokens: z.number().int().nonnegative().nullable(),

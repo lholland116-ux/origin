@@ -9,6 +9,7 @@ import {
 import type { CapabilityExecutionInput, CapabilityExecutionResult, CapabilityExecutor, ResolvedExecutionInput } from "@/lib/agent-runtime/capability-executor";
 import { runStandardOperation, StandardOperationError, type StandardOperationEvent, type StandardOperationInput } from "@/lib/ai/standard-operation-service";
 import { mapUserReasoningModeToProviderEffort } from "@/lib/ai/reasoning-mode";
+import type { ProviderCostLedger } from "@/lib/agent-runtime/provider-cost-ledger";
 import {
   assertAdapterInput,
   CapabilityAdapterError,
@@ -24,6 +25,7 @@ export type StandardOperationRunner = (input: StandardOperationInput) => AsyncIt
 
 export type StandardCapabilityAdapterDependencies = Readonly<{
   runOperation?: StandardOperationRunner;
+  providerCostLedger?: ProviderCostLedger;
 }>;
 
 function matchingPredecessors(inputs: readonly ResolvedExecutionInput[], binding: ReturnType<typeof assertAdapterInput>) {
@@ -74,9 +76,16 @@ export function createStandardCapabilityAdapter(
         reasoningEffort: mapUserReasoningModeToProviderEffort(input.context.reasoningMode ?? "medium"),
         history: [{ role: "user", content: objective }],
         executionMode: "durable_runtime_single_attempt",
+        ...(input.context.providerCost && dependencies.providerCostLedger
+          ? { providerCost: { context: input.context.providerCost, ledger: dependencies.providerCostLedger } }
+          : {}),
         ...(fileContext ? { fileContext } : {}),
         ...(webSearchResult ? { webSearchResult } : {}),
       };
+
+      if (!dependencies.runOperation && !operationInput.providerCost) {
+        return failWithMetadata("executor_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+      }
 
       let completion: StandardOperationResult | undefined;
       let deltas = "";

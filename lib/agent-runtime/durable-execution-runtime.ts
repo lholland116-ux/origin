@@ -1161,6 +1161,36 @@ export class DurableXStateExecutionRuntime {
 
       let result: ExecutionStepResult | undefined;
       if (!stepFailure && resolved.inputs) {
+        const currentAttempt = current.steps.find((item) => item.stepId === stepId)?.attempt;
+        const providerCostContext = (capabilityId === "standard" || capabilityId === "file_analysis"
+          || capabilityId === "document_generation" || capabilityId === "image_generation")
+          && current.acceptedRequestId && currentAttempt
+          ? Object.freeze({
+            runId: current.id,
+            stepId,
+            attemptId: executionKey,
+            attemptNumber: currentAttempt,
+            capabilityId,
+            reauthorize: async () => {
+              let latest: DurableExecutionRun | null;
+              try {
+                latest = await this.options.store.getAcceptedRunForFinalization({ runId: current.id });
+              } catch {
+                return false;
+              }
+              const persistedStep = latest?.steps.find((item) => item.stepId === stepId);
+              if (!latest || latest.userId !== current.userId || latest.acceptedRequestId !== current.acceptedRequestId
+                || latest.status !== "running" || latest.controlState !== "active"
+                || !persistedStep || persistedStep.status !== "running"
+                || persistedStep.executionKey !== executionKey || persistedStep.attempt !== currentAttempt
+                || latest.approvalCheckpoints.some((checkpoint) => checkpoint.stepId === stepId && checkpoint.status === "pending")) {
+                return false;
+              }
+              return (await this.authorize(latest, stepId, capabilityId,
+                resolved.resourceReferences ?? [], resolved.inputs ?? [], { correlationId: input.correlationId })).allowed;
+            },
+          })
+          : undefined;
         const executionInput: CapabilityExecutionInput = {
           executionId: current.id,
           stepId,
@@ -1176,6 +1206,7 @@ export class DurableXStateExecutionRuntime {
             resourceReferences: resolved.resourceReferences,
             requestId: current.runtimeContext.requestMessageBinding!.requestId,
             ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+            ...(providerCostContext ? { providerCost: providerCostContext } : {}),
           },
         };
         try {

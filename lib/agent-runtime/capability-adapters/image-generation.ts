@@ -10,6 +10,7 @@ import {
   type ImageGenerationServiceResult,
 } from "@/lib/ai/image-generation-service";
 import { IMAGE_GENERATION_PROMPT_MAX_LENGTH } from "@/lib/image-generation/config";
+import type { ProviderCostLedger } from "@/lib/agent-runtime/provider-cost-ledger";
 import {
   assertAdapterInput,
   fail,
@@ -23,6 +24,7 @@ export type ExistingMessageImageGenerator = (input: ExistingMessageImageGenerati
 
 export type ImageGenerationCapabilityAdapterDependencies = Readonly<{
   generate?: ExistingMessageImageGenerator;
+  providerCostLedger?: ProviderCostLedger;
 }>;
 
 export function createImageGenerationCapabilityAdapter(
@@ -38,6 +40,9 @@ export function createImageGenerationCapabilityAdapter(
       }
       const prompt = userObjective(inputs);
       if (prompt.length > IMAGE_GENERATION_PROMPT_MAX_LENGTH) return fail("missing_input");
+      if (!dependencies.generate && (!input.context.providerCost || !dependencies.providerCostLedger)) {
+        return failWithMetadata("executor_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+      }
       let generated: ImageGenerationServiceResult;
       // Quota reservation and provider/storage writes make every ambiguous outcome non-replayable.
       try {
@@ -47,12 +52,16 @@ export function createImageGenerationCapabilityAdapter(
           userMessageId: binding.userMessageId,
           assistantMessageId: binding.assistantMessageId,
           request: { prompt },
+          ...(input.context.providerCost && dependencies.providerCostLedger
+            ? { providerCost: { context: input.context.providerCost, ledger: dependencies.providerCostLedger } }
+            : {}),
         });
       } catch (error) {
         if (error instanceof ImageGenerationServiceError) {
           if (error.code === "unauthorized" || error.code === "conversation_not_found") return fail("ownership_denied");
           if (error.code === "invalid_request") return fail("missing_input");
           if (error.code === "daily_limit_reached" || error.code === "monthly_limit_reached") return fail("quota_exhausted");
+          if (error.code === "provider_cost_denied") return fail("quota_exhausted");
           if (error.code === "configuration") return failWithMetadata("executor_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
           if (error.code === "storage_failure") return failWithMetadata("persistence_failed", { phase: "persistence", retrySafety: "RECOVERY_REQUIRED" });
           if (error.code === "persistence_failure") return failWithMetadata("persistence_failed", { phase: "post_persistence", retrySafety: "RECOVERY_REQUIRED" });

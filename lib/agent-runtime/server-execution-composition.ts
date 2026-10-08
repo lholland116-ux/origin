@@ -18,6 +18,7 @@ import type { RequestMessageBinding } from "@/lib/agent-runtime/application-cont
 import type { RuntimeAttachmentReference } from "@/lib/agent-runtime/capability-executor";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createProviderCostLedger } from "@/lib/agent-runtime/provider-cost-ledger";
 
 if (typeof window !== "undefined") throw new Error("Server execution composition is server-only");
 
@@ -35,12 +36,13 @@ async function resolveAcceptedImages(binding: RequestMessageBinding): Promise<re
  * and associates a run; bounded authenticated dispatch is a later gate.
  */
 export function createServerAcceptedExecutionComposition(store: ExecutionStore) {
+  const providerCostLedger = createProviderCostLedger();
   const registry = createExecutionRegistry({
-    standardExecutor: createStandardCapabilityAdapter(),
+    standardExecutor: createStandardCapabilityAdapter({ providerCostLedger }),
     webSearchExecutor: createWebSearchCapabilityAdapter(),
     fileAnalysisExecutor: createFileAnalysisCapabilityAdapter(),
     documentGenerationExecutor: createDocumentGenerationCapabilityAdapter(),
-    imageGenerationExecutor: createImageGenerationCapabilityAdapter(),
+    imageGenerationExecutor: createImageGenerationCapabilityAdapter({ providerCostLedger }),
     imageEditingExecutor: createImageEditingCapabilityAdapter(),
   });
   const runtime = new DurableXStateExecutionRuntime({

@@ -23,6 +23,13 @@ import {
 } from "@/lib/agent-runtime/application-contracts";
 import type { ExecutionFailureDescriptor } from "@/lib/agent-runtime/runtime-contracts";
 import {
+  AGENT_PROVIDER_MAX_INPUT_TOKENS,
+  AGENT_PROVIDER_MAX_OUTPUT_TOKENS,
+  ProviderCostLedgerError,
+  type ProviderCostInvocationContext,
+  type ProviderCostLedger,
+} from "@/lib/agent-runtime/provider-cost-ledger";
+import {
   buildDocumentContext,
 } from "@/lib/documents/prepare-context";
 import {
@@ -85,6 +92,8 @@ export type StandardOperationInput = Readonly<{
   webSearchResult?: WebSearchOperationResult;
   /** Runtime-owned: disable provider SDK retries for one durable attempt. */
   executionMode?: "durable_runtime_single_attempt";
+  /** Present only for the governed autonomous runtime; never serialized or persisted. */
+  providerCost?: Readonly<{ context: ProviderCostInvocationContext; ledger: ProviderCostLedger }>;
 }>;
 
 export type StandardOperationEvent =
@@ -126,7 +135,7 @@ type ResponsesStreamEvent = {
   type: string;
   delta?: string;
   error?: { message?: string } | null;
-  response?: { usage?: ProviderResponseUsage | null };
+  response?: { id?: string; usage?: ProviderResponseUsage | null };
 };
 
 function isWeakReply(reply: string): boolean {
@@ -220,17 +229,14 @@ function buildResponsesInput(input: StandardOperationInput, predecessorContext: 
 }
 
 async function createRetryResponse(params: {
-  input: ReturnType<typeof buildResponsesInput>;
-  hasDocumentContext: boolean;
-  hasWebContext: boolean;
-  chatConfig: ReturnType<typeof getGeneralChatConfig>;
+  requestInput: Readonly<Record<string, unknown>>;
   provider: typeof openai;
   executionMode?: StandardOperationInput["executionMode"];
+  enforceOutputLimit: boolean;
 }) {
   const request = {
-    ...params.chatConfig,
-    instructions: buildSystemInstructions(params.hasDocumentContext, params.hasWebContext),
-    input: params.input,
+    ...params.requestInput,
+    ...(params.enforceOutputLimit ? { max_output_tokens: AGENT_PROVIDER_MAX_OUTPUT_TOKENS } : {}),
     store: false,
   } as never;
   return params.executionMode === "durable_runtime_single_attempt"
@@ -263,11 +269,82 @@ async function* executeStandardOperation(
   const hasImage = Boolean(imageDataUrl) || imageUrls.length > 0;
   const config = getGeneralChatConfig(input.reasoningEffort);
   const operationInput = buildResponsesInput(input, predecessorContext) as never;
+  const requestInput = Object.freeze({
+    ...config,
+    instructions: buildSystemInstructions(hasDocumentContext, hasWebContext),
+    input: operationInput,
+  });
+  let invocationSequence = 0;
+  const admitInvocation = async (): Promise<string | null> => {
+    if (!input.providerCost) return null;
+    let counted: unknown;
+    try {
+      counted = await dependencies.provider.responses.inputTokens.count(requestInput as never, { maxRetries: 0 });
+    } catch {
+      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+    }
+    const inputTokens = counted && typeof counted === "object"
+      ? (counted as { input_tokens?: unknown }).input_tokens
+      : null;
+    if (!Number.isSafeInteger(inputTokens) || (inputTokens as number) < 0
+      || (inputTokens as number) > AGENT_PROVIDER_MAX_INPUT_TOKENS) {
+      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+    }
+    invocationSequence += 1;
+    let admission;
+    try {
+      admission = await input.providerCost.ledger.admit(input.providerCost.context, {
+        invocationSequence,
+        provider: "openai",
+        model: config.model,
+        inputTokens: inputTokens as number,
+        maxOutputTokens: AGENT_PROVIDER_MAX_OUTPUT_TOKENS,
+      });
+    } catch (error) {
+      throw new StandardOperationError("provider_failed", {
+        phase: "pre_provider",
+        retrySafety: error instanceof ProviderCostLedgerError && error.code === "denied" ? "TERMINAL" : "RECOVERY_REQUIRED",
+      });
+    }
+    if (!admission.mayDispatch) {
+      throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+    }
+    try {
+      if (!(await input.providerCost.ledger.beginDispatch(admission.id))) {
+        throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+      }
+    } catch {
+      throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+    }
+    return admission.id;
+  };
+  const settleInvocation = async (admissionId: string | null, usage?: ProviderResponseUsage | null, operationId?: string) => {
+    if (!input.providerCost || !admissionId) return;
+    try {
+      await input.providerCost.ledger.settle({
+        admissionId,
+        ...(usage ? { usage: mapProviderResponseUsage(usage) } : {}),
+        ...(operationId ? { providerOperationId: operationId } : {}),
+      });
+    } catch {
+      throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+    }
+  };
+  const markInvocationUncertain = async (admissionId: string | null, code: string, operationId?: string) => {
+    if (!input.providerCost || !admissionId) return;
+    try {
+      await input.providerCost.ledger.markUncertain({ admissionId, code, ...(operationId ? { providerOperationId: operationId } : {}) });
+    } catch {
+      // The original reservation remains outstanding even if diagnostic refinement fails.
+    }
+  };
   const measurements: OperationMeasurement[] = [];
   let fullReply = "";
   let primaryMeasurementRecorded = false;
   let primaryCompleted = false;
   let primaryIncomplete = false;
+  let primaryAdmissionId: string | null = null;
+  let primaryOperationId: string | undefined;
 
   const makeMeasurement = (
     attemptKind: "primary" | "image_retry",
@@ -299,10 +376,10 @@ async function* executeStandardOperation(
 
   let providerStreamOpened = false;
   try {
+    primaryAdmissionId = await admitInvocation();
     const request = {
-      ...config,
-      instructions: buildSystemInstructions(hasDocumentContext, hasWebContext),
-      input: operationInput,
+      ...requestInput,
+      ...(input.providerCost ? { max_output_tokens: AGENT_PROVIDER_MAX_OUTPUT_TOKENS } : {}),
       store: false,
     } as never;
     const responseStream = (await (input.executionMode === "durable_runtime_single_attempt"
@@ -311,6 +388,10 @@ async function* executeStandardOperation(
     providerStreamOpened = true;
 
     for await (const event of responseStream) {
+      if (event.type === "response.created" && typeof event.response?.id === "string") {
+        primaryOperationId = event.response.id;
+        await markInvocationUncertain(primaryAdmissionId, "openai_response_created", primaryOperationId);
+      }
       if (event.type === "response.output_text.delta") {
         const delta = event.delta ?? "";
         if (delta) {
@@ -320,6 +401,7 @@ async function* executeStandardOperation(
       }
 
       if (event.type === "response.failed") {
+        await settleInvocation(primaryAdmissionId, event.response?.usage, event.response?.id ?? primaryOperationId);
         if (!primaryMeasurementRecorded) {
           primaryMeasurementRecorded = true;
           yield {
@@ -331,6 +413,7 @@ async function* executeStandardOperation(
       }
 
       if (event.type === "error") {
+        await markInvocationUncertain(primaryAdmissionId, "openai_stream_error", primaryOperationId);
         if (!primaryMeasurementRecorded) {
           primaryMeasurementRecorded = true;
           yield {
@@ -341,7 +424,11 @@ async function* executeStandardOperation(
         throw new StandardOperationError("provider_failed");
       }
 
-      if (event.type === "response.completed") primaryCompleted = true;
+      if (event.type === "response.completed") {
+        primaryCompleted = true;
+        primaryOperationId = event.response?.id ?? primaryOperationId;
+        await settleInvocation(primaryAdmissionId, event.response?.usage, primaryOperationId);
+      }
       if (event.type === "response.completed" && !primaryMeasurementRecorded) {
         primaryMeasurementRecorded = true;
         yield {
@@ -350,7 +437,11 @@ async function* executeStandardOperation(
         };
       }
 
-      if (event.type === "response.incomplete") primaryIncomplete = true;
+      if (event.type === "response.incomplete") {
+        primaryIncomplete = true;
+        primaryOperationId = event.response?.id ?? primaryOperationId;
+        await settleInvocation(primaryAdmissionId, event.response?.usage, primaryOperationId);
+      }
       if (event.type === "response.incomplete" && !primaryMeasurementRecorded) {
         primaryMeasurementRecorded = true;
         yield {
@@ -365,6 +456,7 @@ async function* executeStandardOperation(
     }
 
     if (!primaryMeasurementRecorded) {
+      await markInvocationUncertain(primaryAdmissionId, "openai_stream_ended_without_terminal_event", primaryOperationId);
       primaryMeasurementRecorded = true;
       yield {
         type: "measurement",
@@ -372,6 +464,19 @@ async function* executeStandardOperation(
       };
     }
   } catch (error) {
+    if (!primaryCompleted && !primaryIncomplete) {
+      const safePreProviderFailure = input.executionMode === "durable_runtime_single_attempt"
+        && !providerStreamOpened && isTemporaryProviderDnsFailure(error);
+      if (safePreProviderFailure && primaryAdmissionId && input.providerCost) {
+        try {
+          await input.providerCost.ledger.releaseBeforeDispatch({ admissionId: primaryAdmissionId, code: "provider_dns_before_send" });
+        } catch {
+          throw new StandardOperationError("provider_failed", { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" });
+        }
+      } else {
+        await markInvocationUncertain(primaryAdmissionId, "openai_provider_outcome_unknown", primaryOperationId);
+      }
+    }
     if (!primaryMeasurementRecorded) {
       primaryMeasurementRecorded = true;
       yield {
@@ -400,15 +505,18 @@ async function* executeStandardOperation(
       startedAt: retryStartedAt,
     };
 
+    let retryAdmissionId: string | null = null;
+    let retryOperationId: string | undefined;
     try {
+      retryAdmissionId = await admitInvocation();
       const retry = await createRetryResponse({
-        input: operationInput,
-        hasDocumentContext,
-        hasWebContext,
-        chatConfig: config,
+        requestInput,
         provider: dependencies.provider,
         executionMode: input.executionMode,
+        enforceOutputLimit: Boolean(input.providerCost),
       });
+      retryOperationId = typeof retry.id === "string" ? retry.id : undefined;
+      await settleInvocation(retryAdmissionId, retry.usage, retryOperationId);
       const outcome: OperationOutcome = retry.status === "incomplete"
         ? "incomplete"
         : retry.status === "failed" || retry.status === "cancelled" || retry.error
@@ -422,6 +530,7 @@ async function* executeStandardOperation(
       const retryText = retry.output_text?.trim() ?? "";
       if (!isWeakReply(retryText)) finalReply = retryText;
     } catch {
+      await markInvocationUncertain(retryAdmissionId, "openai_fallback_outcome_unknown", retryOperationId);
       yield {
         type: "measurement",
         measurement: makeMeasurement("image_retry", "api_error", retryStartedAt, true),

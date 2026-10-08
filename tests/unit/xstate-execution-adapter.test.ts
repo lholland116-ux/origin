@@ -37,16 +37,16 @@ function handoff(steps: PlanStep[]): PlannedExecutionHandoff {
 }
 
 const sequentialPlan = () => handoff([
-  { id: "step-1", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-  { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "search_results" }], expectedOutput: "text" },
+  { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+  { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "text" },
   { id: "step-3", capability: "document_generation", dependsOn: ["step-2"], inputs: [{ source: "step", stepId: "step-2", output: "text" }], expectedOutput: "document" },
 ]);
 
 const joinPlan = () => handoff([
-  { id: "step-1", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
+  { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
   { id: "step-2", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "text" },
   { id: "step-3", capability: "standard", dependsOn: ["step-1", "step-2"], inputs: [
-    { source: "step", stepId: "step-1", output: "search_results" },
+    { source: "step", stepId: "step-1", output: "text" },
     { source: "step", stepId: "step-2", output: "text" },
   ], expectedOutput: "text" },
   { id: "step-4", capability: "document_generation", dependsOn: ["step-3"], inputs: [{ source: "step", stepId: "step-3", output: "text" }], expectedOutput: "document" },
@@ -125,13 +125,13 @@ describe("LVTChat XState execution adapter", () => {
       "authorize:step-2", "execute:step-2",
       "authorize:step-3", "execute:step-3",
     ]);
-    expect(calls.map(({ capabilityId }) => capabilityId)).toEqual(["web_search", "standard", "document_generation"]);
+    expect(calls.map(({ capabilityId }) => capabilityId)).toEqual(["standard", "standard", "document_generation"]);
     expect(calls[1]?.inputs).toEqual([{ source: "step", stepId: "step-1", result: result.stepResults["step-1"] }]);
     expect(calls[2]?.inputs[0]).toMatchObject({ source: "step", stepId: "step-2", result: result.stepResults["step-2"] });
     expect(executor).toHaveBeenCalledTimes(3);
     expect(mutationAttempts).toEqual([true, true, true]);
     expect(authorizer).toHaveBeenCalledTimes(3);
-    expect(calls[0]).toMatchObject({ executionId: "execution-test-1", stepId: "step-1", capabilityId: "web_search" });
+    expect(calls[0]).toMatchObject({ executionId: "execution-test-1", stepId: "step-1", capabilityId: "standard" });
     expect(calls[0]?.context).toMatchObject({
       authenticatedUserId: "a1000000-0000-4000-8000-000000000001",
       conversationId: "b1000000-0000-4000-8000-000000000001",
@@ -247,6 +247,19 @@ describe("LVTChat XState execution adapter", () => {
 
     expect(wrongVersion).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
     expect(unsupported).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it.each(["web_search", "image_editing"] as const)("blocks autonomous %s handoffs before execution", async (capability) => {
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const expectedOutput = capability === "web_search" ? "search_results" : "image";
+    const denied = await createRuntime(executor).execute(handoff([
+      { id: "blocked", capability, dependsOn: [], inputs: capability === "image_editing"
+        ? [{ source: "attachment", output: "image" }]
+        : [{ source: "user" }], expectedOutput,
+      },
+    ]), runtimeInput());
+    expect(denied).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
     expect(executor).not.toHaveBeenCalled();
   });
 

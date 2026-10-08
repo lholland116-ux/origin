@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CAPABILITY_REGISTRY, type CapabilityId, type CapabilityOutputKind } from "@/lib/ai/capability-registry";
 import type { PlanInputRef, PlanStep } from "@/lib/ai/intelligence-plan";
+import { isAutonomousCapabilityAllowed } from "@/lib/agent-runtime/autonomous-capability-policy";
 import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coordinator";
 import { validateIntelligencePlan } from "@/lib/ai/plan-validator";
 import type {
@@ -97,7 +98,7 @@ export function validateExecutionHandoff(input: unknown): { handoff: PlannedExec
   if (raw.plan !== null && typeof raw.plan === "object" && "steps" in raw.plan && Array.isArray(raw.plan.steps)) {
     if (raw.plan.steps.some((step) => step !== null && typeof step === "object"
       && "capability" in step && typeof step.capability === "string"
-      && !CAPABILITY_REGISTRY.has(step.capability))) {
+      && (!CAPABILITY_REGISTRY.has(step.capability) || !isAutonomousCapabilityAllowed(step.capability)))) {
       return { failure: executionFailure("unsupported_capability") };
     }
   }
@@ -114,7 +115,8 @@ export function validateExecutionHandoff(input: unknown): { handoff: PlannedExec
   const capabilities = new Set<string>(raw.governance.capabilityIds);
   if (capabilities.size !== raw.governance.capabilityIds.length
     || raw.governance.capabilityIds.some((id) => !CAPABILITY_REGISTRY.has(id))
-    || (raw.plan as { steps: PlanStep[] }).steps.some((step) => !capabilities.has(step.capability))) {
+    || (raw.plan as { steps: PlanStep[] }).steps.some((step) =>
+      !capabilities.has(step.capability) || !isAutonomousCapabilityAllowed(step.capability))) {
     return { failure: executionFailure("invalid_handoff") };
   }
 

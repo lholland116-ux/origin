@@ -22,8 +22,8 @@ const BINDING: RequestMessageBinding = {
 };
 
 function handoff(steps: PlanStep[] = [
-  { id: "step-1", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-  { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "search_results" }], expectedOutput: "text" },
+  { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+  { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "text" },
 ]): PlannedExecutionHandoff {
   const objective = "Search and explain";
   const plan: IntelligencePlan = { objective, steps, status: "validated" };
@@ -48,9 +48,7 @@ function handoff(steps: PlanStep[] = [
 }
 
 function result(input: CapabilityExecutionInput): ExecutionStepResult {
-  return input.stepId === "step-1"
-    ? { kind: "search_results", value: { sources: ["stable-result"] } }
-    : { kind: "text", value: { answer: "stable-answer" } };
+  return { kind: "text", value: { answer: input.stepId === "step-1" ? "stable-result" : "stable-answer" } };
 }
 
 function input(overrides: Partial<ExecutionRuntimeInput> = {}): ExecutionRuntimeInput {
@@ -58,7 +56,7 @@ function input(overrides: Partial<ExecutionRuntimeInput> = {}): ExecutionRuntime
     authenticatedUserId: USER_ID,
     conversationId: BINDING.conversationId,
     requestMessageBinding: BINDING,
-    userInput: "Search this topic and explain it.",
+    userInput: "Process this topic and explain it.",
     ...overrides,
   };
 }
@@ -103,7 +101,7 @@ describe("durable execution human controls", () => {
     expect(paused.kind).toBe("paused");
     const saved = await store.getRun({ runId: RUN_ID, userId: USER_ID });
     expect(saved).toMatchObject({ controlState: "paused", runtimeContext: { requestMessageBinding: BINDING }, steps: [
-      { stepId: "step-1", status: "succeeded", result: { kind: "search_results" } },
+      { stepId: "step-1", status: "succeeded", result: { kind: "text" } },
       { stepId: "step-2", status: "pending" },
     ] });
     expect((await service.resume({ runId: RUN_ID, authenticatedUserId: USER_ID })).kind).toBe("paused");

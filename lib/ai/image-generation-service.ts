@@ -10,6 +10,11 @@ import {
   ReplicateFluxSchnellProviderError,
 } from "@/lib/image-generation/providers/replicate-flux-schnell";
 import type { ImageGenerationProvider, ImageGenerationRequest, ImageGenerationResult } from "@/lib/image-generation/provider";
+import {
+  ProviderCostLedgerError,
+  type ProviderCostInvocationContext,
+  type ProviderCostLedger,
+} from "@/lib/agent-runtime/provider-cost-ledger";
 import { normalizeGeneratedImageMimeType } from "@/lib/chat/generated-image-history";
 import { validateImageGenerationRequest } from "@/lib/image-generation/validation";
 import {
@@ -30,6 +35,8 @@ export type ImageGenerationServiceInput = Readonly<{
   userId: string;
   conversationId: string;
   request: ImageGenerationRequest;
+  /** Server-only autonomous accounting hook. Standalone callers never provide this. */
+  providerCost?: Readonly<{ context: ProviderCostInvocationContext; ledger: ProviderCostLedger }>;
 }>;
 
 export type ExistingMessageImageGenerationServiceInput = ImageGenerationServiceInput & Readonly<{
@@ -50,6 +57,7 @@ export type ImageGenerationServiceErrorCode =
   | "daily_limit_reached"
   | "monthly_limit_reached"
   | "configuration"
+  | "provider_cost_denied"
   | "provider_failure"
   | "invalid_provider_output"
   | "storage_failure"
@@ -63,6 +71,7 @@ const ERROR_DETAILS: Readonly<Record<ImageGenerationServiceErrorCode, { status: 
   daily_limit_reached: { status: 429, code: "IMAGE_DAILY_LIMIT_REACHED", message: "You've reached today's image generation limit." },
   monthly_limit_reached: { status: 429, code: "IMAGE_MONTHLY_LIMIT_REACHED", message: "You've reached this month's image generation limit." },
   configuration: { status: 500, code: "IMAGE_GENERATION_CONFIGURATION", message: "Image generation is not configured." },
+  provider_cost_denied: { status: 429, code: "AGENT_PROVIDER_COST_LIMIT", message: "The autonomous operation cannot be admitted under the current cost policy." },
   provider_failure: { status: 502, code: "IMAGE_GENERATION_PROVIDER", message: "The image generation provider could not complete the request." },
   invalid_provider_output: { status: 502, code: "INVALID_PROVIDER_OUTPUT", message: "The image generation provider returned an invalid image." },
   storage_failure: { status: 500, code: "INTERNAL_ERROR", message: "Image generation could not be completed." },
@@ -88,7 +97,7 @@ export type ImageGenerationServiceDependencies = Readonly<{
   reserveQuota: (conversationId: string) => Promise<string>;
   startAttempt: (input: { attemptId: string; provider: string; model: string }) => Promise<boolean>;
   releaseQuota: (input: { attemptId: string; reason: ImageQuotaReleaseReason }) => Promise<void>;
-  createProvider: () => Pick<ImageGenerationProvider, "generateImage">;
+  createProvider: (options?: { readonly onPredictionId?: (id: string) => Promise<void> }) => Pick<ImageGenerationProvider, "generateImage">;
   uploadImage: (input: { storagePath: string; bytes: Uint8Array; mimeType: string }) => Promise<void>;
   completeGeneration: (input: {
     attemptId: string;
@@ -196,7 +205,7 @@ function defaultDependencies(): ImageGenerationServiceDependencies {
       return data === true;
     },
     releaseQuota: release,
-    createProvider: () => new ReplicateFluxSchnellProvider(),
+    createProvider: (options) => new ReplicateFluxSchnellProvider(options),
     uploadImage: async ({ storagePath, bytes, mimeType }) => {
       const { error } = await admin().storage.from("chat-images").upload(storagePath, Buffer.from(bytes), {
         contentType: mimeType,
@@ -309,17 +318,78 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
       throw new ImageGenerationServiceError("internal_failure");
     }
 
+    let costAdmissionId: string | null = null;
+    let provider: Pick<ImageGenerationProvider, "generateImage">;
+    try {
+      provider = dependencies.createProvider(input.providerCost ? {
+        onPredictionId: async (id) => {
+          if (!input.providerCost) return;
+          await input.providerCost.ledger.markUncertain({
+            admissionId: costAdmissionId!, code: "replicate_prediction_created", providerOperationId: id,
+          });
+        },
+      } : undefined);
+    } catch {
+      await releaseQuota(attemptId, "internal_failure");
+      throw new ImageGenerationServiceError("configuration");
+    }
+
+    if (input.providerCost) {
+      try {
+        const admission = await input.providerCost.ledger.admit(input.providerCost.context, {
+          invocationSequence: 1,
+          provider: "replicate",
+          model: "flux-schnell",
+          requestedImages: 1,
+        });
+        if (!admission.mayDispatch) throw new ProviderCostLedgerError("denied");
+        costAdmissionId = admission.id;
+        if (!(await input.providerCost.ledger.beginDispatch(admission.id))) {
+          await input.providerCost.ledger.releaseBeforeDispatch({ admissionId: admission.id, code: "control_blocked_before_send" });
+          throw new ProviderCostLedgerError("denied");
+        }
+      } catch (error) {
+        await releaseQuota(attemptId, "internal_failure");
+        throw new ImageGenerationServiceError(error instanceof ProviderCostLedgerError && error.code === "denied"
+          ? "provider_cost_denied" : "internal_failure");
+      }
+    }
+
     let result: ImageGenerationResult;
     try {
-      result = await dependencies.createProvider().generateImage(validated.request);
+      result = await provider.generateImage(validated.request);
     } catch (error) {
       const providerError = error instanceof ReplicateFluxSchnellProviderError ? error : null;
-      await releaseQuota(attemptId, providerError?.code === "invalid_output" ? "invalid_provider_output" : "provider_failure");
+      if (input.providerCost && costAdmissionId) {
+        if (providerError?.observedImageCount !== undefined && providerError.observedImageCount > 1) {
+          await input.providerCost.ledger.settle({
+            admissionId: costAdmissionId,
+            imageCount: providerError.observedImageCount,
+            ...(providerError.providerOperationId ? { providerOperationId: providerError.providerOperationId } : {}),
+          }).catch(() => undefined);
+        } else {
+          await input.providerCost.ledger.markUncertain({
+            admissionId: costAdmissionId,
+            code: providerError?.code === "invalid_output" ? "replicate_invalid_output" : "replicate_provider_outcome_unknown",
+            ...(providerError?.providerOperationId ? { providerOperationId: providerError.providerOperationId } : {}),
+          }).catch(() => undefined);
+        }
+      } else {
+        await releaseQuota(attemptId, providerError?.code === "invalid_output" ? "invalid_provider_output" : "provider_failure");
+      }
       if (providerError?.code === "configuration") throw new ImageGenerationServiceError("configuration");
       if (providerError?.code === "invalid_request") throw new ImageGenerationServiceError("invalid_request");
       if (providerError?.code === "invalid_output") throw new ImageGenerationServiceError("invalid_provider_output");
       if (providerError?.code === "provider_failure") throw new ImageGenerationServiceError("provider_failure");
       throw new ImageGenerationServiceError("internal_failure");
+    }
+
+    if (input.providerCost && costAdmissionId) {
+      await input.providerCost.ledger.settle({
+        admissionId: costAdmissionId,
+        imageCount: 1,
+        ...(result.generationId ? { providerOperationId: result.generationId } : {}),
+      }).catch(() => undefined);
     }
 
     const mimeType = normalizeGeneratedImageMimeType(result.mimeType);

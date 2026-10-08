@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
     responses: {
       create: vi.fn(),
       stream: vi.fn(),
+      inputTokens: { count: vi.fn() },
     },
   },
   createSupabaseClient: vi.fn(),
@@ -186,6 +187,162 @@ describe("Standard core operation", () => {
     expect(serializedProviderInput).toContain("https://example.com");
     expect(JSON.parse(JSON.stringify(events.at(-1)))).toMatchObject({ type: "completion", result: { reply: "Combined answer." } });
     expectNoRequestSideEffects();
+  });
+
+  it("admits each durable OpenAI invocation against the exact counted input and output cap", async () => {
+    mocks.provider.responses.inputTokens.count.mockResolvedValue({ input_tokens: 123 });
+    mocks.provider.responses.stream.mockResolvedValue(responseStream(
+      { type: "response.created", response: { id: "resp_cost_bound_1" } },
+      { type: "response.output_text.delta", delta: "A useful governed answer." },
+      { type: "response.completed", response: { id: "resp_cost_bound_1", usage: {
+        input_tokens: 123,
+        input_tokens_details: { cached_tokens: 20, cache_write_tokens: 5 },
+        output_tokens: 18,
+        total_tokens: 141,
+      } } },
+    ));
+    const ledger = {
+      admit: vi.fn().mockResolvedValue({ id: "50000000-0000-4000-8000-000000000001", mayDispatch: true }),
+      beginDispatch: vi.fn().mockResolvedValue(true),
+      settle: vi.fn().mockResolvedValue(undefined),
+      markUncertain: vi.fn().mockResolvedValue(undefined),
+      releaseBeforeDispatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const providerCost = {
+      context: {
+        runId: "60000000-0000-4000-8000-000000000001",
+        stepId: "answer",
+        attemptId: "70000000-0000-4000-8000-000000000001",
+        attemptNumber: 1,
+        capabilityId: "file_analysis" as const,
+        reauthorize: vi.fn().mockResolvedValue(true),
+      },
+      ledger,
+    };
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    const events: StandardOperationEvent[] = [];
+    for await (const event of operation.run(standardInput({
+      executionMode: "durable_runtime_single_attempt",
+      providerCost,
+    }))) events.push(event);
+
+    expect(mocks.provider.responses.inputTokens.count).toHaveBeenCalledOnce();
+    expect(mocks.provider.responses.inputTokens.count).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-6-luna", instructions: expect.any(String), input: expect.any(Array) }),
+      { maxRetries: 0 },
+    );
+    expect(ledger.admit).toHaveBeenCalledWith(providerCost.context, {
+      invocationSequence: 1,
+      provider: "openai",
+      model: "gpt-6-luna",
+      inputTokens: 123,
+      maxOutputTokens: 4096,
+    });
+    expect(ledger.beginDispatch).toHaveBeenCalledOnce();
+    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ max_output_tokens: 4096, store: false }),
+      { maxRetries: 0 },
+    );
+    expect(ledger.markUncertain).toHaveBeenCalledWith(expect.objectContaining({
+      admissionId: "50000000-0000-4000-8000-000000000001",
+      providerOperationId: "resp_cost_bound_1",
+    }));
+    expect(ledger.settle).toHaveBeenCalledWith(expect.objectContaining({
+      admissionId: "50000000-0000-4000-8000-000000000001",
+      providerOperationId: "resp_cost_bound_1",
+      usage: expect.objectContaining({ inputTokens: 123, cachedInputTokens: 20, cacheWriteTokens: 5, outputTokens: 18 }),
+    }));
+    expect(events.some((event) => event.type === "completion")).toBe(true);
+  });
+
+  it("fails closed before admission or generation when the exact OpenAI token count exceeds the cap", async () => {
+    mocks.provider.responses.inputTokens.count.mockResolvedValue({ input_tokens: 16_001 });
+    const ledger = {
+      admit: vi.fn(),
+      beginDispatch: vi.fn(),
+      settle: vi.fn(),
+      markUncertain: vi.fn(),
+      releaseBeforeDispatch: vi.fn(),
+    };
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    await expect(async () => {
+      for await (const _event of operation.run(standardInput({
+        executionMode: "durable_runtime_single_attempt",
+        providerCost: {
+          context: {
+            runId: "60000000-0000-4000-8000-000000000001",
+            stepId: "answer",
+            attemptId: "70000000-0000-4000-8000-000000000001",
+            attemptNumber: 1,
+            capabilityId: "standard",
+            reauthorize: vi.fn().mockResolvedValue(true),
+          },
+          ledger: ledger as never,
+        },
+      }))) void _event;
+    }).rejects.toBeInstanceOf(StandardOperationError);
+    expect(ledger.admit).not.toHaveBeenCalled();
+    expect(mocks.provider.responses.stream).not.toHaveBeenCalled();
+  });
+
+  it("gives the internal image retry its own durable admission and counts it toward the two-call ceiling", async () => {
+    mocks.provider.responses.inputTokens.count.mockResolvedValue({ input_tokens: 20 });
+    mocks.provider.responses.stream.mockResolvedValue(responseStream(
+      { type: "response.created", response: { id: "resp_primary_retry" } },
+      { type: "response.output_text.delta", delta: "No." },
+      { type: "response.completed", response: { id: "resp_primary_retry", usage: { input_tokens: 20, output_tokens: 1 } } },
+    ));
+    mocks.provider.responses.create.mockResolvedValue({
+      id: "resp_image_retry",
+      status: "completed",
+      error: null,
+      output_text: "A detailed visual description that answers the request.",
+      usage: { input_tokens: 20, output_tokens: 11 },
+    });
+    const ledger = {
+      admit: vi.fn()
+        .mockResolvedValueOnce({ id: "50000000-0000-4000-8000-000000000011", mayDispatch: true })
+        .mockResolvedValueOnce({ id: "50000000-0000-4000-8000-000000000012", mayDispatch: true }),
+      beginDispatch: vi.fn().mockResolvedValue(true),
+      settle: vi.fn().mockResolvedValue(undefined),
+      markUncertain: vi.fn().mockResolvedValue(undefined),
+      releaseBeforeDispatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const providerCost = {
+      context: {
+        runId: "60000000-0000-4000-8000-000000000001",
+        stepId: "answer",
+        attemptId: "70000000-0000-4000-8000-000000000001",
+        attemptNumber: 1,
+        capabilityId: "standard" as const,
+        reauthorize: vi.fn().mockResolvedValue(true),
+      },
+      ledger,
+    };
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    const events: StandardOperationEvent[] = [];
+    for await (const event of operation.run(standardInput({
+      executionMode: "durable_runtime_single_attempt",
+      providerCost,
+      imageDataUrl: `data:image/png;base64,${"a".repeat(1_000)}`,
+    }))) events.push(event);
+
+    expect(ledger.admit.mock.calls.map(([context, request]) => [context, request.invocationSequence])).toEqual([
+      [providerCost.context, 1], [providerCost.context, 2],
+    ]);
+    expect(ledger.beginDispatch).toHaveBeenCalledTimes(2);
+    expect(ledger.settle).toHaveBeenCalledTimes(2);
+    expect(ledger.settle.mock.calls.map(([input]) => input.admissionId)).toEqual([
+      "50000000-0000-4000-8000-000000000011",
+      "50000000-0000-4000-8000-000000000012",
+    ]);
+    expect(mocks.provider.responses.create).toHaveBeenCalledWith(
+      expect.objectContaining({ max_output_tokens: 4096, store: false }),
+      { maxRetries: 0 },
+    );
+    expect(events.find((event) => event.type === "completion")).toMatchObject({
+      result: { reply: "A detailed visual description that answers the request." },
+    });
   });
 
   it("rejects a mismatched predecessor before calling the provider", async () => {

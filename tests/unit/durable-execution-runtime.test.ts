@@ -35,8 +35,8 @@ const ACCEPTED_REQUEST: AcceptedRequestExecutionIdentity = {
 };
 
 function handoff(steps: PlanStep[] = [
-  { id: "step-1", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-  { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "search_results" }], expectedOutput: "text" },
+  { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+  { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "text" },
   { id: "step-3", capability: "document_generation", dependsOn: ["step-2"], inputs: [{ source: "step", stepId: "step-2", output: "text" }], expectedOutput: "document" },
 ]): PlannedExecutionHandoff {
   const objective = "Private objective deliberately omitted from durable execution plan";
@@ -273,14 +273,14 @@ describe("durable XState execution runtime", () => {
     expect(resumedCalls.every(({ executionKey }) => typeof executionKey === "string")).toBe(true);
     expect(resumedAuthorizations).toEqual(["step-2", "step-3"]);
     expect(resumed.run.steps.map(({ status }) => status)).toEqual(["succeeded", "succeeded", "succeeded"]);
-    expect(resumed.stepResults["step-1"]).toEqual({ kind: "search_results", value: { step: "step-1", prior: [] } });
+    expect(resumed.stepResults["step-1"]).toEqual({ kind: "text", value: { step: "step-1", prior: [] } });
   });
 
   it("passes a large result transparently to a declared successor and returns it unchanged after resume", async () => {
     const store = new InMemoryExecutionStore();
     const largeResult: ExecutionStepResult = {
-      kind: "search_results",
-      value: { reply: "bounded web result ".repeat(6_000), source: { title: "Source", url: "https://example.test" } },
+      kind: "text",
+      value: { reply: "bounded execution result ".repeat(6_000) },
     };
     const calls: CapabilityExecutionInput[] = [];
     const executor = vi.fn(async (input: CapabilityExecutionInput) => {
@@ -290,8 +290,8 @@ describe("durable XState execution runtime", () => {
       return mockResult(input);
     });
     const plan = handoff([
-      { id: "step-1", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-      { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "search_results" }], expectedOutput: "text" },
+      { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+      { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "text" },
     ]);
     const service = runtime(store, executor);
     const result = await service.execute(plan, runtimeInput(), "large-result-transparent-key");
@@ -473,7 +473,7 @@ describe("durable XState execution runtime", () => {
       );
       if (input.stepId === "step-1") {
         return {
-          kind: "search_results",
+          kind: "text",
           value: {
             requestMessageBinding: {
               ...REQUEST_BINDING,
@@ -485,8 +485,8 @@ describe("durable XState execution runtime", () => {
       return mockResult(input);
     });
     const result = await service.execute(handoff([
-      { id: "step-1", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-      { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "search_results" }], expectedOutput: "text" },
+      { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+      { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "text" },
     ]), runtimeInput(), "immutable-message-binding");
 
     expect(result.kind).toBe("succeeded");

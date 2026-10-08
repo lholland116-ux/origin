@@ -1424,6 +1424,41 @@ export type Database = {
         }
         Returns: Json
       }
+      admit_agent_provider_cost: {
+        Args: {
+          p_run_id: string
+          p_step_id: string
+          p_attempt_id: string
+          p_attempt_number: number
+          p_invocation_sequence: number
+          p_capability_id: string
+          p_provider: string
+          p_model: string
+          p_input_tokens: number | null
+          p_max_output_tokens: number | null
+          p_requested_images: number | null
+        }
+        Returns: Json
+      }
+      begin_agent_provider_cost_dispatch: {
+        Args: { p_admission_id: string }
+        Returns: Json
+      }
+      settle_agent_provider_cost: {
+        Args: {
+          p_admission_id: string
+          p_outcome: string
+          p_settlement_fingerprint: string
+          p_input_tokens: number | null
+          p_cached_input_tokens: number | null
+          p_cache_write_tokens: number | null
+          p_output_tokens: number | null
+          p_image_count: number | null
+          p_provider_operation_id: string | null
+          p_outcome_code: string | null
+        }
+        Returns: Json
+      }
       delete_generated_image_metadata: {
         Args: { p_generated_image_id: string }
         Returns: {

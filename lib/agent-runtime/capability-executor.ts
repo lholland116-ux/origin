@@ -2,6 +2,7 @@ import type { CapabilityId, CapabilityOutputKind } from "@/lib/ai/capability-reg
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
 import type { UserReasoningMode } from "@/lib/ai/reasoning-mode";
 import type { ExecutionStepResult, JsonValue } from "@/lib/agent-runtime/runtime-contracts";
+import type { ProviderCostInvocationContext } from "@/lib/agent-runtime/provider-cost-ledger";
 
 export type RuntimeAttachmentReference = {
   readonly id: string;
@@ -45,6 +46,8 @@ export type CapabilityExecutionInput = {
     readonly resourceReferences: readonly string[];
     readonly requestId?: string;
     readonly correlationId?: string;
+    /** Server-only reauthorization lease; never persisted or returned to clients. */
+    readonly providerCost?: ProviderCostInvocationContext;
   };
 };
 

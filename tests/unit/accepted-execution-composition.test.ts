@@ -17,7 +17,7 @@ const RUN_FINGERPRINT = "d".repeat(64);
 const request: AgentRequestAcceptanceInput = {
   conversationId: CONVERSATION,
   idempotencyKey: "f2000000-0000-4000-8000-000000000001",
-  message: "Search the latest FDA QMSR changes and create a PDF briefing.",
+  message: "Summarize the provided information and create a PDF briefing.",
   documentIds: [],
   images: [],
   requestOptions: { routingMode: "auto", reasoningMode: "high" },
@@ -77,8 +77,25 @@ function fixture(options: {
 }
 
 describe("accepted-request execution composition", () => {
-  it("validates and associates the deterministic File/Web -> Standard -> Document handoff without dispatch", async () => {
-    const deps = fixture({ lookup: async () => ({ status: "not_found" }) });
+  it("validates and associates the deterministic Standard -> Document handoff without dispatch", async () => {
+    const deps = fixture({
+      lookup: async () => ({ status: "not_found" }),
+      decide: async () => ({
+        kind: "multi_step",
+        handoff: {
+          version: 1,
+          objective: request.message,
+          plan: { objective: request.message, status: "validated", steps: [
+            { id: "step-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+            { id: "step-2", capability: "document_generation", dependsOn: ["step-1"], inputs: [{ source: "step", stepId: "step-1", output: "text" }], expectedOutput: "document" },
+          ] },
+          orderedStepIds: ["step-1", "step-2"],
+          plannerSource: "deterministic",
+          governance: { maxSteps: 6, capabilityIds: ["document_generation", "standard"], modelPlanningAllowed: false, maxModelCalls: 2, maxRepairAttempts: 1, attachmentContextAllowed: true, handoffVersion: 1 },
+        },
+        telemetry: { task_complexity: "multi_step", planning_outcome: "planned", planner_source: "deterministic", step_count: 2, planner_model_calls: 0, repair_attempted: false, failure_code: null, planning_latency_ms: 0 },
+      } as IntelligenceDecision),
+    });
     deps.lookup.mockResolvedValueOnce({ status: "not_found" }).mockResolvedValueOnce({ status: "found", run: persistedRun });
     const result = await deps.composer.prepare(request);
     expect(result).toMatchObject({ kind: "associated", run: { id: RUN } });
@@ -88,11 +105,10 @@ describe("accepted-request execution composition", () => {
     expect(deps.lookup).toHaveBeenCalledTimes(2);
     const [handoff, runtimeInput, acceptedIdentity] = deps.associate.mock.calls[0]!;
     expect(handoff).toMatchObject({ plan: { status: "validated", steps: [
-      { capability: "web_search", inputs: [{ source: "user" }] },
-      { capability: "standard", inputs: [{ source: "user" }, { source: "step", stepId: "step-1" }] },
-      { capability: "document_generation", inputs: [{ source: "step", stepId: "step-2", output: "text" }] },
+      { capability: "standard", inputs: [{ source: "user" }] },
+      { capability: "document_generation", inputs: [{ source: "step", stepId: "step-1", output: "text" }] },
     ] } });
-    const standard = (handoff as { plan: { steps: Array<{ inputs?: Array<{ source: string }> }> } }).plan.steps[1]!;
+    const standard = (handoff as { plan: { steps: Array<{ inputs?: Array<{ source: string }> }> } }).plan.steps[0]!;
     expect(standard.inputs?.filter(({ source }) => source === "user")).toHaveLength(1);
     expect(runtimeInput).toMatchObject({
       userInput: request.message,
