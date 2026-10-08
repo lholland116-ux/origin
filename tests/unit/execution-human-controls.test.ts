@@ -189,6 +189,74 @@ describe("durable execution human controls", () => {
     expect(calls).toEqual([]);
   });
 
+  it("clears pause through the control-only path without continuing or dispatching work", async () => {
+    const store = new InMemoryExecutionStore();
+    const calls: string[] = [];
+    const service = makeRuntime(store, { execute: async (request) => {
+      calls.push(request.stepId);
+      if (request.stepId === "step-1") {
+        expect(await service.pause({ runId: RUN_ID, authenticatedUserId: USER_ID })).toMatchObject({ kind: "pause_requested" });
+      }
+      return result(request);
+    } });
+    expect((await service.execute(handoff(), input(), "control-only-resume")).kind).toBe("paused");
+    const before = await store.getRun({ runId: RUN_ID, userId: USER_ID });
+    expect(before?.controlRevision).toBe(2);
+    const resumed = await makeRuntime(store, { execute: async (request) => { calls.push(`unexpected:${request.stepId}`); return result(request); } })
+      .resumeControlOnly({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedControlRevision: before!.controlRevision });
+    expect(resumed).toMatchObject({ kind: "resumed" });
+    expect(calls).toEqual(["step-1"]);
+    expect(await store.getRun({ runId: RUN_ID, userId: USER_ID })).toMatchObject({ controlState: "active", controlRevision: 3, steps: [{ status: "succeeded" }, { status: "pending" }] });
+    expect(await makeRuntime(store, { authorize: async () => false }).resumeControlOnly({
+      runId: RUN_ID, authenticatedUserId: USER_ID, expectedControlRevision: before!.controlRevision,
+    })).toMatchObject({ kind: "already_applied" });
+  });
+
+  it("blocks control-only resume after authorization revocation but keeps protective stop available", async () => {
+    const store = new InMemoryExecutionStore();
+    const service = makeRuntime(store, { execute: async (request) => {
+      if (request.stepId === "step-1") await service.pause({ runId: RUN_ID, authenticatedUserId: USER_ID });
+      return result(request);
+    } });
+    expect((await service.execute(handoff(), input(), "control-only-revoked")).kind).toBe("paused");
+    const paused = await store.getRun({ runId: RUN_ID, userId: USER_ID });
+    expect(paused?.controlState).toBe("paused");
+    if (!paused) return;
+    const revoked = makeRuntime(store, { authorize: async () => false });
+    expect(await revoked.resumeControlOnly({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedControlRevision: paused.controlRevision }))
+      .toMatchObject({ kind: "rejected", failure: { code: "authorization_denied" } });
+    expect(await store.getRun({ runId: RUN_ID, userId: USER_ID })).toMatchObject({ controlState: "paused", controlRevision: paused.controlRevision });
+    expect(await revoked.stop({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedControlRevision: paused.controlRevision }))
+      .toMatchObject({ kind: "stopped" });
+  });
+
+  it("rejects a stale control revision and an approval after current authorization is revoked", async () => {
+    const store = new InMemoryExecutionStore();
+    const service = makeRuntime(store, { approvalPolicy: () => ["step-2"] });
+    expect((await service.execute(handoff(), input(), "stale-control-and-revoked-approval")).kind).toBe("awaiting_human_approval");
+    const before = await store.getRun({ runId: RUN_ID, userId: USER_ID });
+    expect(before).toBeTruthy();
+    if (!before) return;
+    const staleStop = await makeRuntime(store).stop({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedControlRevision: before.controlRevision - 1 });
+    expect(staleStop).toMatchObject({ kind: "rejected", failure: { code: "snapshot_conflict" } });
+    const checkpoint = before.approvalCheckpoints[0]!;
+    const denied = await makeRuntime(store, { authorize: async () => false }).approveCheckpoint({
+      runId: RUN_ID, authenticatedUserId: USER_ID, checkpointId: checkpoint.id, expectedControlRevision: before.controlRevision,
+    });
+    expect(denied).toMatchObject({ kind: "rejected", failure: { code: "authorization_denied" } });
+    expect(await store.getRun({ runId: RUN_ID, userId: USER_ID })).toMatchObject({
+      controlRevision: before.controlRevision,
+      approvalCheckpoints: [{ status: "pending" }],
+    });
+    expect(await store.getControlEvents({ runId: RUN_ID, userId: USER_ID })).toHaveLength(1);
+    expect(await service.approveCheckpoint({
+      runId: RUN_ID, authenticatedUserId: USER_ID, checkpointId: checkpoint.id, expectedControlRevision: before.controlRevision,
+    })).toMatchObject({ kind: "approved" });
+    expect(await makeRuntime(store, { authorize: async () => false }).approveCheckpoint({
+      runId: RUN_ID, authenticatedUserId: USER_ID, checkpointId: checkpoint.id, expectedControlRevision: before.controlRevision,
+    })).toMatchObject({ kind: "already_applied" });
+  });
+
   it("does not resume an indeterminate in-flight operation", async () => {
     const backend = new InMemoryExecutionStore();
     let calls = 0;

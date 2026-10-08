@@ -44,6 +44,8 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
   const decisionRaceStepKey = randomUUID();
   const stoppedRunId = randomUUID();
   const stoppedStepKey = randomUUID();
+  const stopApprovalRaceRunId = randomUUID();
+  const stopApprovalRaceStepKey = randomUUID();
 
   function createSnapshot(runActor: ReturnType<typeof createExecutionRunLifecycle>, stepActor: ReturnType<typeof createExecutionStepLifecycle>): ExecutionSnapshotEnvelope {
     return { version: 1, runtimeVersion: 1, snapshot: { run: runActor.getPersistedSnapshot(), steps: { "store-step": stepActor.getPersistedSnapshot() } } };
@@ -223,6 +225,10 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
     expect(await restartedStore.resumeRun({
       runId: retryRunId, userId, actorUserId: userId, expectedControlRevision: 1, createdAt: new Date().toISOString(),
     })).toMatchObject({ status: "saved", controlState: "active", controlRevision: 2 });
+    expect(await restartedStore.resumeRun({
+      runId: retryRunId, userId, actorUserId: userId, expectedControlRevision: 1, createdAt: new Date().toISOString(),
+    })).toMatchObject({ status: "already_applied", controlState: "active", controlRevision: 2 });
+    expect(await restartedStore.getControlEvents({ runId: retryRunId, userId })).toHaveLength(2);
     expect(await restartedStore.claimRetryableStep({
       runId: retryRunId,
       userId,
@@ -339,6 +345,10 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
     const events = await store.getControlEvents({ runId: controlRunId, userId });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ action: claim.status === "claimed" ? "pause_requested" : "paused", actorUserId: userId, priorControlRevision: 0, controlRevision: 1 });
+    expect(await store.pauseRun({
+      runId: controlRunId, userId, actorUserId: userId, expectedControlRevision: 0, createdAt: new Date().toISOString(),
+    })).toMatchObject({ status: "already_applied" });
+    expect(await store.getControlEvents({ runId: controlRunId, userId })).toHaveLength(1);
   });
 
   it("durably gates a specific step, records one winning decision, and blocks claims until approval", async () => {
@@ -392,6 +402,20 @@ describeDatabase("Supabase execution store (local PostgreSQL only)", () => {
     ]);
     expect([raceApproval, raceReturn].filter((result) => result.status === "approved" || result.status === "returned")).toHaveLength(1);
     expect([raceApproval, raceReturn].filter((result) => result.status === "already_decided")).toHaveLength(1);
+
+    const stopRaceCreated = await store.createRun(input({ runId: stopApprovalRaceRunId, stepKey: stopApprovalRaceStepKey, approvalCheckpoint: true }));
+    expect(stopRaceCreated.status).toBe("created");
+    if (stopRaceCreated.status !== "created") return;
+    const stopRaceCheckpoint = stopRaceCreated.run.approvalCheckpoints[0]!;
+    const [stopRaceApproval, stopRaceStop] = await Promise.all([
+      store.decideApprovalCheckpoint({ runId: stopApprovalRaceRunId, userId, actorUserId: userId, expectedControlRevision: 1, checkpointId: stopRaceCheckpoint.id, decision: "approve", decidedAt: new Date().toISOString() }),
+      new SupabaseExecutionStore(sql).stopRun({ runId: stopApprovalRaceRunId, userId, actorUserId: userId, expectedControlRevision: 1, createdAt: new Date().toISOString() }),
+    ]);
+    expect([stopRaceApproval.status, stopRaceStop.status].filter((status) => status === "approved" || status === "stopped")).toHaveLength(1);
+    expect([stopRaceApproval.status, stopRaceStop.status].every((status) => status === "approved" || status === "stopped" || status === "terminal" || status === "conflict")).toBe(true);
+    const stopRaceEvents = await store.getControlEvents({ runId: stopApprovalRaceRunId, userId });
+    expect(stopRaceEvents.map((event) => event.controlRevision)).toEqual([1, 2]);
+    expect(new Set(stopRaceEvents.map((event) => event.controlRevision)).size).toBe(stopRaceEvents.length);
   });
 
   it("rejects stale control revisions and stop atomically blocks claims without changing request binding", async () => {

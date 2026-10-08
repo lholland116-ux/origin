@@ -48,11 +48,21 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
     requestMessageBindingValidator,
   });
   const coordinator = createIntelligenceDecisionCoordinator({ modelPlanningAllowed: false });
-  return createAcceptedExecutionComposer({
+  const composer = createAcceptedExecutionComposer({
     accept: (input) => agentRequestAcceptanceService.accept(input),
     lookup: (identity) => store.lookupAcceptedRequestRun(identity),
     associate: (handoff, runtimeInput, identity) => runtime.associateAcceptedRequest(handoff, runtimeInput, identity),
     resolveImages: resolveAcceptedImages,
     decide: (input) => coordinator.decideIntelligenceAction(input),
+  });
+  return Object.freeze({
+    ...composer,
+    control: Object.freeze({
+      pause: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.pause(input),
+      resume: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.resumeControlOnly(input),
+      stop: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.stop(input),
+      approveCheckpoint: (input: { runId: string; authenticatedUserId: string; checkpointId: string; expectedControlRevision: number }) => runtime.approveCheckpoint(input),
+      returnCheckpoint: (input: { runId: string; authenticatedUserId: string; checkpointId: string; expectedControlRevision: number; rationale: string }) => runtime.returnCheckpoint(input),
+    }),
   });
 }

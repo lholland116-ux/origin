@@ -3,6 +3,7 @@ import { createServerAcceptedExecutionComposition } from "@/lib/agent-runtime/se
 import { createSupabaseDatabaseSql } from "@/lib/database/supabase/supabase-transactions";
 import { SupabaseExecutionStore } from "@/lib/database/supabase/supabase-execution-store";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { requestMessageBindingValidator } from "@/lib/agent-runtime/request-message-binding";
 import { createWorkflowHttpHandlers, readWorkflowFeatureGate } from "@/lib/agent-runtime/workflow-http-api";
 import type { ExecutionStore } from "@/lib/agent-runtime/execution-store";
 
@@ -34,6 +35,37 @@ export const workflowHttpHandlers = createWorkflowHttpHandlers({
   },
   prepare: (input) => getComposer().prepare(input),
   getRun: (runId, userId) => getStore().getRun({ runId, userId }),
+  validateBinding: async (run) => {
+    const binding = run.runtimeContext.requestMessageBinding;
+    return binding ? requestMessageBindingValidator.validate(binding) : false;
+  },
+  validateAcceptance: async (run) => {
+    const binding = run.runtimeContext.requestMessageBinding;
+    if (!binding || !run.acceptedRequestId || !run.acceptanceFingerprint) return false;
+    const associated = await getStore().lookupAcceptedRequestRun({
+      requestId: run.acceptedRequestId,
+      userId: run.userId,
+      conversationId: binding.conversationId,
+      userMessageId: binding.userMessageId,
+      assistantMessageId: binding.assistantMessageId,
+      idempotencyKey: run.idempotencyKey,
+      requestFingerprint: run.acceptanceFingerprint,
+    });
+    return associated.status === "found" && associated.run.id === run.id;
+  },
+  mutateControl: ({ runId, userId, action, expectedControlRevision }) => {
+    const input = { runId, authenticatedUserId: userId, expectedControlRevision };
+    switch (action) {
+      case "pause": return getComposer().control.pause(input);
+      case "resume": return getComposer().control.resume(input);
+      case "stop": return getComposer().control.stop(input);
+    }
+  },
+  decideApproval: ({ runId, userId, checkpointId, decision, expectedControlRevision, rationale }) => {
+    const input = { runId, authenticatedUserId: userId, checkpointId, expectedControlRevision };
+    if (decision === "approve") return getComposer().control.approveCheckpoint(input);
+    return getComposer().control.returnCheckpoint({ ...input, rationale: rationale! });
+  },
   ownsConversation: async (conversationId, userId) => {
     const supabase = await createServerSupabaseClient();
     const { data, error } = await supabase.from("conversations").select("id")

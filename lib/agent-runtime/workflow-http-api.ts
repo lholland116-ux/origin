@@ -1,10 +1,13 @@
 import { agentRequestAcceptanceInputSchema, type AgentRequestAcceptanceInput } from "@/lib/agent-runtime/request-acceptance";
 import type { AcceptedExecutionCompositionResult } from "@/lib/agent-runtime/accepted-execution-composition";
 import type { DurableExecutionRun } from "@/lib/agent-runtime/execution-store";
+import type { ExecutionControlCommandResult } from "@/lib/agent-runtime/runtime-contracts";
 import { classifyTaskComplexity } from "@/lib/ai/task-complexity";
+import { z } from "zod";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const WORKFLOW_START_MAX_BODY_BYTES = 65_536;
+export const WORKFLOW_CONTROL_MAX_BODY_BYTES = 8_192;
 
 export type WorkflowFeatureGate = Readonly<{
   enabled: boolean;
@@ -17,6 +20,7 @@ export type WorkflowProgressDto = Readonly<{
   conversationId: string;
   state: "prepared" | "executing" | "pause_requested" | "paused" | "stop_requested" | "stopped" | "returned" | "approval_required" | "completed" | "failed";
   controlState: DurableExecutionRun["controlState"];
+  controlRevision: number;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -24,6 +28,11 @@ export type WorkflowProgressDto = Readonly<{
   totalStepCount: number;
   failurePresent: boolean;
   recoveryRequired: boolean;
+  approvalCheckpoints: readonly Readonly<{
+    id: string;
+    stepId: string;
+    state: "pending" | "approved" | "returned";
+  }>[];
   steps: readonly Readonly<{
     id: string;
     capabilityLabel: string;
@@ -41,6 +50,10 @@ export type WorkflowHttpDependencies = Readonly<{
   prepare: (input: AgentRequestAcceptanceInput) => Promise<AcceptedExecutionCompositionResult>;
   getRun: (runId: string, userId: string) => Promise<DurableExecutionRun | null>;
   ownsConversation: (conversationId: string, userId: string) => Promise<boolean>;
+  validateBinding: (run: DurableExecutionRun) => Promise<boolean>;
+  validateAcceptance: (run: DurableExecutionRun) => Promise<boolean>;
+  mutateControl: (input: { runId: string; userId: string; action: "pause" | "resume" | "stop"; expectedControlRevision: number }) => Promise<ExecutionControlCommandResult>;
+  decideApproval: (input: { runId: string; userId: string; checkpointId: string; decision: "approve" | "return"; expectedControlRevision: number; rationale?: string }) => Promise<ExecutionControlCommandResult>;
   configuredAppUrl?: string;
 }>;
 
@@ -104,11 +117,11 @@ function sameOrigin(request: Request, configuredAppUrl?: string): boolean {
 
 type ReadBodyResult = { kind: "ok"; value: unknown } | { kind: "invalid" } | { kind: "too_large" };
 
-async function readBoundedJson(request: Request): Promise<ReadBodyResult> {
+async function readBoundedJson(request: Request, maximumBytes = WORKFLOW_START_MAX_BODY_BYTES): Promise<ReadBodyResult> {
   const contentLength = request.headers.get("content-length");
   if (contentLength !== null) {
     if (!/^\d+$/.test(contentLength)) return { kind: "invalid" };
-    if (Number(contentLength) > WORKFLOW_START_MAX_BODY_BYTES) return { kind: "too_large" };
+    if (Number(contentLength) > maximumBytes) return { kind: "too_large" };
   }
   if (!request.body) return { kind: "invalid" };
 
@@ -120,7 +133,7 @@ async function readBoundedJson(request: Request): Promise<ReadBodyResult> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > WORKFLOW_START_MAX_BODY_BYTES) {
+      if (size > maximumBytes) {
         await reader.cancel();
         return { kind: "too_large" };
       }
@@ -156,13 +169,79 @@ const CAPABILITY_LABELS: Readonly<Record<string, string>> = Object.freeze({
   image_editing: "Image editing",
 });
 const RECOVERY_REQUIRED_CODES = new Set(["indeterminate_step", "invalid_persisted_state", "invalid_snapshot", "persistence_failed"]);
+const controlRequestSchema = z.object({
+  action: z.enum(["pause", "resume", "stop"]),
+  expectedControlRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+}).strict();
+const approvalRequestSchema = z.object({
+  decision: z.enum(["approve", "return"]),
+  expectedControlRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  rationale: z.string().trim().min(1).max(1000).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.decision === "return" && value.rationale === undefined) {
+    context.addIssue({ code: "custom", message: "A rationale is required to return a checkpoint." });
+  }
+  if (value.decision === "approve" && value.rationale !== undefined) {
+    context.addIssue({ code: "custom", message: "Approval does not accept a rationale." });
+  }
+});
+
+type OwnedRunResult =
+  | { readonly kind: "ok"; readonly run: DurableExecutionRun }
+  | { readonly kind: "not_found" }
+  | { readonly kind: "unavailable" };
+
+async function loadOwnedControlRun(
+  dependencies: WorkflowHttpDependencies,
+  runId: string,
+  userId: string,
+): Promise<OwnedRunResult> {
+  let run: DurableExecutionRun | null;
+  try { run = await dependencies.getRun(runId, userId); } catch { return { kind: "unavailable" }; }
+  if (!run || run.id !== runId || run.userId !== userId) return { kind: "not_found" };
+  const binding = run.runtimeContext.requestMessageBinding;
+  if (!UUID.test(run.runtimeContext.conversationId) || !run.acceptedRequestId
+    || run.acceptedRequestId !== binding?.requestId || !run.acceptanceFingerprint
+    || !/^[0-9a-f]{64}$/.test(run.acceptanceFingerprint)
+    || binding?.userId !== userId || binding.conversationId !== run.runtimeContext.conversationId) return { kind: "not_found" };
+  try {
+    const [validBinding, validAcceptance, ownsConversation] = await Promise.all([
+      dependencies.validateBinding(run),
+      dependencies.validateAcceptance(run),
+      dependencies.ownsConversation(run.runtimeContext.conversationId, userId),
+    ]);
+    return validBinding && validAcceptance && ownsConversation ? { kind: "ok", run } : { kind: "not_found" };
+  } catch {
+    return { kind: "unavailable" };
+  }
+}
+
+function commandError(result: ExecutionControlCommandResult): Response | null {
+  if (result.kind === "rejected") {
+    const code = result.failure.code;
+    if (code === "ownership_denied") return error("not_found", "The workflow was not found.", 404);
+    if (code === "authorization_denied") return error("authorization_denied", "Current permissions do not allow this action.", 403);
+    if (code === "authorization_failed") return error("authorization_unavailable", "Current permissions could not be verified.", 503);
+    if (code === "snapshot_conflict") return error("revision_conflict", "Workflow state changed; refresh status and try again.", 409);
+    if (code === "indeterminate_step") return error("unsafe_boundary", "The workflow is at an unsafe execution boundary.", 409);
+    if (code === "invalid_persisted_state") return error("invalid_workflow_state", "The persisted workflow state is unavailable.", 503);
+    if (code === "persistence_failed") return error("unavailable", "The workflow service is temporarily unavailable.", 503);
+    return error("invalid_transition", "This workflow action is not currently available.", 409);
+  }
+  if (result.kind === "recovery_required") return error("unsafe_boundary", "The workflow is at an unsafe execution boundary.", 409);
+  return null;
+}
 
 export function toWorkflowProgressDto(run: DurableExecutionRun): WorkflowProgressDto | null {
   const conversationId = run.runtimeContext.conversationId;
   const orderedIds = run.executionPlan.orderedStepIds;
-  if (!UUID.test(run.id) || !UUID.test(conversationId) || !Array.isArray(orderedIds) || orderedIds.length !== run.steps.length) return null;
+  if (!UUID.test(run.id) || !UUID.test(conversationId) || !Array.isArray(orderedIds) || orderedIds.length !== run.steps.length
+    || !Number.isSafeInteger(run.controlRevision) || run.controlRevision < 0) return null;
   const stepsById = new Map(run.steps.map((step) => [step.stepId, step]));
   if (new Set(orderedIds).size !== orderedIds.length || orderedIds.some((id) => !stepsById.has(id))) return null;
+  if (!Array.isArray(run.approvalCheckpoints) || run.approvalCheckpoints.some((checkpoint) =>
+    !UUID.test(checkpoint.id) || checkpoint.runId !== run.id || checkpoint.userId !== run.userId
+    || !stepsById.has(checkpoint.stepId) || !["pending", "approved", "returned"].includes(checkpoint.status))) return null;
 
   const pendingApprovals = new Set(run.approvalCheckpoints.filter((item) => item.status === "pending").map((item) => item.stepId));
   const steps = orderedIds.map((id) => {
@@ -192,6 +271,7 @@ export function toWorkflowProgressDto(run: DurableExecutionRun): WorkflowProgres
     conversationId,
     state,
     controlState: run.controlState,
+    controlRevision: run.controlRevision,
     createdAt: timestamp(run.createdAt) ?? run.createdAt,
     ...(timestamp(run.startedAt) ? { startedAt: timestamp(run.startedAt) } : {}),
     ...(timestamp(run.completedAt) ? { completedAt: timestamp(run.completedAt) } : {}),
@@ -199,6 +279,7 @@ export function toWorkflowProgressDto(run: DurableExecutionRun): WorkflowProgres
     totalStepCount: run.steps.length,
     failurePresent: run.status === "failed" || failureCodes.length > 0,
     recoveryRequired: failureCodes.some((code) => RECOVERY_REQUIRED_CODES.has(code)),
+    approvalCheckpoints: run.approvalCheckpoints.map(({ id, stepId, status }) => ({ id, stepId, state: status })),
     steps,
   };
 }
@@ -305,15 +386,90 @@ export function createWorkflowHttpHandlers(dependencies: WorkflowHttpDependencie
       if (!featureAllows(gate, userId)) return error("feature_disabled", "Workflow status is unavailable.", 404);
       if (!UUID.test(runId)) return error("invalid_request", "The run identifier is invalid.", 400);
 
-      let run: DurableExecutionRun | null;
-      try { run = await dependencies.getRun(runId, userId); } catch { return error("unavailable", "Workflow status is temporarily unavailable.", 503); }
-      if (!run || run.userId !== userId || run.id !== runId) return error("not_found", "The workflow was not found.", 404);
-      if (!UUID.test(run.runtimeContext.conversationId)) return error("not_found", "The workflow was not found.", 404);
-      let conversationOwned: boolean;
-      try { conversationOwned = await dependencies.ownsConversation(run.runtimeContext.conversationId, userId); } catch { return error("unavailable", "Workflow status is temporarily unavailable.", 503); }
-      if (!conversationOwned) return error("not_found", "The workflow was not found.", 404);
-      const dto = toWorkflowProgressDto(run);
+      const owned = await loadOwnedControlRun(dependencies, runId, userId);
+      if (owned.kind === "unavailable") return error("unavailable", "Workflow status is temporarily unavailable.", 503);
+      if (owned.kind !== "ok") return error("not_found", "The workflow was not found.", 404);
+      const dto = toWorkflowProgressDto(owned.run);
       return dto ? json({ status: dto }, 200) : error("unavailable", "Workflow status is temporarily unavailable.", 503);
+    },
+
+    async control(request: Request, runId: string): Promise<Response> {
+      if (request.method !== "POST") return error("method_not_allowed", "POST is required.", 405);
+      let gate: WorkflowFeatureGate;
+      try { gate = dependencies.getGate(); } catch { return error("feature_disabled", "Workflow controls are unavailable.", 404); }
+      if (!gate.enabled) return error("feature_disabled", "Workflow controls are unavailable.", 404);
+      let userId: string | null;
+      try { userId = await dependencies.authenticate(); } catch { return error("unavailable", "The workflow service is temporarily unavailable.", 503); }
+      if (!userId) return error("unauthenticated", "Authentication is required.", 401);
+      if (!featureAllows(gate, userId)) return error("feature_disabled", "Workflow controls are unavailable.", 404);
+      if (!sameOrigin(request, dependencies.configuredAppUrl)) return error("origin_denied", "The request origin is not allowed.", 403);
+      if (!UUID.test(runId)) return error("invalid_request", "The run identifier is invalid.", 400);
+
+      const body = await readBoundedJson(request, WORKFLOW_CONTROL_MAX_BODY_BYTES);
+      if (body.kind === "too_large") return error("invalid_request", "The control request is too large.", 413);
+      if (body.kind !== "ok") return error("invalid_request", "The control request must be valid JSON.", 400);
+      const parsed = controlRequestSchema.safeParse(body.value);
+      if (!parsed.success) return error("invalid_request", "The control request is invalid.", 400);
+
+      const owned = await loadOwnedControlRun(dependencies, runId, userId);
+      if (owned.kind === "unavailable") return error("unavailable", "Workflow ownership could not be verified.", 503);
+      if (owned.kind !== "ok") return error("not_found", "The workflow was not found.", 404);
+      let result: ExecutionControlCommandResult;
+      try {
+        result = await dependencies.mutateControl({
+          runId, userId, action: parsed.data.action,
+          expectedControlRevision: parsed.data.expectedControlRevision,
+        });
+      } catch { return error("unavailable", "The workflow service is temporarily unavailable.", 503); }
+      const failed = commandError(result);
+      if (failed) return failed;
+      const updated = await loadOwnedControlRun(dependencies, runId, userId);
+      if (updated.kind !== "ok") return error("unavailable", "The updated workflow status is unavailable.", 503);
+      const dto = toWorkflowProgressDto(updated.run);
+      return dto
+        ? json({ result: result.kind, status: dto }, result.kind === "awaiting_human_approval" ? 409 : 200)
+        : error("unavailable", "The updated workflow status is unavailable.", 503);
+    },
+
+    async decideApproval(request: Request, runId: string, checkpointId: string): Promise<Response> {
+      if (request.method !== "POST") return error("method_not_allowed", "POST is required.", 405);
+      let gate: WorkflowFeatureGate;
+      try { gate = dependencies.getGate(); } catch { return error("feature_disabled", "Workflow approvals are unavailable.", 404); }
+      if (!gate.enabled) return error("feature_disabled", "Workflow approvals are unavailable.", 404);
+      let userId: string | null;
+      try { userId = await dependencies.authenticate(); } catch { return error("unavailable", "The workflow service is temporarily unavailable.", 503); }
+      if (!userId) return error("unauthenticated", "Authentication is required.", 401);
+      if (!featureAllows(gate, userId)) return error("feature_disabled", "Workflow approvals are unavailable.", 404);
+      if (!sameOrigin(request, dependencies.configuredAppUrl)) return error("origin_denied", "The request origin is not allowed.", 403);
+      if (!UUID.test(runId) || !UUID.test(checkpointId)) return error("invalid_request", "The workflow or checkpoint identifier is invalid.", 400);
+
+      const body = await readBoundedJson(request, WORKFLOW_CONTROL_MAX_BODY_BYTES);
+      if (body.kind === "too_large") return error("invalid_request", "The approval request is too large.", 413);
+      if (body.kind !== "ok") return error("invalid_request", "The approval request must be valid JSON.", 400);
+      const parsed = approvalRequestSchema.safeParse(body.value);
+      if (!parsed.success) return error("invalid_request", "The approval request is invalid.", 400);
+
+      const owned = await loadOwnedControlRun(dependencies, runId, userId);
+      if (owned.kind === "unavailable") return error("unavailable", "Workflow ownership could not be verified.", 503);
+      if (owned.kind !== "ok") return error("not_found", "The workflow was not found.", 404);
+      const checkpoint = owned.run.approvalCheckpoints.find((item) => item.id === checkpointId
+        && item.runId === runId && item.userId === userId);
+      if (!checkpoint) return error("not_found", "The approval checkpoint was not found.", 404);
+      let result: ExecutionControlCommandResult;
+      try {
+        result = await dependencies.decideApproval({
+          runId, userId, checkpointId, decision: parsed.data.decision,
+          expectedControlRevision: parsed.data.expectedControlRevision,
+          ...(parsed.data.rationale === undefined ? {} : { rationale: parsed.data.rationale }),
+        });
+      } catch { return error("unavailable", "The workflow service is temporarily unavailable.", 503); }
+      const failed = commandError(result);
+      if (failed) return failed;
+      const updated = await loadOwnedControlRun(dependencies, runId, userId);
+      if (updated.kind !== "ok") return error("unavailable", "The updated workflow status is unavailable.", 503);
+      const dto = toWorkflowProgressDto(updated.run);
+      return dto ? json({ result: result.kind, status: dto }, 200)
+        : error("unavailable", "The updated workflow status is unavailable.", 503);
     },
   });
 }

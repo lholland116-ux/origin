@@ -11,6 +11,7 @@ const RUN = "c3000000-0000-4000-8000-000000000001";
 const REQUEST = "d3000000-0000-4000-8000-000000000001";
 const USER_MESSAGE = "d3000000-0000-4000-8000-000000000002";
 const ASSISTANT_MESSAGE = "d3000000-0000-4000-8000-000000000003";
+const CHECKPOINT = "d3000000-0000-4000-8000-000000000004";
 const IDEMPOTENCY = "e3000000-0000-4000-8000-000000000001";
 const PILOT_GATE = { enabled: true, pilotUserIds: new Set([USER]) };
 const requestBody = {
@@ -68,13 +69,17 @@ function fixture(overrides: Partial<WorkflowHttpDependencies> = {}) {
   const prepare = vi.fn(async () => associated());
   const getRun = vi.fn(async () => persistedRun());
   const ownsConversation = vi.fn(async () => true);
+  const validateBinding = vi.fn(async () => true);
+  const validateAcceptance = vi.fn(async () => true);
+  const mutateControl = vi.fn(async () => ({ kind: "rejected", failure: { code: "authorization_denied", message: "Denied." } } as const));
+  const decideApproval = vi.fn(async () => ({ kind: "rejected", failure: { code: "authorization_denied", message: "Denied." } } as const));
   const getGate = vi.fn(() => PILOT_GATE);
   const handlers = createWorkflowHttpHandlers({
-    getGate, authenticate, loadCurrentPlan, prepare, getRun, ownsConversation,
+    getGate, authenticate, loadCurrentPlan, prepare, getRun, ownsConversation, validateBinding, validateAcceptance, mutateControl, decideApproval,
     configuredAppUrl: "https://app.example.test",
     ...overrides,
   });
-  return { handlers, getGate, authenticate, loadCurrentPlan, prepare, getRun, ownsConversation };
+  return { handlers, getGate, authenticate, loadCurrentPlan, prepare, getRun, ownsConversation, validateBinding, validateAcceptance, mutateControl, decideApproval };
 }
 
 function startRequest(body: unknown = requestBody, headers: Record<string, string> = {}): Request {
@@ -82,6 +87,18 @@ function startRequest(body: unknown = requestBody, headers: Record<string, strin
     method: "POST",
     headers: { origin: "https://app.example.test", "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
+  });
+}
+
+function controlRequest(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request(`https://app.example.test/api/v1/agent-workflows/${RUN}/controls`, {
+    method: "POST", headers: { origin: "https://app.example.test", "content-type": "application/json", ...headers }, body: JSON.stringify(body),
+  });
+}
+
+function approvalRequest(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request(`https://app.example.test/api/v1/agent-workflows/${RUN}/approvals/${CHECKPOINT}`, {
+    method: "POST", headers: { origin: "https://app.example.test", "content-type": "application/json", ...headers }, body: JSON.stringify(body),
   });
 }
 
@@ -234,6 +251,8 @@ describe("authenticated workflow HTTP handlers", () => {
     expect(await responseBody(response)).toMatchObject({ status: { runId: RUN, state: "prepared" } });
     expect(deps.getRun).toHaveBeenCalledWith(RUN, USER);
     expect(deps.ownsConversation).toHaveBeenCalledWith(CONVERSATION, USER);
+    expect(deps.validateBinding).toHaveBeenCalled();
+    expect(deps.validateAcceptance).toHaveBeenCalled();
     expect(deps.prepare).not.toHaveBeenCalled();
   });
 
@@ -253,13 +272,103 @@ describe("authenticated workflow HTTP handlers", () => {
       controlState: "active",
       failureCode: "indeterminate_step",
       steps: [{ runId: RUN, userId: USER, stepId: "research", capabilityId: "web_search", dependencyIds: [], attempt: 1, executionKey: "secret", status: "running", startedAt: "2026-10-08T12:01:00.000Z", result: { kind: "text", value: "secret reasoning" } }],
-      approvalCheckpoints: [{ id: "secret-checkpoint", runId: RUN, userId: USER, stepId: "research", planFingerprint: "private", stepFingerprint: "private", status: "pending", source: "runtime_policy", createdAt: "2026-10-08T12:01:00.000Z" }],
+      approvalCheckpoints: [{ id: CHECKPOINT, runId: RUN, userId: USER, stepId: "research", planFingerprint: "private", stepFingerprint: "private", status: "pending", source: "runtime_policy", createdAt: "2026-10-08T12:01:00.000Z" }],
     });
     const dto = toWorkflowProgressDto(run)!;
     expect(dto).toMatchObject({ state: "approval_required", failurePresent: true, recoveryRequired: true, steps: [{ state: "running", approvalRequired: true }] });
+    expect(dto).toMatchObject({ controlRevision: 0, approvalCheckpoints: [{ id: CHECKPOINT, stepId: "research", state: "pending" }] });
     const serialized = JSON.stringify(dto);
     expect(serialized).not.toContain("secret");
     expect(serialized).not.toContain("reasoning");
     expect(serialized).not.toContain("fingerprint");
+  });
+
+  it("keeps every control mutation dormant when the feature gate is disabled", async () => {
+    const deps = fixture({ getGate: () => ({ enabled: false, pilotUserIds: new Set() }) });
+    expect((await deps.handlers.control(controlRequest({ action: "pause", expectedControlRevision: 0 }), RUN)).status).toBe(404);
+    expect((await deps.handlers.decideApproval(approvalRequest({ decision: "approve", expectedControlRevision: 0 }), RUN, CHECKPOINT)).status).toBe(404);
+    expect(deps.getRun).not.toHaveBeenCalled();
+    expect(deps.mutateControl).not.toHaveBeenCalled();
+    expect(deps.decideApproval).not.toHaveBeenCalled();
+  });
+
+  it("requires authentication, same-origin, and strict control payloads before mutation", async () => {
+    const unauthenticated = fixture({ authenticate: async () => null });
+    expect((await unauthenticated.handlers.control(controlRequest({ action: "pause", expectedControlRevision: 0 }), RUN)).status).toBe(401);
+    const crossOrigin = fixture();
+    expect((await crossOrigin.handlers.control(controlRequest({ action: "pause", expectedControlRevision: 0 }, { origin: "https://evil.example" }), RUN)).status).toBe(403);
+    const invalid = fixture();
+    expect((await invalid.handlers.control(controlRequest({ action: "pause", expectedControlRevision: 0, userId: USER }), RUN)).status).toBe(400);
+    expect(invalid.mutateControl).not.toHaveBeenCalled();
+  });
+
+  it("allows an owner pause through the governed callback and returns the persisted DTO", async () => {
+    const paused = persistedRun({ controlState: "paused", controlRevision: 1 });
+    const deps = fixture({
+      mutateControl: async (input) => {
+        expect(input).toEqual({ runId: RUN, userId: USER, action: "pause", expectedControlRevision: 0 });
+        return { kind: "paused", run: {} as never };
+      },
+      getRun: async () => paused,
+    });
+    const response = await deps.handlers.control(controlRequest({ action: "pause", expectedControlRevision: 0 }), RUN);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await responseBody(response)).toMatchObject({ result: "paused", status: { controlState: "paused", controlRevision: 1 } });
+  });
+
+  it("returns a refreshable conflict for stale control revisions", async () => {
+    const deps = fixture({ mutateControl: async () => ({ kind: "rejected", failure: { code: "snapshot_conflict", message: "Conflict." } }) });
+    const response = await deps.handlers.control(controlRequest({ action: "stop", expectedControlRevision: 0 }), RUN);
+    expect(response.status).toBe(409);
+    expect(await responseBody(response)).toMatchObject({ error: { code: "revision_conflict" } });
+  });
+
+  it("binds approval decisions to a pending checkpoint and requires return rationale", async () => {
+    const run = persistedRun({ approvalCheckpoints: [{ id: CHECKPOINT, runId: RUN, userId: USER, stepId: "research", planFingerprint: "f".repeat(64), stepFingerprint: "e".repeat(64), status: "pending", source: "runtime_policy", createdAt: "2026-10-08T12:01:00.000Z" }] });
+    const deps = fixture({ getRun: async () => run });
+    expect((await deps.handlers.decideApproval(approvalRequest({ decision: "return", expectedControlRevision: 0 }), RUN, CHECKPOINT)).status).toBe(400);
+    expect((await deps.handlers.decideApproval(approvalRequest({ decision: "approve", expectedControlRevision: 0 }), RUN, "d3000000-0000-4000-8000-000000000099")).status).toBe(404);
+    expect(deps.decideApproval).not.toHaveBeenCalled();
+  });
+
+  it("commits an owner approval only for the exact pending checkpoint and returns refreshed safe status", async () => {
+    const pending = persistedRun({ approvalCheckpoints: [{ id: CHECKPOINT, runId: RUN, userId: USER, stepId: "research", planFingerprint: "f".repeat(64), stepFingerprint: "e".repeat(64), status: "pending", source: "runtime_policy", createdAt: "2026-10-08T12:01:00.000Z" }] });
+    const approved = persistedRun({ controlRevision: 1, approvalCheckpoints: [{ ...pending.approvalCheckpoints[0]!, status: "approved", decidedBy: USER, decidedAt: "2026-10-08T12:02:00.000Z" }] });
+    const getRun = vi.fn().mockResolvedValueOnce(pending).mockResolvedValue(approved);
+    const decideApproval = vi.fn(async (input) => {
+      expect(input).toEqual({ runId: RUN, userId: USER, checkpointId: CHECKPOINT, decision: "approve", expectedControlRevision: 0 });
+      return { kind: "approved", run: {} as never, checkpoint: { ...pending.approvalCheckpoints[0]!, status: "approved", decidedBy: USER, decidedAt: "2026-10-08T12:02:00.000Z" } } as const;
+    });
+    const deps = fixture({ getRun, decideApproval });
+    const response = await deps.handlers.decideApproval(approvalRequest({ decision: "approve", expectedControlRevision: 0 }), RUN, CHECKPOINT);
+    expect(response.status).toBe(200);
+    const body = await responseBody(response);
+    expect(body).toMatchObject({ result: "approved", status: { controlRevision: 1, approvalCheckpoints: [{ id: CHECKPOINT, state: "approved" }] } });
+    expect(JSON.stringify(body)).not.toContain("fingerprint");
+  });
+
+  it("denies control mutations when the immutable acceptance binding cannot be verified", async () => {
+    const deps = fixture({ validateAcceptance: async () => false });
+    const response = await deps.handlers.control(controlRequest({ action: "stop", expectedControlRevision: 0 }), RUN);
+    expect(response.status).toBe(404);
+    expect(deps.mutateControl).not.toHaveBeenCalled();
+  });
+
+  it("allows exact approval replay after a lost response but rejects a competing decision", async () => {
+    const approved = persistedRun({ controlRevision: 1, approvalCheckpoints: [{ id: CHECKPOINT, runId: RUN, userId: USER, stepId: "research", planFingerprint: "f".repeat(64), stepFingerprint: "e".repeat(64), status: "approved", source: "runtime_policy", createdAt: "2026-10-08T12:01:00.000Z", decidedBy: USER, decidedAt: "2026-10-08T12:02:00.000Z" }] });
+    const exactReplay = fixture({
+      getRun: async () => approved,
+      decideApproval: async () => ({ kind: "already_applied", run: {} as never }),
+    });
+    const replay = await exactReplay.handlers.decideApproval(approvalRequest({ decision: "approve", expectedControlRevision: 0 }), RUN, CHECKPOINT);
+    expect(replay.status).toBe(200);
+    expect(await responseBody(replay)).toMatchObject({ result: "already_applied", status: { approvalCheckpoints: [{ state: "approved" }] } });
+
+    const conflict = fixture({
+      getRun: async () => approved,
+      decideApproval: async () => ({ kind: "rejected", failure: { code: "snapshot_conflict", message: "Conflict." } }),
+    });
+    expect((await conflict.handlers.decideApproval(approvalRequest({ decision: "return", expectedControlRevision: 0, rationale: "Please revise." }), RUN, CHECKPOINT)).status).toBe(409);
   });
 });
