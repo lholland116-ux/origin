@@ -108,6 +108,11 @@ function runtime(
 
 function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["claimStep"]): ExecutionStore {
   return {
+    discoverExecutionWork: (input) => base.discoverExecutionWork(input),
+    claimExecutionWork: (input) => base.claimExecutionWork(input),
+    renewExecutionWorkClaim: (input) => base.renewExecutionWorkClaim(input),
+    releaseExecutionWorkClaim: (input) => base.releaseExecutionWorkClaim(input),
+    listOrphanedAcceptedRequests: (input) => base.listOrphanedAcceptedRequests(input),
     createRun: (input) => base.createRun(input),
     associateAcceptedRequest: (input) => base.associateAcceptedRequest(input),
     lookupAcceptedRequestRun: (input) => base.lookupAcceptedRequestRun(input),

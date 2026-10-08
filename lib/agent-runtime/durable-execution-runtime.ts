@@ -68,6 +68,8 @@ function safeRuntimeInput(input: ExecutionRuntimeInput): boolean {
     && (input.organizationId === undefined || safeId(input.organizationId))
     && (input.requestId === undefined || safeId(input.requestId))
     && (input.correlationId === undefined || safeId(input.correlationId))
+    && (input.workClaim === undefined || (UUID_PATTERN.test(input.workClaim.claimId)
+      && Number.isSafeInteger(input.workClaim.fencingGeneration) && input.workClaim.fencingGeneration > 0))
     && (input.resourceReferences === undefined || input.resourceReferences.every((ref) => typeof ref === "string" && safeId(ref)))
     && (input.attachments === undefined || input.attachments.every((item) => Boolean(item)
       && typeof item.id === "string" && item.id.length > 0 && item.id.length <= 200
@@ -829,6 +831,7 @@ export class DurableXStateExecutionRuntime {
     readonly authenticatedUserId: string;
     readonly requestId?: string;
     readonly correlationId?: string;
+    readonly workClaim?: ExecutionRuntimeInput["workClaim"];
   }): Promise<ExecutionOutcome> {
     try {
       return await this.resumeExisting(input);
@@ -894,9 +897,14 @@ export class DurableXStateExecutionRuntime {
     readonly authenticatedUserId: string;
     readonly requestId?: string;
     readonly correlationId?: string;
+    readonly workClaim?: ExecutionRuntimeInput["workClaim"];
   }): Promise<ExecutionOutcome> {
     if (!UUID_PATTERN.test(input.runId) || !UUID_PATTERN.test(input.authenticatedUserId)) {
       return { kind: "rejected", failure: executionFailure("ownership_denied") };
+    }
+    if (input.workClaim !== undefined && (!UUID_PATTERN.test(input.workClaim.claimId)
+      || !Number.isSafeInteger(input.workClaim.fencingGeneration) || input.workClaim.fencingGeneration < 1)) {
+      return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
     }
     let record: DurableExecutionRun | null;
     try {
@@ -1009,6 +1017,7 @@ export class DurableXStateExecutionRuntime {
           stepId: retryPending.stepId,
           expectedRevision: revision,
           snapshot: retryClaimSnapshot,
+          ...(input.workClaim ? { workClaim: input.workClaim } : {}),
         });
       } catch {
         stopActors();
@@ -1065,6 +1074,7 @@ export class DurableXStateExecutionRuntime {
         status: "running",
         snapshot: pendingEnvelope,
         startedAt,
+        ...(input.workClaim ? { workClaim: input.workClaim } : {}),
       });
       if (started.status !== "saved") {
         const latest = await this.options.store.getRun({ runId: current.id, userId: current.userId });
@@ -1112,6 +1122,7 @@ export class DurableXStateExecutionRuntime {
             expectedRevision: revision,
             snapshot: claimSnapshot,
             startedAt,
+            ...(input.workClaim ? { workClaim: input.workClaim } : {}),
           });
         } catch {
           lifecycle.stop();
@@ -1247,6 +1258,7 @@ export class DurableXStateExecutionRuntime {
                 expectedRevision: revision,
                 snapshot: retrySnapshot,
                 nextRetryAt,
+                ...(input.workClaim ? { workClaim: input.workClaim } : {}),
               });
             } catch {
               scheduled = { status: "conflict" };
@@ -1291,6 +1303,7 @@ export class DurableXStateExecutionRuntime {
           runId: current.id, userId: current.userId, expectedRevision: revision,
           runStatus: "failed", snapshot: failedEnvelope, updates, completedAt,
           failureCode: stepFailure.code, retainUserInput: false,
+          ...(input.workClaim ? { workClaim: input.workClaim } : {}),
         });
         lifecycle.stop();
         for (const actor of stepActors.values()) actor.stop();
@@ -1317,6 +1330,7 @@ export class DurableXStateExecutionRuntime {
         runStatus: allDone ? "succeeded" : "running", snapshot: checkpointSnapshot,
         updates: [{ stepId, status: "succeeded", result, completedAt }],
         ...(allDone ? { completedAt } : {}), retainUserInput,
+        ...(input.workClaim ? { workClaim: input.workClaim } : {}),
       });
       lifecycle.stop();
       if (saved.status !== "saved") {

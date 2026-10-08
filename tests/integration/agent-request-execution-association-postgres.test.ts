@@ -313,4 +313,237 @@ describeDatabase("accepted request execution association (isolated local Postgre
     if (result.kind !== "associated") return;
     expect(await store.getRun({ runId: result.runId, userId: otherUserId })).toBeNull();
   });
+
+  it("discovers only bounded accepted work and classifies association orphans without replay", async () => {
+    const orphan = await accept();
+    const orphaned = await store.listOrphanedAcceptedRequests({ limit: 100 });
+    expect(orphaned.length).toBeLessThanOrEqual(100);
+    expect(orphaned).toContainEqual(expect.objectContaining({
+      requestId: orphan.identity.requestId,
+      classification: "association_recovery_blocked",
+    }));
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(orphan.identity), orphan.identity);
+    expect(associated.kind).toBe("associated");
+    expect(await store.listOrphanedAcceptedRequests({ limit: 100 })).not.toContainEqual(expect.objectContaining({ requestId: orphan.identity.requestId }));
+    if (associated.kind !== "associated") return;
+
+    const first = await store.discoverExecutionWork({ limit: 1 });
+    const repeated = await store.discoverExecutionWork({ limit: 100 });
+    expect(first.length).toBeLessThanOrEqual(1);
+    expect(repeated).toContainEqual(expect.objectContaining({ runId: associated.runId, stepId: "synthesis", kind: "runnable" }));
+    expect(repeated).toEqual(await store.discoverExecutionWork({ limit: 100 }));
+    const rows = await sql.unsafe(
+      "SELECT count(*)::integer AS count FROM public.execution_work_claim_history WHERE run_id=$1::uuid",
+      [associated.runId],
+    ) as Array<{ count: number }>;
+    expect(rows[0]!.count).toBe(0);
+  });
+
+  it("serializes concurrent claimers and recovers a lost claim acknowledgement by identity", async () => {
+    const accepted = await accept();
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated run fixture.");
+    const claimIds = [randomUUID(), randomUUID()];
+    const independentClient = postgres(DATABASE_URL, { prepare: false, max: 1 });
+    let results: Awaited<ReturnType<SupabaseExecutionStore["claimExecutionWork"]>>[];
+    try {
+      const independentStore = new SupabaseExecutionStore(independentClient);
+      results = await Promise.all([
+        store.claimExecutionWork({ runId: associated.runId, claimId: claimIds[0]! }),
+        independentStore.claimExecutionWork({ runId: associated.runId, claimId: claimIds[1]! }),
+      ]);
+    } finally {
+      await independentClient.end();
+    }
+    expect(results.filter((result) => result.status === "claimed")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "busy")).toHaveLength(1);
+    const winner = results.find((result) => result.status === "claimed");
+    if (winner?.status !== "claimed") return;
+    const restartedClient = postgres(DATABASE_URL, { prepare: false, max: 1 });
+    let replay: Awaited<ReturnType<SupabaseExecutionStore["claimExecutionWork"]>>;
+    try {
+      replay = await new SupabaseExecutionStore(restartedClient).claimExecutionWork({ runId: associated.runId, claimId: winner.claim.claimId });
+    } finally {
+      await restartedClient.end();
+    }
+    expect(replay).toMatchObject({ status: "claimed", claim: winner.claim, stepId: winner.stepId, snapshotRevision: winner.snapshotRevision });
+    const claims = await sql.unsafe(
+      "SELECT count(*)::integer AS count, max(fencing_generation)::integer AS generation FROM public.execution_work_claim_history WHERE run_id=$1::uuid",
+      [associated.runId],
+    ) as Array<{ count: number; generation: number }>;
+    expect(claims[0]).toEqual({ count: 1, generation: 1 });
+
+    const parallelAcceptance = await accept();
+    const parallelRun = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(parallelAcceptance.identity), parallelAcceptance.identity);
+    const otherAccepted = await accept();
+    const otherRun = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(otherAccepted.identity), otherAccepted.identity);
+    if (parallelRun.kind !== "associated" || otherRun.kind !== "associated") throw new Error("Expected parallel run fixtures.");
+    const parallel = await Promise.all([
+      store.claimExecutionWork({ runId: parallelRun.runId, claimId: randomUUID() }),
+      store.claimExecutionWork({ runId: otherRun.runId, claimId: randomUUID() }),
+    ]);
+    expect(parallel.every((result) => result.status === "claimed")).toBe(true);
+  });
+
+  it("uses database-time leases and fencing to reject stale writes after reclaim", async () => {
+    const accepted = await accept();
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated run fixture.");
+    const old = await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID(), leaseSeconds: 30 });
+    if (old.status !== "claimed") throw new Error("Expected first claim.");
+    expect(await store.renewExecutionWorkClaim({ runId: associated.runId, claim: old.claim })).toMatchObject({ status: "renewed" });
+    await sql`UPDATE public.execution_run_work_state SET lease_until=clock_timestamp()-interval '1 second' WHERE run_id=${associated.runId}::uuid`;
+    await sql`UPDATE public.execution_work_claim_history SET lease_until=clock_timestamp()-interval '1 second' WHERE claim_id=${old.claim.claimId}::uuid`;
+    const replacement = await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() });
+    if (replacement.status !== "claimed") throw new Error("Expected reclaimed work.");
+    expect(replacement.claim.fencingGeneration).toBe(old.claim.fencingGeneration + 1);
+    expect(await store.renewExecutionWorkClaim({ runId: associated.runId, claim: old.claim })).toEqual({ status: "stale_claim" });
+    expect(await store.releaseExecutionWorkClaim({ runId: associated.runId, claim: old.claim, expectedRevision: 0 })).toEqual({ status: "stale_claim" });
+
+    const pending = await store.getRun({ runId: associated.runId, userId });
+    if (!pending) throw new Error("Expected run fixture.");
+    const write = {
+      runId: associated.runId,
+      userId,
+      expectedRevision: pending.snapshotRevision,
+      status: "running" as const,
+      snapshot: pending.snapshot,
+      startedAt: new Date().toISOString(),
+    };
+    expect(await store.saveRunState(write)).toMatchObject({ status: "conflict" });
+    expect(await store.saveRunState({ ...write, workClaim: old.claim })).toMatchObject({ status: "conflict" });
+    const currentWrite = await store.saveRunState({ ...write, workClaim: replacement.claim });
+    expect(currentWrite.status).toBe("saved");
+    if (currentWrite.status !== "saved") return;
+    expect(await store.releaseExecutionWorkClaim({ runId: associated.runId, claim: replacement.claim, expectedRevision: 0 })).toEqual({ status: "revision_conflict" });
+    expect(await store.releaseExecutionWorkClaim({ runId: associated.runId, claim: replacement.claim, expectedRevision: currentWrite.snapshotRevision })).toEqual({ status: "released" });
+  });
+
+  it("does not renew or advance work after a human pause", async () => {
+    const accepted = await accept();
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated run fixture.");
+    const claim = await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() });
+    if (claim.status !== "claimed") throw new Error("Expected claimed run fixture.");
+    const paused = await store.pauseRun({
+      runId: associated.runId, userId, expectedControlRevision: 0,
+      actorUserId: userId, createdAt: new Date().toISOString(),
+    });
+    expect(paused.status).toBe("paused");
+    expect(await store.renewExecutionWorkClaim({ runId: associated.runId, claim: claim.claim })).toEqual({ status: "ineligible" });
+    expect(await store.saveRunState({
+      runId: associated.runId, userId, expectedRevision: 0, status: "running",
+      snapshot: (await store.getRun({ runId: associated.runId, userId }))!.snapshot,
+      startedAt: new Date().toISOString(), workClaim: claim.claim,
+    })).toMatchObject({ status: "conflict" });
+    expect(await store.releaseExecutionWorkClaim({ runId: associated.runId, claim: claim.claim, expectedRevision: 0 })).toEqual({ status: "released" });
+
+    const stoppedAcceptance = await accept();
+    const stoppedRun = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(stoppedAcceptance.identity), stoppedAcceptance.identity);
+    if (stoppedRun.kind !== "associated") throw new Error("Expected stopped run fixture.");
+    const stoppedClaim = await store.claimExecutionWork({ runId: stoppedRun.runId, claimId: randomUUID() });
+    if (stoppedClaim.status !== "claimed") throw new Error("Expected claim before stop.");
+    expect(await store.stopRun({
+      runId: stoppedRun.runId, userId, expectedControlRevision: 0,
+      actorUserId: userId, createdAt: new Date().toISOString(),
+    })).toMatchObject({ status: "stopped" });
+    expect(await store.renewExecutionWorkClaim({ runId: stoppedRun.runId, claim: stoppedClaim.claim })).toEqual({ status: "ineligible" });
+    expect(await store.releaseExecutionWorkClaim({ runId: stoppedRun.runId, claim: stoppedClaim.claim, expectedRevision: 0 })).toEqual({ status: "released" });
+  });
+
+  it("classifies an expired in-flight provider boundary as recovery-required, never runnable", async () => {
+    const accepted = await accept();
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated run fixture.");
+    const claim = await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() });
+    if (claim.status !== "claimed") throw new Error("Expected claimed run fixture.");
+    await sql`UPDATE public.execution_runs SET status='running',started_at=clock_timestamp() WHERE id=${associated.runId}::uuid`;
+    await sql`UPDATE public.execution_steps SET status='running',started_at=clock_timestamp() WHERE run_id=${associated.runId}::uuid AND step_id='synthesis'`;
+    const step = (await store.getRun({ runId: associated.runId, userId }))?.steps.find((item) => item.stepId === "synthesis");
+    if (!step) throw new Error("Expected in-flight step fixture.");
+    const admitted = await sql`
+      SELECT public.admit_agent_provider_cost(
+        ${associated.runId}::uuid, 'synthesis', ${step.executionKey}::uuid,
+        1::smallint, 1::smallint, 'standard', 'openai', 'gpt-6-luna', 10, 32, NULL::smallint
+      ) AS result
+    ` as Array<{ result: { admission_id: string } }>;
+    const admissionId = admitted[0]?.result.admission_id;
+    if (!admissionId) throw new Error("Expected durable test admission.");
+    await sql`UPDATE public.execution_run_work_state SET lease_until=clock_timestamp()-interval '1 second' WHERE run_id=${associated.runId}::uuid`;
+    await sql`UPDATE public.execution_work_claim_history SET lease_until=clock_timestamp()-interval '1 second' WHERE claim_id=${claim.claim.claimId}::uuid`;
+    await expect(sql`
+      SELECT public.admit_agent_provider_cost(
+        ${associated.runId}::uuid, 'synthesis', ${step.executionKey}::uuid,
+        1::smallint, 2::smallint, 'standard', 'openai', 'gpt-6-luna', 10, 32, NULL::smallint
+      )
+    `).rejects.toThrow("AGENT_PROVIDER_COST_WORK_CLAIM_STALE");
+    await expect(sql`SELECT public.begin_agent_provider_cost_dispatch(${admissionId}::uuid)`)
+      .rejects.toThrow("AGENT_PROVIDER_COST_WORK_CLAIM_STALE");
+    const admissions = await sql`SELECT count(*)::integer AS count, max(status) AS status,
+      max(reservation_nano_usd)::text AS reservation FROM public.agent_provider_cost_admissions WHERE run_id=${associated.runId}::uuid` as Array<{ count: number; status: string; reservation: string }>;
+    expect(admissions[0]).toMatchObject({ count: 1, status: "admitted" });
+    expect(BigInt(admissions[0]!.reservation)).toBeGreaterThan(BigInt(0));
+    expect(await store.discoverExecutionWork({ limit: 20 })).toContainEqual(expect.objectContaining({
+      runId: associated.runId, stepId: "synthesis", kind: "recovery_required",
+    }));
+    expect(await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() })).toEqual({ status: "recovery_required" });
+    expect(await store.discoverExecutionWork({ limit: 20 })).not.toContainEqual(expect.objectContaining({ runId: associated.runId, kind: "runnable" }));
+  });
+
+  it("discovers explicitly due retries without changing the cost or attempt ledgers", async () => {
+    const accepted = await accept();
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated run fixture.");
+    await sql`UPDATE public.execution_runs SET status='running',started_at=clock_timestamp() WHERE id=${associated.runId}::uuid`;
+    await sql`UPDATE public.execution_steps SET status='running',started_at=clock_timestamp() WHERE run_id=${associated.runId}::uuid AND step_id='synthesis'`;
+    await sql`UPDATE public.execution_steps SET status='retry_pending',next_retry_at=clock_timestamp()-interval '1 second' WHERE run_id=${associated.runId}::uuid AND step_id='synthesis'`;
+    expect(await store.discoverExecutionWork({ limit: 100 })).toContainEqual(expect.objectContaining({
+      runId: associated.runId, stepId: "synthesis", kind: "runnable",
+    }));
+    const claim = await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() });
+    if (claim.status !== "claimed") throw new Error("Expected safe retry to be claimable.");
+    const before = await sql`SELECT count(*)::integer AS count FROM public.agent_provider_cost_admissions WHERE run_id=${associated.runId}::uuid` as Array<{ count: number }>;
+    expect(before[0]!.count).toBe(0);
+    expect((await store.getRun({ runId: associated.runId, userId }))?.steps.find((step) => step.stepId === "synthesis")?.attempt).toBe(1);
+  });
+
+  it("blocks pending approval and capability-denied runs from discovery and claims", async () => {
+    const accepted = await accept();
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated run fixture.");
+    await sql`INSERT INTO public.execution_human_approval_checkpoints (
+      run_id,user_id,step_id,plan_fingerprint,step_fingerprint,source
+    ) VALUES (${associated.runId}::uuid,${userId}::uuid,'synthesis',${associated.planFingerprint},${"e".repeat(64)},'runtime_policy')`;
+    expect(await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() })).toEqual({ status: "ineligible" });
+
+    const deniedAcceptance = await accept();
+    const deniedRun = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(deniedAcceptance.identity), deniedAcceptance.identity);
+    if (deniedRun.kind !== "associated") throw new Error("Expected associated denied-capability fixture.");
+    await sql`UPDATE public.execution_steps SET capability_id='web_search' WHERE run_id=${deniedRun.runId}::uuid AND step_id='synthesis'`;
+    expect(await store.claimExecutionWork({ runId: deniedRun.runId, claimId: randomUUID() })).toEqual({ status: "ineligible" });
+    expect(await store.discoverExecutionWork({ limit: 100 })).not.toContainEqual(expect.objectContaining({ runId: deniedRun.runId }));
+  });
+
+  it("keeps completed finalization work out of execution claims", async () => {
+    const accepted = await accept();
+    const associated = await makeRuntime(store).runtime.associateAcceptedRequest(plan(), runtimeInput(accepted.identity), accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated run fixture.");
+    await sql`UPDATE public.execution_runs SET status='running',started_at=clock_timestamp() WHERE id=${associated.runId}::uuid`;
+    await sql`UPDATE public.execution_steps SET status='running',started_at=clock_timestamp() WHERE run_id=${associated.runId}::uuid`;
+    await sql`UPDATE public.execution_steps SET status='succeeded',completed_at=clock_timestamp(),result_envelope='{"kind":"text","value":{"text":"done"}}'::jsonb WHERE run_id=${associated.runId}::uuid`;
+    await sql`UPDATE public.execution_runs SET status='succeeded',completed_at=clock_timestamp() WHERE id=${associated.runId}::uuid`;
+    const pendingFinalizations = await sql`SELECT run_id FROM public.list_pending_agent_execution_finalizations(100)` as Array<{ run_id: string }>;
+    expect(pendingFinalizations.some((row) => row.run_id === associated.runId)).toBe(true);
+    await sql`INSERT INTO public.execution_run_finalizations (
+      run_id,user_id,request_id,conversation_id,user_message_id,assistant_message_id,completion_sha256
+    ) VALUES (
+      ${associated.runId}::uuid,${userId}::uuid,${accepted.identity.requestId}::uuid,
+      ${accepted.identity.conversationId}::uuid,${accepted.identity.userMessageId}::uuid,
+      ${accepted.identity.assistantMessageId}::uuid,${"a".repeat(64)}
+    )`;
+    const finalized = await sql`SELECT run_id FROM public.list_pending_agent_execution_finalizations(100)` as Array<{ run_id: string }>;
+    expect(finalized.some((row) => row.run_id === associated.runId)).toBe(false);
+    expect(await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() })).toEqual({ status: "ineligible" });
+    expect(await store.discoverExecutionWork({ limit: 100 })).not.toContainEqual(expect.objectContaining({ runId: associated.runId }));
+  });
 });

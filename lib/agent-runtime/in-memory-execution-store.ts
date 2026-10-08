@@ -40,6 +40,14 @@ export class InMemoryExecutionStore implements ExecutionStore {
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
+  // This test fake intentionally never simulates a trusted dispatcher. Durable
+  // discovery/claim semantics are qualified against the PostgreSQL adapter.
+  async discoverExecutionWork(input: { readonly limit?: number } = {}): Promise<[]> { void input; return []; }
+  async claimExecutionWork(input: { readonly runId: string; readonly claimId: string; readonly leaseSeconds?: number }): Promise<{ readonly status: "ineligible" }> { void input; return { status: "ineligible" }; }
+  async renewExecutionWorkClaim(input: { readonly runId: string; readonly claim: { readonly claimId: string; readonly fencingGeneration: number }; readonly leaseSeconds?: number }): Promise<{ readonly status: "stale_claim" }> { void input; return { status: "stale_claim" }; }
+  async releaseExecutionWorkClaim(input: { readonly runId: string; readonly claim: { readonly claimId: string; readonly fencingGeneration: number }; readonly expectedRevision: number }): Promise<{ readonly status: "stale_claim" }> { void input; return { status: "stale_claim" }; }
+  async listOrphanedAcceptedRequests(input: { readonly limit?: number } = {}): Promise<[]> { void input; return []; }
+
   async createRun(input: CreateDurableExecutionRunInput): Promise<CreateDurableExecutionRunResult> {
     const prior = [...this.runs.values()].find((run) => run.userId === input.userId
       && run.idempotencyKey === input.idempotencyKey);

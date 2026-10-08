@@ -868,6 +868,11 @@ describe("six independent capability adapters", () => {
     };
     const authorizedSteps: string[] = [];
     const reopenStore = (): ExecutionStore => ({
+      discoverExecutionWork: (input) => persistentBackend.discoverExecutionWork(input),
+      claimExecutionWork: (input) => persistentBackend.claimExecutionWork(input),
+      renewExecutionWorkClaim: (input) => persistentBackend.renewExecutionWorkClaim(input),
+      releaseExecutionWorkClaim: (input) => persistentBackend.releaseExecutionWorkClaim(input),
+      listOrphanedAcceptedRequests: (input) => persistentBackend.listOrphanedAcceptedRequests(input),
       createRun: (input) => persistentBackend.createRun(input),
       associateAcceptedRequest: (input) => persistentBackend.associateAcceptedRequest(input),
       lookupAcceptedRequestRun: (input) => persistentBackend.lookupAcceptedRequestRun(input),

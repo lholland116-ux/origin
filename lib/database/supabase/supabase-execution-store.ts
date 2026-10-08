@@ -25,12 +25,38 @@ import type {
   HumanApprovalWriteResult,
   AcceptedRequestExecutionIdentity,
   LookupAcceptedExecutionRunResult,
+  DiscoveredExecutionWork,
+  ExecutionWorkClaim,
+  ExecutionWorkClaimResult,
+  ExecutionWorkLeaseResult,
+  OrphanedAcceptedRequest,
 } from "@/lib/agent-runtime/execution-store";
+import { EXECUTION_WORK_LEASE_POLICY } from "@/lib/agent-runtime/execution-store";
 import type { ExecutionControlEvent, ExecutionControlState, HumanApprovalCheckpoint } from "@/lib/agent-runtime/runtime-contracts";
 import { EXECUTION_CONTROL_STATES, HUMAN_APPROVAL_STATUSES, MAX_EXECUTION_STEP_ATTEMPTS } from "@/lib/agent-runtime/runtime-contracts";
 
 type ExecutionSql = postgres.Sql | postgres.TransactionSql;
 type Row = postgres.Row & Record<string, unknown>;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function workClaimIsCurrent(
+  sql: ExecutionSql,
+  runId: string,
+  userId: string,
+  claim?: ExecutionWorkClaim,
+): Promise<boolean> {
+  const rows = await sql`SELECT public.agent_execution_work_claim_is_current(
+    ${runId}::uuid, ${userId}::uuid, ${claim?.claimId ?? null}::uuid,
+    ${claim?.fencingGeneration ?? null}::bigint
+  ) AS current` as readonly Row[];
+  return rows[0]?.current === true;
+}
+
+function rpcObject(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  return value;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -270,6 +296,107 @@ function checkpointReplayMatches(
 /** Direct PostgreSQL adapter. Every lookup/update carries user_id and run_id; claims/checkpoints serialize on the owned run row. */
 export class SupabaseExecutionStore implements ExecutionStore {
   constructor(private readonly sql: postgres.Sql) {}
+
+  async discoverExecutionWork(input: { readonly limit?: number } = {}): Promise<readonly DiscoveredExecutionWork[]> {
+    const limit = input.limit ?? 50;
+    if (!Number.isInteger(limit) || limit < 1 || limit > EXECUTION_WORK_LEASE_POLICY.maximumDiscoveryBatch) return [];
+    const rows = await this.sql`SELECT * FROM public.discover_agent_execution_work(${limit})` as readonly Row[];
+    return rows.flatMap((row) => {
+      const generation = Number(row.fencing_generation);
+      const dueAt = iso(row.due_at);
+      if (typeof row.run_id !== "string" || typeof row.step_id !== "string"
+        || !["pending_step", "safe_retry", "recovery_required"].includes(String(row.work_kind))
+        || !dueAt || !Number.isSafeInteger(generation) || generation < 0) return [];
+      return [{
+        runId: row.run_id,
+        stepId: row.step_id,
+        kind: row.work_kind === "recovery_required" ? "recovery_required" as const : "runnable" as const,
+        dueAt,
+        fencingGeneration: generation,
+      }];
+    });
+  }
+
+  async claimExecutionWork(input: { readonly runId: string; readonly claimId: string; readonly leaseSeconds?: number }): Promise<ExecutionWorkClaimResult> {
+    if (!UUID_PATTERN.test(input.runId) || !UUID_PATTERN.test(input.claimId)
+      || !Number.isInteger(input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds)
+      || (input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds) < EXECUTION_WORK_LEASE_POLICY.minimumSeconds
+      || (input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds) > EXECUTION_WORK_LEASE_POLICY.maximumSeconds) {
+      return { status: "ineligible" };
+    }
+    const rows = await this.sql`SELECT public.claim_agent_execution_work(
+      ${input.runId}::uuid, ${input.claimId}::uuid, ${input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds}
+    ) AS result` as readonly Row[];
+    const result = rpcObject(rows[0]?.result);
+    if (!result || typeof result.status !== "string") return { status: "ineligible" };
+    if (result.status !== "claimed") {
+      return ["busy", "ineligible", "recovery_required", "stale_claim", "not_found"].includes(result.status)
+        ? { status: result.status as Exclude<ExecutionWorkClaimResult, { status: "claimed" }> ["status"] }
+        : { status: "ineligible" };
+    }
+    const generation = Number(result.fencingGeneration);
+    const snapshotRevision = Number(result.snapshotRevision);
+    if (result.claimId !== input.claimId || result.runId !== input.runId
+      || typeof result.stepId !== "string" || !Number.isSafeInteger(generation) || generation < 1
+      || !Number.isSafeInteger(snapshotRevision) || snapshotRevision < 0 || typeof result.leaseExpiresAt !== "string"
+      || !Number.isFinite(Date.parse(result.leaseExpiresAt))) return { status: "ineligible" };
+    return {
+      status: "claimed",
+      runId: input.runId,
+      stepId: result.stepId,
+      snapshotRevision,
+      leaseExpiresAt: new Date(result.leaseExpiresAt).toISOString(),
+      claim: { claimId: input.claimId, fencingGeneration: generation },
+    };
+  }
+
+  async renewExecutionWorkClaim(input: { readonly runId: string; readonly claim: ExecutionWorkClaim; readonly leaseSeconds?: number }): Promise<ExecutionWorkLeaseResult> {
+    if (!UUID_PATTERN.test(input.runId) || !UUID_PATTERN.test(input.claim.claimId)
+      || !Number.isSafeInteger(input.claim.fencingGeneration) || input.claim.fencingGeneration < 1
+      || !Number.isInteger(input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds)
+      || (input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds) < EXECUTION_WORK_LEASE_POLICY.minimumSeconds
+      || (input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds) > EXECUTION_WORK_LEASE_POLICY.maximumSeconds) {
+      return { status: "stale_claim" };
+    }
+    const rows = await this.sql`SELECT public.renew_agent_execution_work_claim(
+      ${input.runId}::uuid, ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint,
+      ${input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds}
+    ) AS result` as readonly Row[];
+    const result = rpcObject(rows[0]?.result);
+    if (result?.status === "renewed" && typeof result.leaseExpiresAt === "string" && Number.isFinite(Date.parse(result.leaseExpiresAt))) {
+      return { status: "renewed", leaseExpiresAt: new Date(result.leaseExpiresAt).toISOString() };
+    }
+    return ["stale_claim", "ineligible", "not_found"].includes(String(result?.status))
+      ? { status: result!.status as "stale_claim" | "ineligible" | "not_found" }
+      : { status: "stale_claim" };
+  }
+
+  async releaseExecutionWorkClaim(input: { readonly runId: string; readonly claim: ExecutionWorkClaim; readonly expectedRevision: number }): Promise<ExecutionWorkLeaseResult> {
+    if (!UUID_PATTERN.test(input.runId) || !UUID_PATTERN.test(input.claim.claimId)
+      || !Number.isSafeInteger(input.claim.fencingGeneration) || input.claim.fencingGeneration < 1
+      || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) return { status: "stale_claim" };
+    const rows = await this.sql`SELECT public.release_agent_execution_work_claim(
+      ${input.runId}::uuid, ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint,
+      ${input.expectedRevision}::bigint
+    ) AS result` as readonly Row[];
+    const result = rpcObject(rows[0]?.result);
+    if (result?.status === "released") return { status: "released" };
+    return ["stale_claim", "ineligible", "revision_conflict", "not_found", "unsafe_boundary"].includes(String(result?.status))
+      ? { status: result!.status === "revision_conflict" ? "revision_conflict" : result!.status as Exclude<ExecutionWorkLeaseResult, { status: "renewed" | "released" }> ["status"] }
+      : { status: "stale_claim" };
+  }
+
+  async listOrphanedAcceptedRequests(input: { readonly limit?: number } = {}): Promise<readonly OrphanedAcceptedRequest[]> {
+    const limit = input.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) return [];
+    const rows = await this.sql`SELECT * FROM public.list_orphaned_agent_request_acceptances(${limit})` as readonly Row[];
+    return rows.flatMap((row) => {
+      const createdAt = iso(row.created_at);
+      return typeof row.request_id === "string" && createdAt && row.classification === "association_recovery_blocked"
+        ? [{ requestId: row.request_id, createdAt, classification: "association_recovery_blocked" as const }]
+        : [];
+    });
+  }
 
   async associateAcceptedRequest(
     input: AssociateAcceptedExecutionRunInput,
@@ -663,6 +790,10 @@ export class SupabaseExecutionStore implements ExecutionStore {
           THEN runtime_context - 'userInput' ELSE runtime_context END
       WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid AND status = 'pending'
         AND ${input.status} = 'running' AND control_state = 'active' AND snapshot_revision = ${input.expectedRevision}
+        AND public.agent_execution_work_claim_is_current(
+          id, user_id, ${input.workClaim?.claimId ?? null}::uuid,
+          ${input.workClaim?.fencingGeneration ?? null}::bigint
+        )
       RETURNING snapshot_revision
     ` as readonly Row[];
     if (rows.length === 1) return { status: "saved", snapshotRevision: Number(rows[0]!.snapshot_revision) };
@@ -674,6 +805,7 @@ export class SupabaseExecutionStore implements ExecutionStore {
       const runs = await tx`SELECT snapshot_revision, status, control_state FROM public.execution_runs
         WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid FOR UPDATE` as readonly Row[];
       if (runs.length !== 1) return { status: "not_found" };
+      if (!await workClaimIsCurrent(tx, input.runId, input.userId, input.workClaim)) return { status: "conflict" };
       if (Number(runs[0]!.snapshot_revision) !== input.expectedRevision || runs[0]!.status !== "running") return { status: "conflict" };
       if (runs[0]!.control_state !== "active") return { status: "control_blocked", controlState: runs[0]!.control_state as ExecutionControlState };
       const checkpoints = await tx`SELECT * FROM public.execution_human_approval_checkpoints
@@ -708,6 +840,7 @@ export class SupabaseExecutionStore implements ExecutionStore {
       const runs = await tx`SELECT snapshot_revision, status, control_state FROM public.execution_runs
         WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid FOR UPDATE` as readonly Row[];
       if (runs.length !== 1) return { status: "not_found" };
+      if (!await workClaimIsCurrent(tx, input.runId, input.userId, input.workClaim)) return { status: "conflict" };
       if (Number(runs[0]!.snapshot_revision) !== input.expectedRevision || runs[0]!.status !== "running") return { status: "conflict" };
       const priorControlState = runs[0]!.control_state as ExecutionControlState;
       if (["paused", "stopped", "returned"].includes(priorControlState)) return { status: "conflict" };
@@ -756,6 +889,7 @@ export class SupabaseExecutionStore implements ExecutionStore {
       const runs = await tx`SELECT snapshot_revision, status, control_state FROM public.execution_runs
         WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid FOR UPDATE` as readonly Row[];
       if (runs.length !== 1) return { status: "not_found" };
+      if (!await workClaimIsCurrent(tx, input.runId, input.userId, input.workClaim)) return { status: "conflict" };
       if (Number(runs[0]!.snapshot_revision) !== input.expectedRevision || runs[0]!.status !== "running") return { status: "conflict" };
       if (runs[0]!.control_state !== "active") return { status: "control_blocked", controlState: runs[0]!.control_state as ExecutionControlState };
       const steps = await tx`SELECT status, attempt, next_retry_at FROM public.execution_steps
@@ -809,6 +943,7 @@ export class SupabaseExecutionStore implements ExecutionStore {
       const runs = await tx`SELECT snapshot_revision, status, control_state FROM public.execution_runs
         WHERE id = ${input.runId}::uuid AND user_id = ${input.userId}::uuid FOR UPDATE` as readonly Row[];
       if (runs.length !== 1) return { status: "not_found" };
+      if (!await workClaimIsCurrent(tx, input.runId, input.userId, input.workClaim)) return { status: "conflict" };
       if (Number(runs[0]!.snapshot_revision) !== input.expectedRevision) {
         const existing = await loadRun(tx, input.runId, input.userId);
         return existing && checkpointReplayMatches(existing, input)

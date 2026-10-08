@@ -1,6 +1,7 @@
 import type { CapabilityId, CapabilityOutputKind } from "@/lib/ai/capability-registry";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
 import type { UserReasoningMode } from "@/lib/ai/reasoning-mode";
+import type { ExecutionWorkClaim } from "@/lib/agent-runtime/execution-store";
 import type { ExecutionStepResult, JsonValue } from "@/lib/agent-runtime/runtime-contracts";
 import type { ProviderCostInvocationContext } from "@/lib/agent-runtime/provider-cost-ledger";
 
@@ -23,6 +24,8 @@ export type ExecutionRuntimeInput = {
   readonly resourceReferences?: readonly string[];
   readonly requestId?: string;
   readonly correlationId?: string;
+  /** Supplied only by a future trusted worker; never persisted as user/runtime context. */
+  readonly workClaim?: ExecutionWorkClaim;
 };
 
 export type ResolvedExecutionInput =

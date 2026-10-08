@@ -13,6 +13,12 @@ import type { UserReasoningMode } from "@/lib/ai/reasoning-mode";
 
 export const EXECUTION_RUNTIME_VERSION = 1 as const;
 export const EXECUTION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const EXECUTION_WORK_LEASE_POLICY = Object.freeze({
+  defaultSeconds: 120,
+  minimumSeconds: 30,
+  maximumSeconds: 900,
+  maximumDiscoveryBatch: 100,
+} as const);
 
 export type PersistedExecutionPlan = {
   readonly version: 1;
@@ -131,6 +137,33 @@ export type AcceptedRequestExecutionIdentity = Readonly<{
   readonly requestFingerprint: string;
 }>;
 
+export type ExecutionWorkClaim = Readonly<{
+  readonly claimId: string;
+  readonly fencingGeneration: number;
+}>;
+
+export type DiscoveredExecutionWork = Readonly<{
+  readonly runId: string;
+  readonly stepId: string;
+  readonly kind: "runnable" | "recovery_required";
+  readonly dueAt: string;
+  readonly fencingGeneration: number;
+}>;
+
+export type ExecutionWorkClaimResult =
+  | Readonly<{ status: "claimed"; claim: ExecutionWorkClaim; runId: string; stepId: string; snapshotRevision: number; leaseExpiresAt: string }>
+  | Readonly<{ status: "busy" | "ineligible" | "recovery_required" | "stale_claim" | "not_found" }>;
+
+export type ExecutionWorkLeaseResult =
+  | Readonly<{ status: "renewed" | "released"; leaseExpiresAt?: string }>
+  | Readonly<{ status: "stale_claim" | "ineligible" | "revision_conflict" | "not_found" | "unsafe_boundary" }>;
+
+export type OrphanedAcceptedRequest = Readonly<{
+  readonly requestId: string;
+  readonly createdAt: string;
+  readonly classification: "association_recovery_blocked";
+}>;
+
 export type AssociateAcceptedExecutionRunInput = Readonly<{
   readonly acceptance: AcceptedRequestExecutionIdentity;
   readonly run: CreateDurableExecutionRunInput;
@@ -213,6 +246,14 @@ export type DecideHumanApprovalInput = {
 
 /** LVTChat-owned persistence boundary; no Supabase/Postgres client types escape this interface. */
 export interface ExecutionStore {
+  /** Bounded, content-free server discovery; this never claims or dispatches work. */
+  discoverExecutionWork(input: { readonly limit?: number }): Promise<readonly DiscoveredExecutionWork[]>;
+  /** Atomically claims an eligible accepted execution using a caller-generated idempotency identity. */
+  claimExecutionWork(input: { readonly runId: string; readonly claimId: string; readonly leaseSeconds?: number }): Promise<ExecutionWorkClaimResult>;
+  renewExecutionWorkClaim(input: { readonly runId: string; readonly claim: ExecutionWorkClaim; readonly leaseSeconds?: number }): Promise<ExecutionWorkLeaseResult>;
+  releaseExecutionWorkClaim(input: { readonly runId: string; readonly claim: ExecutionWorkClaim; readonly expectedRevision: number }): Promise<ExecutionWorkLeaseResult>;
+  /** Detection only: accepted requests without a validated plan are never replayed here. */
+  listOrphanedAcceptedRequests(input: { readonly limit?: number }): Promise<readonly OrphanedAcceptedRequest[]>;
   createRun(input: CreateDurableExecutionRunInput): Promise<CreateDurableExecutionRunResult>;
   /** Atomically verifies immutable acceptance identity and creates/retrieves its sole run. */
   associateAcceptedRequest(input: AssociateAcceptedExecutionRunInput): Promise<AssociateAcceptedExecutionRunResult>;
@@ -237,6 +278,7 @@ export interface ExecutionStore {
     readonly completedAt?: string;
     readonly failureCode?: string;
     readonly retainUserInput?: boolean;
+    readonly workClaim?: ExecutionWorkClaim;
   }): Promise<ExecutionStoreWriteResult>;
   claimStep(input: {
     readonly runId: string;
@@ -245,6 +287,7 @@ export interface ExecutionStore {
     readonly expectedRevision: number;
     readonly snapshot: ExecutionSnapshotEnvelope;
     readonly startedAt: string;
+    readonly workClaim?: ExecutionWorkClaim;
   }): Promise<ClaimDurableStepResult>;
   scheduleStepRetry(input: {
     readonly runId: string;
@@ -253,6 +296,7 @@ export interface ExecutionStore {
     readonly expectedRevision: number;
     readonly snapshot: ExecutionSnapshotEnvelope;
     readonly nextRetryAt: string;
+    readonly workClaim?: ExecutionWorkClaim;
   }): Promise<ScheduleDurableStepRetryResult>;
   claimRetryableStep(input: {
     readonly runId: string;
@@ -260,6 +304,7 @@ export interface ExecutionStore {
     readonly stepId: string;
     readonly expectedRevision: number;
     readonly snapshot: ExecutionSnapshotEnvelope;
+    readonly workClaim?: ExecutionWorkClaim;
   }): Promise<ClaimRetryableStepResult>;
   checkpoint(input: {
     readonly runId: string;
@@ -271,5 +316,6 @@ export interface ExecutionStore {
     readonly completedAt?: string;
     readonly failureCode?: string;
     readonly retainUserInput?: boolean;
+    readonly workClaim?: ExecutionWorkClaim;
   }): Promise<ExecutionStoreWriteResult>;
 }
