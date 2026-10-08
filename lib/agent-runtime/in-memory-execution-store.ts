@@ -2,6 +2,9 @@ import type {
   ClaimDurableStepResult,
   CreateDurableExecutionRunInput,
   CreateDurableExecutionRunResult,
+  AssociateAcceptedExecutionRunInput,
+  AssociateAcceptedExecutionRunResult,
+  AcceptedRequestExecutionIdentity,
   DurableExecutionRun,
   DurableExecutionStep,
   DurableStepCheckpoint,
@@ -22,11 +25,17 @@ import { MAX_EXECUTION_STEP_ATTEMPTS } from "@/lib/agent-runtime/runtime-contrac
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableStep = Mutable<DurableExecutionStep>;
 type MutableRun = Mutable<Omit<DurableExecutionRun, "steps">> & { steps: MutableStep[] };
+type PendingAssociation = Readonly<{
+  identity: AcceptedRequestExecutionIdentity;
+  result: Promise<AssociateAcceptedExecutionRunResult>;
+}>;
 
 /** Deterministic store fake for adapter tests; production claims use PostgreSQL conditional updates. */
 export class InMemoryExecutionStore implements ExecutionStore {
   private readonly runs = new Map<string, MutableRun>();
   private readonly controlEvents = new Map<string, ExecutionControlEvent[]>();
+  private readonly acceptedAssociations = new Map<string, PendingAssociation>();
+  private readonly acceptedAssociationKeys = new Map<string, PendingAssociation>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -87,6 +96,58 @@ export class InMemoryExecutionStore implements ExecutionStore {
     }
     this.runs.set(run.id, run);
     return { status: "created", run: structuredClone(run) };
+  }
+
+  associateAcceptedRequest(input: AssociateAcceptedExecutionRunInput): Promise<AssociateAcceptedExecutionRunResult> {
+    const { acceptance, run } = input;
+    const associationKey = `${acceptance.userId}:${acceptance.idempotencyKey}`;
+    if (!validAcceptedAssociationInput(acceptance, run)) return Promise.resolve({ status: "conflict" });
+
+    const prior = this.acceptedAssociations.get(acceptance.requestId)
+      ?? this.acceptedAssociationKeys.get(associationKey);
+    if (prior) {
+      return sameAcceptance(prior.identity, acceptance)
+        ? prior.result.then((result) => result.status === "created" ? { ...result, status: "existing" } : result)
+        : Promise.resolve({ status: "conflict" });
+    }
+
+    const result = Promise.resolve().then(async (): Promise<AssociateAcceptedExecutionRunResult> => {
+      const keyRun = [...this.runs.values()].find((candidate) => candidate.userId === run.userId
+        && candidate.idempotencyKey === run.idempotencyKey);
+      if (keyRun && (keyRun.acceptedRequestId !== acceptance.requestId
+        || keyRun.acceptanceFingerprint !== acceptance.requestFingerprint)) return { status: "conflict" };
+      if (this.runs.has(run.id) && this.runs.get(run.id)?.acceptedRequestId !== acceptance.requestId) {
+        return { status: "conflict" };
+      }
+
+      const created = await this.createRun(run);
+      if (created.status === "idempotency_conflict") return { status: "conflict" };
+      if (created.status === "existing") {
+        return created.run.acceptedRequestId === acceptance.requestId
+          && created.run.acceptanceFingerprint === acceptance.requestFingerprint
+          ? { status: "existing", runId: created.run.id, planFingerprint: created.run.requestFingerprint }
+          : { status: "conflict" };
+      }
+
+      const stored = this.runs.get(created.run.id);
+      if (!stored) return { status: "conflict" };
+      stored.acceptedRequestId = acceptance.requestId;
+      stored.acceptanceFingerprint = acceptance.requestFingerprint;
+      return { status: "created", runId: stored.id, planFingerprint: stored.requestFingerprint };
+    });
+    const pending = { identity: acceptance, result };
+    this.acceptedAssociations.set(acceptance.requestId, pending);
+    this.acceptedAssociationKeys.set(associationKey, pending);
+    void result.then((outcome) => {
+      if (outcome.status === "conflict") {
+        if (this.acceptedAssociations.get(acceptance.requestId) === pending) this.acceptedAssociations.delete(acceptance.requestId);
+        if (this.acceptedAssociationKeys.get(associationKey) === pending) this.acceptedAssociationKeys.delete(associationKey);
+      }
+    }, () => {
+      if (this.acceptedAssociations.get(acceptance.requestId) === pending) this.acceptedAssociations.delete(acceptance.requestId);
+      if (this.acceptedAssociationKeys.get(associationKey) === pending) this.acceptedAssociationKeys.delete(associationKey);
+    });
+    return result;
   }
 
   async getRun(input: { readonly runId: string; readonly userId: string }): Promise<DurableExecutionRun | null> {
@@ -402,4 +463,43 @@ export class InMemoryExecutionStore implements ExecutionStore {
     const run = this.runs.get(runId);
     return run?.userId === userId ? run : undefined;
   }
+}
+
+function sameAcceptance(
+  left: AcceptedRequestExecutionIdentity,
+  right: AcceptedRequestExecutionIdentity,
+): boolean {
+  return left.requestId === right.requestId
+    && left.userId === right.userId
+    && left.conversationId === right.conversationId
+    && left.userMessageId === right.userMessageId
+    && left.assistantMessageId === right.assistantMessageId
+    && left.idempotencyKey === right.idempotencyKey
+    && left.requestFingerprint === right.requestFingerprint;
+}
+
+function validAcceptedAssociationInput(
+  acceptance: AcceptedRequestExecutionIdentity,
+  run: CreateDurableExecutionRunInput,
+): boolean {
+  const binding = run.runtimeContext.requestMessageBinding;
+  return /^[0-9a-f-]{36}$/i.test(acceptance.requestId)
+    && /^[0-9a-f-]{36}$/i.test(acceptance.userId)
+    && /^[0-9a-f-]{36}$/i.test(acceptance.conversationId)
+    && /^[0-9a-f-]{36}$/i.test(acceptance.userMessageId)
+    && /^[0-9a-f-]{36}$/i.test(acceptance.assistantMessageId)
+    && /^[0-9a-f-]{36}$/i.test(run.id)
+    && /^[0-9a-f]{64}$/.test(acceptance.requestFingerprint)
+    && acceptance.idempotencyKey.length > 0
+    && acceptance.idempotencyKey.length <= 128
+    && acceptance.idempotencyKey === acceptance.idempotencyKey.trim()
+    && run.userId === acceptance.userId
+    && run.idempotencyKey === acceptance.idempotencyKey
+    && /^[0-9a-f]{64}$/.test(run.requestFingerprint)
+    && binding?.requestId === acceptance.requestId
+    && binding.userId === acceptance.userId
+    && binding.conversationId === acceptance.conversationId
+    && binding.userMessageId === acceptance.userMessageId
+    && binding.assistantMessageId === acceptance.assistantMessageId
+    && run.runtimeContext.conversationId === acceptance.conversationId;
 }

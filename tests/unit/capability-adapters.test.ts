@@ -868,6 +868,7 @@ describe("six independent capability adapters", () => {
     const authorizedSteps: string[] = [];
     const reopenStore = (): ExecutionStore => ({
       createRun: (input) => persistentBackend.createRun(input),
+      associateAcceptedRequest: (input) => persistentBackend.associateAcceptedRequest(input),
       getRun: (input) => persistentBackend.getRun(input),
       getControlEvents: (input) => persistentBackend.getControlEvents(input),
       pauseRun: (input) => persistentBackend.pauseRun(input),

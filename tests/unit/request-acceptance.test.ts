@@ -49,6 +49,7 @@ describe("atomic Agent Runtime request acceptance contract", () => {
       kind: "accepted",
       replayed: false,
       idempotencyKey: REQUEST_KEY,
+      requestFingerprint: fingerprintAgentRequest(agentRequestAcceptanceInputSchema.parse(input)),
       binding: {
         requestId: ACCEPTED.requestId,
         userId: USER_ID,
@@ -116,7 +117,12 @@ describe("atomic Agent Runtime request acceptance contract", () => {
       accept: vi.fn(async () => ({ data: replay, error: null })),
       now: () => new Date("2026-10-09T00:00:01.000Z"),
     })).accept(input);
-    expect(replayResult).toMatchObject({ kind: "accepted", replayed: true, usageDate: "2026-10-08" });
+    expect(replayResult).toMatchObject({
+      kind: "accepted",
+      replayed: true,
+      usageDate: "2026-10-08",
+      requestFingerprint: fingerprintAgentRequest(agentRequestAcceptanceInputSchema.parse(input)),
+    });
 
     const limited = await createAgentRequestAcceptanceService(dependencies({
       accept: vi.fn(async () => ({ data: { kind: "limit_reached", messageCount: 20 }, error: null })),

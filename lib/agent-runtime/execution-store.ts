@@ -72,6 +72,10 @@ export type DurableExecutionRun = {
   readonly handoffVersion: number;
   readonly idempotencyKey: string;
   readonly requestFingerprint: string;
+  /** Present only for runs atomically associated with the acceptance ledger. */
+  readonly acceptedRequestId?: string;
+  /** Acceptance identity fingerprint; distinct from requestFingerprint (plan/runtime). */
+  readonly acceptanceFingerprint?: string;
   readonly executionPlan: PersistedExecutionPlan;
   readonly runtimeContext: PersistedExecutionContext;
   readonly status: ExecutionRunStatus;
@@ -114,6 +118,25 @@ export type CreateDurableExecutionRunInput = {
 export type CreateDurableExecutionRunResult =
   | { readonly status: "created" | "existing"; readonly run: DurableExecutionRun }
   | { readonly status: "idempotency_conflict" };
+
+export type AcceptedRequestExecutionIdentity = Readonly<{
+  readonly requestId: string;
+  readonly userId: string;
+  readonly conversationId: string;
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly idempotencyKey: string;
+  readonly requestFingerprint: string;
+}>;
+
+export type AssociateAcceptedExecutionRunInput = Readonly<{
+  readonly acceptance: AcceptedRequestExecutionIdentity;
+  readonly run: CreateDurableExecutionRunInput;
+}>;
+
+export type AssociateAcceptedExecutionRunResult =
+  | { readonly status: "created" | "existing"; readonly runId: string; readonly planFingerprint: string }
+  | { readonly status: "conflict" };
 
 export type DurableStepCheckpoint = {
   readonly stepId: string;
@@ -185,6 +208,8 @@ export type DecideHumanApprovalInput = {
 /** LVTChat-owned persistence boundary; no Supabase/Postgres client types escape this interface. */
 export interface ExecutionStore {
   createRun(input: CreateDurableExecutionRunInput): Promise<CreateDurableExecutionRunResult>;
+  /** Atomically verifies immutable acceptance identity and creates/retrieves its sole run. */
+  associateAcceptedRequest(input: AssociateAcceptedExecutionRunInput): Promise<AssociateAcceptedExecutionRunResult>;
   getRun(input: { readonly runId: string; readonly userId: string }): Promise<DurableExecutionRun | null>;
   getControlEvents(input: { readonly runId: string; readonly userId: string }): Promise<readonly ExecutionControlEvent[]>;
   pauseRun(input: { readonly runId: string; readonly userId: string; readonly expectedControlRevision: number; readonly actorUserId: string; readonly createdAt: string }): Promise<ExecutionControlWriteResult>;

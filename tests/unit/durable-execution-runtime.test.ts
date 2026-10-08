@@ -9,7 +9,7 @@ import type {
   ExecutionRuntimeInput,
   RequestMessageBindingValidator,
 } from "@/lib/agent-runtime/capability-executor";
-import type { ExecutionStore } from "@/lib/agent-runtime/execution-store";
+import type { AcceptedRequestExecutionIdentity, ExecutionStore } from "@/lib/agent-runtime/execution-store";
 import type { ExecutionSnapshotEnvelope } from "@/lib/agent-runtime/execution-store";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
 import { createExecutionRunLifecycle, createExecutionStepLifecycle } from "@/lib/agent-runtime/execution-lifecycle";
@@ -27,6 +27,11 @@ const REQUEST_BINDING: RequestMessageBinding = {
   conversationId: "a1000000-0000-4000-8000-000000000099",
   userMessageId: "c2000000-0000-4000-8000-000000000002",
   assistantMessageId: "c2000000-0000-4000-8000-000000000003",
+};
+const ACCEPTED_REQUEST: AcceptedRequestExecutionIdentity = {
+  ...REQUEST_BINDING,
+  idempotencyKey: "d2000000-0000-4000-8000-000000000001",
+  requestFingerprint: "d".repeat(64),
 };
 
 function handoff(steps: PlanStep[] = [
@@ -104,6 +109,7 @@ function runtime(
 function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["claimStep"]): ExecutionStore {
   return {
     createRun: (input) => base.createRun(input),
+    associateAcceptedRequest: (input) => base.associateAcceptedRequest(input),
     getRun: (input) => base.getRun(input),
     getControlEvents: (input) => base.getControlEvents(input),
     pauseRun: (input) => base.pauseRun(input),
@@ -120,6 +126,84 @@ function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["cla
 }
 
 describe("durable XState execution runtime", () => {
+  it("atomically associates one validated acceptance without dispatching a capability", async () => {
+    const store = new InMemoryExecutionStore();
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const result = await runtime(store, executor).associateAcceptedRequest(
+      handoff(), runtimeInput(), ACCEPTED_REQUEST,
+    );
+
+    expect(result).toMatchObject({ kind: "associated", status: "created", runId: RUN_ID });
+    if (result.kind !== "associated") return;
+    expect(await store.getRun({ runId: result.runId, userId: USER_ID })).toMatchObject({
+      acceptedRequestId: ACCEPTED_REQUEST.requestId,
+      acceptanceFingerprint: ACCEPTED_REQUEST.requestFingerprint,
+      idempotencyKey: ACCEPTED_REQUEST.idempotencyKey,
+      requestFingerprint: result.planFingerprint,
+      status: "pending",
+      steps: [{ status: "pending" }, { status: "pending" }, { status: "pending" }],
+    });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("returns the original run and stored plan after replanning a committed acceptance", async () => {
+    const store = new InMemoryExecutionStore();
+    const executeCapability = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const engine = runtime(store, executeCapability);
+    const first = await engine.associateAcceptedRequest(handoff(), runtimeInput(), ACCEPTED_REQUEST);
+    const changedPlan = handoff([
+      { id: "alternate-1", capability: "standard", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "text" },
+      { id: "alternate-2", capability: "document_generation", dependsOn: ["alternate-1"], inputs: [{ source: "step", stepId: "alternate-1", output: "text" }], expectedOutput: "document" },
+    ]);
+    const replay = await engine.associateAcceptedRequest(changedPlan, runtimeInput(), ACCEPTED_REQUEST);
+
+    expect(first).toMatchObject({ kind: "associated", status: "created" });
+    expect(replay).toMatchObject({ kind: "associated", status: "existing", runId: RUN_ID });
+    expect(replay.kind === "associated" && first.kind === "associated"
+      ? replay.planFingerprint === first.planFingerprint
+      : false).toBe(true);
+    expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.executionPlan.steps.map((step) => step.id))
+      .toEqual(["step-1", "step-2", "step-3"]);
+    expect(executeCapability).not.toHaveBeenCalled();
+  });
+
+  it("converges concurrent identical acceptance associations to one stable run", async () => {
+    const store = new InMemoryExecutionStore();
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const engine = runtime(store, executor);
+    const results = await Promise.all(Array.from({ length: 12 }, () =>
+      engine.associateAcceptedRequest(handoff(), runtimeInput(), ACCEPTED_REQUEST)));
+
+    expect(results.every((result) => result.kind === "associated")).toBe(true);
+    expect(new Set(results.flatMap((result) => result.kind === "associated" ? [result.runId] : [])).size).toBe(1);
+    expect(results.filter((result) => result.kind === "associated" && result.status === "created")).toHaveLength(1);
+    expect(results.filter((result) => result.kind === "associated" && result.status === "existing")).toHaveLength(11);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting accepted identity and forged message binding before persistence", async () => {
+    const store = new InMemoryExecutionStore();
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const engine = runtime(store, executor);
+    const first = await engine.associateAcceptedRequest(handoff(), runtimeInput(), ACCEPTED_REQUEST);
+    const conflicting = await engine.associateAcceptedRequest(handoff(), runtimeInput(), {
+      ...ACCEPTED_REQUEST,
+      requestFingerprint: "e".repeat(64),
+    });
+    const forgedBinding = {
+      ...REQUEST_BINDING,
+      userMessageId: "c2000000-0000-4000-8000-000000000099",
+    };
+    const forged = await runtime(store, executor).associateAcceptedRequest(
+      handoff(), runtimeInput({ requestMessageBinding: forgedBinding }), ACCEPTED_REQUEST,
+    );
+
+    expect(first).toMatchObject({ kind: "associated", status: "created" });
+    expect(conflicting).toMatchObject({ kind: "rejected", failure: { code: "idempotency_conflict" } });
+    expect(forged).toMatchObject({ kind: "rejected", failure: { code: "invalid_handoff" } });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
   it("requires a conversation binding before creating a durable run", async () => {
     const store = new InMemoryExecutionStore();
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));

@@ -194,6 +194,7 @@ describe("durable execution human controls", () => {
     let calls = 0;
     const crashAtCheckpoint: ExecutionStore = {
       createRun: (value) => backend.createRun(value),
+      associateAcceptedRequest: (value) => backend.associateAcceptedRequest(value),
       getRun: (value) => backend.getRun(value),
       getControlEvents: (value) => backend.getControlEvents(value),
       pauseRun: (value) => backend.pauseRun(value),

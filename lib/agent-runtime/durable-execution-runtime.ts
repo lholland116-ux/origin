@@ -13,6 +13,8 @@ import { CapabilityAdapterError } from "@/lib/agent-runtime/capability-adapters/
 import { decideRetry } from "@/lib/agent-runtime/retry-policy";
 import { requestMessageBindingSchema } from "@/lib/agent-runtime/application-contracts";
 import {
+  type AcceptedRequestExecutionIdentity,
+  type CreateDurableExecutionRunInput,
   EXECUTION_RUNTIME_VERSION,
   EXECUTION_SNAPSHOT_SCHEMA_VERSION,
   type CreateDurableExecutionRunResult,
@@ -305,6 +307,15 @@ export type DurableExecutionRuntimeOptions = {
   readonly now?: () => Date;
 };
 
+export type AcceptedRunAssociationOutcome =
+  | {
+      readonly kind: "associated";
+      readonly status: "created" | "existing";
+      readonly runId: string;
+      readonly planFingerprint: string;
+    }
+  | { readonly kind: "rejected"; readonly failure: ExecutionFailure };
+
 /** Durable, request-driven mock execution. It never retries a persisted running step. */
 export class DurableXStateExecutionRuntime {
   private readonly createExecutionId: () => string;
@@ -415,6 +426,140 @@ export class DurableXStateExecutionRuntime {
     for (const actor of stepActors.values()) actor.stop();
     runActor.stop();
     return this.resume({ runId: created.run.id, authenticatedUserId: stableInput.authenticatedUserId });
+  }
+
+  /**
+   * Persists or retrieves the run for one immutable accepted request without
+   * dispatching a capability. The database association operation is the
+   * authority for replay identity and is atomic with initial run persistence.
+   */
+  async associateAcceptedRequest(
+    handoffInput: unknown,
+    runtimeInput: ExecutionRuntimeInput,
+    acceptance: AcceptedRequestExecutionIdentity,
+  ): Promise<AcceptedRunAssociationOutcome> {
+    const checked = validateExecutionHandoff(handoffInput);
+    if (!checked.handoff) return { kind: "rejected", failure: checked.failure };
+    const parsedBinding = requestMessageBindingSchema.safeParse(runtimeInput.requestMessageBinding);
+    if (!parsedBinding.success) return { kind: "rejected", failure: executionFailure("invalid_handoff") };
+
+    const acceptedBinding = {
+      requestId: acceptance.requestId,
+      userId: acceptance.userId,
+      conversationId: acceptance.conversationId,
+      userMessageId: acceptance.userMessageId,
+      assistantMessageId: acceptance.assistantMessageId,
+    };
+    const parsedAcceptedBinding = requestMessageBindingSchema.safeParse(acceptedBinding);
+    if (!parsedAcceptedBinding.success
+      || acceptance.userId !== runtimeInput.authenticatedUserId
+      || acceptance.conversationId !== runtimeInput.conversationId
+      || acceptance.requestId !== parsedBinding.data.requestId
+      || acceptance.userId !== parsedBinding.data.userId
+      || acceptance.conversationId !== parsedBinding.data.conversationId
+      || acceptance.userMessageId !== parsedBinding.data.userMessageId
+      || acceptance.assistantMessageId !== parsedBinding.data.assistantMessageId
+      || typeof acceptance.idempotencyKey !== "string"
+      || acceptance.idempotencyKey.length < 1
+      || acceptance.idempotencyKey.length > 128
+      || acceptance.idempotencyKey !== acceptance.idempotencyKey.trim()
+      || !/^[0-9a-f]{64}$/.test(acceptance.requestFingerprint)) {
+      return { kind: "rejected", failure: executionFailure("invalid_handoff") };
+    }
+
+    const stableInput: ExecutionRuntimeInput = {
+      ...runtimeInput,
+      requestMessageBinding: Object.freeze({ ...parsedBinding.data }),
+      ...(runtimeInput.attachments ? { attachments: runtimeInput.attachments.map((item) => Object.freeze({ ...item })) } : {}),
+      ...(runtimeInput.resourceReferences ? { resourceReferences: [...runtimeInput.resourceReferences] } : {}),
+    };
+    if (!safeRuntimeInput(stableInput)) return { kind: "rejected", failure: executionFailure("invalid_handoff") };
+
+    let bindingIsValid = false;
+    try {
+      bindingIsValid = await this.options.requestMessageBindingValidator.validate(stableInput.requestMessageBinding);
+    } catch {
+      bindingIsValid = false;
+    }
+    if (!bindingIsValid) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+
+    const handoff = checked.handoff;
+    let approvalStepIds: string[];
+    try {
+      const configured = this.options.approvalPolicy?.({
+        steps: handoff.plan.steps,
+        authenticatedUserId: stableInput.authenticatedUserId,
+        conversationId: stableInput.conversationId,
+      }) ?? [];
+      if (!Array.isArray(configured) || configured.some((id) => typeof id !== "string")
+        || new Set(configured).size !== configured.length
+        || configured.some((id) => !handoff.orderedStepIds.includes(id))) {
+        return { kind: "rejected", failure: executionFailure("invalid_handoff") };
+      }
+      approvalStepIds = [...configured].sort();
+    } catch {
+      return { kind: "rejected", failure: executionFailure("authorization_failed") };
+    }
+
+    const plan = safePlan(handoff);
+    const needsUserInput = handoff.plan.steps.some((step) => step.inputs?.some((input) => input.source === "user"));
+    const runtimeContext = {
+      conversationId: stableInput.conversationId,
+      requestMessageBinding: stableInput.requestMessageBinding,
+      ...(needsUserInput ? { userInput: stableInput.userInput ?? handoff.objective } : {}),
+      attachments: (stableInput.attachments ?? []).map(({ id, kind }) => ({ id, kind })),
+      resourceReferences: [...(stableInput.resourceReferences ?? [])],
+      ...(stableInput.organizationId ? { organizationId: stableInput.organizationId } : {}),
+    };
+    const planFingerprint = approvalStepIds.length === 0
+      ? fingerprint({ plan, runtimeContext })
+      : fingerprint({ plan, runtimeContext, approvalStepIds });
+    const runActor = createExecutionRunLifecycle();
+    const stepActors = new Map(handoff.orderedStepIds.map((id) => [id, createExecutionStepLifecycle()]));
+    const snapshot = initialEnvelope(runActor, stepActors);
+    const createdAt = this.now().toISOString();
+    const runInput: CreateDurableExecutionRunInput = {
+      id: this.createExecutionId(),
+      userId: stableInput.authenticatedUserId,
+      handoffVersion: handoff.version,
+      idempotencyKey: acceptance.idempotencyKey,
+      requestFingerprint: planFingerprint,
+      executionPlan: plan,
+      runtimeContext,
+      snapshot,
+      steps: handoff.plan.steps.map((step) => ({
+        stepId: step.id,
+        capabilityId: step.capability,
+        dependencyIds: step.dependsOn,
+        executionKey: this.createExecutionKey(),
+      })),
+      approvalCheckpoints: approvalStepIds.map((stepId) => ({
+        id: this.createControlId(),
+        stepId,
+        stepFingerprint: fingerprint(handoff.plan.steps.find((step) => step.id === stepId)),
+      })),
+      createdAt,
+    };
+
+    let association;
+    try {
+      association = await this.options.store.associateAcceptedRequest({ acceptance, run: runInput });
+    } catch {
+      for (const actor of stepActors.values()) actor.stop();
+      runActor.stop();
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+    for (const actor of stepActors.values()) actor.stop();
+    runActor.stop();
+    if (association.status === "conflict") {
+      return { kind: "rejected", failure: executionFailure("idempotency_conflict") };
+    }
+    return {
+      kind: "associated",
+      status: association.status,
+      runId: association.runId,
+      planFingerprint: association.planFingerprint,
+    };
   }
 
   async pause(input: { readonly runId: string; readonly authenticatedUserId: string }): Promise<ExecutionControlCommandResult> {

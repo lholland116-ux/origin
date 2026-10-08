@@ -41,6 +41,8 @@ export type AgentRequestAcceptance = Readonly<{
   replayed: boolean;
   /** Reuse verbatim as execution_runs.idempotency_key when a run is created. */
   idempotencyKey: string;
+  /** Fingerprint verified by the acceptance RPC and retained for run association. */
+  requestFingerprint: string;
   binding: RequestMessageBinding;
   usageDate: string;
 }>;
@@ -99,7 +101,7 @@ export function fingerprintAgentRequest(input: AgentRequestAcceptanceInput): str
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function acceptedPayload(value: unknown): AgentRequestAcceptance | null {
+function acceptedPayload(value: unknown): Omit<AgentRequestAcceptance, "requestFingerprint"> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   if (row.kind !== "accepted" || typeof row.replayed !== "boolean"
@@ -191,7 +193,10 @@ export function createAgentRequestAcceptanceService(dependencies: RequestAccepta
         if (accepted.binding.userId !== userId
           || accepted.binding.conversationId !== parsed.data.conversationId
           || accepted.idempotencyKey !== parsed.data.idempotencyKey) return { kind: "unavailable" };
-        return accepted;
+        // This is the exact fingerprint submitted to the RPC above. The RPC
+        // returns accepted only after verifying the same value against its
+        // immutable ledger row (including on replay).
+        return { ...accepted, requestFingerprint };
       }
 
       if (result.data && typeof result.data === "object" && !Array.isArray(result.data)) {

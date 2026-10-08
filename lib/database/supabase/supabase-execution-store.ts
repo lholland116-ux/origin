@@ -12,6 +12,8 @@ import {
   MAX_DURABLE_RESULT_JSONB_BYTES,
 } from "@/lib/agent-runtime/result-payload-contract";
 import type {
+  AssociateAcceptedExecutionRunInput,
+  AssociateAcceptedExecutionRunResult,
   ClaimDurableStepResult,
   CreateDurableExecutionRunInput,
   CreateDurableExecutionRunResult,
@@ -120,6 +122,8 @@ function mapRun(value: unknown, steps: readonly unknown[]): DurableExecutionRun 
     handoffVersion: value.handoff_version,
     idempotencyKey: value.idempotency_key,
     requestFingerprint: value.request_fingerprint,
+    ...(typeof value.accepted_request_id === "string" ? { acceptedRequestId: value.accepted_request_id } : {}),
+    ...(typeof value.acceptance_fingerprint === "string" ? { acceptanceFingerprint: value.acceptance_fingerprint } : {}),
     executionPlan: value.execution_plan as DurableExecutionRun["executionPlan"],
     runtimeContext: value.runtime_context as DurableExecutionRun["runtimeContext"],
     status: value.status as DurableExecutionRun["status"],
@@ -264,6 +268,58 @@ function checkpointReplayMatches(
 /** Direct PostgreSQL adapter. Every lookup/update carries user_id and run_id; claims/checkpoints serialize on the owned run row. */
 export class SupabaseExecutionStore implements ExecutionStore {
   constructor(private readonly sql: postgres.Sql) {}
+
+  async associateAcceptedRequest(
+    input: AssociateAcceptedExecutionRunInput,
+  ): Promise<AssociateAcceptedExecutionRunResult> {
+    const run = input.run;
+    const runPayload = {
+      id: run.id,
+      handoffVersion: run.handoffVersion,
+      planFingerprint: run.requestFingerprint,
+      executionPlan: run.executionPlan,
+      runtimeContext: run.runtimeContext,
+      snapshot: run.snapshot,
+      createdAt: run.createdAt,
+      steps: run.steps.map((step) => ({
+        stepId: step.stepId,
+        capabilityId: step.capabilityId,
+        dependencyIds: [...step.dependencyIds],
+        executionKey: step.executionKey,
+      })),
+      approvalCheckpoints: (run.approvalCheckpoints ?? []).map((checkpoint) => ({
+        id: checkpoint.id,
+        stepId: checkpoint.stepId,
+        stepFingerprint: checkpoint.stepFingerprint,
+      })),
+    };
+
+    let rows: readonly Row[];
+    try {
+      rows = await this.sql<{ result: unknown }[]>`
+        SELECT public.associate_agent_request_execution_run(
+          ${this.sql.json(json(input.acceptance))}::jsonb,
+          ${this.sql.json(json(runPayload))}::jsonb
+        ) AS result
+      ` as readonly Row[];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("AGENT_REQUEST_EXECUTION_ASSOCIATION_CONFLICT")) return { status: "conflict" };
+      throw error;
+    }
+
+    const value = rows[0]?.result;
+    if (!isRecord(value) || !["created", "existing"].includes(String(value.status))
+      || typeof value.runId !== "string" || !/^[0-9a-f-]{36}$/i.test(value.runId)
+      || typeof value.planFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(value.planFingerprint)) {
+      throw new Error("Execution store returned an invalid accepted-run association.");
+    }
+    return {
+      status: value.status as "created" | "existing",
+      runId: value.runId,
+      planFingerprint: value.planFingerprint,
+    };
+  }
 
   async createRun(input: CreateDurableExecutionRunInput): Promise<CreateDurableExecutionRunResult> {
     return this.sql.begin(async (tx) => {
