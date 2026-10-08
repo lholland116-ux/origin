@@ -111,6 +111,7 @@ function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["cla
     createRun: (input) => base.createRun(input),
     associateAcceptedRequest: (input) => base.associateAcceptedRequest(input),
     lookupAcceptedRequestRun: (input) => base.lookupAcceptedRequestRun(input),
+    getAcceptedRunForFinalization: (input) => base.getAcceptedRunForFinalization(input),
     getRun: (input) => base.getRun(input),
     getControlEvents: (input) => base.getControlEvents(input),
     pauseRun: (input) => base.pauseRun(input),

@@ -264,6 +264,7 @@ describe("durable execution human controls", () => {
     createRun: (value) => backend.createRun(value),
     associateAcceptedRequest: (value) => backend.associateAcceptedRequest(value),
     lookupAcceptedRequestRun: (value) => backend.lookupAcceptedRequestRun(value),
+    getAcceptedRunForFinalization: (value) => backend.getAcceptedRunForFinalization(value),
       getRun: (value) => backend.getRun(value),
       getControlEvents: (value) => backend.getControlEvents(value),
       pauseRun: (value) => backend.pauseRun(value),

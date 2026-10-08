@@ -894,6 +894,7 @@ describe("six independent capability adapters", () => {
       createRun: (input) => persistentBackend.createRun(input),
       associateAcceptedRequest: (input) => persistentBackend.associateAcceptedRequest(input),
       lookupAcceptedRequestRun: (input) => persistentBackend.lookupAcceptedRequestRun(input),
+      getAcceptedRunForFinalization: (input) => persistentBackend.getAcceptedRunForFinalization(input),
       getRun: (input) => persistentBackend.getRun(input),
       getControlEvents: (input) => persistentBackend.getControlEvents(input),
       pauseRun: (input) => persistentBackend.pauseRun(input),

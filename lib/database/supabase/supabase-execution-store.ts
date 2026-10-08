@@ -383,6 +383,31 @@ export class SupabaseExecutionStore implements ExecutionStore {
     return this.sql.begin("isolation level repeatable read", (tx) => loadRun(tx, input.runId, input.userId));
   }
 
+  async getAcceptedRunForFinalization(input: { readonly runId: string }): Promise<DurableExecutionRun | null> {
+    const rows = await this.sql`
+      SELECT run.user_id
+      FROM public.execution_runs AS run
+      JOIN public.agent_request_acceptances AS acceptance
+        ON acceptance.request_id = run.accepted_request_id
+       AND acceptance.user_id = run.user_id
+       AND acceptance.request_fingerprint = run.acceptance_fingerprint
+      WHERE run.id = ${input.runId}::uuid
+        AND run.runtime_context->'requestMessageBinding' = pg_catalog.jsonb_build_object(
+          'requestId', acceptance.request_id,
+          'userId', acceptance.user_id,
+          'conversationId', acceptance.conversation_id,
+          'userMessageId', acceptance.user_message_id,
+          'assistantMessageId', acceptance.assistant_message_id
+        )
+    ` as readonly Row[];
+    const userId = rows[0]?.user_id;
+    if (typeof userId !== "string") return null;
+    const run = await this.getRun({ runId: input.runId, userId });
+    if (!run || run.acceptedRequestId === undefined || run.userId !== userId
+      || run.runtimeContext.requestMessageBinding?.userId !== userId) return null;
+    return run;
+  }
+
   async lookupAcceptedRequestRun(input: AcceptedRequestExecutionIdentity): Promise<LookupAcceptedExecutionRunResult> {
     const rows = await this.sql`
       SELECT acceptance.request_id, acceptance.user_id, acceptance.conversation_id,

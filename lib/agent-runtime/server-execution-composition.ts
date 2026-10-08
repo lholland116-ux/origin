@@ -12,10 +12,12 @@ import { createRegistryCapabilityExecutor } from "@/lib/agent-runtime/registry-c
 import { requestMessageBindingValidator } from "@/lib/agent-runtime/request-message-binding";
 import { agentRequestAcceptanceService } from "@/lib/agent-runtime/request-acceptance";
 import { createAcceptedExecutionComposer } from "@/lib/agent-runtime/accepted-execution-composition";
+import { createAcceptedExecutionFinalizer } from "@/lib/agent-runtime/accepted-execution-finalization";
 import type { ExecutionStore } from "@/lib/agent-runtime/execution-store";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
 import type { RuntimeAttachmentReference } from "@/lib/agent-runtime/capability-executor";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 if (typeof window !== "undefined") throw new Error("Server execution composition is server-only");
 
@@ -55,8 +57,33 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
     resolveImages: resolveAcceptedImages,
     decide: (input) => coordinator.decideIntelligenceAction(input),
   });
+  const finalizer = createAcceptedExecutionFinalizer({
+    loadAcceptedRun: (runId) => store.getAcceptedRunForFinalization({ runId }),
+    finalizeAtomically: async ({ runId, finalText }) => {
+      const admin = createAdminClient();
+      const { data, error } = await admin.rpc("finalize_accepted_agent_execution", {
+        p_run_id: runId,
+        p_final_text: finalText,
+      });
+      if (error) throw new Error("Durable execution finalization was unavailable.");
+      return data;
+    },
+    listPendingRunIds: async (limit) => {
+      const admin = createAdminClient();
+      const { data, error } = await admin.rpc("list_pending_agent_execution_finalizations", {
+        p_limit: limit,
+      });
+      if (error || !Array.isArray(data)) throw new Error("Durable finalization discovery was unavailable.");
+      return data.flatMap((row) => row && typeof row === "object" && "run_id" in row
+        && typeof row.run_id === "string" ? [row.run_id] : []);
+    },
+  });
   return Object.freeze({
     ...composer,
+    // Internal server/worker-compatible persistence operation only. No HTTP
+    // handler invokes it; a separately qualified trigger must remain dormant.
+    finalizeAcceptedExecution: finalizer.finalize,
+    listPendingExecutionFinalizations: finalizer.listPendingRunIds,
     control: Object.freeze({
       pause: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.pause(input),
       resume: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.resumeControlOnly(input),

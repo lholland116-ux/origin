@@ -156,6 +156,22 @@ export class InMemoryExecutionStore implements ExecutionStore {
     return run?.userId === input.userId ? structuredClone(run) : null;
   }
 
+  async getAcceptedRunForFinalization(input: { readonly runId: string }): Promise<DurableExecutionRun | null> {
+    const run = this.runs.get(input.runId);
+    if (!run?.acceptedRequestId || !run.acceptanceFingerprint) return null;
+    const acceptance = this.acceptedAssociations.get(run.acceptedRequestId)?.identity;
+    const binding = run.runtimeContext.requestMessageBinding;
+    if (!acceptance || !binding || acceptance.userId !== run.userId
+      || acceptance.requestFingerprint !== run.acceptanceFingerprint
+      || acceptance.idempotencyKey !== run.idempotencyKey
+      || binding.requestId !== acceptance.requestId
+      || binding.userId !== acceptance.userId
+      || binding.conversationId !== acceptance.conversationId
+      || binding.userMessageId !== acceptance.userMessageId
+      || binding.assistantMessageId !== acceptance.assistantMessageId) return null;
+    return structuredClone(run);
+  }
+
   async lookupAcceptedRequestRun(input: AcceptedRequestExecutionIdentity): Promise<LookupAcceptedExecutionRunResult> {
     const run = [...this.runs.values()].find((candidate) => candidate.acceptedRequestId === input.requestId
       || (candidate.userId === input.userId && candidate.idempotencyKey === input.idempotencyKey));

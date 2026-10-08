@@ -218,6 +218,8 @@ export interface ExecutionStore {
   associateAcceptedRequest(input: AssociateAcceptedExecutionRunInput): Promise<AssociateAcceptedExecutionRunResult>;
   /** Owner-scoped, immutable acceptance lookup used before any replay replans. */
   lookupAcceptedRequestRun(input: AcceptedRequestExecutionIdentity): Promise<LookupAcceptedExecutionRunResult>;
+  /** Server/worker-only lookup; owner is derived from the acceptance ledger, never supplied by the caller. */
+  getAcceptedRunForFinalization(input: { readonly runId: string }): Promise<DurableExecutionRun | null>;
   getRun(input: { readonly runId: string; readonly userId: string }): Promise<DurableExecutionRun | null>;
   getControlEvents(input: { readonly runId: string; readonly userId: string }): Promise<readonly ExecutionControlEvent[]>;
   pauseRun(input: { readonly runId: string; readonly userId: string; readonly expectedControlRevision: number; readonly actorUserId: string; readonly createdAt: string }): Promise<ExecutionControlWriteResult>;
