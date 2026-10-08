@@ -1069,7 +1069,7 @@ export class DurableXStateExecutionRuntime {
 
       const capabilityId = step.capability;
       if (!stepFailure) {
-        const authorization = await this.authorize(current, stepId, capabilityId, resolved.resourceReferences ?? [], {
+        const authorization = await this.authorize(current, stepId, capabilityId, resolved.resourceReferences ?? [], resolved.inputs ?? [], {
           correlationId: input.correlationId,
         });
         if (!authorization.allowed) stepFailure = authorization.failure;
@@ -1246,6 +1246,7 @@ export class DurableXStateExecutionRuntime {
     stepId: string,
     capabilityId: CapabilityExecutionInput["capabilityId"],
     resourceReferences: readonly string[],
+    resolvedInputs: CapabilityExecutionInput["inputs"],
     context: { readonly requestId?: string; readonly correlationId?: string },
   ): Promise<{ readonly allowed: true } | { readonly allowed: false; readonly failure: ExecutionFailure }> {
     try {
@@ -1254,15 +1255,22 @@ export class DurableXStateExecutionRuntime {
         stepId,
         capabilityId,
         authenticatedUserId: record.userId,
+        ...(record.acceptedRequestId ? { acceptedRequestId: record.acceptedRequestId } : {}),
+        ...(record.acceptanceFingerprint ? { acceptanceFingerprint: record.acceptanceFingerprint } : {}),
+        idempotencyKey: record.idempotencyKey,
+        requestFingerprint: record.requestFingerprint,
         conversationId: record.runtimeContext.conversationId,
         requestMessageBinding: record.runtimeContext.requestMessageBinding!,
+        resolvedInputs,
         ...(record.runtimeContext.organizationId ? { organizationId: record.runtimeContext.organizationId } : {}),
         resourceReferences,
         requestId: record.runtimeContext.requestMessageBinding!.requestId,
         ...(context.correlationId ? { correlationId: context.correlationId } : {}),
       });
       if (!decision || typeof decision.allowed !== "boolean") return { allowed: false, failure: executionFailure("authorization_failed") };
-      return decision.allowed ? { allowed: true } : { allowed: false, failure: executionFailure("authorization_denied") };
+      return decision.allowed
+        ? { allowed: true }
+        : { allowed: false, failure: executionFailure(decision.reasonCode === "authorization_unavailable" ? "authorization_failed" : "authorization_denied") };
     } catch {
       return { allowed: false, failure: executionFailure("authorization_failed") };
     }

@@ -59,8 +59,15 @@ export type ExecutionAuthorizationInput = {
   readonly stepId: string;
   readonly capabilityId: CapabilityId;
   readonly authenticatedUserId: string;
+  /** Durable association proof; concrete production authorizers require all fields. */
+  readonly acceptedRequestId?: string;
+  readonly acceptanceFingerprint?: string;
+  readonly idempotencyKey?: string;
+  readonly requestFingerprint?: string;
   readonly conversationId: string;
   readonly requestMessageBinding: RequestMessageBinding;
+  /** Typed, resolved inputs are transient authorization evidence, never caller authority. */
+  readonly resolvedInputs: readonly ResolvedExecutionInput[];
   readonly organizationId?: string;
   readonly resourceReferences: readonly string[];
   readonly requestId?: string;

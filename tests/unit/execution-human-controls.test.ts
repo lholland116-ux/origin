@@ -219,6 +219,7 @@ describe("durable execution human controls", () => {
   it("gates only the trusted selected step, survives restart, and approval does not bypass execution authorization", async () => {
     const store = new InMemoryExecutionStore();
     const calls: string[] = [];
+    let accessRevoked = false;
     const first = makeRuntime(store, { approvalPolicy: () => ["step-2"], execute: async (request) => {
       calls.push(request.stepId);
       return result(request);
@@ -231,10 +232,14 @@ describe("durable execution human controls", () => {
     expect(await makeRuntime(store).approveCheckpoint({ runId: RUN_ID, authenticatedUserId: USER_ID, checkpointId: outcome.checkpoint.id })).toMatchObject({ kind: "approved", checkpoint: { stepId: "step-2", status: "approved" } });
     expect(await makeRuntime(store).approveCheckpoint({ runId: RUN_ID, authenticatedUserId: USER_ID, checkpointId: outcome.checkpoint.id })).toMatchObject({ kind: "already_applied" });
     expect(calls).toEqual(["step-1"]);
-    const resumed = await makeRuntime(store, { execute: async (request) => { calls.push(request.stepId); return result(request); } })
+    accessRevoked = true;
+    const resumed = await makeRuntime(store, {
+      authorize: async () => !accessRevoked,
+      execute: async (request) => { calls.push(request.stepId); return result(request); },
+    })
       .resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
-    expect(resumed.kind).toBe("succeeded");
-    expect(calls).toEqual(["step-1", "step-2"]);
+    expect(resumed).toMatchObject({ kind: "failed", failure: { code: "authorization_denied" } });
+    expect(calls).toEqual(["step-1"]);
     expect((await store.getRun({ runId: RUN_ID, userId: USER_ID }))?.steps.map((step) => step.attempt)).toEqual([1, 1]);
   });
 

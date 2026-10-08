@@ -353,6 +353,7 @@ export class XStateExecutionAdapter {
         authenticatedUserId: runtimeInput.authenticatedUserId,
         conversationId: runtimeInput.conversationId,
         requestMessageBinding: stableRequestBinding,
+        resolvedInputs: resolved.inputs,
         ...(runtimeInput.organizationId ? { organizationId: runtimeInput.organizationId } : {}),
         resourceReferences: resolved.resourceReferences,
         requestId: stableRequestBinding.requestId,
@@ -373,7 +374,7 @@ export class XStateExecutionAdapter {
         continue;
       }
       if (!authorization.allowed) {
-        markFailed(executionFailure("authorization_denied"));
+        markFailed(executionFailure(authorization.reasonCode === "authorization_unavailable" ? "authorization_failed" : "authorization_denied"));
         stepLifecycle.stop();
         continue;
       }
