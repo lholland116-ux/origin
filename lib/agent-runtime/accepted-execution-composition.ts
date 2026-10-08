@@ -18,9 +18,16 @@ export type AcceptedExecutionCompositionDependencies = Readonly<{
 
 export type AcceptedExecutionCompositionResult =
   | { readonly kind: "associated"; readonly status: "created" | "existing"; readonly run: DurableExecutionRun }
-  | { readonly kind: "single_step"; readonly decision: Extract<IntelligenceDecision, { kind: "single_step" }> }
-  | { readonly kind: "unable_to_plan"; readonly decision: Extract<IntelligenceDecision, { kind: "unable_to_plan" }> }
-  | { readonly kind: "rejected"; readonly reason: "invalid_request" | "unauthorized" | "unavailable" | "conflict" | "invalid_handoff" };
+  | { readonly kind: "single_step"; readonly decision: Extract<IntelligenceDecision, { kind: "single_step" }>; readonly acceptedRequest: AcceptedExecutionRecoveryIdentity }
+  | { readonly kind: "unable_to_plan"; readonly decision: Extract<IntelligenceDecision, { kind: "unable_to_plan" }>; readonly acceptedRequest: AcceptedExecutionRecoveryIdentity }
+  | { readonly kind: "rejected"; readonly reason: "invalid_request" | "unauthorized" | "inaccessible_conversation" | "inaccessible_resource" | "daily_usage_quota_exhausted" | "image_quota_exhausted" | "unavailable" | "conflict" | "invalid_handoff"; readonly acceptedRequest?: AcceptedExecutionRecoveryIdentity };
+
+export type AcceptedExecutionRecoveryIdentity = Readonly<{
+  readonly requestId: string;
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly idempotencyKey: string;
+}>;
 
 function acceptedIdentity(accepted: Extract<AgentRequestAcceptanceResult, { kind: "accepted" }>): AcceptedRequestExecutionIdentity {
   return {
@@ -31,6 +38,15 @@ function acceptedIdentity(accepted: Extract<AgentRequestAcceptanceResult, { kind
     assistantMessageId: accepted.binding.assistantMessageId,
     idempotencyKey: accepted.idempotencyKey,
     requestFingerprint: accepted.requestFingerprint,
+  };
+}
+
+function recoveryIdentity(accepted: Extract<AgentRequestAcceptanceResult, { kind: "accepted" }>): AcceptedExecutionRecoveryIdentity {
+  return {
+    requestId: accepted.binding.requestId,
+    userMessageId: accepted.binding.userMessageId,
+    assistantMessageId: accepted.binding.assistantMessageId,
+    idempotencyKey: accepted.idempotencyKey,
   };
 }
 
@@ -54,7 +70,15 @@ export function createAcceptedExecutionComposer(dependencies: AcceptedExecutionC
         return { kind: "rejected", reason: "unavailable" };
       }
       if (accepted.kind !== "accepted") {
-        return { kind: "rejected", reason: accepted.kind === "unauthorized" ? "unauthorized" : accepted.kind === "invalid_request" ? "invalid_request" : accepted.kind === "idempotency_conflict" ? "conflict" : "unavailable" };
+        const reason = accepted.kind === "unauthorized" ? "unauthorized"
+          : accepted.kind === "invalid_request" ? "invalid_request"
+          : accepted.kind === "idempotency_conflict" ? "conflict"
+          : accepted.kind === "inaccessible_conversation" ? "inaccessible_conversation"
+          : accepted.kind === "inaccessible_resource" ? "inaccessible_resource"
+          : accepted.kind === "limit_reached" ? "daily_usage_quota_exhausted"
+          : accepted.kind === "image_limit_reached" ? "image_quota_exhausted"
+          : "unavailable";
+        return { kind: "rejected", reason };
       }
       let fingerprint: string;
       try {
@@ -62,28 +86,29 @@ export function createAcceptedExecutionComposer(dependencies: AcceptedExecutionC
       } catch {
         return { kind: "rejected", reason: "invalid_request" };
       }
+      const acceptedRequest = recoveryIdentity(accepted);
       if (accepted.requestFingerprint !== fingerprint
         || accepted.binding.conversationId !== parsed.data.conversationId
-        || accepted.binding.userId === "") return { kind: "rejected", reason: "conflict" };
+        || accepted.binding.userId === "") return { kind: "rejected", reason: "conflict", acceptedRequest };
 
       const identity = acceptedIdentity(accepted);
       try {
         const prior = existingResult(await dependencies.lookup(identity));
-        if (prior) return prior;
+        if (prior) return prior.kind === "rejected" ? { ...prior, acceptedRequest } : prior;
       } catch {
-        return { kind: "rejected", reason: "unavailable" };
+        return { kind: "rejected", reason: "unavailable", acceptedRequest };
       }
 
       let imageAttachments: readonly RuntimeAttachmentReference[];
       try {
         imageAttachments = await dependencies.resolveImages(accepted.binding);
       } catch {
-        return { kind: "rejected", reason: "unavailable" };
+        return { kind: "rejected", reason: "unavailable", acceptedRequest };
       }
       if (imageAttachments.length !== parsed.data.images.length
         || imageAttachments.some((item) => item.kind !== "image" || !item.id)
         || new Set(imageAttachments.map(({ id }) => id)).size !== imageAttachments.length) {
-        return { kind: "rejected", reason: "conflict" };
+        return { kind: "rejected", reason: "conflict", acceptedRequest };
       }
       const attachments: RuntimeAttachmentReference[] = [
         ...parsed.data.documentIds.map((id) => ({ id, kind: "file" as const })),
@@ -103,12 +128,12 @@ export function createAcceptedExecutionComposer(dependencies: AcceptedExecutionC
           attachments: attachmentKinds,
         });
       } catch {
-        return { kind: "rejected", reason: "unavailable" };
+        return { kind: "rejected", reason: "unavailable", acceptedRequest };
       }
-      if (decision.kind === "single_step") return { kind: "single_step", decision };
-      if (decision.kind === "unable_to_plan") return { kind: "unable_to_plan", decision };
+      if (decision.kind === "single_step") return { kind: "single_step", decision, acceptedRequest };
+      if (decision.kind === "unable_to_plan") return { kind: "unable_to_plan", decision, acceptedRequest };
       const checkedHandoff = validateExecutionHandoff(decision.handoff);
-      if (!checkedHandoff.handoff) return { kind: "rejected", reason: "invalid_handoff" };
+      if (!checkedHandoff.handoff) return { kind: "rejected", reason: "invalid_handoff", acceptedRequest };
 
       const runtimeInput: ExecutionRuntimeInput = {
         userInput: parsed.data.message,
@@ -123,20 +148,20 @@ export function createAcceptedExecutionComposer(dependencies: AcceptedExecutionC
       try {
         associated = await dependencies.associate(checkedHandoff.handoff, runtimeInput, identity);
       } catch {
-        return { kind: "rejected", reason: "unavailable" };
+        return { kind: "rejected", reason: "unavailable", acceptedRequest };
       }
       if (associated.kind !== "associated") {
-        return { kind: "rejected", reason: associated.failure.code === "invalid_handoff" ? "invalid_handoff" : "conflict" };
+        return { kind: "rejected", reason: associated.failure.code === "invalid_handoff" ? "invalid_handoff" : "conflict", acceptedRequest };
       }
       let persisted: LookupAcceptedExecutionRunResult;
       try {
         persisted = await dependencies.lookup(identity);
       } catch {
-        return { kind: "rejected", reason: "unavailable" };
+        return { kind: "rejected", reason: "unavailable", acceptedRequest };
       }
       if (persisted.status !== "found" || persisted.run.id !== associated.runId
         || persisted.run.requestFingerprint !== associated.planFingerprint) {
-        return { kind: "rejected", reason: "conflict" };
+        return { kind: "rejected", reason: "conflict", acceptedRequest };
       }
       return { kind: "associated", status: associated.status, run: persisted.run };
     },

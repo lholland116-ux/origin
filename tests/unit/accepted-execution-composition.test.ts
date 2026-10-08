@@ -119,7 +119,7 @@ describe("accepted-request execution composition", () => {
   it("rejects a changed request fingerprint before lookup or planning", async () => {
     const deps = fixture();
     deps.accept.mockResolvedValueOnce({ ...accepted(request), requestFingerprint: "0".repeat(64) });
-    expect(await deps.composer.prepare(request)).toEqual({ kind: "rejected", reason: "conflict" });
+    expect(await deps.composer.prepare(request)).toMatchObject({ kind: "rejected", reason: "conflict", acceptedRequest: { requestId: REQUEST, idempotencyKey: request.idempotencyKey } });
     expect(deps.lookup).not.toHaveBeenCalled();
     expect(deps.decide).not.toHaveBeenCalled();
   });
@@ -141,7 +141,7 @@ describe("accepted-request execution composition", () => {
       telemetry: {} as never,
     } as unknown as IntelligenceDecision;
     const deps = fixture({ decide: async () => invalid });
-    expect(await deps.composer.prepare(request)).toEqual({ kind: "rejected", reason: "invalid_handoff" });
+    expect(await deps.composer.prepare(request)).toMatchObject({ kind: "rejected", reason: "invalid_handoff", acceptedRequest: { requestId: REQUEST, idempotencyKey: request.idempotencyKey } });
     expect(deps.associate).not.toHaveBeenCalled();
   });
 

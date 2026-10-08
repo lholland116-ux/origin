@@ -50,6 +50,9 @@ export type AgentRequestAcceptance = Readonly<{
 export type AgentRequestAcceptanceResult =
   | AgentRequestAcceptance
   | Readonly<{ kind: "limit_reached"; messageCount: number }>
+  | Readonly<{ kind: "image_limit_reached" }>
+  | Readonly<{ kind: "inaccessible_conversation" }>
+  | Readonly<{ kind: "inaccessible_resource" }>
   | Readonly<{ kind: "invalid_request" }>
   | Readonly<{ kind: "unauthorized" }>
   | Readonly<{ kind: "idempotency_conflict" }>
@@ -136,6 +139,19 @@ function failureCode(error: unknown): string {
     : "";
 }
 
+function mapAcceptanceFailure(error: unknown): AgentRequestAcceptanceResult {
+  const code = failureCode(error);
+  if (code.includes("REQUEST_IDEMPOTENCY_CONFLICT")) return { kind: "idempotency_conflict" };
+  if (code.includes("CONVERSATION_NOT_FOUND")) return { kind: "inaccessible_conversation" };
+  if (code.includes("DOCUMENT_UNAVAILABLE") || code.includes("INVALID_IMAGE") || code.includes("DUPLICATE_IMAGE")) {
+    return { kind: "inaccessible_resource" };
+  }
+  if (code.includes("IMAGE_LIMIT_EXCEEDED")) return { kind: "image_limit_reached" };
+  if (code.includes("INVALID_AGENT_REQUEST") || code.includes("INVALID_AGENT_REQUEST_OPTIONS")
+    || code.includes("DUPLICATE_DOCUMENT") || code.includes("INVALID_IMAGES")) return { kind: "invalid_request" };
+  return { kind: "unavailable" };
+}
+
 export function createAgentRequestAcceptanceService(dependencies: RequestAcceptanceDependencies) {
   return Object.freeze({
     async accept(rawInput: unknown): Promise<AgentRequestAcceptanceResult> {
@@ -183,9 +199,7 @@ export function createAgentRequestAcceptanceService(dependencies: RequestAccepta
         return { kind: "unavailable" };
       }
       if (result.error) {
-        return failureCode(result.error).includes("REQUEST_IDEMPOTENCY_CONFLICT")
-          ? { kind: "idempotency_conflict" }
-          : { kind: "unavailable" };
+        return mapAcceptanceFailure(result.error);
       }
 
       const accepted = acceptedPayload(result.data);

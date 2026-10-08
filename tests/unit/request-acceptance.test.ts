@@ -130,6 +130,21 @@ describe("atomic Agent Runtime request acceptance contract", () => {
     expect(limited).toEqual({ kind: "limit_reached", messageCount: 20 });
   });
 
+  it("maps database ownership and attachment failures to sanitized result codes", async () => {
+    for (const [message, expected] of [
+      ["CONVERSATION_NOT_FOUND", { kind: "inaccessible_conversation" }],
+      ["DOCUMENT_UNAVAILABLE", { kind: "inaccessible_resource" }],
+      ["INVALID_IMAGE", { kind: "inaccessible_resource" }],
+      ["IMAGE_LIMIT_EXCEEDED", { kind: "image_limit_reached" }],
+      ["INVALID_AGENT_REQUEST_OPTIONS", { kind: "invalid_request" }],
+    ] as const) {
+      const result = await createAgentRequestAcceptanceService(dependencies({
+        accept: vi.fn(async () => ({ data: null, error: { message } })),
+      })).accept(input);
+      expect(result).toEqual(expected);
+    }
+  });
+
   it("uses the existing development-only usage-limit bypass without exposing it in request input", async () => {
     const deps = dependencies({ env: { NODE_ENV: "development" } });
     await createAgentRequestAcceptanceService(deps).accept(input);
