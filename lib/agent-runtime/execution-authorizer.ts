@@ -9,6 +9,7 @@ import { requestMessageBindingSchema, generatedDocumentReferenceSchema, generate
 import { EXECUTION_CAPABILITY_IDS } from "@/lib/agent-runtime/execution-registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { isTrustedExecutionSubject, type TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -353,3 +354,104 @@ const productionDependencies: ExecutionAuthorizerDependencies = {
 
 /** Background recovery without a current authenticated session is denied by default. */
 export const executionAuthorizer = createExecutionAuthorizer(productionDependencies);
+
+/**
+ * Reuses the exact authorization predicates above, substituting only the
+ * identity/resource readers. Its subject can only originate from the
+ * claim-validating server-only resolver and is revalidated around the checks.
+ */
+export function createTrustedBackgroundExecutionAuthorizer(subject: TrustedExecutionSubject) {
+  if (!isTrustedExecutionSubject(subject)) throw new Error("Trusted execution subject is required.");
+  const dependencies: ExecutionAuthorizerDependencies = {
+    authenticate: async () => {
+      const admin = createAdminClient();
+      const { data, error } = await admin.auth.admin.getUserById(subject.userId);
+      const user = data?.user as unknown as { id?: unknown; banned_until?: unknown; deleted_at?: unknown } | null;
+      if (error || !user || user.id !== subject.userId || user.deleted_at
+        || (typeof user.banned_until === "string" && Date.parse(user.banned_until) > Date.now())) return null;
+      return await subject.assertCurrent() ? subject.userId : null;
+    },
+    loadAccountPlan: async (userId) => {
+      if (userId !== subject.userId) return { plan: null, error: new Error("Owner mismatch.") };
+      const { data, error } = await createAdminClient().from("profiles").select("plan").eq("id", userId).maybeSingle();
+      return { plan: data?.plan ?? null, error };
+    },
+    loadAssociation: async (input) => {
+      if (input.executionId !== subject.runId || input.authenticatedUserId !== subject.userId
+        || input.stepId !== subject.stepId || input.capabilityId !== subject.capabilityId) return null;
+      const admin = createAdminClient();
+      const { data: run, error: runError } = await admin.from("execution_runs")
+        .select("id,user_id,accepted_request_id,acceptance_fingerprint,idempotency_key,request_fingerprint,runtime_context,execution_plan")
+        .eq("id", subject.runId).eq("user_id", subject.userId).maybeSingle();
+      if (runError || !run) return null;
+      const { data: acceptance, error: acceptanceError } = await admin.from("agent_request_acceptances")
+        .select("request_id,user_id,conversation_id,user_message_id,assistant_message_id,idempotency_key,request_fingerprint,request_options")
+        .eq("request_id", subject.requestId).eq("user_id", subject.userId).maybeSingle();
+      if (acceptanceError || !acceptance || !(await subject.assertCurrent())) return null;
+      return { run: run as unknown as Record<string, unknown>, acceptance: acceptance as unknown as Record<string, unknown> };
+    },
+    validateBinding: async (binding) => binding.requestId === subject.requestId
+      && binding.userId === subject.userId && binding.conversationId === subject.conversationId
+      && binding.userMessageId === subject.userMessageId && binding.assistantMessageId === subject.assistantMessageId
+      && await subject.assertCurrent(),
+    checkConversationOwnership: async (userId, conversationId) => {
+      if (userId !== subject.userId) return "not_owned";
+      const { data, error } = await createAdminClient().from("conversations").select("id")
+        .eq("id", conversationId).eq("user_id", userId).maybeSingle();
+      if (error) throw new Error("Conversation authorization lookup failed.");
+      return data ? "owned" : "not_owned";
+    },
+    checkDocument: async ({ userId, conversationId, id }) => {
+      if (userId !== subject.userId) return { ownership: "not_owned" };
+      const { data, error } = await createAdminClient().from("documents")
+        .select("id,size_bytes,extraction_status,extracted_text")
+        .eq("id", id).eq("user_id", userId).eq("conversation_id", conversationId).maybeSingle();
+      if (error) throw new Error("Document authorization lookup failed.");
+      return data ? { ownership: "owned", sizeBytes: Number(data.size_bytes),
+        ready: data.extraction_status === "ready" && typeof data.extracted_text === "string" && Boolean(data.extracted_text.trim()) }
+        : { ownership: "not_owned" };
+    },
+    checkUploadedImage: async ({ userId, conversationId, userMessageId, id }) => {
+      if (userId !== subject.userId || userMessageId !== subject.userMessageId) return "not_owned";
+      const admin = createAdminClient();
+      const { data: image, error: imageError } = await admin.from("message_images").select("id,message_id").eq("id", id).maybeSingle();
+      if (imageError) throw new Error("Image authorization lookup failed.");
+      if (!image) return "not_owned";
+      const { data: message, error: messageError } = await admin.from("messages").select("id")
+        .eq("id", image.message_id).eq("id", userMessageId).eq("user_id", userId)
+        .eq("conversation_id", conversationId).eq("role", "user").maybeSingle();
+      if (messageError) throw new Error("Image message authorization lookup failed.");
+      return message ? "owned" : "not_owned";
+    },
+    checkGeneratedImage: async ({ userId, conversationId, assistantMessageId, id }) => {
+      if (userId !== subject.userId || assistantMessageId !== subject.assistantMessageId) return "not_owned";
+      const { data, error } = await createAdminClient().from("message_generated_images").select("id,message_id")
+        .eq("id", id).eq("user_id", userId).eq("conversation_id", conversationId).maybeSingle();
+      if (error) throw new Error("Generated image authorization lookup failed.");
+      return data?.message_id === assistantMessageId ? "owned" : "not_owned";
+    },
+    checkGeneratedDocument: async ({ userId, conversationId, assistantMessageId, id }) => {
+      if (userId !== subject.userId || assistantMessageId !== subject.assistantMessageId) return "not_owned";
+      const { data, error } = await createAdminClient().from("generated_documents").select("id")
+        .eq("id", id).eq("user_id", userId).eq("conversation_id", conversationId)
+        .eq("message_id", assistantMessageId).maybeSingle();
+      if (error) throw new Error("Generated document authorization lookup failed.");
+      return data ? "owned" : "not_owned";
+    },
+  };
+  const authorizePersistedPredicates = createExecutionAuthorizer(dependencies);
+  return Object.freeze({
+    async authorize(input: ExecutionAuthorizationInput): Promise<ExecutionAuthorizationDecision> {
+      if (input.executionId !== subject.runId || input.authenticatedUserId !== subject.userId
+        || input.stepId !== subject.stepId || input.capabilityId !== subject.capabilityId
+        || input.acceptedRequestId !== subject.requestId
+        || input.conversationId !== subject.conversationId
+        || input.requestMessageBinding.userMessageId !== subject.userMessageId
+        || input.requestMessageBinding.assistantMessageId !== subject.assistantMessageId
+        || !(await subject.assertCurrent())) return { allowed: false, reasonCode: "denied" };
+      const decision = await authorizePersistedPredicates.authorize(input);
+      if (!decision.allowed || !(await subject.assertCurrent())) return { allowed: false, reasonCode: "denied" };
+      return decision;
+    },
+  });
+}

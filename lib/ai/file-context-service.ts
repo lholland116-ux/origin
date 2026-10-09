@@ -4,6 +4,8 @@ import {
   type FileContextResult,
 } from "@/lib/agent-runtime/application-contracts";
 import { MAX_DOCUMENT_CONTEXT_CHARS } from "@/lib/documents/context-limits";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isTrustedExecutionSubject, type TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 
 export const MAX_FILE_CONTEXT_DOCUMENTS = 10;
 
@@ -22,6 +24,7 @@ export type FileContextServiceInput = Readonly<{
   userId: string;
   conversationId: string;
   documentIds: readonly string[];
+  trustedExecutionSubject?: TrustedExecutionSubject;
 }>;
 
 export type FileContextServiceDependencies = Readonly<{
@@ -53,8 +56,12 @@ export class FileContextPreparationError extends Error {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function loadOwnedReadyDocuments(input: FileContextServiceInput): Promise<readonly FileContextRow[]> {
-  const supabase = await createServerSupabaseClient();
-  const { data, error } = await supabase
+  const trusted = input.trustedExecutionSubject;
+  if (trusted && (!isTrustedExecutionSubject(trusted) || trusted.capabilityId !== "file_analysis"
+    || trusted.userId !== input.userId || trusted.conversationId !== input.conversationId
+    || !(await trusted.assertCurrent()))) throw new FileContextPreparationError("document_unavailable");
+  const client = trusted ? createAdminClient() : await createServerSupabaseClient();
+  const { data, error } = await client
     .from("documents")
     .select("id,user_id,conversation_id,file_name,mime_type,size_bytes,extraction_status,extracted_text")
     .eq("user_id", input.userId)
@@ -82,6 +89,12 @@ export function createFileContextService(dependencies: FileContextServiceDepende
       || input.documentIds.some((id) => !UUID_PATTERN.test(id))
       || new Set(input.documentIds).size !== input.documentIds.length) {
       throw new FileContextPreparationError("invalid_reference");
+    }
+    if (input.trustedExecutionSubject && (!isTrustedExecutionSubject(input.trustedExecutionSubject)
+      || input.trustedExecutionSubject.capabilityId !== "file_analysis"
+      || input.trustedExecutionSubject.userId !== input.userId
+      || input.trustedExecutionSubject.conversationId !== input.conversationId)) {
+      throw new FileContextPreparationError("document_unavailable");
     }
 
     let rows: readonly FileContextRow[];

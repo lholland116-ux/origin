@@ -311,7 +311,10 @@ values
     now() - interval '2 hours',
     now() - interval '90 minutes',
     now() - interval '110 minutes',
-    now() - interval '100 minutes',
+    greatest(
+      date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+      now() - interval '100 minutes'
+    ),
     null,
     null,
     'replicate',

@@ -39,7 +39,14 @@ export function createFileAnalysisCapabilityAdapter(
       const documentIds = attachments.map((item) => item.reference.id);
       let result: FileContextResult;
       try {
-        result = await prepare({ userId: binding.userId, conversationId: binding.conversationId, documentIds });
+        result = await prepare({
+          userId: binding.userId,
+          conversationId: binding.conversationId,
+          documentIds,
+          ...(input.context.trustedExecutionSubject
+            ? { trustedExecutionSubject: input.context.trustedExecutionSubject }
+            : {}),
+        });
       } catch (error) {
         if (error instanceof FileContextPreparationError) {
           if (error.code === "invalid_reference") return fail("missing_input");

@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   downloadGeneratedDocument,
   findGeneratedDocumentById,
+  findGeneratedDocumentByRequest,
   removeGeneratedDocumentObjectByPath,
   uploadGeneratedDocumentArtifact,
 } from "@/lib/documents/generated-document-server";
@@ -14,6 +15,7 @@ import {
 import { getDocumentMimeType, isSupportedDocumentFormat } from "@/lib/documents/generation/mime";
 import { isSafeFilename } from "@/lib/documents/generation/filenames";
 import type { GeneratedArtifact } from "@/lib/documents/generation/contracts";
+import { isTrustedExecutionSubject, type TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 import {
   generatedDocumentReferenceSchema,
   type GeneratedDocumentReference,
@@ -33,6 +35,7 @@ export type PersistGeneratedDocumentInput = GeneratedDocumentPersistenceInput & 
 
 export type PersistGeneratedDocumentForExistingMessageInput = GeneratedDocumentPersistenceInput & Readonly<{
   assistantMessageId: string;
+  trustedExecutionSubject?: TrustedExecutionSubject;
 }>;
 
 export type GeneratedDocumentPersistenceResult = Readonly<{
@@ -54,6 +57,7 @@ export type GeneratedDocumentPersistenceDependencies = Readonly<{
   }) => Promise<unknown>;
   remove: typeof removeGeneratedDocumentObjectByPath;
   findById: typeof findGeneratedDocumentById;
+  findByRequest?: (input: { userId: string; conversationId: string; generationRequestId: string }) => Promise<GeneratedDocumentPersistenceRecord | null>;
   download: typeof downloadGeneratedDocument;
 }>;
 
@@ -118,6 +122,24 @@ function defaultDependencies(): GeneratedDocumentPersistenceDependencies {
       return data;
     },
     persistChatForExistingMessage: async (input) => {
+      if (input.trustedExecutionSubject) {
+        const subject = input.trustedExecutionSubject;
+        if (!isTrustedExecutionSubject(subject) || subject.capabilityId !== "document_generation"
+          || subject.userId !== input.userId || subject.conversationId !== input.conversationId
+          || subject.assistantMessageId !== input.assistantMessageId
+          || subject.executionKey !== input.generationRequestId || !(await subject.assertCurrent())) {
+          throw new Error("Trusted document subject is unavailable.");
+        }
+        return await subject.persistDocument({
+          generatedDocumentId: input.generatedDocumentId,
+          storagePath: input.storagePath,
+          filename: input.generatedOutput.filename,
+          format: input.generatedOutput.format,
+          mimeType: input.generatedOutput.mimeType.split(";", 1)[0] ?? input.generatedOutput.mimeType,
+          sizeBytes: input.generatedOutput.sizeBytes,
+          templateId: input.templateId,
+        });
+      }
       const client = await createServerSupabaseClient();
       const rpcClient = client as unknown as {
         rpc: (name: string, params: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
@@ -139,6 +161,7 @@ function defaultDependencies(): GeneratedDocumentPersistenceDependencies {
     },
     remove: removeGeneratedDocumentObjectByPath,
     findById: findGeneratedDocumentById,
+    findByRequest: findGeneratedDocumentByRequest,
     download: downloadGeneratedDocument,
   };
 }
@@ -192,7 +215,17 @@ function createGeneratedDocumentPersistenceOperations(
     let storagePath = "";
     let persistenceCommitted = false;
     let replayDuplicate = false;
+    let persistenceOutcomeUncertain = false;
+    const reconciliation: { record: GeneratedDocumentPersistenceRecord | null } = { record: null };
     try {
+      const trusted = "trustedExecutionSubject" in input ? input.trustedExecutionSubject : undefined;
+      if (trusted && (!isTrustedExecutionSubject(trusted) || trusted.capabilityId !== "document_generation"
+        || trusted.userId !== input.userId || trusted.conversationId !== input.conversationId
+        || trusted.executionKey !== input.generationRequestId
+        || ("assistantMessageId" in input && trusted.assistantMessageId !== input.assistantMessageId)
+        || !(await trusted.assertCurrent()))) {
+        throw new GeneratedDocumentPersistenceError("invalid_output");
+      }
       storagePath = await dependencies.upload({
         userId: input.userId,
         conversationId: input.conversationId,
@@ -203,22 +236,73 @@ function createGeneratedDocumentPersistenceOperations(
         bytes: input.generatedOutput.bytes,
       });
 
-      const raw = await persistChat({
-        ...input,
-        generatedDocumentId,
-        storagePath,
-      });
+      const reconcileTrustedPersistence = async () => {
+        if (!trusted) return;
+        try {
+          const prior = await dependencies.findByRequest?.({
+            userId: input.userId, conversationId: input.conversationId, generationRequestId: input.generationRequestId,
+          });
+          if (!prior) {
+            if (!dependencies.findByRequest) persistenceOutcomeUncertain = true;
+            return;
+          }
+          if (prior.userId !== input.userId || prior.conversationId !== input.conversationId
+            || prior.generationRequestId !== input.generationRequestId
+            || ("assistantMessageId" in input && prior.messageId !== input.assistantMessageId)) {
+            persistenceOutcomeUncertain = true;
+            return;
+          }
+          reconciliation.record = prior;
+          persistenceCommitted = true;
+          if (prior.storagePath !== storagePath) {
+            await dependencies.remove({
+              userId: input.userId,
+              conversationId: input.conversationId,
+              generatedDocumentId,
+              filename: input.generatedOutput.filename,
+              format: input.generatedOutput.format,
+              storagePath,
+            });
+            storagePath = "";
+          }
+        } catch { persistenceOutcomeUncertain = true; }
+      };
+
+      let raw: unknown;
+      try {
+        raw = await persistChat({ ...input, generatedDocumentId, storagePath });
+      } catch (error) {
+        await reconcileTrustedPersistence();
+        if (!reconciliation.record) throw error;
+        raw = [{ assistant_message_id: reconciliation.record.messageId,
+          generated_document_id: reconciliation.record.id, was_existing: reconciliation.record.storagePath !== storagePath }];
+      }
+      if (!Array.isArray(raw) || !raw[0] || typeof raw[0] !== "object") {
+        await reconcileTrustedPersistence();
+        if (reconciliation.record) raw = [{ assistant_message_id: reconciliation.record.messageId,
+          generated_document_id: reconciliation.record.id, was_existing: reconciliation.record.storagePath !== storagePath }];
+      }
       if (!Array.isArray(raw) || !raw[0] || typeof raw[0] !== "object") {
         throw new GeneratedDocumentPersistenceError("persistence_failure");
       }
-      const persisted = raw[0] as Record<string, unknown>;
-      const messageId = typeof persisted.assistant_message_id === "string" ? persisted.assistant_message_id : "";
-      const documentId = typeof persisted.generated_document_id === "string" ? persisted.generated_document_id : "";
-      if (!messageId || !documentId) throw new GeneratedDocumentPersistenceError("persistence_failure");
+      const initial = raw[0] as Record<string, unknown>;
+      if (typeof initial.assistant_message_id !== "string" || typeof initial.generated_document_id !== "string") {
+        await reconcileTrustedPersistence();
+        if (reconciliation.record) raw = [{ assistant_message_id: reconciliation.record.messageId,
+          generated_document_id: reconciliation.record.id, was_existing: reconciliation.record.storagePath !== storagePath }];
+      }
+      const resultRow = Array.isArray(raw) && raw[0] && typeof raw[0] === "object"
+        ? raw[0] as Record<string, unknown> : null;
+      if (!resultRow || typeof resultRow.assistant_message_id !== "string"
+        || typeof resultRow.generated_document_id !== "string") {
+        throw new GeneratedDocumentPersistenceError("persistence_failure");
+      }
 
-      const wasExisting = persisted.was_existing === true;
+      const wasExisting = resultRow.was_existing === true;
+      const messageId = resultRow.assistant_message_id;
+      const documentId = resultRow.generated_document_id;
       persistenceCommitted = true;
-      if (wasExisting) {
+      if (wasExisting && storagePath) {
         replayDuplicate = true;
         await dependencies.remove({
           userId: input.userId,
@@ -248,7 +332,7 @@ function createGeneratedDocumentPersistenceOperations(
         },
       };
     } catch (error) {
-      if (storagePath && (!persistenceCommitted || replayDuplicate)) {
+      if (storagePath && ((!persistenceCommitted && !persistenceOutcomeUncertain) || replayDuplicate)) {
         try {
           await dependencies.remove({
             userId: input.userId,
@@ -284,6 +368,7 @@ function createGeneratedDocumentPersistenceOperations(
       return await persist(input, (persistInput) => dependencies.persistChatForExistingMessage({
         ...persistInput,
         assistantMessageId: input.assistantMessageId,
+        ...(input.trustedExecutionSubject ? { trustedExecutionSubject: input.trustedExecutionSubject } : {}),
       }));
     },
   };

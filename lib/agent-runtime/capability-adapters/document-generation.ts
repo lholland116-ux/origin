@@ -105,6 +105,9 @@ export function createDocumentGenerationCapabilityAdapter(
           templateId: "simple-document",
           generatedOutput: artifact,
           assistantMessageId: binding.assistantMessageId,
+          ...(input.context.trustedExecutionSubject
+            ? { trustedExecutionSubject: input.context.trustedExecutionSubject }
+            : {}),
         });
       } catch (error) {
         if (error instanceof GeneratedDocumentPersistenceError) {

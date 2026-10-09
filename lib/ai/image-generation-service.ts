@@ -15,6 +15,7 @@ import {
   type ProviderCostInvocationContext,
   type ProviderCostLedger,
 } from "@/lib/agent-runtime/provider-cost-ledger";
+import { isTrustedExecutionSubject, type TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 import { normalizeGeneratedImageMimeType } from "@/lib/chat/generated-image-history";
 import { validateImageGenerationRequest } from "@/lib/image-generation/validation";
 import {
@@ -37,6 +38,8 @@ export type ImageGenerationServiceInput = Readonly<{
   request: ImageGenerationRequest;
   /** Server-only autonomous accounting hook. Standalone callers never provide this. */
   providerCost?: Readonly<{ context: ProviderCostInvocationContext; ledger: ProviderCostLedger }>;
+  /** Only valid when derived from a currently claimed accepted execution. */
+  trustedExecutionSubject?: TrustedExecutionSubject;
 }>;
 
 export type ExistingMessageImageGenerationServiceInput = ImageGenerationServiceInput & Readonly<{
@@ -267,9 +270,12 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
   }) => Promise<unknown>,
 ) {
   return async function generateImage(input: TInput): Promise<ImageGenerationServiceResult> {
+    let costAdmissionId: string | null = null;
     const releaseQuota = async (attemptId: string, reason: ImageQuotaReleaseReason) => {
       try {
-        await dependencies.releaseQuota({ attemptId, reason });
+        if ("trustedExecutionSubject" in input && input.trustedExecutionSubject) {
+          await input.trustedExecutionSubject.releaseImageQuota({ attemptId, reason });
+        } else await dependencies.releaseQuota({ attemptId, reason });
       } catch {
         dependencies.logFailure("Image Generation quota release exception", { reason });
       }
@@ -277,22 +283,36 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
     if (!UUID_PATTERN.test(input.userId) || !UUID_PATTERN.test(input.conversationId)) {
       throw new ImageGenerationServiceError("invalid_request");
     }
+    const trusted = "trustedExecutionSubject" in input ? input.trustedExecutionSubject : undefined;
+    if (trusted && (!isTrustedExecutionSubject(trusted) || trusted.capabilityId !== "image_generation"
+      || trusted.userId !== input.userId || trusted.conversationId !== input.conversationId
+      || !("userMessageId" in input) || trusted.userMessageId !== input.userMessageId
+      || !("assistantMessageId" in input) || trusted.assistantMessageId !== input.assistantMessageId
+      || !input.providerCost || input.providerCost.context.runId !== trusted.runId
+      || input.providerCost.context.stepId !== trusted.stepId || input.providerCost.context.attemptId !== trusted.executionKey
+      || input.providerCost.context.attemptNumber !== trusted.attemptNumber)) {
+      throw new ImageGenerationServiceError("unauthorized");
+    }
     const validated = validateImageGenerationRequest(input.request);
     if (!validated.success || (validated.request.model !== undefined && validated.request.model !== IMAGE_GENERATION_DEFAULT_MODEL)) {
       throw new ImageGenerationServiceError("invalid_request");
     }
 
-    let conversationOwned: boolean;
-    try {
-      conversationOwned = await dependencies.verifyConversation({ userId: input.userId, conversationId: input.conversationId });
-    } catch {
-      throw new ImageGenerationServiceError("internal_failure");
+    if (trusted) {
+      if (!(await trusted.assertCurrent())) throw new ImageGenerationServiceError("unauthorized");
+    } else {
+      let conversationOwned: boolean;
+      try {
+        conversationOwned = await dependencies.verifyConversation({ userId: input.userId, conversationId: input.conversationId });
+      } catch {
+        throw new ImageGenerationServiceError("internal_failure");
+      }
+      if (!conversationOwned) throw new ImageGenerationServiceError("conversation_not_found");
     }
-    if (!conversationOwned) throw new ImageGenerationServiceError("conversation_not_found");
 
     let attemptId: string;
     try {
-      attemptId = await dependencies.reserveQuota(input.conversationId);
+      attemptId = trusted ? await trusted.reserveImageQuota() : await dependencies.reserveQuota(input.conversationId);
       if (!UUID_PATTERN.test(attemptId)) throw new Error("Quota reservation response was invalid.");
     } catch (error) {
       const message = extractMessage(error);
@@ -303,22 +323,18 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
       throw new ImageGenerationServiceError("internal_failure");
     }
 
-    let started = false;
-    try {
-      started = await dependencies.startAttempt({
-        attemptId,
-        provider: IMAGE_GENERATION_DEFAULT_PROVIDER,
-        model: IMAGE_GENERATION_DEFAULT_MODEL,
-      });
-    } catch {
-      started = false;
-    }
-    if (!started) {
+    const startProviderAttempt = async (): Promise<boolean> => {
+      try {
+        return trusted
+          ? await trusted.startImageAttempt({ attemptId, provider: IMAGE_GENERATION_DEFAULT_PROVIDER, model: IMAGE_GENERATION_DEFAULT_MODEL })
+          : await dependencies.startAttempt({ attemptId, provider: IMAGE_GENERATION_DEFAULT_PROVIDER, model: IMAGE_GENERATION_DEFAULT_MODEL });
+      } catch { return false; }
+    };
+    if (!trusted && !(await startProviderAttempt())) {
       await releaseQuota(attemptId, "internal_failure");
       throw new ImageGenerationServiceError("internal_failure");
     }
 
-    let costAdmissionId: string | null = null;
     let provider: Pick<ImageGenerationProvider, "generateImage">;
     try {
       provider = dependencies.createProvider(input.providerCost ? {
@@ -342,8 +358,13 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
           model: "flux-schnell",
           requestedImages: 1,
         });
-        if (!admission.mayDispatch) throw new ProviderCostLedgerError("denied");
         costAdmissionId = admission.id;
+        if (!admission.mayDispatch) throw new ProviderCostLedgerError("denied");
+        if (trusted && !(await startProviderAttempt())) {
+          await input.providerCost.ledger.releaseBeforeDispatch({ admissionId: admission.id, code: "image_quota_start_denied" });
+          await releaseQuota(attemptId, "internal_failure");
+          throw new ProviderCostLedgerError("denied");
+        }
         if (!(await input.providerCost.ledger.beginDispatch(admission.id))) {
           await input.providerCost.ledger.releaseBeforeDispatch({ admissionId: admission.id, code: "control_blocked_before_send" });
           throw new ProviderCostLedgerError("denied");
@@ -413,20 +434,34 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
 
     let persisted: unknown;
     try {
-      persisted = await completeGeneration(input, {
-        attemptId,
-        conversationId: input.conversationId,
-        prompt: validated.request.prompt,
-        storagePath,
-        mimeType,
-        provider: providerName,
-        model: modelName,
-      });
+      persisted = trusted
+        ? await trusted.completeImage({
+          attemptId,
+          prompt: validated.request.prompt,
+          storagePath,
+          mimeType,
+          provider: providerName,
+          model: modelName,
+        })
+        : await completeGeneration(input, {
+          attemptId,
+          conversationId: input.conversationId,
+          prompt: validated.request.prompt,
+          storagePath,
+          mimeType,
+          provider: providerName,
+          model: modelName,
+        });
     } catch {
       persisted = null;
     }
     const ids = durableIds(persisted);
     if (!ids) {
+      if (trusted) {
+        // A lost acknowledgement may follow a committed row; preserve object and
+        // quota state for explicit recovery by the durable execution identity.
+        throw new ImageGenerationServiceError("persistence_failure");
+      }
       try {
         await dependencies.removeImage(storagePath);
       } catch {

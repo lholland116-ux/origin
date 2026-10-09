@@ -51,6 +51,9 @@ export function createImageGenerationCapabilityAdapter(
           conversationId: binding.conversationId,
           userMessageId: binding.userMessageId,
           assistantMessageId: binding.assistantMessageId,
+          ...(input.context.trustedExecutionSubject
+            ? { trustedExecutionSubject: input.context.trustedExecutionSubject }
+            : {}),
           request: { prompt },
           ...(input.context.providerCost && dependencies.providerCostLedger
             ? { providerCost: { context: input.context.providerCost, ledger: dependencies.providerCostLedger } }

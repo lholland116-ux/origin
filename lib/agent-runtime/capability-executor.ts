@@ -4,6 +4,7 @@ import type { UserReasoningMode } from "@/lib/ai/reasoning-mode";
 import type { ExecutionWorkClaim } from "@/lib/agent-runtime/execution-store";
 import type { ExecutionStepResult, JsonValue } from "@/lib/agent-runtime/runtime-contracts";
 import type { ProviderCostInvocationContext } from "@/lib/agent-runtime/provider-cost-ledger";
+import type { TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 
 export type RuntimeAttachmentReference = {
   readonly id: string;
@@ -51,6 +52,8 @@ export type CapabilityExecutionInput = {
     readonly correlationId?: string;
     /** Server-only reauthorization lease; never persisted or returned to clients. */
     readonly providerCost?: ProviderCostInvocationContext;
+    /** Server-only claim-bound identity for a future worker invocation. */
+    readonly trustedExecutionSubject?: TrustedExecutionSubject;
   };
 };
 
