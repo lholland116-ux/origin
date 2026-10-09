@@ -6,7 +6,7 @@ import { createDocumentGenerationCapabilityAdapter } from "@/lib/agent-runtime/c
 import { createImageGenerationCapabilityAdapter } from "@/lib/agent-runtime/capability-adapters/image-generation";
 import { createImageEditingCapabilityAdapter } from "@/lib/agent-runtime/capability-adapters/image-editing";
 import { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-execution-runtime";
-import { executionAuthorizer } from "@/lib/agent-runtime/execution-authorizer";
+import { createTrustedBackgroundExecutionAuthorizer, executionAuthorizer } from "@/lib/agent-runtime/execution-authorizer";
 import { createExecutionRegistry } from "@/lib/agent-runtime/execution-registry";
 import { createRegistryCapabilityExecutor } from "@/lib/agent-runtime/registry-capability-executor";
 import { requestMessageBindingValidator } from "@/lib/agent-runtime/request-message-binding";
@@ -19,6 +19,8 @@ import type { RuntimeAttachmentReference } from "@/lib/agent-runtime/capability-
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createProviderCostLedger } from "@/lib/agent-runtime/provider-cost-ledger";
+import { resolveTrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
+import { createTrustedExecutionWorker } from "@/lib/agent-runtime/trusted-execution-worker";
 
 if (typeof window !== "undefined") throw new Error("Server execution composition is server-only");
 
@@ -50,6 +52,8 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
     executor: createRegistryCapabilityExecutor(registry),
     authorizer: executionAuthorizer,
     requestMessageBindingValidator,
+    resolveTrustedExecutionSubject,
+    createTrustedBackgroundAuthorizer: createTrustedBackgroundExecutionAuthorizer,
   });
   const coordinator = createIntelligenceDecisionCoordinator({ modelPlanningAllowed: false });
   const composer = createAcceptedExecutionComposer({
@@ -80,12 +84,20 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
         && typeof row.run_id === "string" ? [row.run_id] : []);
     },
   });
+  const worker = createTrustedExecutionWorker({
+    store,
+    runtime,
+    finalizeAcceptedExecution: finalizer.finalize,
+    listPendingFinalizationRunIds: finalizer.listPendingRunIds,
+  });
   return Object.freeze({
     ...composer,
     // Internal server/worker-compatible persistence operation only. No HTTP
     // handler invokes it; a separately qualified trigger must remain dormant.
     finalizeAcceptedExecution: finalizer.finalize,
     listPendingExecutionFinalizations: finalizer.listPendingRunIds,
+    // Internal-only bounded invocation; deliberately not wired to HTTP or a scheduler.
+    runTrustedExecutionWorkerOnce: worker.runOnce,
     control: Object.freeze({
       pause: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.pause(input),
       resume: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.resumeControlOnly(input),

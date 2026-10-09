@@ -89,6 +89,10 @@ function runtime(
   authorize: ExecutionAuthorizer["authorize"] = async () => ({ allowed: true }),
   validateBinding: RequestMessageBindingValidator["validate"] = async () => true,
   nowOverride?: () => Date,
+  trusted?: {
+    resolve: NonNullable<ConstructorParameters<typeof DurableXStateExecutionRuntime>[0]["resolveTrustedExecutionSubject"]>;
+    authorize: NonNullable<ConstructorParameters<typeof DurableXStateExecutionRuntime>[0]["createTrustedBackgroundAuthorizer"]>;
+  },
 ) {
   let keyCounter = 0;
   let runCounter = 0;
@@ -97,6 +101,10 @@ function runtime(
     executor: { execute: executor },
     authorizer: { authorize },
     requestMessageBindingValidator: { validate: validateBinding },
+    ...(trusted ? {
+      resolveTrustedExecutionSubject: trusted.resolve,
+      createTrustedBackgroundAuthorizer: trusted.authorize,
+    } : {}),
     createExecutionId: () => `b2000000-0000-4000-8000-${String(++runCounter).padStart(12, "0")}`,
     createExecutionKey: () => `c2000000-0000-4000-8000-${String(++keyCounter).padStart(12, "0")}`,
     now: nowOverride ?? (() => {
@@ -133,6 +141,72 @@ function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["cla
 }
 
 describe("durable XState execution runtime", () => {
+  it("advances exactly one claimed step per slice and uses the trusted subject for fresh authorization", async () => {
+    const store = new InMemoryExecutionStore();
+    const subject = Object.freeze({ userId: USER_ID, runId: RUN_ID }) as never;
+    const resolved: unknown[] = [];
+    const calls: CapabilityExecutionInput[] = [];
+    const fileId = "c2000000-0000-4000-8000-000000000004";
+    const workflow = handoff([
+      { id: "step-1", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
+      { id: "step-2", capability: "standard", dependsOn: ["step-1"], inputs: [
+        { source: "user" }, { source: "step", stepId: "step-1", output: "structured_data" },
+      ], expectedOutput: "text" },
+      { id: "step-3", capability: "document_generation", dependsOn: ["step-2"], inputs: [
+        { source: "step", stepId: "step-2", output: "text" },
+      ], expectedOutput: "document" },
+    ]);
+    const engine = runtime(store, async (input): Promise<ExecutionStepResult> => {
+      calls.push(input);
+      if (input.capabilityId === "file_analysis") return {
+        kind: "structured_data",
+        value: { kind: "file_context", userId: USER_ID, conversationId: REQUEST_BINDING.conversationId,
+          documents: [{ documentId: fileId, fileName: "analysis.txt", mimeType: "text/plain", sizeBytes: 10, extractedText: "source facts" }] },
+      } as ExecutionStepResult;
+      if (input.capabilityId === "standard") return {
+        kind: "text",
+        value: { kind: "standard_operation", requestId: REQUEST_BINDING.requestId, userId: USER_ID,
+          conversationId: REQUEST_BINDING.conversationId, reply: "Validated synthesis", model: "mock-standard",
+          reasoningEffort: "medium", measurements: [] },
+      } as ExecutionStepResult;
+      if (input.capabilityId === "document_generation") return {
+        kind: "document",
+        value: { kind: "generated_document", artifactId: "d2000000-0000-4000-8000-000000000009",
+          conversationId: REQUEST_BINDING.conversationId, messageId: REQUEST_BINDING.assistantMessageId,
+          filename: "analysis.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 100,
+          createdAt: "2026-10-09T12:00:00.000Z" },
+      } as ExecutionStepResult;
+      return mockResult(input);
+    }, undefined, undefined, undefined, {
+      resolve: async (input) => { resolved.push(input); return subject; },
+      authorize: () => ({ authorize: async () => ({ allowed: true }) }),
+    });
+    const associated = await engine.associateAcceptedRequest(workflow, runtimeInput({ attachments: [{ id: fileId, kind: "file" }] }), ACCEPTED_REQUEST);
+    expect(associated.kind).toBe("associated");
+
+    const deadline = Date.now() + 90_000;
+    const first = await engine.executeClaimedStep({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedStepId: "step-1",
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 1 }, executionDeadlineAtMs: deadline });
+    expect(first.kind).toBe("slice_yielded");
+    expect(calls.map((call) => call.stepId)).toEqual(["step-1"]);
+    expect(calls[0]?.context.trustedExecutionSubject).toBe(subject);
+
+    const second = await engine.executeClaimedStep({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedStepId: "step-2",
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 2 }, executionDeadlineAtMs: deadline });
+    expect(second.kind).toBe("slice_yielded");
+    const third = await engine.executeClaimedStep({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedStepId: "step-3",
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 3 }, executionDeadlineAtMs: deadline });
+    expect(third.kind).toBe("succeeded");
+    expect(calls.map((call) => call.stepId)).toEqual(["step-1", "step-2", "step-3"]);
+    expect(calls[1]?.inputs).toContainEqual(expect.objectContaining({ source: "step", stepId: "step-1" }));
+    expect(calls[2]?.inputs).toContainEqual(expect.objectContaining({ source: "step", stepId: "step-2" }));
+    expect(calls.every((call) => call.context.trustedExecutionSubject === subject)).toBe(true);
+    expect(resolved).toHaveLength(3);
+    expect(await store.getRun({ runId: RUN_ID, userId: USER_ID })).toMatchObject({
+      status: "succeeded", steps: [{ status: "succeeded" }, { status: "succeeded" }, { status: "succeeded" }],
+    });
+  });
+
   it("atomically associates one validated acceptance without dispatching a capability", async () => {
     const store = new InMemoryExecutionStore();
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));

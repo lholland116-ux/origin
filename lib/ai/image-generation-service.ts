@@ -40,6 +40,8 @@ export type ImageGenerationServiceInput = Readonly<{
   providerCost?: Readonly<{ context: ProviderCostInvocationContext; ledger: ProviderCostLedger }>;
   /** Only valid when derived from a currently claimed accepted execution. */
   trustedExecutionSubject?: TrustedExecutionSubject;
+  /** Absolute server deadline for bounded autonomous provider operations. */
+  executionDeadlineAtMs?: number;
 }>;
 
 export type ExistingMessageImageGenerationServiceInput = ImageGenerationServiceInput & Readonly<{
@@ -100,7 +102,10 @@ export type ImageGenerationServiceDependencies = Readonly<{
   reserveQuota: (conversationId: string) => Promise<string>;
   startAttempt: (input: { attemptId: string; provider: string; model: string }) => Promise<boolean>;
   releaseQuota: (input: { attemptId: string; reason: ImageQuotaReleaseReason }) => Promise<void>;
-  createProvider: (options?: { readonly onPredictionId?: (id: string) => Promise<void> }) => Pick<ImageGenerationProvider, "generateImage">;
+  createProvider: (options?: {
+    readonly onPredictionId?: (id: string) => Promise<void>;
+    readonly executionDeadlineAtMs?: number;
+  }) => Pick<ImageGenerationProvider, "generateImage">;
   uploadImage: (input: { storagePath: string; bytes: Uint8Array; mimeType: string }) => Promise<void>;
   completeGeneration: (input: {
     attemptId: string;
@@ -338,6 +343,7 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
     let provider: Pick<ImageGenerationProvider, "generateImage">;
     try {
       provider = dependencies.createProvider(input.providerCost ? {
+        ...(input.executionDeadlineAtMs ? { executionDeadlineAtMs: input.executionDeadlineAtMs } : {}),
         onPredictionId: async (id) => {
           if (!input.providerCost) return;
           await input.providerCost.ledger.markUncertain({

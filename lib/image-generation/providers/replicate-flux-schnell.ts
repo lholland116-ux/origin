@@ -146,8 +146,14 @@ export class ReplicateFluxSchnellProvider
 {
   private readonly runner: ReplicateRunner;
   private providerOperationId?: string;
+  private readonly executionDeadlineAtMs?: number;
 
-  constructor(options: { runner?: ReplicateRunner; onPredictionId?: (id: string) => Promise<void> } = {}) {
+  constructor(options: {
+    runner?: ReplicateRunner;
+    onPredictionId?: (id: string) => Promise<void>;
+    executionDeadlineAtMs?: number;
+  } = {}) {
+    this.executionDeadlineAtMs = options.executionDeadlineAtMs;
     if (options.runner) {
       this.runner = options.runner;
       return;
@@ -175,7 +181,19 @@ export class ReplicateFluxSchnellProvider
           }
           predictionPostAttempted = true;
         }
-        const response = await globalThis.fetch(input, init);
+        let requestInit = init;
+        if (this.executionDeadlineAtMs !== undefined) {
+          const remainingMs = this.executionDeadlineAtMs - Date.now();
+          if (!Number.isSafeInteger(this.executionDeadlineAtMs) || remainingMs <= 0) {
+            throw new Error("Bounded autonomous image operation exceeded its deadline.");
+          }
+          const timeoutSignal = AbortSignal.timeout(remainingMs);
+          const signal = init?.signal
+            ? AbortSignal.any([init.signal, timeoutSignal])
+            : timeoutSignal;
+          requestInit = { ...init, signal };
+        }
+        const response = await globalThis.fetch(input, requestInit);
         if (method === "POST" && isPredictionCreate && response.ok) {
           let body: unknown;
           try {

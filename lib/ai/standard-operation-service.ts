@@ -92,6 +92,8 @@ export type StandardOperationInput = Readonly<{
   webSearchResult?: WebSearchOperationResult;
   /** Runtime-owned: disable provider SDK retries for one durable attempt. */
   executionMode?: "durable_runtime_single_attempt";
+  /** Absolute server wall-time bound used only by bounded durable execution. */
+  executionDeadlineAtMs?: number;
   /** Present only for the governed autonomous runtime; never serialized or persisted. */
   providerCost?: Readonly<{ context: ProviderCostInvocationContext; ledger: ProviderCostLedger }>;
 }>;
@@ -233,6 +235,7 @@ async function createRetryResponse(params: {
   provider: typeof openai;
   executionMode?: StandardOperationInput["executionMode"];
   enforceOutputLimit: boolean;
+  timeoutMs?: number;
 }) {
   const request = {
     ...params.requestInput,
@@ -240,7 +243,7 @@ async function createRetryResponse(params: {
     store: false,
   } as never;
   return params.executionMode === "durable_runtime_single_attempt"
-    ? params.provider.responses.create(request, { maxRetries: 0 })
+    ? params.provider.responses.create(request, { maxRetries: 0, ...(params.timeoutMs ? { timeout: params.timeoutMs } : {}) })
     : params.provider.responses.create(request);
 }
 
@@ -248,6 +251,12 @@ async function* executeStandardOperation(
   input: StandardOperationInput,
   dependencies: StandardOperationDependencies,
 ): AsyncGenerator<StandardOperationEvent> {
+  const durableDeadlineAtMs = input.executionMode === "durable_runtime_single_attempt"
+    ? input.executionDeadlineAtMs ?? Date.now() + 90_000
+    : undefined;
+  const providerTimeoutMs = () => durableDeadlineAtMs === undefined
+    ? undefined
+    : Math.max(1, Math.min(90_000, durableDeadlineAtMs - Date.now()));
   const parsedContext = requestTransactionContextSchema.safeParse(input.requestContext);
   if (!parsedContext.success) throw new StandardOperationError("invalid_request_context");
   const requestContext = parsedContext.data;
@@ -278,9 +287,14 @@ async function* executeStandardOperation(
   const admitInvocation = async (): Promise<string | null> => {
     if (!input.providerCost) return null;
     let counted: unknown;
+    const countTimeoutMs = providerTimeoutMs();
     try {
-      counted = await dependencies.provider.responses.inputTokens.count(requestInput as never, { maxRetries: 0 });
-    } catch {
+      counted = await dependencies.provider.responses.inputTokens.count(requestInput as never, {
+        maxRetries: 0,
+        ...(countTimeoutMs ? { timeout: countTimeoutMs } : {}),
+      });
+    } catch (error) {
+      if (error instanceof StandardOperationError) throw error;
       throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
     }
     const inputTokens = counted && typeof counted === "object"
@@ -382,8 +396,9 @@ async function* executeStandardOperation(
       ...(input.providerCost ? { max_output_tokens: AGENT_PROVIDER_MAX_OUTPUT_TOKENS } : {}),
       store: false,
     } as never;
+    const streamTimeoutMs = providerTimeoutMs();
     const responseStream = (await (input.executionMode === "durable_runtime_single_attempt"
-      ? dependencies.provider.responses.stream(request, { maxRetries: 0 })
+      ? dependencies.provider.responses.stream(request, { maxRetries: 0, ...(streamTimeoutMs ? { timeout: streamTimeoutMs } : {}) })
       : dependencies.provider.responses.stream(request))) as unknown as AsyncIterable<ResponsesStreamEvent>;
     providerStreamOpened = true;
 
@@ -509,11 +524,13 @@ async function* executeStandardOperation(
     let retryOperationId: string | undefined;
     try {
       retryAdmissionId = await admitInvocation();
+      const retryTimeoutMs = providerTimeoutMs();
       const retry = await createRetryResponse({
         requestInput,
         provider: dependencies.provider,
         executionMode: input.executionMode,
         enforceOutputLimit: Boolean(input.providerCost),
+        ...(retryTimeoutMs ? { timeoutMs: retryTimeoutMs } : {}),
       });
       retryOperationId = typeof retry.id === "string" ? retry.id : undefined;
       await settleInvocation(retryAdmissionId, retry.usage, retryOperationId);

@@ -54,6 +54,8 @@ export type CapabilityExecutionInput = {
     readonly providerCost?: ProviderCostInvocationContext;
     /** Server-only claim-bound identity for a future worker invocation. */
     readonly trustedExecutionSubject?: TrustedExecutionSubject;
+    /** Absolute server deadline for a bounded worker slice; never persisted or client-visible. */
+    readonly executionDeadlineAtMs?: number;
   };
 };
 

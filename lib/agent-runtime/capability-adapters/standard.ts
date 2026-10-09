@@ -76,6 +76,9 @@ export function createStandardCapabilityAdapter(
         reasoningEffort: mapUserReasoningModeToProviderEffort(input.context.reasoningMode ?? "medium"),
         history: [{ role: "user", content: objective }],
         executionMode: "durable_runtime_single_attempt",
+        ...(input.context.executionDeadlineAtMs
+          ? { executionDeadlineAtMs: input.context.executionDeadlineAtMs }
+          : {}),
         ...(input.context.providerCost && dependencies.providerCostLedger
           ? { providerCost: { context: input.context.providerCost, ledger: dependencies.providerCostLedger } }
           : {}),

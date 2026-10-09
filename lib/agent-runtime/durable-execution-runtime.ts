@@ -10,6 +10,7 @@ import type {
   RequestMessageBindingValidator,
 } from "@/lib/agent-runtime/capability-executor";
 import { CapabilityAdapterError } from "@/lib/agent-runtime/capability-adapters/common";
+import type { TrustedExecutionSubject, TrustedExecutionSubjectInput } from "@/lib/agent-runtime/trusted-execution-subject";
 import { decideRetry } from "@/lib/agent-runtime/retry-policy";
 import { requestMessageBindingSchema } from "@/lib/agent-runtime/application-contracts";
 import {
@@ -298,6 +299,9 @@ export type DurableExecutionRuntimeOptions = {
   readonly executor: CapabilityExecutor;
   readonly authorizer: ExecutionAuthorizer;
   readonly requestMessageBindingValidator: RequestMessageBindingValidator;
+  /** Server-owned bridge for the internal worker; never supplied by request handlers. */
+  readonly resolveTrustedExecutionSubject?: (input: TrustedExecutionSubjectInput) => Promise<TrustedExecutionSubject | null>;
+  readonly createTrustedBackgroundAuthorizer?: (subject: TrustedExecutionSubject) => ExecutionAuthorizer;
   readonly createExecutionId?: () => string;
   readonly createExecutionKey?: () => string;
   readonly createControlId?: () => string;
@@ -840,6 +844,27 @@ export class DurableXStateExecutionRuntime {
     }
   }
 
+  /** Executes no more than the single DB-claimed step, retaining resumeExisting's state-machine path. */
+  async executeClaimedStep(input: {
+    readonly runId: string;
+    readonly authenticatedUserId: string;
+    readonly expectedStepId: string;
+    readonly workClaim: NonNullable<ExecutionRuntimeInput["workClaim"]>;
+    readonly executionDeadlineAtMs: number;
+    readonly correlationId?: string;
+  }): Promise<ExecutionOutcome> {
+    if (!this.options.resolveTrustedExecutionSubject || !this.options.createTrustedBackgroundAuthorizer
+      || !input.workClaim || !STEP_ID_PATTERN.test(input.expectedStepId)
+      || !Number.isSafeInteger(input.executionDeadlineAtMs) || input.executionDeadlineAtMs <= this.now().getTime()) {
+      return { kind: "rejected", failure: executionFailure("authorization_denied") };
+    }
+    try {
+      return await this.resumeExisting({ ...input, maxSteps: 1 });
+    } catch {
+      return { kind: "rejected", failure: executionFailure("persistence_failed") };
+    }
+  }
+
   /** Explicit owner-authorized control transition; ordinary runtime continuation never clears a pause. */
   async resumeControl(input: {
     readonly runId: string;
@@ -898,6 +923,9 @@ export class DurableXStateExecutionRuntime {
     readonly requestId?: string;
     readonly correlationId?: string;
     readonly workClaim?: ExecutionRuntimeInput["workClaim"];
+    readonly maxSteps?: number;
+    readonly expectedStepId?: string;
+    readonly executionDeadlineAtMs?: number;
   }): Promise<ExecutionOutcome> {
     if (!UUID_PATTERN.test(input.runId) || !UUID_PATTERN.test(input.authenticatedUserId)) {
       return { kind: "rejected", failure: executionFailure("ownership_denied") };
@@ -988,6 +1016,10 @@ export class DurableXStateExecutionRuntime {
     if (record.controlState !== "active") {
       return controlOutcome(record)!;
     }
+    if (input.executionDeadlineAtMs !== undefined && this.now().getTime() >= input.executionDeadlineAtMs) {
+      const run = executionRun(record);
+      return { kind: "slice_yielded", run, stepResults: outputResults(record.steps), telemetry: telemetry(run, null, record.snapshotRevision, false) };
+    }
     let revision = record.snapshotRevision;
     let current = record;
     let claimedRetryStepId: string | undefined;
@@ -995,6 +1027,9 @@ export class DurableXStateExecutionRuntime {
 
     const retryPending = current.steps.find((step) => step.status === "retry_pending");
     if (retryPending) {
+      if (input.expectedStepId !== undefined && retryPending.stepId !== input.expectedStepId) {
+        return { kind: "rejected", failure: executionFailure("snapshot_conflict") };
+      }
       const retryActor = stepActors.get(retryPending.stepId)!;
       const stopActors = () => {
         for (const actor of stepActors.values()) actor.stop();
@@ -1091,9 +1126,13 @@ export class DurableXStateExecutionRuntime {
 
     const stepById = new Map(handoff.plan.steps.map((step) => [step.id, step]));
     const results: Record<string, ExecutionStepResult> = { ...outputResults(current.steps) };
+    let completedSliceSteps = 0;
     for (const stepId of handoff.orderedStepIds) {
       const persistedStep = current.steps.find((step) => step.stepId === stepId)!;
       if (persistedStep.status === "succeeded" || persistedStep.status === "skipped") continue;
+      if (input.expectedStepId !== undefined && stepId !== input.expectedStepId) {
+        return { kind: "rejected", failure: executionFailure("snapshot_conflict") };
+      }
       const isClaimedRetry = persistedStep.status === "running" && claimedRetryStepId === stepId;
       if (persistedStep.status !== "pending" && !isClaimedRetry) {
         return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("indeterminate_step"), stepId };
@@ -1163,11 +1202,39 @@ export class DurableXStateExecutionRuntime {
       }
 
       const capabilityId = step.capability;
+      let trustedSubject: TrustedExecutionSubject | undefined;
       if (!stepFailure) {
-        const authorization = await this.authorize(current, stepId, capabilityId, resolved.resourceReferences ?? [], resolved.inputs ?? [], {
-          correlationId: input.correlationId,
-        });
-        if (!authorization.allowed) stepFailure = authorization.failure;
+        if (input.workClaim) {
+          try {
+            trustedSubject = await this.options.resolveTrustedExecutionSubject?.({
+              runId: current.id,
+              stepId,
+              executionKey,
+              claimId: input.workClaim.claimId,
+              fencingGeneration: input.workClaim.fencingGeneration,
+            }) ?? undefined;
+          } catch {
+            trustedSubject = undefined;
+          }
+          if (!trustedSubject) stepFailure = executionFailure("authorization_denied");
+        }
+        if (!stepFailure) {
+          const authorization = await this.authorize(current, stepId, capabilityId, resolved.resourceReferences ?? [], resolved.inputs ?? [], {
+            correlationId: input.correlationId,
+            ...(input.workClaim ? { workClaim: input.workClaim } : {}),
+            executionKey,
+            ...(trustedSubject ? { trustedSubject } : {}),
+          });
+          if (!authorization.allowed) stepFailure = authorization.failure;
+        }
+      }
+
+      if (!stepFailure && input.executionDeadlineAtMs !== undefined
+        && this.now().getTime() >= input.executionDeadlineAtMs) {
+        // The step is durably running, so the safe non-dispatch boundary is recovery, not replay.
+        for (const actor of stepActors.values()) actor.stop();
+        runActor.stop();
+        return { kind: "recovery_required", run: executionRun(current), failure: executionFailure("indeterminate_step"), stepId };
       }
 
       let result: ExecutionStepResult | undefined;
@@ -1183,6 +1250,7 @@ export class DurableXStateExecutionRuntime {
             attemptNumber: currentAttempt,
             capabilityId,
             reauthorize: async () => {
+              if (input.executionDeadlineAtMs !== undefined && this.now().getTime() >= input.executionDeadlineAtMs) return false;
               let latest: DurableExecutionRun | null;
               try {
                 latest = await this.options.store.getAcceptedRunForFinalization({ runId: current.id });
@@ -1198,7 +1266,12 @@ export class DurableXStateExecutionRuntime {
                 return false;
               }
               return (await this.authorize(latest, stepId, capabilityId,
-                resolved.resourceReferences ?? [], resolved.inputs ?? [], { correlationId: input.correlationId })).allowed;
+                resolved.resourceReferences ?? [], resolved.inputs ?? [], {
+                  correlationId: input.correlationId,
+                  ...(input.workClaim ? { workClaim: input.workClaim } : {}),
+                  executionKey,
+                  ...(trustedSubject ? { trustedSubject } : {}),
+                })).allowed;
             },
           })
           : undefined;
@@ -1218,6 +1291,8 @@ export class DurableXStateExecutionRuntime {
             requestId: current.runtimeContext.requestMessageBinding!.requestId,
             ...(input.correlationId ? { correlationId: input.correlationId } : {}),
             ...(providerCostContext ? { providerCost: providerCostContext } : {}),
+            ...(trustedSubject ? { trustedExecutionSubject: trustedSubject } : {}),
+            ...(input.executionDeadlineAtMs ? { executionDeadlineAtMs: input.executionDeadlineAtMs } : {}),
           },
         };
         try {
@@ -1365,6 +1440,13 @@ export class DurableXStateExecutionRuntime {
         runActor.stop();
         return controlOutcome(current)!;
       }
+      completedSliceSteps += 1;
+      if (input.maxSteps !== undefined && completedSliceSteps >= input.maxSteps) {
+        for (const actor of stepActors.values()) actor.stop();
+        runActor.stop();
+        const run = executionRun(current);
+        return { kind: "slice_yielded", run, stepResults: outputResults(current.steps), telemetry: telemetry(run, null, revision, true) };
+      }
     }
 
     const run = executionRun(current);
@@ -1377,10 +1459,22 @@ export class DurableXStateExecutionRuntime {
     capabilityId: CapabilityExecutionInput["capabilityId"],
     resourceReferences: readonly string[],
     resolvedInputs: CapabilityExecutionInput["inputs"],
-    context: { readonly requestId?: string; readonly correlationId?: string },
+    context: {
+      readonly requestId?: string;
+      readonly correlationId?: string;
+      readonly workClaim?: ExecutionRuntimeInput["workClaim"];
+      readonly executionKey?: string;
+      readonly trustedSubject?: TrustedExecutionSubject;
+    },
   ): Promise<{ readonly allowed: true } | { readonly allowed: false; readonly failure: ExecutionFailure }> {
     try {
-      const decision = await this.options.authorizer.authorize({
+      const authorizer = context.trustedSubject
+        ? this.options.createTrustedBackgroundAuthorizer?.(context.trustedSubject)
+        : this.options.authorizer;
+      if (!authorizer || (context.workClaim && (!context.executionKey || !context.trustedSubject))) {
+        return { allowed: false, failure: executionFailure("authorization_denied") };
+      }
+      const decision = await authorizer.authorize({
         executionId: record.id,
         stepId,
         capabilityId,

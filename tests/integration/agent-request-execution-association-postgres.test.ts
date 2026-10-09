@@ -4,9 +4,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coordinator";
 import { validateIntelligencePlan } from "@/lib/ai/plan-validator";
 import type { ExecutionRuntimeInput } from "@/lib/agent-runtime/capability-executor";
+import type { CapabilityExecutionInput } from "@/lib/agent-runtime/capability-executor";
 import type { AcceptedRequestExecutionIdentity } from "@/lib/agent-runtime/execution-store";
 import { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-execution-runtime";
 import { SupabaseExecutionStore } from "@/lib/database/supabase/supabase-execution-store";
+import { createTrustedExecutionWorker } from "@/lib/agent-runtime/trusted-execution-worker";
+import { createAcceptedExecutionFinalizer } from "@/lib/agent-runtime/accepted-execution-finalization";
+import type { ExecutionStepResult } from "@/lib/agent-runtime/runtime-contracts";
 
 const RUN_DATABASE_TESTS = process.env.AGENT_REQUEST_ACCEPTANCE_DATABASE_TESTS === "true";
 const DATABASE_URL = process.env.AGENT_REQUEST_ACCEPTANCE_TEST_DATABASE_URL
@@ -62,6 +66,29 @@ function plan(variant = "first"): PlannedExecutionHandoff {
   };
 }
 
+function qualityAnalysisPlan(): PlannedExecutionHandoff {
+  const steps = [
+    { id: "file-analysis", capability: "file_analysis" as const, dependsOn: [] as string[],
+      inputs: [{ source: "attachment" as const, output: "file" as const }], expectedOutput: "structured_data" as const },
+    { id: "synthesis", capability: "standard" as const, dependsOn: ["file-analysis"], inputs: [
+      { source: "user" as const }, { source: "step" as const, stepId: "file-analysis", output: "structured_data" as const },
+    ], expectedOutput: "text" as const },
+    { id: "document", capability: "document_generation" as const, dependsOn: ["synthesis"],
+      inputs: [{ source: "step" as const, stepId: "synthesis", output: "text" as const }], expectedOutput: "document" as const },
+  ];
+  const objective = "Analyze the supplied quality report and prepare a concise document.";
+  const candidate = { objective, steps, status: "validated" as const };
+  const checked = validateIntelligencePlan(candidate);
+  if (!checked.valid) throw new Error(checked.errors.join("; "));
+  return {
+    version: 1, objective, plan: candidate, orderedStepIds: checked.orderedStepIds,
+    plannerSource: "deterministic",
+    governance: { maxSteps: 3, capabilityIds: ["document_generation", "file_analysis", "standard"],
+      modelPlanningAllowed: false, maxModelCalls: 0, maxRepairAttempts: 0,
+      attachmentContextAllowed: true, handoffVersion: 1 },
+  };
+}
+
 function makeRuntime(store: SupabaseExecutionStore, runId: () => string = randomUUID, stepKey: () => string = randomUUID) {
   const execute = vi.fn(async () => ({ kind: "text" as const, value: { text: "mock" } }));
   const runtime = new DurableXStateExecutionRuntime({
@@ -90,6 +117,7 @@ describeDatabase("accepted request execution association (isolated local Postgre
     readonly fingerprint?: string;
     readonly conversation?: string;
     readonly message?: string;
+    readonly documentIds?: readonly string[];
   } = {}, database: postgres.Sql = sql) {
     const key = options.key ?? randomUUID();
     const fingerprint = options.fingerprint ?? "a".repeat(64);
@@ -101,7 +129,7 @@ describeDatabase("accepted request execution association (isolated local Postgre
         ${fingerprint},
         ${database.json({ routingMode: "auto" })}::jsonb,
         ${options.message ?? "Create a concise report."},
-        ARRAY[]::uuid[],
+        ${[...(options.documentIds ?? [])]}::uuid[],
         '[]'::jsonb,
         ${usageDate}::date,
         100,
@@ -156,6 +184,7 @@ describeDatabase("accepted request execution association (isolated local Postgre
 
   afterAll(async () => {
     if (!RUN_DATABASE_TESTS || !sql) return;
+    await sql.unsafe("DELETE FROM public.documents WHERE user_id IN ($1::uuid,$2::uuid)", [userId, otherUserId]);
     await sql.unsafe("DELETE FROM auth.users WHERE id IN ($1::uuid,$2::uuid)", [userId, otherUserId]);
     await sql.end();
   });
@@ -545,5 +574,97 @@ describeDatabase("accepted request execution association (isolated local Postgre
     expect(finalized.some((row) => row.run_id === associated.runId)).toBe(false);
     expect(await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() })).toEqual({ status: "ineligible" });
     expect(await store.discoverExecutionWork({ limit: 100 })).not.toContainEqual(expect.objectContaining({ runId: associated.runId }));
+  });
+
+  it("advances File Analysis → Standard → Document in successive fenced slices and finalizes the original message once", async () => {
+    const documentId = randomUUID();
+    await sql`INSERT INTO public.documents (
+      id,user_id,conversation_id,file_name,mime_type,size_bytes,storage_path,extracted_text,extraction_status
+    ) VALUES (
+      ${documentId}::uuid,${userId}::uuid,${conversationId}::uuid,'quality.txt','text/plain',12,
+      ${`qualification/${documentId}.txt`},'Accepted quality evidence for qualification.','ready'
+    )`;
+    const accepted = await accept({ documentIds: [documentId], message: "Analyze the quality report and prepare a report." });
+    const runtimeInputForRun: ExecutionRuntimeInput = {
+      ...runtimeInput(accepted.identity),
+      attachments: [{ id: documentId, kind: "file" }],
+      resourceReferences: [documentId],
+      userInput: "Analyze the quality report and prepare a report.",
+    };
+    const calls: CapabilityExecutionInput[] = [];
+    const trustedSubject = Object.freeze({ assertCurrent: async () => true }) as never;
+    const runtime = new DurableXStateExecutionRuntime({
+      store,
+      executor: { execute: async (input): Promise<ExecutionStepResult> => {
+        calls.push(input);
+        if (input.capabilityId === "file_analysis") return {
+          kind: "structured_data",
+          value: { kind: "file_context", userId, conversationId,
+            documents: [{ documentId, fileName: "quality.txt", mimeType: "text/plain", sizeBytes: 12,
+              extractedText: "Accepted quality evidence for qualification." }] },
+        };
+        if (input.capabilityId === "standard") return {
+          kind: "text",
+          value: { kind: "standard_operation", requestId: accepted.identity.requestId, userId, conversationId,
+            reply: "Quality findings are documented.", model: "mock-standard", reasoningEffort: "medium", measurements: [] },
+        };
+        return {
+          kind: "document",
+          value: { kind: "generated_document", artifactId: randomUUID(), conversationId,
+            messageId: accepted.identity.assistantMessageId, filename: "quality-report.pdf", format: "pdf",
+            mimeType: "application/pdf", sizeBytes: 128, createdAt: new Date().toISOString() },
+        };
+      } },
+      authorizer: { authorize: async () => ({ allowed: false }) },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: randomUUID,
+      createExecutionKey: randomUUID,
+      now: () => new Date(),
+      resolveTrustedExecutionSubject: async () => trustedSubject,
+      createTrustedBackgroundAuthorizer: () => ({ authorize: async () => ({ allowed: true }) }),
+    });
+    const associated = await runtime.associateAcceptedRequest(qualityAnalysisPlan(), runtimeInputForRun, accepted.identity);
+    if (associated.kind !== "associated") throw new Error("Expected associated worker run.");
+
+    // Test fixtures from earlier assertions are isolated from the one candidate for this worker sequence.
+    await sql`UPDATE public.execution_run_work_state SET available_at=clock_timestamp()+interval '1 day'
+      WHERE run_id<>${associated.runId}::uuid AND claim_id IS NULL AND recovery_state='ready'`;
+    const finalizer = createAcceptedExecutionFinalizer({
+      loadAcceptedRun: (runId) => store.getAcceptedRunForFinalization({ runId }),
+      finalizeAtomically: async ({ runId, finalText }) => {
+        const [row] = await sql<{ result: unknown }[]>`SELECT public.finalize_accepted_agent_execution(
+          ${runId}::uuid,${finalText}
+        ) AS result`;
+        return row!.result;
+      },
+      listPendingRunIds: async (limit) => {
+        const rows = await sql<{ run_id: string }[]>`SELECT run_id FROM public.list_pending_agent_execution_finalizations(${limit})`;
+        return rows.map((row) => row.run_id);
+      },
+    });
+    const worker = createTrustedExecutionWorker({ store, runtime, listPendingFinalizationRunIds: finalizer.listPendingRunIds,
+      finalizeAcceptedExecution: finalizer.finalize, createClaimId: randomUUID });
+
+    expect(await worker.runOnce()).toMatchObject({ status: "bounded_yield", runId: associated.runId, stepId: "file-analysis", capability: "file_analysis" });
+    expect(await worker.runOnce()).toMatchObject({ status: "bounded_yield", runId: associated.runId, stepId: "synthesis", capability: "standard" });
+    expect(await worker.runOnce()).toMatchObject({ status: "step_completed", runId: associated.runId, stepId: "document", capability: "document_generation" });
+    expect(calls.map(({ stepId, capabilityId }) => [stepId, capabilityId])).toEqual([
+      ["file-analysis", "file_analysis"], ["synthesis", "standard"], ["document", "document_generation"],
+    ]);
+    expect(calls[1]?.inputs).toContainEqual(expect.objectContaining({ source: "step", stepId: "file-analysis" }));
+    expect(calls[2]?.inputs).toContainEqual(expect.objectContaining({ source: "step", stepId: "synthesis" }));
+    expect(calls.every((call) => call.context.trustedExecutionSubject === trustedSubject)).toBe(true);
+    expect((await store.getRun({ runId: associated.runId, userId }))?.steps).toMatchObject([
+      { status: "succeeded" }, { status: "succeeded" }, { status: "succeeded" },
+    ]);
+
+    expect(await worker.runOnce()).toMatchObject({ status: "finalization_completed", runId: associated.runId });
+    const finalized = await sql<{ content: string }[]>`SELECT content FROM public.messages WHERE id=${accepted.identity.assistantMessageId}::uuid`;
+    expect(finalized[0]?.content).toBe("Your requested document is ready.");
+    const receipts = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.execution_run_finalizations WHERE run_id=${associated.runId}::uuid`;
+    expect(receipts[0]?.count).toBe(1);
+    expect(await worker.runOnce()).toMatchObject({ status: "no_work" });
+    expect(calls).toHaveLength(3);
+    // Storage upload and metadata use the already-qualified claim-bound 3D.2A path; this test mocks that adapter boundary.
   });
 });

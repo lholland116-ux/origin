@@ -54,6 +54,9 @@ export function createImageGenerationCapabilityAdapter(
           ...(input.context.trustedExecutionSubject
             ? { trustedExecutionSubject: input.context.trustedExecutionSubject }
             : {}),
+          ...(input.context.executionDeadlineAtMs
+            ? { executionDeadlineAtMs: input.context.executionDeadlineAtMs }
+            : {}),
           request: { prompt },
           ...(input.context.providerCost && dependencies.providerCostLedger
             ? { providerCost: { context: input.context.providerCost, ledger: dependencies.providerCostLedger } }

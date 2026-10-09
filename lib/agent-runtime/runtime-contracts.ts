@@ -193,6 +193,13 @@ export type ExecutionOutcome =
       readonly nextRetryAt: string;
     }
   | {
+      /** One durable worker slice completed one substantive step; another invocation may continue. */
+      readonly kind: "slice_yielded";
+      readonly run: ExecutionRun;
+      readonly stepResults: Readonly<Record<string, ExecutionStepResult>>;
+      readonly telemetry: ExecutionOperationalMetadata;
+    }
+  | {
       readonly kind: "paused" | "pause_requested" | "stopped" | "stop_requested" | "returned";
       readonly run: ExecutionRun;
     }

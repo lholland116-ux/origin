@@ -229,7 +229,7 @@ describe("Standard core operation", () => {
     expect(mocks.provider.responses.inputTokens.count).toHaveBeenCalledOnce();
     expect(mocks.provider.responses.inputTokens.count).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-6-luna", instructions: expect.any(String), input: expect.any(Array) }),
-      { maxRetries: 0 },
+      { maxRetries: 0, timeout: expect.any(Number) },
     );
     expect(ledger.admit).toHaveBeenCalledWith(providerCost.context, {
       invocationSequence: 1,
@@ -241,7 +241,7 @@ describe("Standard core operation", () => {
     expect(ledger.beginDispatch).toHaveBeenCalledOnce();
     expect(mocks.provider.responses.stream).toHaveBeenCalledWith(
       expect.objectContaining({ max_output_tokens: 4096, store: false }),
-      { maxRetries: 0 },
+      { maxRetries: 0, timeout: expect.any(Number) },
     );
     expect(ledger.markUncertain).toHaveBeenCalledWith(expect.objectContaining({
       admissionId: "50000000-0000-4000-8000-000000000001",
@@ -338,7 +338,7 @@ describe("Standard core operation", () => {
     ]);
     expect(mocks.provider.responses.create).toHaveBeenCalledWith(
       expect.objectContaining({ max_output_tokens: 4096, store: false }),
-      { maxRetries: 0 },
+      { maxRetries: 0, timeout: expect.any(Number) },
     );
     expect(events.find((event) => event.type === "completion")).toMatchObject({
       result: { reply: "A detailed visual description that answers the request." },
@@ -386,7 +386,7 @@ describe("Standard core operation", () => {
       caught = error;
     }
 
-    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0 });
+    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0, timeout: expect.any(Number) });
     expect(caught).toBeInstanceOf(StandardOperationError);
     expect(caught).toMatchObject({ failureMetadata: { phase: "pre_provider", retrySafety: "SAFE_RETRY" } });
     expect(JSON.stringify(caught)).not.toContain("private resolver detail");
@@ -417,7 +417,7 @@ describe("Standard core operation", () => {
 
     expect(caught).toMatchObject({ failureMetadata: { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" } });
     expect(mocks.provider.responses.stream).toHaveBeenCalledOnce();
-    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0 });
+    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0, timeout: expect.any(Number) });
     expectNoRequestSideEffects();
   });
 });
