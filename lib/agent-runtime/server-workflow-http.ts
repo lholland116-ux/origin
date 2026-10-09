@@ -20,6 +20,11 @@ function getComposer(): ReturnType<typeof createServerAcceptedExecutionCompositi
   return composer;
 }
 
+/** Internal wake-up only; callers provide no run/user identity. */
+export function runTrustedExecutionWorkerOnce() {
+  return getComposer().runTrustedExecutionWorkerOnce();
+}
+
 export const workflowHttpHandlers = createWorkflowHttpHandlers({
   getGate: () => readWorkflowFeatureGate(),
   authenticate: async () => {

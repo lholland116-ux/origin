@@ -33,9 +33,8 @@ async function resolveAcceptedImages(binding: RequestMessageBinding): Promise<re
 }
 
 /**
- * Production-oriented but dormant composition. It binds all six static
- * adapters and the concrete authorizer. The returned interface only prepares
- * and associates a run; bounded authenticated dispatch is a later gate.
+ * Server-only composition for accepted runs. Bounded execution is reachable
+ * only through the default-disabled, authenticated internal wake boundary.
  */
 export function createServerAcceptedExecutionComposition(store: ExecutionStore) {
   const providerCostLedger = createProviderCostLedger();
@@ -92,11 +91,10 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
   });
   return Object.freeze({
     ...composer,
-    // Internal server/worker-compatible persistence operation only. No HTTP
-    // handler invokes it; a separately qualified trigger must remain dormant.
+    // Internal server/worker-compatible persistence operation only.
     finalizeAcceptedExecution: finalizer.finalize,
     listPendingExecutionFinalizations: finalizer.listPendingRunIds,
-    // Internal-only bounded invocation; deliberately not wired to HTTP or a scheduler.
+    // Internal-only bounded invocation; only the HMAC-protected wake boundary calls it.
     runTrustedExecutionWorkerOnce: worker.runOnce,
     control: Object.freeze({
       pause: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.pause(input),

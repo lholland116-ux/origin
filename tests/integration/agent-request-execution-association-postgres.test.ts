@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coordinator";
@@ -10,6 +10,7 @@ import { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-execu
 import { SupabaseExecutionStore } from "@/lib/database/supabase/supabase-execution-store";
 import { createTrustedExecutionWorker } from "@/lib/agent-runtime/trusted-execution-worker";
 import { createAcceptedExecutionFinalizer } from "@/lib/agent-runtime/accepted-execution-finalization";
+import { handleExecutionTrigger, signExecutionTrigger } from "@/lib/agent-runtime/execution-trigger";
 import type { ExecutionStepResult } from "@/lib/agent-runtime/runtime-contracts";
 
 const RUN_DATABASE_TESTS = process.env.AGENT_REQUEST_ACCEPTANCE_DATABASE_TESTS === "true";
@@ -644,10 +645,55 @@ describeDatabase("accepted request execution association (isolated local Postgre
     });
     const worker = createTrustedExecutionWorker({ store, runtime, listPendingFinalizationRunIds: finalizer.listPendingRunIds,
       finalizeAcceptedExecution: finalizer.finalize, createClaimId: randomUUID });
+    const triggerSecret = "disposable-integration-trigger-secret-at-least-32-bytes";
+    let workerInvocations = 0;
+    const triggerWorkerOnce = async (options: { nonce?: string; timestamp?: string; expectedStatus?: number } = {}) => {
+      const timestamp = options.timestamp ?? String(Math.floor(Date.now() / 1000));
+      const nonce = options.nonce ?? randomBytes(16).toString("hex");
+      const response = await handleExecutionTrigger(new Request("https://lvtchat.test/api/internal/execution-wake", {
+        method: "POST",
+        headers: {
+          "x-lvtchat-timestamp": timestamp,
+          "x-lvtchat-nonce": nonce,
+          "x-lvtchat-signature": signExecutionTrigger(triggerSecret, timestamp, nonce),
+        },
+      }), {
+        enabled: true,
+        secret: triggerSecret,
+        consumeNonce: async (nonceHash) => {
+          const [row] = await sql<{ consumed: boolean }[]>`SELECT public.consume_agent_execution_trigger_nonce(${nonceHash}) AS consumed`;
+          return row!.consumed;
+        },
+        acquireInvocation: async (claimId) => {
+          const [row] = await sql<{ status: "acquired" | "busy"; fencing_generation: number | null }[]>`
+            SELECT * FROM public.acquire_agent_execution_trigger_gate(${claimId}::uuid)`;
+          return row!.status === "busy" ? { status: "busy" as const }
+            : { status: "acquired" as const, fencingGeneration: Number(row!.fencing_generation) };
+        },
+        renewInvocation: async (claimId, fencingGeneration) => {
+          const [row] = await sql<{ renewed: boolean }[]>`SELECT public.renew_agent_execution_trigger_gate(
+            ${claimId}::uuid, ${fencingGeneration}::bigint) AS renewed`;
+          return row!.renewed;
+        },
+        releaseInvocation: async (claimId, fencingGeneration) => {
+          const [row] = await sql<{ released: boolean }[]>`
+            SELECT public.release_agent_execution_trigger_gate(${claimId}::uuid, ${fencingGeneration}::bigint) AS released`;
+          return row!.released;
+        },
+        runOnce: async () => {
+          workerInvocations += 1;
+          return worker.runOnce();
+        },
+      });
+      expect(response.status).toBe(options.expectedStatus ?? 200);
+      const result = await response.json() as Record<string, unknown>;
+      expect(result).not.toHaveProperty("runId");
+      return result;
+    };
 
-    expect(await worker.runOnce()).toMatchObject({ status: "bounded_yield", runId: associated.runId, stepId: "file-analysis", capability: "file_analysis" });
-    expect(await worker.runOnce()).toMatchObject({ status: "bounded_yield", runId: associated.runId, stepId: "synthesis", capability: "standard" });
-    expect(await worker.runOnce()).toMatchObject({ status: "step_completed", runId: associated.runId, stepId: "document", capability: "document_generation" });
+    expect(await triggerWorkerOnce()).toMatchObject({ status: "bounded_yield" });
+    expect(await triggerWorkerOnce()).toMatchObject({ status: "bounded_yield" });
+    expect(await triggerWorkerOnce()).toMatchObject({ status: "step_completed" });
     expect(calls.map(({ stepId, capabilityId }) => [stepId, capabilityId])).toEqual([
       ["file-analysis", "file_analysis"], ["synthesis", "standard"], ["document", "document_generation"],
     ]);
@@ -658,12 +704,16 @@ describeDatabase("accepted request execution association (isolated local Postgre
       { status: "succeeded" }, { status: "succeeded" }, { status: "succeeded" },
     ]);
 
-    expect(await worker.runOnce()).toMatchObject({ status: "finalization_completed", runId: associated.runId });
+    expect(await triggerWorkerOnce()).toMatchObject({ status: "finalization_completed" });
     const finalized = await sql<{ content: string }[]>`SELECT content FROM public.messages WHERE id=${accepted.identity.assistantMessageId}::uuid`;
     expect(finalized[0]?.content).toBe("Your requested document is ready.");
     const receipts = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.execution_run_finalizations WHERE run_id=${associated.runId}::uuid`;
     expect(receipts[0]?.count).toBe(1);
-    expect(await worker.runOnce()).toMatchObject({ status: "no_work" });
+    const replay = { nonce: randomBytes(16).toString("hex"), timestamp: String(Math.floor(Date.now() / 1000)) };
+    expect(await triggerWorkerOnce(replay)).toMatchObject({ status: "no_work" });
+    const workerInvocationsBeforeReplay = workerInvocations;
+    expect(await triggerWorkerOnce({ ...replay, expectedStatus: 409 })).toEqual({ error: "duplicate_trigger" });
+    expect(workerInvocations).toBe(workerInvocationsBeforeReplay);
     expect(calls).toHaveLength(3);
     // Storage upload and metadata use the already-qualified claim-bound 3D.2A path; this test mocks that adapter boundary.
   });
