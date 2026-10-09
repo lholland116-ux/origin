@@ -1,0 +1,13 @@
+{
+  "name": "lvtchat-hostinger-runtime-probe",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "hostinger-node-runtime-probe.mjs",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "start": "node hostinger-node-runtime-probe.mjs"
+  }
+}

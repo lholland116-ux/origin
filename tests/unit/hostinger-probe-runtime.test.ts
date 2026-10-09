@@ -60,17 +60,46 @@ describe("Hostinger test probe protocol", () => {
     )).toBe("5e96ee8cfc75918009d5c2a3653c584d5cf32f60a4cc49505c6eecd4402926a7");
 
     const php = readFileSync("scripts/hostinger-probe-caller.php", "utf8");
-    expect(php).toContain("$signable = \"v1\\nPOST\\n\" . $cases[$case]['path']");
+    const probeSource = readFileSync("scripts/hostinger-node-runtime-probe.mjs", "utf8");
+    const packageJson = JSON.parse(readFileSync("deploy/hostinger-node-probe/package.json", "utf8")) as {
+      engines: { node: string };
+      scripts: { start: string };
+      dependencies?: Record<string, string>;
+    };
+    expect(php).toContain("$signable = \"v1\\nPOST\\n\" . $path . \"\\n\" . $timestamp . \"\\n\" . strtolower($nonce)");
     expect(php).toContain("hash_hmac('sha256', $signable, $secret)");
     expect(php).toContain("'x-lvtchat-signature: ' . $signature");
-    expect(php).toContain("'replay' => [");
-    expect(php).toContain("'invalid-signature' => [");
-    expect(php).toContain("'stale-timestamp' => [");
-    expect(php).toContain("'missing-key' => [");
+    expect(php).toContain("['case' => 'replay', 'kind' => 'replay']");
+    expect(php).toContain("['case' => 'invalid-signature', 'kind' => 'invalid']");
+    expect(php).toContain("['case' => 'stale-timestamp', 'kind' => 'stale']");
+    expect(php).toContain("['case' => 'missing-auth', 'kind' => 'missing-auth']");
+    expect(php).toContain("'missing-key',");
+    expect(php).toContain("'auth-suite'");
+    expect(php).toContain("'delay-suite'");
+    expect(php).toContain("$case === 'overlap'");
+    expect(php).toContain("PROBE_HOST_FILE = __DIR__ . '/probe-host.allow'");
+    expect(php).toContain("SITE_A_HOST = 'darkblue-bear-768036.hostingersite.com'");
+    expect(php).toContain("return 'https://' . $host");
+    expect(php).toContain("$host === SITE_A_HOST");
+    expect(php).toContain("function_exists('curl_multi_init')");
+    expect(php).toContain("'follow_location' => 0");
+    expect(php).toContain("CURLOPT_FOLLOWLOCATION => false");
+    expect(php).toContain("CURLOPT_SSL_VERIFYPEER => true");
+    expect(php).toContain("CURLOPT_PROTOCOLS => CURLPROTO_HTTPS");
+    expect(php).toContain("hostingersite\\.com|hostinger-site\\.com");
     expect(php).toContain("__DIR__ . '/https-probe.key'");
-    expect(php).toContain("darkblue-bear-768036.hostingersite.com");
     expect(php).not.toContain("https://lvtchat.com");
+    expect(php).not.toContain("PROBE_ORIGIN =");
+    expect(php).not.toContain("https://" + "darkblue-bear-768036.hostingersite.com");
     expect(php).not.toMatch(/echo\s+\$(?:secret|signature|nonce)\b|var_dump\s*\(/i);
+    expect(packageJson).toMatchObject({
+      engines: { node: "24.x" },
+      scripts: { start: "node hostinger-node-runtime-probe.mjs" },
+    });
+    expect(packageJson.dependencies).toBeUndefined();
+    expect(probeSource).toContain("Number(process.env.PORT)");
+    expect(probeSource).toContain("server.listen(port, \"0.0.0.0\"");
+    expect(probeSource).not.toMatch(/(?:OPENAI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|STRIPE_SECRET_KEY)/);
   });
 
   it("accepts one authenticated wake request and rejects its exact replay", async () => {
