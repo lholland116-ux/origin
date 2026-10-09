@@ -3,7 +3,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
-import { pathToFileURL } from "node:url";
 
 export const WAKE_PATH = "/api/internal/execution-wake";
 export const HEALTH_PATH = "/healthz";
@@ -232,6 +231,8 @@ async function main() {
   process.once("SIGINT", () => shutdown("SIGINT"));
 }
 
-const directExecution = process.argv[1]
-  && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (directExecution) void main();
+// Hostinger may load the configured entry file through an ESM import rather
+// than execute it as process.argv[1]. This file is the deployable application
+// entry point, so start by default in either mode. Tests that import the module
+// for its helpers can explicitly opt out.
+if (process.env.HOSTINGER_PROBE_DISABLE_AUTOSTART !== "true") void main();

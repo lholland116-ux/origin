@@ -104,18 +104,24 @@ manager, the key at
 receiver. The old timestamp-only PHP receiver does not demonstrate production
 nonce replay protection or the fenced PostgreSQL gate.
 
-The deployable Node package is `/tmp/lvtchat-hostinger-node-probe.zip`. It
-contains only root-level `package.json` and `hostinger-node-runtime-probe.mjs`;
+The deployable Node package is
+`/tmp/lvtchat-hostinger-node-probe-startup-fix.zip`. It contains only
+root-level `package.json` and `hostinger-node-runtime-probe.mjs`;
 the package manifest pins Node `24.x`, has no dependencies, and starts with
 `npm start`. The probe listens on Hostinger's supplied `PORT`. Recreate the
 archive from the repository root with:
 
 ```sh
-zip -j -X /tmp/lvtchat-hostinger-node-probe.zip deploy/hostinger-node-probe/package.json scripts/hostinger-node-runtime-probe.mjs
+zip -j -X /tmp/lvtchat-hostinger-node-probe-startup-fix.zip deploy/hostinger-node-probe/package.json scripts/hostinger-node-runtime-probe.mjs
 ```
 
 The generated archive SHA-256 is
-`0539d2462a4cd74fe3ab33356cab9709ed74d199d5ee2afeb1b8b3712de34f9f`.
+`cc61cb480b8f358d9e9d47d553ba8cfcbec781ffffa05e173e473ff1c75621a9`.
+
+The configured entry now starts the HTTP server at module load by default;
+startup does not depend on a `process.argv[1]` path comparison, which can fail
+when a hosting loader imports an ESM entry. `HOSTINGER_PROBE_DISABLE_AUTOSTART`
+is a test-only opt-out and must not be set in Site B.
 
 Site A's caller reads the approved Site B hostname from the private,
 `0600` file `/home/u564997839/lvtchat-cron-probe/probe-host.allow`. It accepts
@@ -151,8 +157,8 @@ and [temporary domains](https://www.hostinger.com/support/how-to-switch-to-a-tem
 
 1. In Websites, select the existing Business plan and choose Create Website →
    Web App → Node.js → Upload your website files. Upload
-   `/tmp/lvtchat-hostinger-node-probe.zip`, choose Node.js `24.x`, and select
-   “Other” if asked for an app/framework type. Set the entry file to
+   `/tmp/lvtchat-hostinger-node-probe-startup-fix.zip`, choose Node.js `24.x`,
+   and select “Other” if asked for an app/framework type. Set the entry file to
    `hostinger-node-runtime-probe.mjs`; no custom build command or third-party
    dependency is required. Choose **Use temporary
    domain** and confirm the assigned Site B hostname is different from Site A

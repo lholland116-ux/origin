@@ -1,18 +1,103 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import type { Readable } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import {
+const previousAutostart = process.env.HOSTINGER_PROBE_DISABLE_AUTOSTART;
+process.env.HOSTINGER_PROBE_DISABLE_AUTOSTART = "true";
+const {
   createHostingerProbeServer,
   HEALTH_PATH,
   runtimeDetails,
   secretFromFile,
   signProbeRequest,
   WAKE_PATH,
-} from "../../scripts/hostinger-node-runtime-probe.mjs";
+} = await import("../../scripts/hostinger-node-runtime-probe.mjs");
+if (previousAutostart === undefined) delete process.env.HOSTINGER_PROBE_DISABLE_AUTOSTART;
+else process.env.HOSTINGER_PROBE_DISABLE_AUTOSTART = previousAutostart;
 
 const SECRET = "local-only-hostinger-probe-secret-at-least-32-bytes";
 const NOW = Date.UTC(2026, 9, 9, 12, 0, 0);
+const DEPLOYABLE_ENTRY = resolve("scripts/hostinger-node-runtime-probe.mjs");
+type ProbeChild = ChildProcessByStdio<null, Readable, Readable>;
+
+async function availablePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolveListen, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Could not reserve a local test port.");
+  const port = address.port;
+  await new Promise<void>((resolveClose, reject) => {
+    server.close((error) => error ? reject(error) : resolveClose());
+  });
+  return port;
+}
+
+function launchImportedEntry(port: number, keyPath: string) {
+  const child = spawn(process.execPath, [
+    "--input-type=module",
+    "-e",
+    "await import(process.env.HOSTINGER_PROBE_ENTRY_URL)",
+  ], {
+    cwd: process.cwd(),
+    env: {
+      PATH: process.env.PATH ?? "",
+      NODE_ENV: "production",
+      PORT: String(port),
+      HOSTINGER_PROBE_KEY_FILE: keyPath,
+      HOSTINGER_PROBE_ENTRY_URL: pathToFileURL(DEPLOYABLE_ENTRY).href,
+    },
+    stdio: ["ignore", "pipe", "pipe"] as const,
+  });
+  let output = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => { output += chunk; });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => { output += chunk; });
+  return { child, output: () => output };
+}
+
+async function waitForHealth(child: ProbeChild, port: number) {
+  const deadline = Date.now() + 3_000;
+  let lastError = "listener did not respond";
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Probe exited before listen(): ${child.exitCode}`);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}${HEALTH_PATH}`, {
+        signal: AbortSignal.timeout(200),
+      });
+      if (response.ok) return await response.json() as Record<string, unknown>;
+      lastError = `health returned HTTP ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "health request failed";
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  throw new Error(`Probe listener was not reachable within three seconds: ${lastError}`);
+}
+
+async function terminateChild(child: ProbeChild): Promise<number | null> {
+  if (child.exitCode !== null) return child.exitCode;
+  const exited = new Promise<number | null>((resolveExit) => {
+    child.once("exit", (code) => resolveExit(code));
+  });
+  child.kill("SIGTERM");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      exited,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Probe did not shut down within three seconds.")), 3_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 function authHeaders(path: string, nonce = "1234567890abcdef1234567890abcdef", timestamp = String(Math.floor(NOW / 1000))) {
   return {
@@ -99,7 +184,77 @@ describe("Hostinger test probe protocol", () => {
     expect(packageJson.dependencies).toBeUndefined();
     expect(probeSource).toContain("Number(process.env.PORT)");
     expect(probeSource).toContain("server.listen(port, \"0.0.0.0\"");
+    expect(probeSource).toContain("HOSTINGER_PROBE_DISABLE_AUTOSTART !== \"true\"");
+    expect(probeSource).not.toContain("directExecution");
     expect(probeSource).not.toMatch(/(?:OPENAI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|STRIPE_SECRET_KEY)/);
+  });
+
+  it("starts the actual deploy entry when ESM-imported, serves health within three seconds, and shuts down cleanly", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "lvtchat-hostinger-entry-"));
+    const keyPath = join(directory, "test-only.key");
+    writeFileSync(keyPath, SECRET, { mode: 0o600 });
+    chmodSync(keyPath, 0o600);
+    const port = await availablePort();
+    const startedAt = Date.now();
+    const running = launchImportedEntry(port, keyPath);
+    try {
+      const health = await waitForHealth(running.child, port);
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+      expect(health).toMatchObject({ status: "ok", keyAvailable: true });
+
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const nonce = "7234567890abcdef1234567890abcdef";
+      const headers = {
+        "x-lvtchat-timestamp": timestamp,
+        "x-lvtchat-nonce": nonce,
+        "x-lvtchat-signature": signProbeRequest(SECRET, "POST", WAKE_PATH, timestamp, nonce),
+      };
+      const accepted = await post(`http://127.0.0.1:${port}`, WAKE_PATH, headers);
+      expect(accepted.status).toBe(200);
+      await accepted.arrayBuffer();
+      const replay = await post(`http://127.0.0.1:${port}`, WAKE_PATH, headers);
+      expect(replay.status).toBe(409);
+      await replay.arrayBuffer();
+      expect(running.output()).toContain("probe_started");
+      expect(running.output()).not.toContain(SECRET);
+      expect(await terminateChild(running.child)).toBe(0);
+    } finally {
+      if (running.child.exitCode === null) {
+        const exited = new Promise<void>((resolveExit) => running.child.once("exit", () => resolveExit()));
+        running.child.kill("SIGKILL");
+        await exited;
+      }
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("starts without a readable key and keeps authenticated endpoints fail-closed", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "lvtchat-hostinger-no-key-"));
+    const missingKeyPath = join(directory, "missing-test-only.key");
+    const port = await availablePort();
+    const running = launchImportedEntry(port, missingKeyPath);
+    try {
+      const health = await waitForHealth(running.child, port);
+      expect(health).toMatchObject({ status: "ok", keyAvailable: false });
+
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const nonce = "8234567890abcdef1234567890abcdef";
+      const response = await post(`http://127.0.0.1:${port}`, WAKE_PATH, {
+        "x-lvtchat-timestamp": timestamp,
+        "x-lvtchat-nonce": nonce,
+        "x-lvtchat-signature": signProbeRequest(SECRET, "POST", WAKE_PATH, timestamp, nonce),
+      });
+      expect(response.status).toBe(503);
+      await response.arrayBuffer();
+      expect(await terminateChild(running.child)).toBe(0);
+    } finally {
+      if (running.child.exitCode === null) {
+        const exited = new Promise<void>((resolveExit) => running.child.once("exit", () => resolveExit()));
+        running.child.kill("SIGKILL");
+        await exited;
+      }
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("accepts one authenticated wake request and rejects its exact replay", async () => {
