@@ -45,6 +45,16 @@ export function runtimeDetails(version = process.versions.node) {
   return { nodeMajor: Number.isSafeInteger(major) ? major : null, nodeVersion: version };
 }
 
+export function resolvePort(rawPort) {
+  if (rawPort === undefined) return 3000;
+  if (typeof rawPort !== "string") return null;
+  const normalized = rawPort.trim();
+  if (normalized.length === 0) return 3000;
+  if (!/^\d+$/.test(normalized)) return null;
+  const port = Number(normalized);
+  return Number.isSafeInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
 /**
  * @param {{ secret?: string | null, now?: () => number, log?: (event: Record<string, unknown>) => unknown, maxActiveRequests?: number, shutdownGraceMs?: number }} [options]
  */
@@ -209,8 +219,8 @@ async function main() {
   }
   const secret = secretFromFile(process.env.HOSTINGER_PROBE_KEY_FILE);
   const probe = createHostingerProbeServer({ secret });
-  const port = Number(process.env.PORT);
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+  const port = resolvePort(process.env.PORT);
+  if (port === null) {
     process.stderr.write(`${JSON.stringify({ event: "probe_start_rejected", reason: "port_unavailable" })}\n`);
     process.exitCode = 1;
     return;

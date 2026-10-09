@@ -12,6 +12,7 @@ const {
   createHostingerProbeServer,
   HEALTH_PATH,
   runtimeDetails,
+  resolvePort,
   secretFromFile,
   signProbeRequest,
   WAKE_PATH,
@@ -24,11 +25,11 @@ const NOW = Date.UTC(2026, 9, 9, 12, 0, 0);
 const DEPLOYABLE_ENTRY = resolve("scripts/hostinger-node-runtime-probe.mjs");
 type ProbeChild = ChildProcessByStdio<null, Readable, Readable>;
 
-async function availablePort(): Promise<number> {
+async function availablePort(requestedPort = 0): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolveListen);
+    server.listen(requestedPort, "127.0.0.1", resolveListen);
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Could not reserve a local test port.");
@@ -39,20 +40,20 @@ async function availablePort(): Promise<number> {
   return port;
 }
 
-function launchImportedEntry(port: number, keyPath: string) {
-  const child = spawn(process.execPath, [
-    "--input-type=module",
-    "-e",
-    "await import(process.env.HOSTINGER_PROBE_ENTRY_URL)",
-  ], {
+function launchEntry(portValue: string | undefined, keyPath: string, mode: "direct" | "import" = "import") {
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "",
+    NODE_ENV: "production",
+    HOSTINGER_PROBE_KEY_FILE: keyPath,
+    HOSTINGER_PROBE_ENTRY_URL: pathToFileURL(DEPLOYABLE_ENTRY).href,
+  };
+  if (portValue !== undefined) env.PORT = portValue;
+  const args = mode === "direct"
+    ? [DEPLOYABLE_ENTRY]
+    : ["--input-type=module", "-e", "await import(process.env.HOSTINGER_PROBE_ENTRY_URL)"];
+  const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
-    env: {
-      PATH: process.env.PATH ?? "",
-      NODE_ENV: "production",
-      PORT: String(port),
-      HOSTINGER_PROBE_KEY_FILE: keyPath,
-      HOSTINGER_PROBE_ENTRY_URL: pathToFileURL(DEPLOYABLE_ENTRY).href,
-    },
+    env,
     stdio: ["ignore", "pipe", "pipe"] as const,
   });
   let output = "";
@@ -92,6 +93,22 @@ async function terminateChild(child: ProbeChild): Promise<number | null> {
       exited,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => reject(new Error("Probe did not shut down within three seconds.")), 3_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function childExitCode(child: ProbeChild, timeoutMs = 3_000): Promise<number | null> {
+  if (child.exitCode !== null) return child.exitCode;
+  const exited = new Promise<number | null>((resolveExit) => child.once("exit", resolveExit));
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      exited,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Probe did not exit within the expected interval.")), timeoutMs);
       }),
     ]);
   } finally {
@@ -182,21 +199,22 @@ describe("Hostinger test probe protocol", () => {
       scripts: { start: "node hostinger-node-runtime-probe.mjs" },
     });
     expect(packageJson.dependencies).toBeUndefined();
-    expect(probeSource).toContain("Number(process.env.PORT)");
+    expect(probeSource).toContain("resolvePort(process.env.PORT)");
     expect(probeSource).toContain("server.listen(port, \"0.0.0.0\"");
     expect(probeSource).toContain("HOSTINGER_PROBE_DISABLE_AUTOSTART !== \"true\"");
     expect(probeSource).not.toContain("directExecution");
     expect(probeSource).not.toMatch(/(?:OPENAI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|STRIPE_SECRET_KEY)/);
   });
 
-  it("starts the actual deploy entry when ESM-imported, serves health within three seconds, and shuts down cleanly", async () => {
+  it("starts the actual ESM-imported entry with PORT absent, serves health within three seconds, and shuts down cleanly", async () => {
     const directory = mkdtempSync(join(tmpdir(), "lvtchat-hostinger-entry-"));
     const keyPath = join(directory, "test-only.key");
     writeFileSync(keyPath, SECRET, { mode: 0o600 });
     chmodSync(keyPath, 0o600);
-    const port = await availablePort();
+    const port = 3000;
+    await availablePort(port);
     const startedAt = Date.now();
-    const running = launchImportedEntry(port, keyPath);
+    const running = launchEntry(undefined, keyPath, "import");
     try {
       const health = await waitForHealth(running.child, port);
       expect(Date.now() - startedAt).toBeLessThan(3_000);
@@ -228,11 +246,33 @@ describe("Hostinger test probe protocol", () => {
     }
   });
 
-  it("starts without a readable key and keeps authenticated endpoints fail-closed", async () => {
+  it("starts the actual entry with empty PORT using the documented fallback", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "lvtchat-hostinger-empty-port-"));
+    const keyPath = join(directory, "test-only.key");
+    writeFileSync(keyPath, SECRET, { mode: 0o600 });
+    chmodSync(keyPath, 0o600);
+    const port = 3000;
+    await availablePort(port);
+    const running = launchEntry("", keyPath, "direct");
+    try {
+      expect(await waitForHealth(running.child, port)).toMatchObject({ status: "ok", keyAvailable: true });
+      expect(await terminateChild(running.child)).toBe(0);
+    } finally {
+      if (running.child.exitCode === null) {
+        const exited = childExitCode(running.child);
+        running.child.kill("SIGKILL");
+        await exited;
+      }
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("starts direct execution with PORT=3000 even when the private key is unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "lvtchat-hostinger-no-key-"));
     const missingKeyPath = join(directory, "missing-test-only.key");
-    const port = await availablePort();
-    const running = launchImportedEntry(port, missingKeyPath);
+    const port = 3000;
+    await availablePort(port);
+    const running = launchEntry("3000", missingKeyPath, "direct");
     try {
       const health = await waitForHealth(running.child, port);
       expect(health).toMatchObject({ status: "ok", keyAvailable: false });
@@ -250,6 +290,34 @@ describe("Hostinger test probe protocol", () => {
     } finally {
       if (running.child.exitCode === null) {
         const exited = new Promise<void>((resolveExit) => running.child.once("exit", () => resolveExit()));
+        running.child.kill("SIGKILL");
+        await exited;
+      }
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed and out-of-range explicit ports without starting a listener", async () => {
+    expect(resolvePort(undefined)).toBe(3000);
+    expect(resolvePort("")).toBe(3000);
+    expect(resolvePort("   ")).toBe(3000);
+    expect(resolvePort("3000")).toBe(3000);
+    expect(resolvePort(" 57222 ")).toBe(57222);
+    expect(resolvePort("not-a-port")).toBeNull();
+    expect(resolvePort("3e3")).toBeNull();
+    expect(resolvePort("0")).toBeNull();
+    expect(resolvePort("65536")).toBeNull();
+
+    const directory = mkdtempSync(join(tmpdir(), "lvtchat-hostinger-invalid-port-"));
+    const missingKeyPath = join(directory, "missing-test-only.key");
+    const running = launchEntry("invalid", missingKeyPath, "import");
+    try {
+      expect(await childExitCode(running.child)).toBe(1);
+      expect(running.output()).toContain('"reason":"port_unavailable"');
+      expect(running.output()).not.toContain("probe_started");
+    } finally {
+      if (running.child.exitCode === null) {
+        const exited = childExitCode(running.child);
         running.child.kill("SIGKILL");
         await exited;
       }

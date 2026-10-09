@@ -105,23 +105,41 @@ receiver. The old timestamp-only PHP receiver does not demonstrate production
 nonce replay protection or the fenced PostgreSQL gate.
 
 The deployable Node package is
-`/tmp/lvtchat-hostinger-node-probe-startup-fix.zip`. It contains only
+`/tmp/lvtchat-hostinger-node-probe-port-fix.zip`. It contains only
 root-level `package.json` and `hostinger-node-runtime-probe.mjs`;
 the package manifest pins Node `24.x`, has no dependencies, and starts with
-`npm start`. The probe listens on Hostinger's supplied `PORT`. Recreate the
-archive from the repository root with:
+`npm start`. The probe binds `0.0.0.0` and uses Hostinger's `PORT` when valid.
+For an absent or blank value it falls back to port `3000`; malformed or
+out-of-range explicit values still fail closed. Hostinger's Node.js guidance
+specifies listening on port `3000` ([troubleshooting guidance](https://www.hostinger.com/support/fix-failed-to-build-application-error-hostinger-node-js/)).
+Recreate the archive from the repository root with:
 
 ```sh
-zip -j -X /tmp/lvtchat-hostinger-node-probe-startup-fix.zip deploy/hostinger-node-probe/package.json scripts/hostinger-node-runtime-probe.mjs
+zip -j -X /tmp/lvtchat-hostinger-node-probe-port-fix.zip deploy/hostinger-node-probe/package.json scripts/hostinger-node-runtime-probe.mjs
 ```
 
 The generated archive SHA-256 is
-`cc61cb480b8f358d9e9d47d553ba8cfcbec781ffffa05e173e473ff1c75621a9`.
+`f2d3e29ae2945d5da1bbca55ef0c5cacfc9be6521f17d378da4d245032878419`.
 
 The configured entry now starts the HTTP server at module load by default;
 startup does not depend on a `process.argv[1]` path comparison, which can fail
 when a hosting loader imports an ESM entry. `HOSTINGER_PROBE_DISABLE_AUTOSTART`
 is a test-only opt-out and must not be set in Site B.
+
+The follow-up `port_unavailable` event means the old code rejected `PORT`
+before calling `listen()`: `Number(undefined)` is `NaN` and an empty string
+converts to zero, while the literal string `3000` is valid. Thus the reported
+event after setting `PORT=3000` does not prove that the deployed process
+received that value; runtime environment propagation or deployment freshness
+remain unverified. Local child-process regression tests now cover absent,
+blank, valid `3000`, malformed, and out-of-range values in direct and ESM-import
+entry modes, with the listener reachable within three seconds, key-present and
+key-absent behavior, and clean shutdown.
+
+Local qualification on 2026-10-09 (Node.js `v25.8.1`) passed 23 focused tests
+across `hostinger-probe-runtime.test.ts` and `execution-trigger.test.ts`;
+TypeScript, targeted ESLint, Node syntax, and `git diff --check` also passed.
+This is local evidence only and does not qualify Site B's Node 24 runtime.
 
 Site A's caller reads the approved Site B hostname from the private,
 `0600` file `/home/u564997839/lvtchat-cron-probe/probe-host.allow`. It accepts
@@ -157,7 +175,7 @@ and [temporary domains](https://www.hostinger.com/support/how-to-switch-to-a-tem
 
 1. In Websites, select the existing Business plan and choose Create Website →
    Web App → Node.js → Upload your website files. Upload
-   `/tmp/lvtchat-hostinger-node-probe-startup-fix.zip`, choose Node.js `24.x`,
+   `/tmp/lvtchat-hostinger-node-probe-port-fix.zip`, choose Node.js `24.x`,
    and select “Other” if asked for an app/framework type. Set the entry file to
    `hostinger-node-runtime-probe.mjs`; no custom build command or third-party
    dependency is required. Choose **Use temporary
