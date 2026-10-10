@@ -129,16 +129,16 @@ describeDatabase("accepted execution finalization (isolated local PostgreSQL onl
     return { runId: associated.runId, execute: runtimeEngine.execute };
   }
 
-  function finalizer() {
+  function finalizer(database: postgres.Sql = sql, executionStore: SupabaseExecutionStore = store) {
     return createAcceptedExecutionFinalizer({
-      loadAcceptedRun: (runId) => store.getAcceptedRunForFinalization({ runId }),
+      loadAcceptedRun: (runId) => executionStore.getAcceptedRunForFinalization({ runId }),
       finalizeAtomically: async ({ runId, finalText }) => {
-        const [row] = await sql<{ result: unknown }[]>`
+        const [row] = await database<{ result: unknown }[]>`
           SELECT public.finalize_accepted_agent_execution(${runId}::uuid, ${finalText}) AS result`;
         return row!.result;
       },
       listPendingRunIds: async (limit) => {
-        const rows = await sql<{ run_id: string }[]>`
+        const rows = await database<{ run_id: string }[]>`
           SELECT * FROM public.list_pending_agent_execution_finalizations(${limit})`;
         return rows.map((row) => row.run_id);
       },
@@ -206,6 +206,31 @@ describeDatabase("accepted execution finalization (isolated local PostgreSQL onl
       UPDATE public.execution_run_finalizations SET completion_sha256=${"d".repeat(64)}
       WHERE run_id=${run.runId}::uuid
     `).rejects.toThrow("Execution finalization receipts are immutable");
+  });
+
+  it("serializes concurrent finalization attempts to one durable receipt and one assistant response", async () => {
+    const accepted = await accept();
+    const run = await complete(accepted.identity);
+    const competingClient = postgres(DATABASE_URL, { prepare: false, max: 2 });
+    try {
+      const competingStore = new SupabaseExecutionStore(competingClient);
+      const results = await Promise.all([
+        finalizer().finalize(run.runId),
+        finalizer(competingClient, competingStore).finalize(run.runId),
+      ]);
+      expect(results.map((result) => result.status).sort()).toEqual(["finalized", "replayed"]);
+      expect(results.every((result) => result.assistantMessageId === accepted.identity.assistantMessageId)).toBe(true);
+
+      const [messages] = await sql<{ count: number; content: string }[]>`
+        SELECT count(*)::integer AS count, max(content) AS content FROM public.messages
+        WHERE id=${accepted.identity.assistantMessageId}::uuid AND role='assistant'`;
+      expect(messages).toEqual({ count: 1, content: "Persisted completion text." });
+      const [receipts] = await sql<{ count: number }[]>`
+        SELECT count(*)::integer AS count FROM public.execution_run_finalizations WHERE run_id=${run.runId}::uuid`;
+      expect(receipts!.count).toBe(1);
+    } finally {
+      await competingClient.end();
+    }
   });
 
   it("does not finalize pending runs or a completed run with pending approval/control state", async () => {

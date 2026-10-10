@@ -18,8 +18,8 @@ function requireIsolatedLocalDatabase(connectionString: string): void {
   const parsed = new URL(connectionString);
   if (!(parsed.protocol === "postgres:" || parsed.protocol === "postgresql:")
     || !["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)
-    || parsed.port !== "57222" || parsed.pathname !== "/postgres") {
-    throw new Error("Agent provider-cost integration tests are restricted to isolated loopback PostgreSQL port 57222.");
+    || !["57222", "57242"].includes(parsed.port) || parsed.pathname !== "/postgres") {
+    throw new Error("Agent provider-cost integration tests are restricted to isolated loopback PostgreSQL ports 57222 or 57242.");
   }
 }
 

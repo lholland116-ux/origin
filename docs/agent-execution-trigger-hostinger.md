@@ -335,3 +335,105 @@ remain unmeasured until this owner-run session completes.
 
 The opt-in PostgreSQL trigger tests use only the documented disposable loopback
 database URL/port. Never point them at production or staging.
+
+## ER-CS5D.2A isolated operational acceptance plan
+
+This is a procedure only. No Hostinger action, remote workflow, production
+route, provider, or production database was used for local qualification.
+Perform it only on the existing isolated Site A/Site B probe pair, never on
+`lvtchat.com`. The probe is deliberately inert: its signed wake path returns
+`probeOnly: true` and does not call the workflow worker or any provider.
+
+### Prerequisites and evidence record
+
+- Use the existing isolated Site A PHP caller/key and a separate Site B Node
+  24 temporary-domain website. Keep the production app, domain, worker gate,
+  Supabase, cron jobs, and customer workflows out of the test.
+- Confirm Site B `/healthz` reports Node major 24 and `keyAvailable: true`.
+  If the approved private key path is unavailable, stop. Do not broaden file
+  permissions or copy the key.
+- Confirm the caller allowlist identifies only Site B's temporary hostname,
+  the PHP cURL multi extension is available, and TLS verification is enabled.
+  Run `php -l` on the caller before scheduling anything.
+- Save sanitized hPanel logs and caller output with UTC timestamps, case,
+  status/duration, each `instanceId`/`requestId`, `activeCount`, and
+  `maxObservedActive`. Exclude key contents, signatures, nonces, headers,
+  environment settings, request/response bodies, and customer data.
+
+### A. Observe server-side overlap
+
+1. Schedule only
+   `php /home/u564997839/lvtchat-cron-probe/hostinger-probe-caller.php delay-suite`.
+   This sends signed probe-only POSTs for 5, 30, 60, 90, and 120 seconds in one
+   cURL-multi batch. It does not exercise the execution worker or a provider.
+2. While requests are active, capture Site B `request_started` log events.
+   Require at least two overlapping starts with the same `instanceId`, and
+   `activeCount >= 2` or `maxObservedActive >= 2` in Site B's own logs. The
+   caller starting several HTTP requests alone is not server-side concurrency
+   evidence.
+3. Record every completion independently. The caller's 135-second timeout is
+   a client setting, not a hosting limit. A timeout, missing log, truncated
+   cron output, or changed process identity leaves that duration unqualified.
+   Stop if the target is not the isolated temporary hostname.
+
+### B. Observe app-process replacement during an active request
+
+1. After overlap is qualified, schedule only
+   `php /home/u564997839/lvtchat-cron-probe/hostinger-probe-caller.php delay-90`.
+2. In hPanel, wait for Site B's `request_started` event with
+   `pathKind: delay` and `delayMs: 90000`. While it is visibly active, use the
+   Site B **Restart** control once. Do not restart Site A or target the real
+   workflow route.
+3. Capture the caller result and Site B logs. Graceful application shutdown
+   is demonstrated by `shutdown_started` with `reason: SIGTERM` and
+   `activeCount > 0`, followed by `request_interrupted`/503 and
+   `shutdown_completed`. A forced restart may remove the process without those
+   events; record the caller transport/HTTP outcome, then change the same
+   isolated cron command to
+   `php /home/u564997839/lvtchat-cron-probe/hostinger-probe-caller.php delay-5`
+   and allow one request after restart. Require its `request_started` event to
+   have a different `instanceId`, and its caller result to complete normally.
+   A caller timeout alone does not prove process exit.
+4. If the start event cannot be observed before completion, or logs cannot
+   distinguish the process before and after, stop and report interruption as
+   unmeasured. Do not repeat against a live workflow.
+
+Delete the scheduled job immediately after this phase. Restore any temporary
+Site B setting and confirm `keyAvailable: true`. Remove only the isolated Site B
+and caller artifacts if the owner wants cleanup, after confirming their
+identity. Roll back by deleting the new cron job first, restoring saved Site B
+settings, and removing only the new isolated website. Preserve Site A and its
+pre-existing files.
+
+### Interpret observations correctly
+
+| Observation | Establishes | Does not establish |
+| --- | --- | --- |
+| Same-instance `request_started` events and server `activeCount` | Site B served overlapping HTTP requests | Production worker overlap behavior |
+| Gateway/client timeout without process logs | Caller did not receive a timely response | App exit, provider timeout, lease expiry, or cancellation |
+| Shutdown/interruption events or old/new instance IDs across restart | Probe process shutdown/replacement during an active HTTP request | Durable recovery of a production workflow |
+| Provider timeout | Not tested; the probe has no provider | Provider charge or exactly-once behavior |
+| PostgreSQL lease expiry/fencing tests | Local DB rejects stale ownership/writes | Hostinger killed a process or remote DB was tested |
+| Deterministic recovery tests | Local state survives tested failure boundaries | Production acceptance or unsupported automatic retries |
+
+### Customer workflow UI manual acceptance matrix
+
+Use an isolated pilot user and deterministic workflow only. Mark each cell
+PASS/FAIL with browser, OS, app build, viewport, and evidence. This plan records
+no device result.
+
+| Check | Desktop Chrome | Mobile browser | Android WebView / Capacitor |
+| --- | --- | --- | --- |
+| Progress and accurate step states | Local UI + isolated deployment | Local reachable dev host or isolated deployment | Packaged test build + isolated backend |
+| Pause, resume, stop and destructive-stop confirmation | Local UI + isolated deployment | Local reachable dev host or isolated deployment | Packaged test build + isolated backend |
+| Approve; return requires and saves rationale | Local UI + isolated deployment | Local reachable dev host or isolated deployment | Packaged test build + isolated backend |
+| Network loss during control; reconnect/status refresh | Local UI + isolated deployment | Local reachable dev host or isolated deployment | Packaged test build + isolated backend |
+| Refresh, conversation switch, original assistant message | Local UI + isolated deployment | Local reachable dev host or isolated deployment | Packaged test build + isolated backend |
+| Authentication expiry fails closed; reauthentication restores owner view | Local auth fixture + isolated deployment | Local auth fixture + isolated deployment | Packaged test build + isolated backend |
+| Narrow layout/no overflow, keyboard/focus, touch targets | Local responsive tools + keyboard | Actual mobile browser required for device PASS | Actual device/emulator required for WebView PASS |
+
+Desktop layout, keyboard flow, and responsive emulation can be checked locally.
+Real mobile-browser and Android WebView/Capacitor results require those actual
+runtimes; label emulator evidence as emulator evidence. Authentication expiry,
+deployed networking, and remote session behavior require an isolated deployed
+app. Production acceptance remains out of scope.

@@ -16,8 +16,8 @@ function requireIsolatedDatabase(connectionString: string): void {
   const parsed = new URL(connectionString);
   if (!(["postgres:", "postgresql:"].includes(parsed.protocol)
     && ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)
-    && parsed.port === "57222" && parsed.pathname === "/postgres")) {
-    throw new Error("Trusted execution persistence tests are restricted to isolated loopback PostgreSQL port 57222.");
+    && ["57222", "57242"].includes(parsed.port) && parsed.pathname === "/postgres")) {
+    throw new Error("Trusted execution persistence tests are restricted to isolated loopback PostgreSQL ports 57222 or 57242.");
   }
 }
 

@@ -662,9 +662,11 @@ describeDatabase("accepted request execution association (isolated local Postgre
     const associated = await runtime.associateAcceptedRequest(qualityAnalysisPlan(), runtimeInputForRun, accepted.identity);
     if (associated.kind !== "associated") throw new Error("Expected associated worker run.");
 
-    // Test fixtures from earlier assertions are isolated from the one candidate for this worker sequence.
+    // This worker scans the shared test database, so defer all other fixtures,
+    // including expired claims that would otherwise surface as recovery work.
     await sql`UPDATE public.execution_run_work_state SET available_at=clock_timestamp()+interval '1 day'
-      WHERE run_id<>${associated.runId}::uuid AND claim_id IS NULL AND recovery_state='ready'`;
+      WHERE run_id<>${associated.runId}::uuid`;
+    expect((await store.discoverExecutionWork({ limit: 100 })).map((item) => item.runId)).toEqual([associated.runId]);
     const finalizer = createAcceptedExecutionFinalizer({
       loadAcceptedRun: (runId) => store.getAcceptedRunForFinalization({ runId }),
       finalizeAtomically: async ({ runId, finalText }) => {
