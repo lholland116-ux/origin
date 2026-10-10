@@ -376,34 +376,13 @@ Perform it only on the existing isolated Site A/Site B probe pair, never on
    cron output, or changed process identity leaves that duration unqualified.
    Stop if the target is not the isolated temporary hostname.
 
-### B. Observe app-process replacement during an active request
+### B. Process replacement and interruption are separate evidence
 
-1. After overlap is qualified, schedule only
-   `php /home/u564997839/lvtchat-cron-probe/hostinger-probe-caller.php delay-90`.
-2. In hPanel, wait for Site B's `request_started` event with
-   `pathKind: delay` and `delayMs: 90000`. While it is visibly active, use the
-   Site B **Restart** control once. Do not restart Site A or target the real
-   workflow route.
-3. Capture the caller result and Site B logs. Graceful application shutdown
-   is demonstrated by `shutdown_started` with `reason: SIGTERM` and
-   `activeCount > 0`, followed by `request_interrupted`/503 and
-   `shutdown_completed`. A forced restart may remove the process without those
-   events; record the caller transport/HTTP outcome, then change the same
-   isolated cron command to
-   `php /home/u564997839/lvtchat-cron-probe/hostinger-probe-caller.php delay-5`
-   and allow one request after restart. Require its `request_started` event to
-   have a different `instanceId`, and its caller result to complete normally.
-   A caller timeout alone does not prove process exit.
-4. If the start event cannot be observed before completion, or logs cannot
-   distinguish the process before and after, stop and report interruption as
-   unmeasured. Do not repeat against a live workflow.
-
-Delete the scheduled job immediately after this phase. Restore any temporary
-Site B setting and confirm `keyAvailable: true`. Remove only the isolated Site B
-and caller artifacts if the owner wants cleanup, after confirming their
-identity. Roll back by deleting the new cron job first, restoring saved Site B
-settings, and removing only the new isolated website. Preserve Site A and its
-pre-existing files.
+The earlier 90-second cron procedure is superseded. It is not an approved
+procedure for the current 30-second caller. A new owner-approved test plan must
+use one manually started `restart-observe` request and one human hPanel action;
+do not create a cron job or automate the Restart action. Process identity
+changing after a delay completes does not show that the delay was interrupted.
 
 ### Interpret observations correctly
 
@@ -494,19 +473,24 @@ credentials. Back up the current private caller before replacing it.
    signed status at a bounded interval. Do not restart unless the private
    observation file visibly shows `phase: active_confirmed`, the same
    pre-restart `instanceId`, and `activeCount > 0` while the caller is still
-   running. If the record is not promptly visible in File Manager, stop; do
-   not infer activity from a schedule or a missing Runtime Log.
-4. While that confirmed request remains active, restart **Site B once**. The
-   caller records the actual HTTP status, transport failure, or delay response
-   when it finishes. Then run `restart-post`. Pass process replacement only
-   when it reads a prior active-confirmed record and observes a different
-   `instanceId`. A timeout or transport error alone is not process-replacement
-   evidence.
-5. Capture the caller output and sanitized private record. Remove the
-   temporary scheduled job. Run caller case `cleanup` or remove only
-   `probe-observation.json` from the private directory. Restore the backed-up
-   caller if the owner does not want the instrumentation retained. Preserve
-   Site A, its key, and its allowlist.
+   running. Use only a private observation method that has been approved and
+   confirmed to refresh promptly; File Manager refresh is not the time-critical
+   signal. If the record is unavailable or stale, stop; do not infer activity
+   from a schedule or a missing Runtime Log.
+4. If a later owner-approved test proceeds, the owner must make the hPanel
+   Restart decision while the `active_confirmed` observation is fresh and the
+   single caller is still running. Record the human action and its time
+   separately; the caller cannot observe or invent that action. The 30-second
+   request and previously observed approximately 32-second caller duration
+   leave a short window. Two simultaneous SSH sessions and hPanel action
+   latency have not been qualified. Abort if the observation is stale, the
+   caller ends, or the owner cannot act within the approved timing gate.
+5. Preserve the sanitized terminal output and private observation before
+   cleanup. Run `restart-post` only after the delay caller has ended. It records
+   one authenticated status result alongside the original evidence. It does
+   not decide whether the human action interrupted the request. Keep the
+   private evidence for owner review; only then remove the test observation
+   with caller case `cleanup`. Preserve Site A, its key, and its allowlist.
 
 ### Stop conditions and limits
 
@@ -517,12 +501,15 @@ before the restart run, or the private observation cannot be refreshed before
 the delay completes. Never restart blindly. An interrupted inert delay proves
 neither a production worker interruption nor durable workflow recovery.
 
-The private file mechanism is locally implemented but Hostinger File Manager
-live-refresh behavior has not been remotely exercised. The first isolated
-operator run must validate that the `active_confirmed` file becomes readable
-while `restart-observe` is still running. If it does not, the process-restart
-test is blocked until a private, promptly readable observation method is
-approved; do not add a public Site A endpoint.
+The private file mechanism is locally implemented but Hostinger live
+visibility has not been remotely exercised. A proposed arrangement is Terminal
+1 running the caller, Terminal 2 reading only fixed allowlisted fields from the
+private observation file, and the browser already positioned at Site B's hPanel
+Restart control. Do not use File Manager refresh as the time-critical signal or
+create extra signed requests from Terminal 2. Whether Hostinger supports two
+simultaneous SSH sessions and promptly shared file visibility is an operational
+prerequisite, not a verified fact. If unavailable, stop and request a separately
+approved private observation method; do not add a public endpoint.
 
 ### Deployment package and migrations
 
@@ -588,3 +575,59 @@ private caller and run that request. Do not restart Site B unless a fresh
 observation independently confirms the request is active. If no redirect
 recurs, the original source remains unknown. Rollback consists of restoring
 the previous private caller and removing only its temporary observation file.
+
+### Controlled restart evidence semantics
+
+The former `restart-post` behavior compared the post-status ID with a historical
+active snapshot and treated an ID change as command success. Since the delay
+could already have returned HTTP 200, that could be misread as interruption.
+The current caller uses a bounded schema version 2 record with a per-run ID.
+`restart-pre` records the zero-active baseline and UTC time; `restart-observe`
+retains that baseline, a separately timestamped positive active snapshot, and
+the final delay result; `restart-post` appends one `postRestart` object without
+replacing those facts. Repeated `restart-post` calls are rejected once that
+object is saved, including when the saved status attempt was unavailable. A
+fresh baseline is required within 120 seconds before starting the delay. Old or
+malformed schema records are not accepted; run `restart-pre` for a new attempt.
+
+The record preserves only validated counters, instance IDs, timestamps, fixed
+error labels, the approved delay response fields, and sanitized redirect
+diagnostics. It remains a private atomic file, is bounded to 32 KiB, and must
+remain mode `0600`; symlinked, non-regular, oversized, malformed, or
+group/world-readable records are rejected. Failed post-status validation or
+write does not replace earlier delay evidence. A failed atomic write leaves the
+prior record in place.
+
+`restart-post` reports `postStatusValid`, `processIdChanged`, a narrow
+`assessment`, and an `interruptionAssessment`. Its exit status means only that
+the authenticated post-status was valid and the evidence append succeeded. It
+does not report an interruption pass. `process_replacement_observed` means only
+that a valid later status returned a different per-process ID.
+
+- A validated HTTP 200 `delay_completed` is normal completion. A later changed
+  ID remains `delay_completed_normally`, not an interruption.
+- A validated HTTP 503 `probe_shutdown` plus a changed ID is
+  `graceful_shutdown_requires_owner_review`. It is only an application-level
+  shutdown indicator and requires separate evidence of a fresh active
+  observation and the owner's single hPanel Restart action.
+- HTTP redirects retain only the sanitized classification and remain
+  ambiguous. Transport failures, timeouts, and caller deadline expiry also
+  remain ambiguous. None prove interruption or process replacement.
+- Missing active evidence, mismatched IDs, stale baseline, or unavailable
+  authenticated post-status cannot qualify interruption.
+
+The active count is a historical snapshot, not a live count. The status schema
+does not expose the active delay's request ID. The caller cannot record the
+human Restart timestamp, prove that the request was active at the exact click,
+or determine whether Hostinger replaced a process because of Restart, deploy,
+or another event. Preserve caller output and private records before cleanup.
+Final process-interruption acceptance requires separate owner review of the
+Hostinger evidence. This documentation and local qualification do not authorize
+a remote test. A future test needs fresh owner authorization; no Hostinger
+Restart latency, two-terminal availability, process interruption, or durable
+workflow recovery is claimed here.
+
+Rollback for a future isolated deployment is to restore the backed-up private
+Site A caller, retain evidence until owner review, then remove only the
+test-generated observation file. Do not change Site B configuration, create
+cron entries, or touch production systems as part of rollback.

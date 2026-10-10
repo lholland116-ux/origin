@@ -11,6 +11,8 @@ const PROBE_PATH = '/api/internal/execution-wake';
 const STATUS_PATH = '/probe/status';
 const OBSERVATION_FILE = __DIR__ . '/probe-observation.json';
 const MAX_PROBE_ACTIVE = 8;
+const OBSERVATION_SCHEMA_VERSION = 2;
+const MAX_OBSERVATION_BYTES = 32768;
 const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 
 function emitResult(string $case, array $results, int $exitCode): never
@@ -25,6 +27,29 @@ function emitResult(string $case, array $results, int $exitCode): never
 function validUuid(mixed $value): bool
 {
     return is_string($value) && preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $value) === 1;
+}
+
+function newUuid(): string
+{
+    $bytes = random_bytes(16);
+    $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+    $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+    $hex = bin2hex($bytes);
+    return substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-' . substr($hex, 12, 4)
+        . '-' . substr($hex, 16, 4) . '-' . substr($hex, 20);
+}
+
+function validUtcTimestamp(mixed $value): bool
+{
+    if (!is_string($value) || strlen($value) > 40) {
+        return false;
+    }
+    try {
+        $date = new DateTimeImmutable($value);
+        return $date->getOffset() === 0 && $date->format('c') === $value;
+    } catch (Throwable) {
+        return false;
+    }
 }
 
 /** Return only the explicitly approved observation fields. */
@@ -96,11 +121,13 @@ function writeObservationRecord(array $record): bool
 {
     $directory = realpath(__DIR__);
     if (!is_string($directory) || preg_match('#(?:^|/)public_html(?:/|$)#i', $directory) === 1
-        || is_link(OBSERVATION_FILE)) {
+        || is_link(OBSERVATION_FILE) || !validObservationRecord($record)) {
         return false;
     }
     $temporary = OBSERVATION_FILE . '.' . bin2hex(random_bytes(8)) . '.tmp';
+    $previousUmask = umask(0077);
     $handle = @fopen($temporary, 'x');
+    umask($previousUmask);
     if ($handle === false) {
         return false;
     }
@@ -108,6 +135,9 @@ function writeObservationRecord(array $record): bool
     try {
         @chmod($temporary, 0600);
         $json = json_encode($record, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL;
+        if (strlen($json) > MAX_OBSERVATION_BYTES) {
+            throw new RuntimeException('observation_too_large');
+        }
         $written = fwrite($handle, $json);
         $ok = is_int($written) && $written === strlen($json) && fflush($handle);
     } catch (Throwable) {
@@ -128,7 +158,9 @@ function readObservationRecord(): ?array
         return null;
     }
     $permissions = @fileperms(OBSERVATION_FILE);
-    if (!is_int($permissions) || (($permissions & 0077) !== 0)) {
+    $size = @filesize(OBSERVATION_FILE);
+    if (!is_int($permissions) || (($permissions & 0077) !== 0)
+        || !is_int($size) || $size < 2 || $size > MAX_OBSERVATION_BYTES) {
         return null;
     }
     try {
@@ -136,7 +168,305 @@ function readObservationRecord(): ?array
     } catch (Throwable) {
         return null;
     }
-    return is_array($record) ? $record : null;
+    return is_array($record) && validObservationRecord($record) ? $record : null;
+}
+
+function validCounterSnapshot(mixed $snapshot, bool $allowZero): bool
+{
+    return is_array($snapshot)
+        && validUuid($snapshot['instanceId'] ?? null)
+        && validUtcTimestamp($snapshot['capturedAt'] ?? null)
+        && is_int($snapshot['activeCount'] ?? null)
+        && $snapshot['activeCount'] >= ($allowZero ? 0 : 1)
+        && $snapshot['activeCount'] <= MAX_PROBE_ACTIVE
+        && is_int($snapshot['maxObservedActive'] ?? null)
+        && $snapshot['maxObservedActive'] >= $snapshot['activeCount']
+        && $snapshot['maxObservedActive'] <= MAX_PROBE_ACTIVE;
+}
+
+function validDelayResult(mixed $delayResult): bool
+{
+    $allowedKeys = [
+        'callerDeadlineReached', 'capturedAt', 'disposition', 'duration_ms', 'http_status',
+        'observation', 'redirect_diagnostic', 'response_error', 'transport_error',
+    ];
+    if (!is_array($delayResult) || !validUtcTimestamp($delayResult['capturedAt'] ?? null)
+        || array_diff(array_keys($delayResult), $allowedKeys) !== []
+        || array_diff(['callerDeadlineReached', 'capturedAt', 'disposition', 'duration_ms', 'http_status',
+            'observation', 'response_error', 'transport_error'], array_keys($delayResult)) !== []
+        || !(is_int($delayResult['http_status'] ?? null)
+            && $delayResult['http_status'] >= 100 && $delayResult['http_status'] <= 599
+            || ($delayResult['http_status'] ?? null) === null)
+        || !(is_int($delayResult['duration_ms'] ?? null)
+            && $delayResult['duration_ms'] >= 0 && $delayResult['duration_ms'] <= 120000)
+        || !in_array($delayResult['transport_error'] ?? null, [null, 'network_error', 'timeout'], true)
+        || !in_array($delayResult['response_error'] ?? null,
+            [null, 'invalid_response', 'unexpected_redirect', 'unexpected_http_status', 'timeout_or_incomplete'], true)
+        || !in_array($delayResult['disposition'] ?? null,
+            ['delay_completed_normally', 'graceful_shutdown_indicated', 'redirect_ambiguous', 'transport_ambiguous',
+                'timeout_ambiguous', 'invalid_or_unexpected_response', 'active_observation_missing',
+                'evidence_mismatch', 'interruption_unproven'], true)) {
+        return false;
+    }
+    if (!is_bool($delayResult['callerDeadlineReached'] ?? null)) {
+        return false;
+    }
+    if (($delayResult['observation'] ?? null) !== null) {
+        $observation = $delayResult['observation'];
+        if (!is_array($observation)) {
+            return false;
+        }
+        $observationKeys = array_keys($observation);
+        sort($observationKeys);
+        $completed = ($observation['status'] ?? null) === 'delay_completed'
+            && ($observation['probeOnly'] ?? null) === true;
+        $shutdown = ($observation['error'] ?? null) === 'probe_shutdown';
+        $expectedObservationKeys = $completed
+            ? ['durationMs', 'instanceId', 'maxObservedActive', 'probeOnly', 'requestId', 'status']
+            : ['durationMs', 'error', 'instanceId', 'maxObservedActive', 'requestId'];
+        if ((!$completed && !$shutdown) || $observationKeys !== $expectedObservationKeys
+            || ($completed && ($delayResult['http_status'] ?? null) !== 200)
+            || ($shutdown && ($delayResult['http_status'] ?? null) !== 503)
+            || !validUuid($observation['requestId'] ?? null)
+            || !validUuid($observation['instanceId'] ?? null)
+            || !is_int($observation['durationMs'] ?? null) || $observation['durationMs'] < 0
+            || !is_int($observation['maxObservedActive'] ?? null)
+            || $observation['maxObservedActive'] < 1 || $observation['maxObservedActive'] > MAX_PROBE_ACTIVE) {
+            return false;
+        }
+    }
+    $diagnostic = $delayResult['redirect_diagnostic'] ?? null;
+    $diagnosticKeys = is_array($diagnostic) ? array_keys($diagnostic) : [];
+    sort($diagnosticKeys);
+    if ($diagnostic !== null && (!is_array($diagnostic)
+        || $diagnosticKeys !== ['hostClassification', 'locationPresent', 'portClassification', 'responderHint', 'routeKind', 'schemeKind', 'status']
+        || !in_array($diagnostic['status'] ?? null, REDIRECT_STATUSES, true)
+        || !is_bool($diagnostic['locationPresent'] ?? null)
+        || !in_array($diagnostic['schemeKind'] ?? null, ['https', 'http', 'relative', 'invalid', 'absent'], true)
+        || !in_array($diagnostic['hostClassification'] ?? null,
+            ['approved_site_b', 'other', 'relative', 'unknown'], true)
+        || !in_array($diagnostic['portClassification'] ?? null, ['approved_port', 'other', 'unknown'], true)
+        || !in_array($diagnostic['routeKind'] ?? null,
+            ['probe_delay', 'probe_status', 'wake_probe', 'health', 'other', 'unknown'], true)
+        || !in_array($diagnostic['responderHint'] ?? null, ['intermediary_indicated', 'unknown'], true))) {
+        return false;
+    }
+    if ($diagnostic !== null && (($delayResult['http_status'] ?? null) !== $diagnostic['status']
+        || ($delayResult['response_error'] ?? null) !== 'unexpected_redirect')) {
+        return false;
+    }
+    if (in_array($delayResult['http_status'] ?? null, REDIRECT_STATUSES, true) && $diagnostic === null) {
+        return false;
+    }
+    return true;
+}
+
+function validObservationRecord(array $record): bool
+{
+    $allowedKeys = [
+        'activeCount', 'activeObservation', 'capturedAt', 'delayResult', 'delaySeconds', 'instanceId',
+        'maxObservedActive', 'phase', 'preRestartActiveCount', 'preRestartCapturedAt',
+        'preRestartInstanceId', 'preRestartMaxObservedActive', 'runId', 'schemaVersion', 'postRestart',
+    ];
+    if (array_diff(array_keys($record), $allowedKeys) !== []
+        || array_diff([
+            'schemaVersion', 'runId', 'phase', 'capturedAt', 'preRestartCapturedAt', 'preRestartInstanceId',
+            'preRestartActiveCount', 'preRestartMaxObservedActive', 'activeObservation', 'instanceId',
+            'activeCount', 'maxObservedActive', 'delaySeconds', 'delayResult',
+        ], array_keys($record)) !== []) {
+        return false;
+    }
+    if (($record['schemaVersion'] ?? null) !== OBSERVATION_SCHEMA_VERSION
+        || !validUuid($record['runId'] ?? null)
+        || !validUuid($record['preRestartInstanceId'] ?? null)
+        || !validUtcTimestamp($record['preRestartCapturedAt'] ?? null)
+        || ($record['preRestartActiveCount'] ?? null) !== 0
+        || !is_int($record['preRestartMaxObservedActive'] ?? null)
+        || $record['preRestartMaxObservedActive'] < 0
+        || $record['preRestartMaxObservedActive'] > MAX_PROBE_ACTIVE
+        || ($record['delaySeconds'] ?? null) !== 30
+        || !in_array($record['phase'] ?? null, ['pre_restart', 'active_confirmed', 'delay_result', 'active_not_confirmed'], true)
+        || !validUtcTimestamp($record['capturedAt'] ?? null)) {
+        return false;
+    }
+    $active = $record['activeObservation'] ?? null;
+    if ($active !== null && (!is_array($active)
+        || array_diff(array_keys($active), ['activeCount', 'capturedAt', 'instanceId', 'maxObservedActive']) !== []
+        || count($active) !== 4 || !validCounterSnapshot($active, false)
+        || $active['instanceId'] !== $record['preRestartInstanceId'])) {
+        return false;
+    }
+    if (in_array($record['phase'], ['pre_restart', 'active_not_confirmed'], true) && $active !== null) {
+        return false;
+    }
+    if ($record['phase'] === 'active_confirmed' && $active === null) {
+        return false;
+    }
+    if (array_key_exists('delayResult', $record) && $record['delayResult'] !== null
+        && !validDelayResult($record['delayResult'])) {
+        return false;
+    }
+    if (in_array($record['phase'], ['delay_result', 'active_not_confirmed'], true)
+        && !is_array($record['delayResult'] ?? null)) {
+        return false;
+    }
+    if (is_array($active) && strtotime($active['capturedAt']) < strtotime($record['preRestartCapturedAt'])) {
+        return false;
+    }
+    if (is_array($record['delayResult'] ?? null)
+        && strtotime($record['delayResult']['capturedAt']) < strtotime($active['capturedAt'] ?? $record['preRestartCapturedAt'])) {
+        return false;
+    }
+    if (is_array($record['delayResult'] ?? null)
+        && delayDisposition($record['delayResult'], is_array($active) ? $active : null)
+            !== $record['delayResult']['disposition']) {
+        return false;
+    }
+    $expectedInstance = is_array($active) ? $active['instanceId']
+        : ($record['phase'] === 'active_not_confirmed' ? null : $record['preRestartInstanceId']);
+    $expectedActiveCount = is_array($active) ? $active['activeCount']
+        : ($record['phase'] === 'active_not_confirmed' ? null : 0);
+    $expectedMaximum = is_array($active) ? $active['maxObservedActive']
+        : ($record['phase'] === 'active_not_confirmed' ? null : $record['preRestartMaxObservedActive']);
+    if (($record['instanceId'] ?? null) !== $expectedInstance
+        || ($record['activeCount'] ?? null) !== $expectedActiveCount
+        || ($record['maxObservedActive'] ?? null) !== $expectedMaximum) {
+        return false;
+    }
+    if (array_key_exists('postRestart', $record)) {
+        $post = $record['postRestart'];
+        $postKeys = [
+            'activeCount', 'assessment', 'capturedAt', 'durationMs', 'httpStatus', 'interruptionAssessment',
+            'maxObservedActive', 'postRestartInstanceId', 'postStatusValid', 'processIdChanged',
+            'responseError', 'transportError',
+        ];
+        if (!is_array($post) || !validUtcTimestamp($post['capturedAt'] ?? null)
+            || array_diff(array_keys($post), $postKeys) !== [] || array_diff($postKeys, array_keys($post)) !== []
+            || !is_bool($post['postStatusValid'] ?? null)
+            || !in_array($post['assessment'] ?? null,
+                ['process_replacement_observed', 'process_replacement_not_observed', 'post_status_unavailable',
+                    'interruption_unproven'], true)
+            || !in_array($post['interruptionAssessment'] ?? null,
+                ['interruption_unproven', 'delay_completed_normally', 'graceful_shutdown_requires_owner_review'], true)
+            || !(is_bool($post['processIdChanged'] ?? null) || ($post['processIdChanged'] ?? null) === null)
+            || !(validUuid($post['postRestartInstanceId'] ?? null) || ($post['postRestartInstanceId'] ?? null) === null)
+            || ($post['postStatusValid'] !== validUuid($post['postRestartInstanceId'] ?? null))
+            || ($post['processIdChanged'] !== null && $post['processIdChanged']
+                !== (($post['postRestartInstanceId'] ?? null) !== $record['preRestartInstanceId']))
+            || ($post['assessment'] === 'process_replacement_observed' && $post['processIdChanged'] !== true)
+            || ($post['assessment'] === 'process_replacement_not_observed' && $post['processIdChanged'] !== false)
+            || ($post['assessment'] === 'post_status_unavailable' && $post['postStatusValid'] !== false)
+            || !(is_int($post['durationMs'] ?? null) && $post['durationMs'] >= 0 && $post['durationMs'] <= 120000)
+            || !(is_int($post['httpStatus'] ?? null)
+                && $post['httpStatus'] >= 100 && $post['httpStatus'] <= 599
+                || ($post['httpStatus'] ?? null) === null)
+            || !in_array($post['transportError'] ?? null, [null, 'network_error'], true)
+            || !in_array($post['responseError'] ?? null, [null, 'invalid_response'], true)
+            || ($post['postStatusValid'] && (!is_int($post['activeCount'] ?? null)
+                || $post['activeCount'] < 0 || $post['activeCount'] > MAX_PROBE_ACTIVE
+                || !is_int($post['maxObservedActive'] ?? null)
+                || $post['maxObservedActive'] < $post['activeCount']
+                || $post['maxObservedActive'] > MAX_PROBE_ACTIVE))) {
+            return false;
+        }
+        if (!$post['postStatusValid']
+            && (($post['activeCount'] ?? null) !== null || ($post['maxObservedActive'] ?? null) !== null)) {
+            return false;
+        }
+        $expectedPostAssessment = !$post['postStatusValid'] ? 'post_status_unavailable'
+            : ($post['processIdChanged'] === true ? 'process_replacement_observed' : 'process_replacement_not_observed');
+        $expectedInterruption = postRestartAssessment($record, $post['postStatusValid'], $post['processIdChanged'])['interruptionAssessment'];
+        if ($post['assessment'] !== $expectedPostAssessment
+            || $post['interruptionAssessment'] !== $expectedInterruption) {
+            return false;
+        }
+        if (strtotime($post['capturedAt']) < strtotime($record['delayResult']['capturedAt'] ?? $record['capturedAt'])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function validFreshPreRestartRecord(?array $record, ?int $now = null): bool
+{
+    if (!is_array($record) || ($record['phase'] ?? null) !== 'pre_restart'
+        || !validObservationRecord($record)) {
+        return false;
+    }
+    $capturedAt = strtotime($record['preRestartCapturedAt']);
+    $age = ($now ?? time()) - $capturedAt;
+    return $age >= 0 && $age <= 120;
+}
+
+function postRestartEvidenceAlreadyRecorded(array $record): bool
+{
+    return array_key_exists('postRestart', $record);
+}
+
+function delayDisposition(array $delayResult, ?array $active): string
+{
+    $observation = $delayResult['observation'] ?? null;
+    if (($delayResult['response_error'] ?? null) === 'unexpected_redirect') {
+        return 'redirect_ambiguous';
+    }
+    if (($delayResult['transport_error'] ?? null) === 'timeout'
+        || ($delayResult['response_error'] ?? null) === 'timeout_or_incomplete') {
+        return 'timeout_ambiguous';
+    }
+    if (($delayResult['transport_error'] ?? null) === 'network_error') {
+        return 'transport_ambiguous';
+    }
+    if ($active === null) {
+        return 'active_observation_missing';
+    }
+    if (is_array($observation) && $observation['instanceId'] !== $active['instanceId']) {
+        return 'evidence_mismatch';
+    }
+    if (($delayResult['response_error'] ?? null) !== null || !is_array($observation)) {
+        return 'invalid_or_unexpected_response';
+    }
+    if (($delayResult['http_status'] ?? null) === 200 && ($observation['status'] ?? null) === 'delay_completed') {
+        return 'delay_completed_normally';
+    }
+    if (($delayResult['http_status'] ?? null) === 503 && ($observation['error'] ?? null) === 'probe_shutdown') {
+        return 'graceful_shutdown_indicated';
+    }
+    return 'interruption_unproven';
+}
+
+function postRestartAssessment(array $record, bool $postStatusValid, ?bool $processIdChanged): array
+{
+    if (!$postStatusValid) {
+        return [
+            'assessment' => 'post_status_unavailable',
+            'interruptionAssessment' => 'interruption_unproven',
+        ];
+    }
+    if ($processIdChanged !== true) {
+        return [
+            'assessment' => 'process_replacement_not_observed',
+            'interruptionAssessment' => 'interruption_unproven',
+        ];
+    }
+    $delayResult = $record['delayResult'] ?? null;
+    $delayObservation = is_array($delayResult) ? ($delayResult['observation'] ?? null) : null;
+    if (is_array($delayResult) && ($delayResult['http_status'] ?? null) === 200
+        && is_array($delayObservation) && ($delayObservation['status'] ?? null) === 'delay_completed') {
+        return [
+            'assessment' => 'process_replacement_observed',
+            'interruptionAssessment' => 'delay_completed_normally',
+        ];
+    }
+    if (is_array($delayResult) && ($delayResult['disposition'] ?? null) === 'graceful_shutdown_indicated') {
+        return [
+            'assessment' => 'process_replacement_observed',
+            'interruptionAssessment' => 'graceful_shutdown_requires_owner_review',
+        ];
+    }
+    return [
+        'assessment' => 'process_replacement_observed',
+        'interruptionAssessment' => 'interruption_unproven',
+    ];
 }
 
 function approvedProbeOrigin(): ?string
@@ -543,6 +873,10 @@ function privateTestSecret(): ?string
     return strlen($secret) >= 32 ? $secret : null;
 }
 
+if (defined('HOSTINGER_PROBE_CALLER_LIBRARY_ONLY') && HOSTINGER_PROBE_CALLER_LIBRARY_ONLY === true) {
+    return;
+}
+
 $case = $argv[1] ?? 'valid';
 $singleCases = [
     'valid', 'invalid-signature', 'stale-timestamp', 'replay', 'missing-key', 'missing-auth',
@@ -642,12 +976,22 @@ if ($case === 'overlap') {
 if ($case === 'restart-pre') {
     $result = signedRequest($probeOrigin, STATUS_PATH, $secret);
     $observation = $result['results'][0]['observation'] ?? null;
+    $capturedAt = gmdate('c');
     $saved = is_array($observation) && $observation['activeCount'] === 0 && writeObservationRecord([
+        'schemaVersion' => OBSERVATION_SCHEMA_VERSION,
+        'runId' => newUuid(),
         'phase' => 'pre_restart',
-        'capturedAt' => gmdate('c'),
+        'capturedAt' => $capturedAt,
+        'preRestartCapturedAt' => $capturedAt,
+        'preRestartInstanceId' => $observation['instanceId'],
+        'preRestartActiveCount' => $observation['activeCount'],
+        'preRestartMaxObservedActive' => $observation['maxObservedActive'],
+        'activeObservation' => null,
         'instanceId' => $observation['instanceId'],
-        'activeCount' => $observation['activeCount'],
+        'activeCount' => 0,
         'maxObservedActive' => $observation['maxObservedActive'],
+        'delaySeconds' => 30,
+        'delayResult' => null,
     ]);
     unset($secret);
     emitResult($case, [[...$result, 'observation_saved' => $saved]], $result['passed'] && $saved ? 0 : 1);
@@ -655,8 +999,7 @@ if ($case === 'restart-pre') {
 
 if ($case === 'restart-observe') {
     $previous = readObservationRecord();
-    if (!is_array($previous) || ($previous['phase'] ?? null) !== 'pre_restart'
-        || !validUuid($previous['instanceId'] ?? null)) {
+    if (!validFreshPreRestartRecord($previous)) {
         unset($secret);
         emitResult($case, [['error' => 'missing_pre_restart_observation']], 2);
     }
@@ -702,9 +1045,11 @@ if ($case === 'restart-observe') {
     $observationSaved = false;
     $running = null;
     $deadline = hrtime(true) + 35_000_000_000;
+    $deadlineExpired = false;
     do {
         $multiStatus = curl_multi_exec($multi, $running);
         if ($multiStatus !== CURLM_OK || hrtime(true) >= $deadline) {
+            $deadlineExpired = $multiStatus === CURLM_OK && $running > 0;
             break;
         }
         $now = hrtime(true);
@@ -713,16 +1058,22 @@ if ($case === 'restart-observe') {
             $statusResult = signedRequest($probeOrigin, STATUS_PATH, $secret);
             $snapshot = $statusResult['results'][0]['observation'] ?? null;
             if (is_array($snapshot) && $snapshot['activeCount'] > 0
-                && $snapshot['instanceId'] === $previous['instanceId']) {
-                $activeObservation = $snapshot;
+                && $snapshot['instanceId'] === $previous['preRestartInstanceId']) {
+                $activeObservation = [
+                    ...$snapshot,
+                    'capturedAt' => gmdate('c'),
+                ];
                 $observationSaved = writeObservationRecord([
+                    ...$previous,
+                    'schemaVersion' => OBSERVATION_SCHEMA_VERSION,
+                    'runId' => $previous['runId'],
                     'phase' => 'active_confirmed',
                     'capturedAt' => gmdate('c'),
-                    'preRestartInstanceId' => $previous['instanceId'],
-                    'instanceId' => $snapshot['instanceId'],
-                    'activeCount' => $snapshot['activeCount'],
-                    'maxObservedActive' => $snapshot['maxObservedActive'],
-                    'delaySeconds' => 30,
+                    'activeObservation' => $activeObservation,
+                    'instanceId' => $activeObservation['instanceId'],
+                    'activeCount' => $activeObservation['activeCount'],
+                    'maxObservedActive' => $activeObservation['maxObservedActive'],
+                    'delayResult' => null,
                 ]);
             }
         }
@@ -733,7 +1084,9 @@ if ($case === 'restart-observe') {
 
     $responseBody = curl_multi_getcontent($handle);
     $httpStatus = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-    $transportError = curl_errno($handle) === 0 ? null : 'network_error';
+    $curlError = curl_errno($handle);
+    $transportError = $curlError === 0 ? null
+        : ($curlError === CURLE_OPERATION_TIMEDOUT ? 'timeout' : 'network_error');
     $delayObservation = null;
     $responseError = null;
     $redirectDiagnostic = null;
@@ -750,34 +1103,36 @@ if ($case === 'restart-observe') {
     } elseif (in_array($httpStatus, REDIRECT_STATUSES, true)) {
         $redirectDiagnostic = redirectDiagnostic($headerCapture, $httpStatus);
         $responseError = 'unexpected_redirect';
-    }
-    if ($redirectDiagnostic !== null) {
-        $activeObservation = null;
-        $observationSaved = false;
+    } elseif ($httpStatus > 0 && !in_array($httpStatus, [200, 503], true)) {
+        $responseError = 'unexpected_http_status';
+    } elseif ($deadlineExpired) {
+        $responseError = 'timeout_or_incomplete';
     }
     $delayResult = [
+        'capturedAt' => gmdate('c'),
         'http_status' => $httpStatus > 0 ? $httpStatus : null,
         'duration_ms' => (int)round(curl_getinfo($handle, CURLINFO_TOTAL_TIME) * 1000),
         'transport_error' => $transportError,
         'response_error' => $responseError,
         'observation' => $delayObservation,
+        'callerDeadlineReached' => $deadlineExpired,
         ...($redirectDiagnostic === null ? [] : ['redirect_diagnostic' => $redirectDiagnostic]),
     ];
+    $delayResult['disposition'] = delayDisposition($delayResult, $activeObservation);
     $record = [
+        ...$previous,
+        'schemaVersion' => OBSERVATION_SCHEMA_VERSION,
+        'runId' => $previous['runId'],
         'phase' => $activeObservation === null ? 'active_not_confirmed' : 'delay_result',
         'capturedAt' => gmdate('c'),
-        'preRestartInstanceId' => $previous['instanceId'],
         'instanceId' => $activeObservation['instanceId'] ?? null,
         'activeCount' => $activeObservation['activeCount'] ?? null,
         'maxObservedActive' => $activeObservation['maxObservedActive'] ?? null,
+        'activeObservation' => $activeObservation,
         'delaySeconds' => 30,
         'delayResult' => $delayResult,
     ];
     $resultSaved = writeObservationRecord($record);
-    if (!$resultSaved && $redirectDiagnostic !== null
-        && is_file(OBSERVATION_FILE) && !is_link(OBSERVATION_FILE)) {
-        @unlink(OBSERVATION_FILE);
-    }
     curl_multi_remove_handle($multi, $handle);
     curl_close($handle);
     curl_multi_close($multi);
@@ -793,33 +1148,72 @@ if ($case === 'restart-observe') {
 }
 
 if ($case === 'restart-post') {
-    $result = signedRequest($probeOrigin, STATUS_PATH, $secret);
-    $observation = $result['results'][0]['observation'] ?? null;
     $previous = readObservationRecord();
-    $canCompare = is_array($observation) && is_array($previous)
-        && in_array($previous['phase'] ?? null, ['active_confirmed', 'delay_result'], true)
-        && is_int($previous['activeCount'] ?? null) && $previous['activeCount'] > 0
-        && validUuid($previous['preRestartInstanceId'] ?? $previous['instanceId'] ?? null);
-    $previousInstanceId = $canCompare
-        ? ($previous['preRestartInstanceId'] ?? $previous['instanceId'])
+    if (!is_array($previous)) {
+        unset($secret);
+        emitResult($case, [[
+            'postStatusValid' => false,
+            'processIdChanged' => null,
+            'assessment' => 'post_status_unavailable',
+            'interruptionAssessment' => 'interruption_unproven',
+            'evidenceSaved' => false,
+            'evidenceError' => 'observation_missing_or_invalid',
+        ]], 1);
+    }
+    if (postRestartEvidenceAlreadyRecorded($previous)) {
+        unset($secret);
+        emitResult($case, [[
+            'postStatusValid' => (bool)$previous['postRestart']['postStatusValid'],
+            'processIdChanged' => $previous['postRestart']['processIdChanged'],
+            'assessment' => $previous['postRestart']['assessment'],
+            'interruptionAssessment' => $previous['postRestart']['interruptionAssessment'],
+            'evidenceSaved' => true,
+            'evidenceError' => 'post_status_already_recorded',
+        ]], 1);
+    }
+
+    $result = signedRequest($probeOrigin, STATUS_PATH, $secret);
+    $statusResult = $result['results'][0] ?? [];
+    $observation = $statusResult['observation'] ?? null;
+    $postStatusValid = is_array($observation);
+    $processIdChanged = $postStatusValid
+        ? $observation['instanceId'] !== $previous['preRestartInstanceId']
         : null;
-    $changed = $canCompare && $observation['instanceId'] !== $previousInstanceId;
-    $saved = is_array($observation) && writeObservationRecord([
-        'phase' => 'post_restart',
+    $assessmentResult = postRestartAssessment($previous, $postStatusValid, $processIdChanged);
+    $assessment = $assessmentResult['assessment'];
+    $interruptionAssessment = $assessmentResult['interruptionAssessment'];
+    $postRestart = [
         'capturedAt' => gmdate('c'),
-        'preRestartInstanceId' => $previousInstanceId,
-        'postRestartInstanceId' => $observation['instanceId'],
-        'processIdChanged' => $changed,
-        'activeCount' => $observation['activeCount'],
-        'maxObservedActive' => $observation['maxObservedActive'],
-    ]);
+        'postStatusValid' => $postStatusValid,
+        'httpStatus' => $statusResult['http_status'] ?? null,
+        'durationMs' => $statusResult['duration_ms'] ?? 0,
+        'transportError' => $statusResult['transport_error'] ?? null,
+        'responseError' => $statusResult['response_error'] ?? null,
+        'postRestartInstanceId' => $postStatusValid ? $observation['instanceId'] : null,
+        'activeCount' => $postStatusValid ? $observation['activeCount'] : null,
+        'maxObservedActive' => $postStatusValid ? $observation['maxObservedActive'] : null,
+        'processIdChanged' => $processIdChanged,
+        'assessment' => $assessment,
+        'interruptionAssessment' => $interruptionAssessment,
+    ];
+    $record = [...$previous, 'postRestart' => $postRestart];
+    $saved = writeObservationRecord($record);
     unset($secret);
     emitResult($case, [[
-        ...$result,
-        'previousInstanceId' => $previousInstanceId,
-        'processIdChanged' => $changed,
-        'observation_saved' => $saved,
-    ]], $result['passed'] && $saved && $changed ? 0 : 1);
+        'postStatusValid' => $postStatusValid,
+        'postStatus' => [
+            'http_status' => $statusResult['http_status'] ?? null,
+            'duration_ms' => $statusResult['duration_ms'] ?? 0,
+            'transport_error' => $statusResult['transport_error'] ?? null,
+            'response_error' => $statusResult['response_error'] ?? null,
+            'observation' => $observation,
+        ],
+        'preRestartInstanceId' => $previous['preRestartInstanceId'],
+        'processIdChanged' => $processIdChanged,
+        'assessment' => $assessment,
+        'interruptionAssessment' => $interruptionAssessment,
+        'evidenceSaved' => $saved,
+    ]], $postStatusValid && $saved ? 0 : 1);
 }
 
 $kind = match ($case) {
