@@ -437,3 +437,121 @@ Real mobile-browser and Android WebView/Capacitor results require those actual
 runtimes; label emulator evidence as emulator evidence. Authentication expiry,
 deployed networking, and remote session behavior require an isolated deployed
 app. Production acceptance remains out of scope.
+
+## ER-CS5D.2B-I isolated probe instrumentation
+
+This local-only instrumentation updates the inert Hostinger probe and its
+tracked Site A caller. It does not change the production execution worker,
+the real `/api/internal/execution-wake` contract, workflow gates, or Supabase.
+Do not run the older `delay-suite` (which includes 30/60/90/120-second
+requests) for this qualification. Use the two 5-second requests for overlap
+and one 30-second request only when coordinating an active-process restart.
+
+### Observable protocol
+
+- Signed `POST /probe/status` uses the existing HMAC, timestamp, nonce, TLS,
+  and no-store rules. It returns exactly `instanceId`, `activeCount`, and
+  `maxObservedActive`. Status calls are authenticated but are excluded from
+  active execution counts.
+- Signed delay responses return only the probe status, `probeOnly`,
+  `requestId`, `instanceId`, `durationMs`, and `maxObservedActive`.
+- The probe nonce replay map is process-local. It rejects replays during one
+  process lifetime, but its entries disappear when that process is replaced.
+  The caller creates a fresh nonce for every status poll; this test probe is
+  not the production trigger's durable PostgreSQL nonce store.
+- The PHP caller validates the response schema and emits only allowlisted
+  fields, HTTP status, duration, and coarse transport/parse failure labels.
+  It never prints response bodies, signing material, raw headers, or nonce.
+- `restart-observe` writes the `active_confirmed` snapshot atomically to
+  `probe-observation.json` beside the caller. The caller refuses to write under
+  a path containing `public_html`; the record is mode `0600` and contains only
+  UTC time, process IDs, counters, delay length, and sanitized delay result.
+  The operator reads it in Site A's private File Manager directory, not over a
+  public monitoring route. Refreshing that file while the cron process is
+  running must be confirmed before attempting a restart. Cron output may be
+  delayed until the script exits and is not the live signal.
+
+### Isolated procedure
+
+Prerequisites: retain Site A; use only its existing private
+`/home/u564997839/lvtchat-cron-probe` directory, key, and allowlist. Site B must
+be the separate Hostinger temporary-domain Node 24 probe. Confirm the caller,
+key, and `probe-host.allow` are outside `public_html`, are private, and target
+only Site B. Do not import application `.env` files or use production
+credentials. Back up the current private caller before replacing it.
+
+1. Update the Site A private caller from the tracked
+   `scripts/hostinger-probe-caller.php`; do not serve it from `public_html`.
+   Run `php -l` on the installed copy. Deploy the Node probe package listed
+   below to isolated Site B and verify `/healthz` reports Node 24 and
+   `keyAvailable: true`.
+2. Run caller case `overlap`. Require two HTTP 200 results, two valid delay
+   observations, the same `instanceId`, distinct request IDs, and
+   `maxObservedActive >= 2` in both observations. This proves server-side
+   overlap in one Site B process; caller-side parallel requests alone do not.
+3. Run `restart-pre`. Require a valid status snapshot with `activeCount: 0`.
+   Then run `restart-observe`. It starts one signed 30-second delay and polls
+   signed status at a bounded interval. Do not restart unless the private
+   observation file visibly shows `phase: active_confirmed`, the same
+   pre-restart `instanceId`, and `activeCount > 0` while the caller is still
+   running. If the record is not promptly visible in File Manager, stop; do
+   not infer activity from a schedule or a missing Runtime Log.
+4. While that confirmed request remains active, restart **Site B once**. The
+   caller records the actual HTTP status, transport failure, or delay response
+   when it finishes. Then run `restart-post`. Pass process replacement only
+   when it reads a prior active-confirmed record and observes a different
+   `instanceId`. A timeout or transport error alone is not process-replacement
+   evidence.
+5. Capture the caller output and sanitized private record. Remove the
+   temporary scheduled job. Run caller case `cleanup` or remove only
+   `probe-observation.json` from the private directory. Restore the backed-up
+   caller if the owner does not want the instrumentation retained. Preserve
+   Site A, its key, and its allowlist.
+
+### Stop conditions and limits
+
+Stop if Site A's caller source is no longer the reviewed tracked version, the
+private directory/key/host allowlist cannot be verified, the key is
+unavailable, TLS or response validation fails, another request is active
+before the restart run, or the private observation cannot be refreshed before
+the delay completes. Never restart blindly. An interrupted inert delay proves
+neither a production worker interruption nor durable workflow recovery.
+
+The private file mechanism is locally implemented but Hostinger File Manager
+live-refresh behavior has not been remotely exercised. The first isolated
+operator run must validate that the `active_confirmed` file becomes readable
+while `restart-observe` is still running. If it does not, the process-restart
+test is blocked until a private, promptly readable observation method is
+approved; do not add a public Site A endpoint.
+
+### Deployment package and migrations
+
+The Site B ZIP manifest is exactly:
+
+- `package.json`
+- `hostinger-node-runtime-probe.mjs`
+
+The package has no dependencies. It contains no `.env`, signing key, customer
+data, `node_modules`, or application code. The caller is a separate private
+Site A update and is not part of the ZIP. No Supabase migrations or database
+changes are required. The locally prepared candidate archive is
+`/tmp/lvtchat-hostinger-probe-instrumented.zip`; recreate it with:
+
+```sh
+zip -j -X /tmp/lvtchat-hostinger-probe-instrumented.zip deploy/hostinger-node-probe/package.json scripts/hostinger-node-runtime-probe.mjs
+```
+
+Its SHA-256 is
+`548992dae9e085dff98ad79d77f6122a5fd08b8275036f6a17cf0db933483a09`.
+
+Local qualification note: the approved official PHP 8.3 CLI image
+(`sha256:c24b55afdf860c874b9ec6267ced132ff52de97d308ab08e6cf41e8596e509f7`)
+provided PHP 8.3.35 with `curl_init` and `curl_multi_init`; no image build or
+host PHP installation was needed. `php -l` passed. The actual caller passed
+local signed-authentication, response-schema, TLS, transport-failure,
+five-second overlap, atomic observation, private-file, and simulated worker
+replacement checks over an isolated Docker network with synthetic credentials
+and a test CA. The focused Node/probe and execution-trigger suites passed 27
+tests; TypeScript, targeted ESLint, Node syntax, and `git diff --check` passed.
+Hostinger File Manager live refresh and deployed execution recovery remain
+separate operational checks and are not claimed as passed.

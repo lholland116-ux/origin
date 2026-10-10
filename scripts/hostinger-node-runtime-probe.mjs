@@ -6,7 +6,8 @@ import { createServer as createHttpServer } from "node:http";
 
 export const WAKE_PATH = "/api/internal/execution-wake";
 export const HEALTH_PATH = "/healthz";
-export const PROBE_DELAY_PATH = /^\/probe\/delay\/(1|5|30|60|90|120)$/;
+export const STATUS_PATH = "/probe/status";
+export const PROBE_DELAY_PATH = /^\/probe\/delay\/(1|5|30)$/;
 export const MAX_CLOCK_SKEW_SECONDS = 300;
 export const NONCE_TTL_MS = 10 * 60 * 1000;
 export const MAX_ACTIVE_REQUESTS = 8;
@@ -125,9 +126,10 @@ export function createHostingerProbeServer({
     }
 
     const delayMatch = request.method === "POST" ? PROBE_DELAY_PATH.exec(url.pathname) : null;
+    const statusRequest = request.method === "POST" && url.pathname === STATUS_PATH;
     const path = request.method === "POST" && url.pathname === WAKE_PATH
       ? WAKE_PATH
-      : delayMatch ? url.pathname : null;
+      : delayMatch ? url.pathname : statusRequest ? STATUS_PATH : null;
     if (!path) {
       request.resume();
       return json(response, 404, { error: "not_found" });
@@ -141,8 +143,13 @@ export function createHostingerProbeServer({
     const auth = authenticate(request, path);
     if (auth.status !== 200) {
       request.resume();
-      emit({ event: "request_rejected", pathKind: delayMatch ? "delay" : "wake", status: auth.status });
+      emit({ event: "request_rejected", pathKind: delayMatch ? "delay" : statusRequest ? "status" : "wake", status: auth.status });
       return json(response, auth.status, { error: auth.status === 409 ? "duplicate_trigger" : "unauthorized" });
+    }
+    if (statusRequest) {
+      request.resume();
+      emit({ event: "status_observed" });
+      return json(response, 200, { instanceId, activeCount, maxObservedActive });
     }
     if (activeCount >= maxActiveRequests) {
       request.resume();
@@ -164,8 +171,17 @@ export function createHostingerProbeServer({
       if (timer) clearTimeout(timer);
       activeCount -= 1;
       activeResponses.delete(finalize);
-      emit({ event, requestId, pathKind, status, durationMs: Math.max(0, now() - startedAt) });
-      if (!response.destroyed) json(response, status, payload);
+      const durationMs = Math.max(0, now() - startedAt);
+      emit({ event, requestId, pathKind, status, durationMs });
+      if (!response.destroyed) {
+        json(response, status, pathKind === "delay" ? {
+          ...payload,
+          requestId,
+          instanceId,
+          durationMs,
+          maxObservedActive,
+        } : payload);
+      }
     };
     activeResponses.add(finalize);
     response.on("close", () => {

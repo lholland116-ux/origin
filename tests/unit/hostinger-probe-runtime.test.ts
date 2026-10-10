@@ -15,6 +15,7 @@ const {
   resolvePort,
   secretFromFile,
   signProbeRequest,
+  STATUS_PATH,
   WAKE_PATH,
 } = await import("../../scripts/hostinger-node-runtime-probe.mjs");
 if (previousAutostart === undefined) delete process.env.HOSTINGER_PROBE_DISABLE_AUTOSTART;
@@ -177,8 +178,15 @@ describe("Hostinger test probe protocol", () => {
     expect(php).toContain("['case' => 'missing-auth', 'kind' => 'missing-auth']");
     expect(php).toContain("'missing-key',");
     expect(php).toContain("'auth-suite'");
-    expect(php).toContain("'delay-suite'");
+    expect(php).not.toContain("delay-suite");
+    expect(probeSource).toContain("(1|5|30)");
+    expect(probeSource).not.toContain("60|90|120");
     expect(php).toContain("$case === 'overlap'");
+    expect(php).toContain("$case === 'restart-observe'");
+    expect(php).toContain("/probe/status");
+    expect(php).toContain("OBSERVATION_FILE = __DIR__ . '/probe-observation.json'");
+    expect(php).toContain("'processIdChanged' => $changed");
+    expect(php).toContain("'transport_error' => $body === false ? 'network_error' : null");
     expect(php).toContain("PROBE_HOST_FILE = __DIR__ . '/probe-host.allow'");
     expect(php).toContain("SITE_A_HOST = 'darkblue-bear-768036.hostingersite.com'");
     expect(php).toContain("return 'https://' . $host");
@@ -339,6 +347,35 @@ describe("Hostinger test probe protocol", () => {
     expect(JSON.stringify(probe.events)).not.toContain(headers["x-lvtchat-nonce"]);
   });
 
+  it("returns only authenticated live status metrics without counting status requests", async () => {
+    const probe = await startProbe();
+    shutdown = () => probe.shutdown();
+    const path = STATUS_PATH;
+    const validHeaders = authHeaders(path, "7234567890abcdef1234567890abcdef");
+    const first = await post(probe.origin, path, validHeaders);
+    expect(first.status).toBe(200);
+    const snapshot = await first.json() as Record<string, unknown>;
+    expect(Object.keys(snapshot).sort()).toEqual(["activeCount", "instanceId", "maxObservedActive"]);
+    expect(snapshot).toMatchObject({ activeCount: 0, maxObservedActive: 0 });
+    expect(typeof snapshot.instanceId).toBe("string");
+
+    const invalid = { ...authHeaders(path, "8234567890abcdef1234567890abcdef"), "x-lvtchat-signature": "0".repeat(64) };
+    expect((await post(probe.origin, path, invalid)).status).toBe(401);
+    const staleTimestamp = String(Math.floor(NOW / 1000) - 301);
+    expect((await post(probe.origin, path, authHeaders(
+      path,
+      "9234567890abcdef1234567890abcdef",
+      staleTimestamp,
+    ))).status).toBe(401);
+    expect((await post(probe.origin, path, validHeaders)).status).toBe(409);
+
+    const nextHeaders = authHeaders(path, "a234567890abcdef1234567890abcdef");
+    const next = await post(probe.origin, path, nextHeaders);
+    expect(await next.json()).toEqual(snapshot);
+    expect(JSON.stringify(probe.events)).not.toContain(SECRET);
+    expect(JSON.stringify(probe.events)).not.toContain(validHeaders["x-lvtchat-signature"]);
+  });
+
   it("rejects stale and invalid MACs and reports missing test key only as a boolean", async () => {
     const probe = await startProbe();
     shutdown = () => probe.shutdown();
@@ -356,10 +393,11 @@ describe("Hostinger test probe protocol", () => {
     const healthWithoutKey = await fetch(`${noKey.origin}${HEALTH_PATH}`);
     expect(await healthWithoutKey.json()).toMatchObject({ keyAvailable: false });
     expect((await post(noKey.origin, WAKE_PATH, valid)).status).toBe(503);
+    expect((await post(noKey.origin, STATUS_PATH, valid)).status).toBe(503);
     await noKey.shutdown();
   });
 
-  it("measures bounded delays and records overlapping requests without side effects", async () => {
+  it("returns per-process delay observations and records overlapping requests without side effects", async () => {
     const probe = await startProbe();
     shutdown = () => probe.shutdown();
     const firstPath = "/probe/delay/1";
@@ -369,8 +407,35 @@ describe("Hostinger test probe protocol", () => {
       post(probe.origin, secondPath, authHeaders(secondPath, "5234567890abcdef1234567890abcdef")),
     ]);
     expect([first.status, second.status]).toEqual([200, 200]);
+    const firstBody = await first.json() as Record<string, unknown>;
+    const secondBody = await second.json() as Record<string, unknown>;
+    expect(firstBody.instanceId).toBe(secondBody.instanceId);
+    expect(firstBody.maxObservedActive).toBeGreaterThanOrEqual(2);
+    expect(secondBody.maxObservedActive).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(firstBody).sort()).toEqual([
+      "durationMs", "instanceId", "maxObservedActive", "probeOnly", "requestId", "status",
+    ]);
+    expect(firstBody.requestId).not.toBe(secondBody.requestId);
+    expect(firstBody.durationMs).toBeGreaterThanOrEqual(0);
     expect(probe.events.some((event) => Number(event.maxObservedActive) >= 2)).toBe(true);
     expect(probe.events.some((event) => event.event === "request_completed")).toBe(true);
+  });
+
+  it("reports an active delay in status while excluding status polling from the count", async () => {
+    const probe = await startProbe();
+    shutdown = () => probe.shutdown();
+    const delayPath = "/probe/delay/1";
+    const delayPromise = post(probe.origin, delayPath, authHeaders(delayPath, "b234567890abcdef1234567890abcdef"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const statusPath = STATUS_PATH;
+    const status = await post(probe.origin, statusPath, authHeaders(statusPath, "c234567890abcdef1234567890abcdef"));
+    const snapshot = await status.json() as Record<string, unknown>;
+    expect(snapshot.activeCount).toBe(1);
+    expect(snapshot.maxObservedActive).toBe(1);
+    const delay = await delayPromise;
+    expect(delay.status).toBe(200);
+    const body = await delay.json() as Record<string, unknown>;
+    expect(body.instanceId).toBe(snapshot.instanceId);
   });
 
   it("interrupts an in-flight harmless delay during graceful shutdown", async () => {
@@ -383,6 +448,13 @@ describe("Hostinger test probe protocol", () => {
     shutdown = undefined;
     const response = await responsePromise;
     expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: "probe_shutdown",
+      instanceId: expect.any(String),
+      requestId: expect.any(String),
+      durationMs: expect.any(Number),
+      maxObservedActive: 1,
+    });
     expect(probe.events.some((event) => event.event === "request_interrupted")).toBe(true);
   });
 
