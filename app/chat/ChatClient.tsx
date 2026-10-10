@@ -65,11 +65,24 @@ import type { ImageEditSourceReference } from "@/lib/image-generation/lineage";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
 import { ChatMessageContent } from "@/components/chat/ChatMessageContent";
+import WorkflowProgressPanel from "@/components/chat/WorkflowProgressPanel";
 import ReadAloudButton from "@/components/chat/ReadAloudButton";
 import ReadAloudSettings from "@/components/chat/ReadAloudSettings";
 import { GeneratedDocumentCard, type GeneratedDocumentCardData } from "@/components/chat/GeneratedDocumentCard";
 import { documentFormatFromMimeType, filenameFromContentDisposition, saveDocumentBlob, DocumentDownloadError } from "@/lib/documents/download";
 import { stopReadAloud } from "@/lib/read-aloud";
+import type { WorkflowProgressDto } from "@/lib/agent-runtime/workflow-http-api";
+import {
+  isWorkflowFeatureDisabledResponse,
+  parseAcceptedWorkflowStart,
+  parseAcceptedWorkflowRecovery,
+  shouldPrepareMultiStepWorkflow,
+  readWorkflowTrackingRecords,
+  saveWorkflowTrackingRecord,
+  upsertWorkflowTrackingRecords,
+  WORKFLOW_PROGRESS_STORAGE_KEY,
+  type WorkflowTrackingRecord,
+} from "@/lib/agent-runtime/workflow-progress-client";
 import {
   hasCurrentInformationIntent,
   selectIntelligenceRoute,
@@ -1981,6 +1994,33 @@ export function createOptimisticAssistantMessage(id: string): Message {
   };
 }
 
+export function reconcileAcceptedWorkflowMessages(
+  messages: Message[],
+  optimisticUserId: string,
+  optimisticAssistantId: string,
+  accepted: { userMessageId: string; assistantMessageId: string },
+): Message[] {
+  const reconciled = messages.map((message) => message.id === optimisticUserId
+    ? { ...message, id: accepted.userMessageId }
+    : message.id === optimisticAssistantId
+      ? { ...message, id: accepted.assistantMessageId }
+      : message);
+  const seen = new Set<string>();
+  return reconciled.filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+}
+
+function workflowProgressStorage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function reconcileGeneratedImageMessages(
   messages: Message[],
   optimisticUserId: string,
@@ -2835,6 +2875,8 @@ export default function ChatClient({
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
   const [documentError, setDocumentError] = useState("");
   const [conversationId, setConversationId] = useState(initialConversationId);
+  const [workflowTrackingRecords, setWorkflowTrackingRecords] = useState<WorkflowTrackingRecord[]>([]);
+  const [workflowInitialStatuses, setWorkflowInitialStatuses] = useState<Record<string, WorkflowProgressDto>>({});
   const [conversations, setConversations] = useState<ConversationItem[]>(initialConversations);
   const [sidebarLoading, setSidebarLoading] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -2983,6 +3025,10 @@ export default function ChatClient({
   useEffect(() => {
     planRef.current = plan;
   }, [plan]);
+
+  useEffect(() => {
+    setWorkflowTrackingRecords(readWorkflowTrackingRecords(workflowProgressStorage(), conversationId));
+  }, [conversationId]);
 
   useEffect(() => {
     if (plan !== "pro" && reasoningMode === "high") {
@@ -3404,6 +3450,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     } catch {
       return false;
     }
+  }
+
+  function refreshWorkflowMessage(): void {
+    void refreshMessagesForConversation(conversationId);
   }
 
   async function handleImageEditSubmit(): Promise<void> {
@@ -4520,6 +4570,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       discardPendingImages();
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
+      try { workflowProgressStorage()?.removeItem(WORKFLOW_PROGRESS_STORAGE_KEY); } catch { /* Storage may be unavailable. */ }
+      setWorkflowTrackingRecords([]);
+      setWorkflowInitialStatuses({});
       router.push("/login");
       router.refresh();
     } catch (error) {
@@ -5109,6 +5162,122 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         });
         await fetchUsage();
         return;
+      }
+
+      const shouldPrepareWorkflow = shouldPrepareMultiStepWorkflow({
+        message: effectiveMessage,
+        webSearchOverride,
+        imageGeneration: useImageGeneration,
+      });
+      if (shouldPrepareWorkflow) {
+        const workflowRequestBody = {
+          conversationId,
+          idempotencyKey: generationRequestId,
+          message: effectiveMessage,
+          documentIds: payloadDocumentIds,
+          images: payloadImages,
+          requestOptions: {
+            routingMode: "auto",
+            reasoningMode,
+          },
+        };
+        let workflowResponse: Response;
+        try {
+          workflowResponse = await fetch("/api/v1/agent-workflows", {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(workflowRequestBody),
+          });
+        } catch {
+          // The request may have crossed the acceptance boundary. Never fall
+          // back to /api/chat or automatically start a second request here.
+          responseAccepted = true;
+          updateAssistantMessage(assistantId, (msg) => ({
+            ...msg,
+            content: "I couldn't confirm whether this workflow request was accepted. Refresh this conversation before sending it again.",
+          }));
+          return;
+        }
+
+        let workflowPayload: unknown = null;
+        try { workflowPayload = await workflowResponse.json(); } catch { /* Treat an unreadable response as ambiguous below. */ }
+
+        if (!isWorkflowFeatureDisabledResponse(workflowResponse.status, workflowPayload)) {
+          const acceptedStart = parseAcceptedWorkflowStart(
+            workflowPayload,
+            conversationId,
+            generationRequestId,
+          );
+          if (workflowResponse.ok && acceptedStart) {
+            responseAccepted = true;
+            const record: WorkflowTrackingRecord = {
+              runId: acceptedStart.status.runId,
+              conversationId,
+              assistantMessageId: acceptedStart.acceptedRequest.assistantMessageId,
+            };
+            setMessages((prev) => reconcileAcceptedWorkflowMessages(
+              prev,
+              optimisticUserId,
+              assistantId,
+              acceptedStart.acceptedRequest,
+            ));
+            setWorkflowTrackingRecords((prev) => upsertWorkflowTrackingRecords(prev, record));
+            setWorkflowInitialStatuses((prev) => ({
+              ...prev,
+              [record.assistantMessageId]: acceptedStart.status,
+            }));
+            saveWorkflowTrackingRecord(workflowProgressStorage(), record);
+            if (hasImages) clearSubmittedPendingImages(pendingImageSnapshot.map((image) => image.id));
+            setWebSearchOverride(false);
+            await refreshMessagesForConversation(conversationId);
+            await refreshConversations(conversationId);
+            await fetchUsage();
+            return;
+          }
+
+          const payloadRecord = workflowPayload && typeof workflowPayload === "object"
+            && !Array.isArray(workflowPayload)
+            ? workflowPayload as Record<string, unknown>
+            : null;
+          const recovery = parseAcceptedWorkflowRecovery(workflowPayload, generationRequestId);
+          if (payloadRecord?.accepted === true && recovery) {
+            responseAccepted = true;
+            if (hasImages) clearSubmittedPendingImages(pendingImageSnapshot.map((image) => image.id));
+            setMessages((prev) => reconcileAcceptedWorkflowMessages(
+              prev,
+              optimisticUserId,
+              assistantId,
+              recovery,
+            ));
+            const errorValue = payloadRecord.error;
+            const message = errorValue && typeof errorValue === "object"
+              && typeof (errorValue as Record<string, unknown>).message === "string"
+              ? (errorValue as Record<string, string>).message
+              : "The request was accepted, but a workflow could not be prepared.";
+            updateAssistantMessage(recovery.assistantMessageId, (msg) => ({ ...msg, content: message }));
+            await refreshConversations(conversationId);
+            await fetchUsage();
+            return;
+          }
+
+          if (payloadRecord?.accepted === "unknown" || payloadRecord?.accepted === true) {
+            responseAccepted = true;
+            if (hasImages) clearSubmittedPendingImages(pendingImageSnapshot.map((image) => image.id));
+            updateAssistantMessage(assistantId, (msg) => ({
+              ...msg,
+              content: "The workflow request may have been accepted, but its status could not be confirmed. Refresh this conversation before retrying.",
+            }));
+            return;
+          }
+
+          const errorValue = payloadRecord?.error;
+          const errorMessage = errorValue && typeof errorValue === "object"
+            && typeof (errorValue as Record<string, unknown>).message === "string"
+            ? (errorValue as Record<string, string>).message
+            : "Could not prepare this workflow request.";
+          throw new Error(errorMessage);
+        }
       }
 
       const chatRequest = buildChatRequest({
@@ -6064,6 +6233,10 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       message.id === messages[messages.length - 1]?.id;
                     const isLatestMessage = message.id === messages[messages.length - 1]?.id;
                     const isRegeneratingImage = regeneratingMessageId === message.id;
+                    const workflowRecord = message.role === "assistant"
+                      ? workflowTrackingRecords.find((record) => record.conversationId === conversationId
+                        && record.assistantMessageId === message.id)
+                      : undefined;
 
                     const bubbleWidthClass =
                       message.role === "user"
@@ -6129,6 +6302,16 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               }
                             />
                           </div>
+
+                          {workflowRecord ? (
+                            <WorkflowProgressPanel
+                              runId={workflowRecord.runId}
+                              conversationId={workflowRecord.conversationId}
+                              initialStatus={workflowInitialStatuses[message.id]}
+                              theme={activeTheme}
+                              onCompleted={refreshWorkflowMessage}
+                            />
+                          ) : null}
 
                           {message.role === "assistant" && message.generatedDocuments?.map((document, index) => (
                             <GeneratedDocumentCard
