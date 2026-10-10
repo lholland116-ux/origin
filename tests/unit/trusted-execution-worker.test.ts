@@ -39,13 +39,16 @@ function run(overrides: Partial<DurableExecutionRun> = {}): DurableExecutionRun 
   } as DurableExecutionRun;
 }
 
-function setup(options: { currentRun?: DurableExecutionRun; pendingFinalizations?: readonly string[] } = {}) {
+function setup(options: { currentRun?: DurableExecutionRun; pendingFinalizations?: readonly string[]; now?: () => number; afterRenew?: () => void } = {}) {
   const currentRun = options.currentRun ?? run();
   const store = {
     discoverExecutionWork: vi.fn(async () => [{ runId: RUN_ID, stepId: "step-1", kind: "runnable", dueAt: "2026-10-09T12:00:00.000Z", fencingGeneration: 0 }]),
     claimExecutionWork: vi.fn(async () => ({ status: "claimed", claim: { claimId: CLAIM_ID, fencingGeneration: 1 }, runId: RUN_ID,
       stepId: "step-1", snapshotRevision: currentRun.snapshotRevision, leaseExpiresAt: "2026-10-09T12:02:00.000Z" })),
-    renewExecutionWorkClaim: vi.fn(async () => ({ status: "renewed", leaseExpiresAt: "2026-10-09T12:02:00.000Z" })),
+    renewExecutionWorkClaim: vi.fn(async () => {
+      options.afterRenew?.();
+      return { status: "renewed", leaseExpiresAt: "2026-10-09T12:02:00.000Z" };
+    }),
     releaseExecutionWorkClaim: vi.fn(async () => ({ status: "released" })),
     getAcceptedRunForFinalization: vi.fn(async () => currentRun),
   } as unknown as ExecutionStore;
@@ -59,7 +62,7 @@ function setup(options: { currentRun?: DurableExecutionRun; pendingFinalizations
     listPendingFinalizationRunIds: vi.fn(async () => finalizations),
     finalizeAcceptedExecution: vi.fn(async () => ({ status: "finalized" })),
     createClaimId: () => CLAIM_ID,
-    now: () => 1_000,
+    now: options.now ?? (() => 1_000),
   });
   return { worker, store, runtime };
 }
@@ -75,11 +78,20 @@ describe("trusted bounded execution worker", () => {
     expect(store.renewExecutionWorkClaim).toHaveBeenCalledWith(expect.objectContaining({ runId: RUN_ID, claim: { claimId: CLAIM_ID, fencingGeneration: 1 } }));
     expect(runtime.executeClaimedStep).toHaveBeenCalledWith(expect.objectContaining({
       runId: RUN_ID, authenticatedUserId: OWNER, expectedStepId: "step-1",
-      workClaim: { claimId: CLAIM_ID, fencingGeneration: 1 }, executionDeadlineAtMs: 91_000,
+      workClaim: { claimId: CLAIM_ID, fencingGeneration: 1 }, executionDeadlineAtMs: 31_000,
+      providerDeadlineAtMs: 21_000,
     }));
     expect(store.releaseExecutionWorkClaim).toHaveBeenCalledWith(expect.objectContaining({
       runId: RUN_ID, claim: { claimId: CLAIM_ID, fencingGeneration: 1 }, expectedRevision: 0,
     }));
+  });
+
+  it("defers a provider step when setup leaves less than the minimum dispatch budget", async () => {
+    let clock = 1_000;
+    const { worker, runtime, store } = setup({ now: () => clock, afterRenew: () => { clock = 17_000; } });
+    expect(await worker.runOnce()).toMatchObject({ status: "bounded_yield", runId: RUN_ID, stepId: "step-1" });
+    expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
+    expect(store.releaseExecutionWorkClaim).toHaveBeenCalledOnce();
   });
 
   it("never dispatches a non-allowlisted capability from a forged/stale discovery result", async () => {

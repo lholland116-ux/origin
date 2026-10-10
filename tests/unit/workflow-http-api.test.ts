@@ -175,6 +175,16 @@ describe("authenticated workflow HTTP handlers", () => {
     expect(deps.prepare).not.toHaveBeenCalled();
   });
 
+  it("explains that autonomous image generation is unavailable without dispatching it", async () => {
+    const deps = fixture({ prepare: async () => ({ kind: "rejected", reason: "capability_unavailable" }) as never });
+    const response = await deps.handlers.start(startRequest());
+    expect(response.status).toBe(422);
+    expect(await responseBody(response)).toMatchObject({ error: {
+      code: "capability_unavailable",
+      message: expect.stringContaining("standalone feature"),
+    } });
+  });
+
   it("checks current reasoning entitlement before request acceptance", async () => {
     const deps = fixture({ loadCurrentPlan: async () => "free" });
     const response = await deps.handlers.start(startRequest({ ...requestBody, requestOptions: { routingMode: "auto", reasoningMode: "high" } }));

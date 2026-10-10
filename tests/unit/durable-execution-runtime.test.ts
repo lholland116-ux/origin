@@ -184,18 +184,19 @@ describe("durable XState execution runtime", () => {
     const associated = await engine.associateAcceptedRequest(workflow, runtimeInput({ attachments: [{ id: fileId, kind: "file" }] }), ACCEPTED_REQUEST);
     expect(associated.kind).toBe("associated");
 
-    const deadline = Date.now() + 90_000;
+    const deadline = Date.now() + 30_000;
+    const providerDeadline = Date.now() + 20_000;
     const first = await engine.executeClaimedStep({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedStepId: "step-1",
-      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 1 }, executionDeadlineAtMs: deadline });
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 1 }, executionDeadlineAtMs: deadline, providerDeadlineAtMs: providerDeadline });
     expect(first.kind).toBe("slice_yielded");
     expect(calls.map((call) => call.stepId)).toEqual(["step-1"]);
     expect(calls[0]?.context.trustedExecutionSubject).toBe(subject);
 
     const second = await engine.executeClaimedStep({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedStepId: "step-2",
-      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 2 }, executionDeadlineAtMs: deadline });
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 2 }, executionDeadlineAtMs: deadline, providerDeadlineAtMs: providerDeadline });
     expect(second.kind).toBe("slice_yielded");
     const third = await engine.executeClaimedStep({ runId: RUN_ID, authenticatedUserId: USER_ID, expectedStepId: "step-3",
-      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 3 }, executionDeadlineAtMs: deadline });
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 3 }, executionDeadlineAtMs: deadline, providerDeadlineAtMs: providerDeadline });
     expect(third.kind).toBe("succeeded");
     expect(calls.map((call) => call.stepId)).toEqual(["step-1", "step-2", "step-3"]);
     expect(calls[1]?.inputs).toContainEqual(expect.objectContaining({ source: "step", stepId: "step-1" }));

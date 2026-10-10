@@ -1,5 +1,6 @@
 import { openai } from "@/lib/openai";
 import { isTemporaryProviderDnsFailure } from "@/lib/ai/provider-failure-normalization";
+import { APIConnectionTimeoutError } from "openai";
 import {
   GENERAL_CHAT_MODEL,
   getGeneralChatConfig,
@@ -29,6 +30,7 @@ import {
   type ProviderCostInvocationContext,
   type ProviderCostLedger,
 } from "@/lib/agent-runtime/provider-cost-ledger";
+import { EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS } from "@/lib/agent-runtime/execution-deadlines";
 import {
   buildDocumentContext,
 } from "@/lib/documents/prepare-context";
@@ -94,6 +96,7 @@ export type StandardOperationInput = Readonly<{
   executionMode?: "durable_runtime_single_attempt";
   /** Absolute server wall-time bound used only by bounded durable execution. */
   executionDeadlineAtMs?: number;
+  providerDeadlineAtMs?: number;
   /** Present only for the governed autonomous runtime; never serialized or persisted. */
   providerCost?: Readonly<{ context: ProviderCostInvocationContext; ledger: ProviderCostLedger }>;
 }>;
@@ -252,11 +255,11 @@ async function* executeStandardOperation(
   dependencies: StandardOperationDependencies,
 ): AsyncGenerator<StandardOperationEvent> {
   const durableDeadlineAtMs = input.executionMode === "durable_runtime_single_attempt"
-    ? input.executionDeadlineAtMs ?? Date.now() + 90_000
+    ? input.providerDeadlineAtMs ?? input.executionDeadlineAtMs ?? Date.now() + 90_000
     : undefined;
   const providerTimeoutMs = () => durableDeadlineAtMs === undefined
     ? undefined
-    : Math.max(1, Math.min(90_000, durableDeadlineAtMs - Date.now()));
+    : Math.min(90_000, durableDeadlineAtMs - Date.now());
   const parsedContext = requestTransactionContextSchema.safeParse(input.requestContext);
   if (!parsedContext.success) throw new StandardOperationError("invalid_request_context");
   const requestContext = parsedContext.data;
@@ -284,18 +287,31 @@ async function* executeStandardOperation(
     input: operationInput,
   });
   let invocationSequence = 0;
-  const admitInvocation = async (): Promise<string | null> => {
+  const admitInvocation = async (optionalFallback = false): Promise<string | null> => {
     if (!input.providerCost) return null;
+    if (providerTimeoutMs() !== undefined && providerTimeoutMs()! < EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS) {
+      if (optionalFallback) return null;
+      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+    }
     let counted: unknown;
     const countTimeoutMs = providerTimeoutMs();
+    if (countTimeoutMs !== undefined && countTimeoutMs < EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS) {
+      if (optionalFallback) return null;
+      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+    }
     try {
       counted = await dependencies.provider.responses.inputTokens.count(requestInput as never, {
         maxRetries: 0,
-        ...(countTimeoutMs ? { timeout: countTimeoutMs } : {}),
+        ...(countTimeoutMs !== undefined ? { timeout: countTimeoutMs } : {}),
       });
     } catch (error) {
+      if (optionalFallback) return null;
       if (error instanceof StandardOperationError) throw error;
-      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+      const safePreProviderFailure = error instanceof APIConnectionTimeoutError || isTemporaryProviderDnsFailure(error);
+      throw new StandardOperationError("provider_failed", {
+        phase: "pre_provider",
+        retrySafety: safePreProviderFailure ? "SAFE_RETRY" : "TERMINAL",
+      });
     }
     const inputTokens = counted && typeof counted === "object"
       ? (counted as { input_tokens?: unknown }).input_tokens
@@ -303,6 +319,10 @@ async function* executeStandardOperation(
     if (!Number.isSafeInteger(inputTokens) || (inputTokens as number) < 0
       || (inputTokens as number) > AGENT_PROVIDER_MAX_INPUT_TOKENS) {
       throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "TERMINAL" });
+    }
+    if (providerTimeoutMs() !== undefined && providerTimeoutMs()! < EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS) {
+      if (optionalFallback) return null;
+      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
     }
     invocationSequence += 1;
     let admission;
@@ -329,6 +349,15 @@ async function* executeStandardOperation(
       }
     } catch {
       throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+    }
+    if (providerTimeoutMs() !== undefined && providerTimeoutMs()! < EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS) {
+      try {
+        await input.providerCost.ledger.releaseBeforeDispatch({ admissionId: admission.id, code: "execution_deadline_before_dispatch" });
+      } catch {
+        throw new StandardOperationError("provider_failed", { phase: "post_provider", retrySafety: "RECOVERY_REQUIRED" });
+      }
+      if (optionalFallback) return null;
+      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
     }
     return admission.id;
   };
@@ -397,8 +426,13 @@ async function* executeStandardOperation(
       store: false,
     } as never;
     const streamTimeoutMs = providerTimeoutMs();
+    if (streamTimeoutMs !== undefined && streamTimeoutMs < EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS) {
+      await input.providerCost?.ledger.releaseBeforeDispatch({ admissionId: primaryAdmissionId!, code: "execution_deadline_before_dispatch" });
+      primaryAdmissionId = null;
+      throw new StandardOperationError("provider_failed", { phase: "pre_provider", retrySafety: "SAFE_RETRY" });
+    }
     const responseStream = (await (input.executionMode === "durable_runtime_single_attempt"
-      ? dependencies.provider.responses.stream(request, { maxRetries: 0, ...(streamTimeoutMs ? { timeout: streamTimeoutMs } : {}) })
+      ? dependencies.provider.responses.stream(request, { maxRetries: 0, ...(streamTimeoutMs !== undefined ? { timeout: streamTimeoutMs } : {}) })
       : dependencies.provider.responses.stream(request))) as unknown as AsyncIterable<ResponsesStreamEvent>;
     providerStreamOpened = true;
 
@@ -510,7 +544,8 @@ async function* executeStandardOperation(
   const streamedReply = fullReply.trim();
   let finalReply = streamedReply;
 
-  if (hasImage && isWeakReply(finalReply)) {
+  if (hasImage && isWeakReply(finalReply)
+    && (providerTimeoutMs() === undefined || providerTimeoutMs()! >= EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS)) {
     const retryStartedAt = performance.now();
     yield {
       type: "attempt_started",
@@ -523,15 +558,22 @@ async function* executeStandardOperation(
     let retryAdmissionId: string | null = null;
     let retryOperationId: string | undefined;
     try {
-      retryAdmissionId = await admitInvocation();
+      retryAdmissionId = await admitInvocation(true);
       const retryTimeoutMs = providerTimeoutMs();
-      const retry = await createRetryResponse({
-        requestInput,
-        provider: dependencies.provider,
-        executionMode: input.executionMode,
-        enforceOutputLimit: Boolean(input.providerCost),
-        ...(retryTimeoutMs ? { timeoutMs: retryTimeoutMs } : {}),
-      });
+      if (!input.providerCost || retryAdmissionId !== null) {
+        if (retryTimeoutMs !== undefined && retryTimeoutMs < EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS) {
+          if (retryAdmissionId && input.providerCost) {
+            await input.providerCost.ledger.releaseBeforeDispatch({ admissionId: retryAdmissionId, code: "execution_deadline_before_dispatch" });
+            retryAdmissionId = null;
+          }
+        } else {
+          const retry = await createRetryResponse({
+            requestInput,
+            provider: dependencies.provider,
+            executionMode: input.executionMode,
+            enforceOutputLimit: Boolean(input.providerCost),
+            ...(retryTimeoutMs !== undefined ? { timeoutMs: retryTimeoutMs } : {}),
+          });
       retryOperationId = typeof retry.id === "string" ? retry.id : undefined;
       await settleInvocation(retryAdmissionId, retry.usage, retryOperationId);
       const outcome: OperationOutcome = retry.status === "incomplete"
@@ -546,6 +588,8 @@ async function* executeStandardOperation(
 
       const retryText = retry.output_text?.trim() ?? "";
       if (!isWeakReply(retryText)) finalReply = retryText;
+        }
+      }
     } catch {
       await markInvocationUncertain(retryAdmissionId, "openai_fallback_outcome_unknown", retryOperationId);
       yield {

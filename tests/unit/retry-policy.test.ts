@@ -18,6 +18,11 @@ describe("durable capability retry policy", () => {
       failure: { ...safeStandardFailure, phase: "read_only_lookup" },
       attempt: 1,
     })).toEqual({ action: "retry", backoffMs: 1_000 });
+    expect(decideRetry({
+      capabilityId: "document_generation",
+      failure: { ...safeStandardFailure, phase: "pre_execution" },
+      attempt: 1,
+    })).toEqual({ action: "retry", backoffMs: 1_000 });
   });
 
   it("fails terminal failures and requires recovery for ambiguous or capability-mismatched failures", () => {

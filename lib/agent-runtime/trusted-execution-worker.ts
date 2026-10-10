@@ -3,12 +3,17 @@ import type { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-
 import { isAutonomousCapabilityAllowed } from "@/lib/agent-runtime/autonomous-capability-policy";
 import type { DiscoveredExecutionWork, ExecutionStore } from "@/lib/agent-runtime/execution-store";
 import { EXECUTION_WORK_LEASE_POLICY } from "@/lib/agent-runtime/execution-store";
+import {
+  EXECUTION_INVOCATION_BUDGET_MS,
+  EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS,
+  EXECUTION_PROVIDER_DISPATCH_BUDGET_MS,
+} from "@/lib/agent-runtime/execution-deadlines";
 
 if (typeof window !== "undefined") throw new Error("Trusted execution worker is server-only");
 
 const MAX_DISCOVERY_PER_INVOCATION = 10;
 const MAX_WORK_ITEMS_PER_INVOCATION = 1;
-const MAX_SLICE_WALL_TIME_MS = 90_000;
+const MAX_SLICE_WALL_TIME_MS = EXECUTION_INVOCATION_BUDGET_MS;
 const LEASE_SECONDS = EXECUTION_WORK_LEASE_POLICY.defaultSeconds;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -200,7 +205,16 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
         { runId: run.id, stepId: claimResult.stepId, capability: selected.capabilityId });
 
       const executionDeadlineAtMs = started + MAX_SLICE_WALL_TIME_MS;
+      const providerDeadlineAtMs = started + EXECUTION_PROVIDER_DISPATCH_BUDGET_MS;
+      const requiresProviderBudget = selected.capabilityId === "standard";
+      const hasProviderBudget = !requiresProviderBudget
+        || providerDeadlineAtMs - now() >= EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS;
       if (!Number.isSafeInteger(executionDeadlineAtMs) || now() >= executionDeadlineAtMs) {
+        const released = await releaseIfSafe(dependencies.store, run.id, claimResult.claim);
+        return outcome(released ? "bounded_yield" : "lease_lost", started, now,
+          { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId });
+      }
+      if (!hasProviderBudget) {
         const released = await releaseIfSafe(dependencies.store, run.id, claimResult.claim);
         return outcome(released ? "bounded_yield" : "lease_lost", started, now,
           { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId });
@@ -212,6 +226,7 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
         expectedStepId: selected.stepId,
         workClaim: claimResult.claim,
         executionDeadlineAtMs,
+        providerDeadlineAtMs,
       }).catch(() => null);
       if (!result) return outcome("recovery_required", started, now,
         { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null });

@@ -367,6 +367,20 @@ describe("six independent capability adapters", () => {
     });
   });
 
+  it("defers read-only file analysis if it returns after the invocation deadline", async () => {
+    const prepare = vi.fn(async () => fileResult()) as unknown as FileContextPreparer;
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+    try {
+      await expect(createFileAnalysisCapabilityAdapter({ prepareFileContext: prepare }).execute(executionInput("file_analysis", [
+        { source: "attachment", reference: { id: fileResult().documents[0]!.documentId, kind: "file" } },
+      ], { context: { ...executionInput("file_analysis").context, executionDeadlineAtMs: 1_500 } }))).rejects.toMatchObject({
+        code: "transient_dependency_failure",
+        descriptor: { phase: "read_only_lookup", retrySafety: "SAFE_RETRY" },
+      });
+      expect(prepare).toHaveBeenCalledOnce();
+    } finally { now.mockRestore(); }
+  });
+
   it("renders once and links a safe document reference only to the bound assistant destination", async () => {
     const standard = standardResult("Validated document body.");
     const artifact = { bytes: new Uint8Array([1, 2, 3]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 3 } as GeneratedArtifact;
@@ -392,6 +406,24 @@ describe("six independent capability adapters", () => {
     }));
     expect(output).toEqual({ kind: "document", value: generatedDocument() });
     expect(JSON.stringify(output)).not.toContain("bytes");
+  });
+
+  it("does not persist a locally rendered document after the invocation deadline", async () => {
+    const standard = standardResult("Validated document body.");
+    const render = vi.fn(async () => ({ bytes: new Uint8Array([1]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 1 } as GeneratedArtifact));
+    const persist = vi.fn(async () => ({ reference: generatedDocument(), delivery: {} as GeneratedArtifact }));
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+    try {
+      await expect(createDocumentGenerationCapabilityAdapter({ render, persist }).execute(executionInput("document_generation", [
+        { source: "user", value: "Create a PDF." },
+        { source: "step", stepId: "standard", result: { kind: "text", value: standard } },
+      ], { context: { ...executionInput("document_generation").context, executionDeadlineAtMs: 1_500 } }))).rejects.toMatchObject({
+        code: "transient_dependency_failure",
+        descriptor: { phase: "pre_execution", retrySafety: "SAFE_RETRY" },
+      });
+      expect(render).toHaveBeenCalledOnce();
+      expect(persist).not.toHaveBeenCalled();
+    } finally { now.mockRestore(); }
   });
 
   it("rejects unsupported document predecessor types and normalizes persistence errors", async () => {
@@ -937,7 +969,7 @@ describe("six independent capability adapters", () => {
       && context.requestMessageBinding.assistantMessageId === REQUEST_BINDING.assistantMessageId)).toBe(true);
   });
 
-  it("does not replay ambiguous image-provider or document-persistence outcomes after restart", async () => {
+  it("defers autonomous image-provider dispatch and does not replay ambiguous document persistence after restart", async () => {
     const store = new InMemoryExecutionStore();
     const makeRuntime = (executor: CapabilityExecutor) => new DurableXStateExecutionRuntime({
       store,
@@ -964,11 +996,8 @@ describe("six independent capability adapters", () => {
     };
     const imageRuntime = makeRuntime(imageRegistry);
     const imageOutcome = await imageRuntime.execute(imagePlan, imageInput, "ambiguous-image-provider");
-    expect(imageOutcome).toMatchObject({ kind: "recovery_required", stepId: "image" });
-    expect(generate).toHaveBeenCalledOnce();
-    expect(await imageRuntime.resume({ runId: "a3100000-0000-4000-8000-000000000080", authenticatedUserId: USER_ID }))
-      .toMatchObject({ kind: "recovery_required", stepId: "image", failure: { code: "indeterminate_step" } });
-    expect(generate).toHaveBeenCalledOnce();
+    expect(imageOutcome).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
+    expect(generate).not.toHaveBeenCalled();
 
     const documentStore = new InMemoryExecutionStore();
     const artifact = { bytes: new Uint8Array([1]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 1 } as GeneratedArtifact;

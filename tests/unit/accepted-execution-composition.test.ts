@@ -161,6 +161,26 @@ describe("accepted-request execution composition", () => {
     expect(deps.associate).not.toHaveBeenCalled();
   });
 
+  it("returns an explicit capability-unavailable rejection for autonomous image generation", async () => {
+    const decision = {
+      kind: "multi_step" as const,
+      handoff: {
+        version: 1 as const,
+        objective: request.message,
+        plannerSource: "deterministic" as const,
+        plan: { objective: request.message, status: "validated" as const, steps: [
+          { id: "image", capability: "image_generation" as const, dependsOn: [], inputs: [{ source: "user" as const }], expectedOutput: "image" as const },
+        ] },
+        orderedStepIds: ["image"],
+        governance: { maxSteps: 6, capabilityIds: ["image_generation"], modelPlanningAllowed: false, maxModelCalls: 0, maxRepairAttempts: 0, attachmentContextAllowed: false, handoffVersion: 1 },
+      },
+      telemetry: { task_complexity: "multi_step", planning_outcome: "planned", planner_source: "deterministic", step_count: 1, planner_model_calls: 0, repair_attempted: false, failure_code: null, planning_latency_ms: 0 },
+    } as IntelligenceDecision;
+    const deps = fixture({ decide: async () => decision });
+    expect(await deps.composer.prepare(request)).toMatchObject({ kind: "rejected", reason: "capability_unavailable" });
+    expect(deps.associate).not.toHaveBeenCalled();
+  });
+
   it("keeps single-step requests on the existing direct-chat path", async () => {
     const decision = await createIntelligenceDecisionCoordinator().decideIntelligenceAction({
       prompt: "Explain ISO 14971.", router: { mode: "auto", hasImageContext: false },

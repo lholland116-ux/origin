@@ -20,7 +20,7 @@ export type AcceptedExecutionCompositionResult =
   | { readonly kind: "associated"; readonly status: "created" | "existing"; readonly run: DurableExecutionRun }
   | { readonly kind: "single_step"; readonly decision: Extract<IntelligenceDecision, { kind: "single_step" }>; readonly acceptedRequest: AcceptedExecutionRecoveryIdentity }
   | { readonly kind: "unable_to_plan"; readonly decision: Extract<IntelligenceDecision, { kind: "unable_to_plan" }>; readonly acceptedRequest: AcceptedExecutionRecoveryIdentity }
-  | { readonly kind: "rejected"; readonly reason: "invalid_request" | "unauthorized" | "inaccessible_conversation" | "inaccessible_resource" | "daily_usage_quota_exhausted" | "image_quota_exhausted" | "unavailable" | "conflict" | "invalid_handoff"; readonly acceptedRequest?: AcceptedExecutionRecoveryIdentity };
+  | { readonly kind: "rejected"; readonly reason: "invalid_request" | "unauthorized" | "inaccessible_conversation" | "inaccessible_resource" | "daily_usage_quota_exhausted" | "image_quota_exhausted" | "unavailable" | "conflict" | "invalid_handoff" | "capability_unavailable"; readonly acceptedRequest?: AcceptedExecutionRecoveryIdentity };
 
 export type AcceptedExecutionRecoveryIdentity = Readonly<{
   readonly requestId: string;
@@ -133,7 +133,11 @@ export function createAcceptedExecutionComposer(dependencies: AcceptedExecutionC
       if (decision.kind === "single_step") return { kind: "single_step", decision, acceptedRequest };
       if (decision.kind === "unable_to_plan") return { kind: "unable_to_plan", decision, acceptedRequest };
       const checkedHandoff = validateExecutionHandoff(decision.handoff);
-      if (!checkedHandoff.handoff) return { kind: "rejected", reason: "invalid_handoff", acceptedRequest };
+      if (!checkedHandoff.handoff) return {
+        kind: "rejected",
+        reason: checkedHandoff.failure.code === "unsupported_capability" ? "capability_unavailable" : "invalid_handoff",
+        acceptedRequest,
+      };
 
       const runtimeInput: ExecutionRuntimeInput = {
         userInput: parsed.data.message,

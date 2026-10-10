@@ -67,17 +67,60 @@ authenticated delivery to this Next.js route or Node.js execution-time and
 overlap behavior. This local qualification does not independently repeat or
 attest to the account-side measurements.
 
-The worker's 90-second deadline is cooperative for some non-provider I/O, and
-Hostinger's request termination ceiling is unknown. The 150-second global gate
-is a renewable concurrency lease, not a hard process timeout; loss of database
-connectivity can prevent renewal, and lease expiry cannot cancel an in-flight
-provider request. If ownership is lost or uncertain, the handler returns an
-unavailable response after the worker settles and does not claim successful
-serialization. PostgreSQL per-run claims, fencing, and recovery-required
-classification protect durable state, but they cannot cancel an already-
-dispatched provider request. An ambiguous paid operation must retain its
-reservation and follow the existing recovery policy; it must not be
-automatically replayed merely because a trigger or lease expired.
+## Hostinger-safe execution bounds
+
+The trusted worker uses a cooperative 30-second total invocation budget and a
+20-second absolute provider-dispatch deadline, both measured from worker start.
+It requires at least five seconds of provider window before beginning an
+OpenAI-backed step; otherwise it releases the claim and defers that step to a
+later wake. The provider deadline leaves nominal time for checkpointing,
+claim release, and response construction. These are application boundaries,
+not hard preemption: arbitrary synchronous CPU work, storage/database latency,
+or hosting process termination can still exceed them. The account's observed
+gateway behavior is not a guaranteed Hostinger limit.
+
+One substantive workflow step is run per wake and checkpointed to the existing
+durable run. Later cron wakes continue from persisted predecessor results; the
+final response is attached to the original assistant message. A workflow with
+multiple steps may therefore span several cron intervals. The worker must not
+open one long request to execute the whole workflow.
+
+OpenAI durable requests use the shared absolute provider deadline and disable
+SDK retries. The optional image-answer fallback is skipped when too little
+provider time remains. If a provider request has been dispatched and then
+times out, disconnects, or returns an ambiguous result, its cost admission is
+retained/marked uncertain and the step requires recovery; the worker must not
+automatically redispatch it. A gateway HTTP 504 does not establish that Node,
+the provider, or billing stopped. The wake handler intentionally does not
+interpret client disconnect as proof of cancellation.
+
+File analysis and document rendering check the invocation deadline before and
+after their read-only/local preparation stages. File lookup and pure document
+rendering that finish late are safely deferred for a later retry. Persistence
+is not abandoned via a detached timeout race: an uncertain persistence result
+remains recovery-required and must use its existing idempotency contract.
+
+Autonomous workflow image generation is temporarily excluded because the
+current Replicate `run` path creates a prediction and waits synchronously for
+completion; durable submit/poll state is not yet implemented. The request is
+rejected before run association with a safe capability-unavailable response.
+Standalone image generation and editing routes are unchanged. Enabling
+workflow image generation requires durable prediction identity, cross-wake
+polling/completion, and recovery tests before re-allowlisting it.
+
+The per-run claim remains 120 seconds, PostgreSQL's current default, and the
+global trigger gate remains 150 seconds with 30-second renewal. They are
+fencing/concurrency leases, not execution deadlines. The longer per-run lease
+is retained as a conservative recovery window because cooperative work may
+overrun; the global gate is retained to serialize duplicate scheduled wakes.
+Neither lease cancels a provider call or overrides recovery-required state.
+
+Before another Hostinger qualification, locally test deadline enforcement,
+provider timeout ambiguity, worker interruption, stale fencing, multi-wake
+continuation, and finalization. Then perform only controlled authenticated
+requests expected to complete below the new target, capture sanitized status
+and durations, and verify overlapping wake behavior. Do not infer a hard
+runtime guarantee from one successful request.
 
 ## Two-site account probe (approval required)
 

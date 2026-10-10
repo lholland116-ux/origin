@@ -79,6 +79,9 @@ export function createStandardCapabilityAdapter(
         ...(input.context.executionDeadlineAtMs
           ? { executionDeadlineAtMs: input.context.executionDeadlineAtMs }
           : {}),
+        ...(input.context.providerDeadlineAtMs
+          ? { providerDeadlineAtMs: input.context.providerDeadlineAtMs }
+          : {}),
         ...(input.context.providerCost && dependencies.providerCostLedger
           ? { providerCost: { context: input.context.providerCost, ledger: dependencies.providerCostLedger } }
           : {}),

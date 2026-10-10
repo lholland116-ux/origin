@@ -851,11 +851,14 @@ export class DurableXStateExecutionRuntime {
     readonly expectedStepId: string;
     readonly workClaim: NonNullable<ExecutionRuntimeInput["workClaim"]>;
     readonly executionDeadlineAtMs: number;
+    readonly providerDeadlineAtMs: number;
     readonly correlationId?: string;
   }): Promise<ExecutionOutcome> {
     if (!this.options.resolveTrustedExecutionSubject || !this.options.createTrustedBackgroundAuthorizer
       || !input.workClaim || !STEP_ID_PATTERN.test(input.expectedStepId)
-      || !Number.isSafeInteger(input.executionDeadlineAtMs) || input.executionDeadlineAtMs <= this.now().getTime()) {
+      || !Number.isSafeInteger(input.executionDeadlineAtMs) || input.executionDeadlineAtMs <= this.now().getTime()
+      || !Number.isSafeInteger(input.providerDeadlineAtMs) || input.providerDeadlineAtMs <= this.now().getTime()
+      || input.providerDeadlineAtMs > input.executionDeadlineAtMs) {
       return { kind: "rejected", failure: executionFailure("authorization_denied") };
     }
     try {
@@ -926,6 +929,7 @@ export class DurableXStateExecutionRuntime {
     readonly maxSteps?: number;
     readonly expectedStepId?: string;
     readonly executionDeadlineAtMs?: number;
+    readonly providerDeadlineAtMs?: number;
   }): Promise<ExecutionOutcome> {
     if (!UUID_PATTERN.test(input.runId) || !UUID_PATTERN.test(input.authenticatedUserId)) {
       return { kind: "rejected", failure: executionFailure("ownership_denied") };
@@ -1251,6 +1255,7 @@ export class DurableXStateExecutionRuntime {
             capabilityId,
             reauthorize: async () => {
               if (input.executionDeadlineAtMs !== undefined && this.now().getTime() >= input.executionDeadlineAtMs) return false;
+              if (input.providerDeadlineAtMs !== undefined && this.now().getTime() >= input.providerDeadlineAtMs) return false;
               let latest: DurableExecutionRun | null;
               try {
                 latest = await this.options.store.getAcceptedRunForFinalization({ runId: current.id });
@@ -1293,6 +1298,7 @@ export class DurableXStateExecutionRuntime {
             ...(providerCostContext ? { providerCost: providerCostContext } : {}),
             ...(trustedSubject ? { trustedExecutionSubject: trustedSubject } : {}),
             ...(input.executionDeadlineAtMs ? { executionDeadlineAtMs: input.executionDeadlineAtMs } : {}),
+            ...(input.providerDeadlineAtMs ? { providerDeadlineAtMs: input.providerDeadlineAtMs } : {}),
           },
         };
         try {

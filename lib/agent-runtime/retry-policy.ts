@@ -23,7 +23,8 @@ function isNormalizedFailure(value: unknown): value is ExecutionFailureDescripto
 function hasQualifiedReplaySafety(capabilityId: string, failure: ExecutionFailureDescriptor): boolean {
   if (failure.code !== "transient_dependency_failure" || failure.retrySafety !== "SAFE_RETRY") return false;
   if ((capabilityId === "standard" || capabilityId === "web_search") && failure.phase === "pre_provider") return true;
-  return capabilityId === "file_analysis" && failure.phase === "read_only_lookup";
+  if (capabilityId === "file_analysis" && failure.phase === "read_only_lookup") return true;
+  return capabilityId === "document_generation" && failure.phase === "pre_execution";
 }
 
 /** LVTChat-owned deterministic retry policy. Only explicitly normalized safe failures are eligible. */

@@ -250,7 +250,7 @@ describe("LVTChat XState execution adapter", () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
-  it.each(["web_search", "image_editing"] as const)("blocks autonomous %s handoffs before execution", async (capability) => {
+  it.each(["web_search", "image_editing", "image_generation"] as const)("blocks autonomous %s handoffs before execution", async (capability) => {
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
     const expectedOutput = capability === "web_search" ? "search_results" : "image";
     const denied = await createRuntime(executor).execute(handoff([

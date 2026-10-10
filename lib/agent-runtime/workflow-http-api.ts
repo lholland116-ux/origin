@@ -308,6 +308,7 @@ function mapPrepareFailure(result: Extract<AcceptedExecutionCompositionResult, {
     case "image_quota_exhausted": return error("image_quota_exhausted", "The image attachment quota has been reached.", 429);
     case "conflict": return error("idempotency_conflict", "The idempotency key was used for a different request.", 409, extra);
     case "invalid_handoff": return error("invalid_plan", "A safe workflow plan could not be validated.", 422, extra);
+    case "capability_unavailable": return error("capability_unavailable", "This capability is not currently available in autonomous workflows. Use its standalone feature instead.", 422, extra);
     case "unavailable": return error("unavailable", "The workflow service is temporarily unavailable.", 503, extra);
   }
 }

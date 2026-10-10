@@ -285,6 +285,76 @@ describe("Standard core operation", () => {
     expect(mocks.provider.responses.stream).not.toHaveBeenCalled();
   });
 
+  it("shares one absolute deadline across token counting and the model request", async () => {
+    mocks.provider.responses.inputTokens.count.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return { input_tokens: 10 };
+    });
+    mocks.provider.responses.stream.mockResolvedValue(responseStream(
+      { type: "response.output_text.delta", delta: "A bounded answer." },
+      { type: "response.completed", response: { usage: { input_tokens: 10, output_tokens: 4 } } },
+    ));
+    const ledger = {
+      admit: vi.fn().mockResolvedValue({ id: "50000000-0000-4000-8000-000000000021", mayDispatch: true }),
+      beginDispatch: vi.fn().mockResolvedValue(true), settle: vi.fn().mockResolvedValue(undefined),
+      markUncertain: vi.fn().mockResolvedValue(undefined), releaseBeforeDispatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const deadline = Date.now() + 15_000;
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    for await (const event of operation.run(standardInput({
+      executionMode: "durable_runtime_single_attempt",
+      providerDeadlineAtMs: deadline,
+      providerCost: { context: {
+        runId: "60000000-0000-4000-8000-000000000001", stepId: "answer",
+        attemptId: "70000000-0000-4000-8000-000000000021", attemptNumber: 1,
+        capabilityId: "standard", reauthorize: vi.fn().mockResolvedValue(true),
+      }, ledger },
+    }))) void event;
+    const countTimeout = Number(mocks.provider.responses.inputTokens.count.mock.calls[0]?.[1]?.timeout);
+    const modelTimeout = Number(mocks.provider.responses.stream.mock.calls[0]?.[1]?.timeout);
+    expect(countTimeout).toBeGreaterThan(0);
+    expect(countTimeout).toBeLessThanOrEqual(15_000);
+    expect(modelTimeout).toBeGreaterThan(0);
+    expect(modelTimeout).toBeLessThan(countTimeout);
+    expect(mocks.provider.responses.stream).toHaveBeenCalledWith(expect.any(Object), { maxRetries: 0, timeout: modelTimeout });
+  });
+
+  it("does not dispatch when the provider window is too short and retains ambiguous charges after timeout", async () => {
+    const ledger = {
+      admit: vi.fn().mockResolvedValue({ id: "50000000-0000-4000-8000-000000000022", mayDispatch: true }),
+      beginDispatch: vi.fn().mockResolvedValue(true), settle: vi.fn().mockResolvedValue(undefined),
+      markUncertain: vi.fn().mockResolvedValue(undefined), releaseBeforeDispatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const providerCost = { context: {
+      runId: "60000000-0000-4000-8000-000000000001", stepId: "answer",
+      attemptId: "70000000-0000-4000-8000-000000000022", attemptNumber: 1,
+      capabilityId: "standard" as const, reauthorize: vi.fn().mockResolvedValue(true),
+    }, ledger };
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    let caught: unknown;
+    try {
+      for await (const event of operation.run(standardInput({ executionMode: "durable_runtime_single_attempt",
+        providerDeadlineAtMs: Date.now() + 4_000, providerCost }))) void event;
+    } catch (error) { caught = error; }
+    expect(caught).toMatchObject({ failureMetadata: { phase: "pre_provider", retrySafety: "SAFE_RETRY" } });
+    expect(mocks.provider.responses.inputTokens.count).not.toHaveBeenCalled();
+    expect(mocks.provider.responses.stream).not.toHaveBeenCalled();
+    expect(ledger.admit).not.toHaveBeenCalled();
+
+    mocks.provider.responses.inputTokens.count.mockResolvedValue({ input_tokens: 10 });
+    mocks.provider.responses.stream.mockRejectedValue(new APIConnectionTimeoutError());
+    caught = undefined;
+    try {
+      for await (const event of operation.run(standardInput({ executionMode: "durable_runtime_single_attempt",
+        providerDeadlineAtMs: Date.now() + 15_000, providerCost }))) void event;
+    } catch (error) { caught = error; }
+    expect(caught).toMatchObject({ failureMetadata: { phase: "provider_in_flight", retrySafety: "RECOVERY_REQUIRED" } });
+    expect(mocks.provider.responses.stream).toHaveBeenCalledOnce();
+    expect(ledger.beginDispatch).toHaveBeenCalledOnce();
+    expect(ledger.markUncertain).toHaveBeenCalledOnce();
+    expect(ledger.settle).not.toHaveBeenCalled();
+  });
+
   it("gives the internal image retry its own durable admission and counts it toward the two-call ceiling", async () => {
     mocks.provider.responses.inputTokens.count.mockResolvedValue({ input_tokens: 20 });
     mocks.provider.responses.stream.mockResolvedValue(responseStream(

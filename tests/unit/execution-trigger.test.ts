@@ -7,7 +7,7 @@ const NOW = Date.UTC(2026, 9, 9, 12, 0, 0);
 const NONCE = "1234567890abcdef1234567890abcdef";
 const PATH = "/api/internal/execution-wake";
 
-function request(options: { nonce?: string; timestamp?: string; signature?: string; body?: string } = {}): Request {
+function request(options: { nonce?: string; timestamp?: string; signature?: string; body?: string; signal?: AbortSignal } = {}): Request {
   const timestamp = options.timestamp ?? String(Math.floor(NOW / 1000));
   const nonce = options.nonce ?? NONCE;
   const signature = options.signature ?? createHmac("sha256", SECRET)
@@ -20,6 +20,7 @@ function request(options: { nonce?: string; timestamp?: string; signature?: stri
       "x-lvtchat-signature": signature,
     },
     body: options.body,
+    signal: options.signal,
   });
 }
 
@@ -197,6 +198,27 @@ describe("authenticated execution wake-up", () => {
     complete();
     expect((await result).status).toBe(200);
     expect(f.releaseInvocation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat caller disconnect as proof that server-side work stopped", async () => {
+    let complete!: () => void;
+    const pending = new Promise<{ status: string; durationMs: number; providerCalls: number | null }>((resolve) => {
+      complete = () => resolve({ status: "step_completed", durationMs: 20, providerCalls: 1 });
+    });
+    const controller = new AbortController();
+    const f = fixture({ runOnce: vi.fn(() => pending) });
+    let settled = false;
+    const result = handleExecutionTrigger(request({ nonce: "9234567890abcdef1234567890abcdef", signal: controller.signal }), f.dependencies as never)
+      .then((response) => { settled = true; return response; });
+    await Promise.resolve();
+    controller.abort();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(f.runOnce).toHaveBeenCalledOnce();
+    expect(f.releaseInvocation).not.toHaveBeenCalled();
+    complete();
+    expect((await result).status).toBe(200);
+    expect(f.releaseInvocation).toHaveBeenCalledOnce();
   });
 
   it("fails closed when durable replay protection is unavailable", async () => {

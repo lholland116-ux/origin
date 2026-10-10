@@ -81,6 +81,10 @@ export function createDocumentGenerationCapabilityAdapter(
 
       const generationRequestId = requireExecutionKey(input);
       const format = requestedFormat(objective);
+      const deadlineAtMs = input.context.executionDeadlineAtMs;
+      if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+        return failWithMetadata("transient_dependency_failure", { phase: "pre_execution", retrySafety: "SAFE_RETRY" });
+      }
       let artifact: GeneratedArtifact;
       try {
         artifact = await render({
@@ -92,6 +96,10 @@ export function createDocumentGenerationCapabilityAdapter(
       } catch (error) {
         if (error instanceof DocumentGenerationValidationError) return fail("missing_input");
         return failWithMetadata("executor_failed", { phase: "pre_execution", retrySafety: "TERMINAL" });
+      }
+      if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+        // Rendering is local and side-effect-free until persistence begins.
+        return failWithMetadata("transient_dependency_failure", { phase: "pre_execution", retrySafety: "SAFE_RETRY" });
       }
 
       let persisted: Awaited<ReturnType<ExistingMessageDocumentPersister>>;

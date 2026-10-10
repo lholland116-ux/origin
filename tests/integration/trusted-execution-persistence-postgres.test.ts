@@ -45,7 +45,7 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
   let sql: postgres.Sql;
   let store: SupabaseExecutionStore;
   let runtime: DurableXStateExecutionRuntime;
-  async function prepare(
+  async function createAcceptedRequest(
     capability: "image_generation" | "document_generation",
     userId = randomUUID(),
     options: { plan?: "free" | "pro"; reasoningMode?: "instant" | "medium" | "high" } = {},
@@ -77,8 +77,17 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
     };
     const binding = { requestId: identity.requestId, userId, conversationId,
       userMessageId: identity.userMessageId, assistantMessageId: identity.assistantMessageId };
-    const associated = await runtime.associateAcceptedRequest(makeHandoff(capability, objective), {
-      authenticatedUserId: userId, conversationId, requestMessageBinding: binding, userInput: objective,
+    return { userId, conversationId, identity, objective, binding };
+  }
+
+  async function prepare(
+    userId = randomUUID(),
+    options: { plan?: "free" | "pro"; reasoningMode?: "instant" | "medium" | "high" } = {},
+  ) {
+    const accepted = await createAcceptedRequest("document_generation", userId, options);
+    const { userId: acceptedUserId, conversationId, identity, objective, binding } = accepted;
+    const associated = await runtime.associateAcceptedRequest(makeHandoff("document_generation", objective), {
+      authenticatedUserId: acceptedUserId, conversationId, requestMessageBinding: binding, userInput: objective,
     }, identity);
     if (associated.kind !== "associated") throw new Error(`Association failed: ${associated.kind}`);
     const claimed = await store.claimExecutionWork({ runId: associated.runId, claimId: randomUUID() });
@@ -92,16 +101,16 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
       runtimeVersion: 1,
       snapshot: { run: runActor.getPersistedSnapshot(), steps: { "trusted-step": stepSnapshot } },
     });
-    const running = await store.saveRunState({ runId: associated.runId, userId, expectedRevision: claimed.snapshotRevision,
+    const running = await store.saveRunState({ runId: associated.runId, userId: acceptedUserId, expectedRevision: claimed.snapshotRevision,
       status: "running", snapshot: envelope(), startedAt: new Date().toISOString(), workClaim: claimed.claim });
     if (running.status !== "saved") throw new Error(`Run start failed: ${running.status}`);
     stepActor.start();
-    const step = await store.claimStep({ runId: associated.runId, userId, stepId: "trusted-step",
+    const step = await store.claimStep({ runId: associated.runId, userId: acceptedUserId, stepId: "trusted-step",
       expectedRevision: running.snapshotRevision, snapshot: envelope(), startedAt: new Date().toISOString(), workClaim: claimed.claim });
     if (step.status !== "claimed") throw new Error(`Step claim failed: ${step.status}`);
     runActor.stop();
     stepActor.stop();
-    return { runId: associated.runId, userId, conversationId, identity, executionKey: step.executionKey, claim: claimed.claim };
+    return { runId: associated.runId, userId: acceptedUserId, conversationId, identity, executionKey: step.executionKey, claim: claimed.claim };
   }
 
   async function resolve(input: Awaited<ReturnType<typeof prepare>>) {
@@ -111,35 +120,6 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
         ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint, false
       ) AS subject`;
     return row?.subject;
-  }
-
-  async function reserveImage(input: Awaited<ReturnType<typeof prepare>>) {
-    const [row] = await sql<{ attempt_id: string }[]>`
-      SELECT public.reserve_trusted_image_generation_quota(
-        ${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
-        ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint
-      ) AS attempt_id`;
-    return row!.attempt_id;
-  }
-
-  async function seedSucceededImageUsage(
-    input: Awaited<ReturnType<typeof prepare>>,
-    plan: "free" | "pro",
-    count: number,
-    daysAgo: number,
-  ) {
-    await sql`INSERT INTO public.image_generation_attempts (
-      user_id, conversation_id, plan_snapshot, status, reserved_at, expires_at,
-      provider_started_at, completed_at, provider, model, estimated_cost_microusd
-    )
-    SELECT ${input.userId}::uuid, ${input.conversationId}::uuid,
-      ${plan}::text, 'succeeded',
-      pg_catalog.clock_timestamp() - pg_catalog.make_interval(days => ${daysAgo}::integer, hours => 2),
-      pg_catalog.clock_timestamp() - pg_catalog.make_interval(days => ${daysAgo}::integer, hours => 1),
-      pg_catalog.clock_timestamp() - pg_catalog.make_interval(days => ${daysAgo}::integer, mins => 45),
-      pg_catalog.clock_timestamp() - pg_catalog.make_interval(days => ${daysAgo}::integer, mins => 30),
-      'replicate', 'flux-schnell', 3000
-    FROM pg_catalog.generate_series(1, ${count}::integer)`;
   }
 
   beforeAll(async () => {
@@ -166,11 +146,11 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
   });
 
   it("derives a valid subject from acceptance and an active fenced claim, and denies forged/stale identities", async () => {
-    const input = await prepare("image_generation");
+    const input = await prepare();
     expect(await resolve(input)).toMatchObject({ user_id: input.userId,
       request_id: input.identity.requestId, conversation_id: input.conversationId,
       user_message_id: input.identity.userMessageId, assistant_message_id: input.identity.assistantMessageId,
-      capability_id: "image_generation", execution_key: input.executionKey });
+      capability_id: "document_generation", execution_key: input.executionKey });
 
     await expect(sql`SELECT public.resolve_trusted_agent_execution_subject(
       ${input.runId}::uuid, 'trusted-step', ${randomUUID()}::uuid,
@@ -197,7 +177,7 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
   });
 
   it("rejects a claim after its owner releases it", async () => {
-    const input = await prepare("image_generation");
+    const input = await prepare();
     // Model a released claim-history record directly: this step is already
     // running, so the production release RPC correctly refuses that boundary.
     await sql`UPDATE public.execution_work_claim_history
@@ -205,98 +185,28 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
       WHERE claim_id = ${input.claim.claimId}::uuid
         AND fencing_generation = ${input.claim.fencingGeneration}::bigint`;
     await expect(resolve(input)).rejects.toThrow();
-    await expect(reserveImage(input)).rejects.toThrow();
-    const [attempts] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count
-      FROM public.image_generation_attempts WHERE execution_run_id = ${input.runId}::uuid`;
+  });
+
+  it("rejects autonomous image generation before run association or quota admission", async () => {
+    const accepted = await createAcceptedRequest("image_generation");
+    const rejected = await runtime.associateAcceptedRequest(makeHandoff("image_generation", accepted.objective), {
+      authenticatedUserId: accepted.userId,
+      conversationId: accepted.conversationId,
+      requestMessageBinding: accepted.binding,
+      userInput: accepted.objective,
+    }, accepted.identity);
+    expect(rejected).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
+
+    const [runs] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.execution_runs
+      WHERE accepted_request_id = ${accepted.identity.requestId}::uuid`;
+    const [attempts] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.image_generation_attempts
+      WHERE user_id = ${accepted.userId}::uuid`;
+    expect(runs!.count).toBe(0);
     expect(attempts!.count).toBe(0);
   });
 
-  it("atomically de-duplicates concurrent image quota reservations and requires cost admission before provider start", async () => {
-    const input = await prepare("image_generation");
-    const connections = [postgres(DATABASE_URL, { prepare: false, max: 1 }), postgres(DATABASE_URL, { prepare: false, max: 1 })];
-    try {
-      const reserveOn = (connection: postgres.Sql) => connection<{ attempt_id: string }[]>`
-        SELECT public.reserve_trusted_image_generation_quota(
-          ${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
-          ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint
-        ) AS attempt_id`;
-      const [first, second] = await Promise.all(connections.map(reserveOn));
-      expect(first[0]!.attempt_id).toBe(second[0]!.attempt_id);
-      const attemptId = first[0]!.attempt_id;
-      const [count] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.image_generation_attempts
-        WHERE execution_run_id = ${input.runId}::uuid`;
-      expect(count!.count).toBe(1);
-      await expect(sql`SELECT public.start_trusted_image_generation_attempt(
-        ${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
-        ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint,
-        ${attemptId}::uuid, 'replicate', 'flux-schnell')`).rejects.toThrow(/PROVIDER_COST_ADMISSION_REQUIRED/);
-
-      const [admissionRow] = await sql<{ result: Record<string, unknown> }[]>`
-        SELECT public.admit_agent_provider_cost(${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
-          1::smallint, 1::smallint, 'image_generation', 'replicate', 'flux-schnell',
-          NULL::integer, NULL::integer, 1::smallint) AS result`;
-      const admission = admissionRow!.result;
-      expect(admission.may_dispatch).toBe(true);
-      const [started] = await sql<{ started: boolean }[]>`SELECT public.start_trusted_image_generation_attempt(
-        ${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
-        ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint,
-        ${attemptId}::uuid, 'replicate', 'flux-schnell') AS started`;
-      expect(started!.started).toBe(true);
-      await sql`SELECT public.begin_agent_provider_cost_dispatch(${admission.admission_id as string}::uuid)`;
-
-      const imagePath = `generated/${input.userId}/${input.conversationId}/${randomUUID()}.png`;
-      await sql`INSERT INTO storage.objects (bucket_id, name, metadata)
-        VALUES ('chat-images', ${imagePath}, ${sql.json({ mimetype: "image/png", size: 3 })}::jsonb)`;
-      const [completed] = await sql<{ generated_image_id: string }[]>`
-        SELECT generated_image_id FROM public.complete_trusted_image_generation(
-          ${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
-          ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint,
-          ${attemptId}::uuid, 'mock prompt', ${imagePath}, 'image/png', 'replicate', 'flux-schnell')`;
-      const [replayed] = await sql<{ generated_image_id: string }[]>`
-        SELECT generated_image_id FROM public.complete_trusted_image_generation(
-          ${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
-          ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint,
-          ${attemptId}::uuid, 'mock prompt', ${imagePath}, 'image/png', 'replicate', 'flux-schnell')`;
-      expect(replayed!.generated_image_id).toBe(completed!.generated_image_id);
-      const [images] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.message_generated_images
-        WHERE user_id = ${input.userId}::uuid AND conversation_id = ${input.conversationId}::uuid`;
-      expect(images!.count).toBe(1);
-      const [messages] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.messages
-        WHERE conversation_id = ${input.conversationId}::uuid`;
-      expect(messages!.count).toBe(2);
-    } finally {
-      await Promise.all(connections.map((connection) => connection.end()));
-    }
-  });
-
-  it("preserves the existing Free/Pro daily and monthly image quota rules", async () => {
-    const freeDaily = await prepare("image_generation");
-    await seedSucceededImageUsage(freeDaily, "free", 2, 0);
-    await reserveImage(freeDaily);
-    const freeDailyNext = await prepare("image_generation", freeDaily.userId);
-    await expect(reserveImage(freeDailyNext)).rejects.toThrow(/IMAGE_DAILY_LIMIT_REACHED/);
-
-    const freeMonthly = await prepare("image_generation");
-    await seedSucceededImageUsage(freeMonthly, "free", 20, 2);
-    await reserveImage(freeMonthly);
-    const freeMonthlyNext = await prepare("image_generation", freeMonthly.userId);
-    await expect(reserveImage(freeMonthlyNext)).rejects.toThrow(/IMAGE_MONTHLY_LIMIT_REACHED/);
-
-    const proDaily = await prepare("image_generation", randomUUID(), { plan: "pro" });
-    await seedSucceededImageUsage(proDaily, "pro", 19, 0);
-    await reserveImage(proDaily);
-    const proDailyNext = await prepare("image_generation", proDaily.userId);
-    await expect(reserveImage(proDailyNext)).rejects.toThrow(/IMAGE_DAILY_LIMIT_REACHED/);
-
-    const proMonthly = await prepare("image_generation", randomUUID(), { plan: "pro" });
-    await seedSucceededImageUsage(proMonthly, "pro", 199, 2);
-    await reserveImage(proMonthly);
-    const proMonthlyNext = await prepare("image_generation", proMonthly.userId);
-    await expect(reserveImage(proMonthlyNext)).rejects.toThrow(/IMAGE_MONTHLY_LIMIT_REACHED/);
-  });
-
   it("persists documents only to the accepted assistant message and is idempotent", async () => {
-    const input = await prepare("document_generation");
+    const input = await prepare();
     const documentId = randomUUID();
     const filename = "result.txt";
     const storagePath = `${input.userId}/${input.conversationId}/generated/${documentId}/${filename}`;
@@ -330,25 +240,19 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
   });
 
   it("enforces pause before subsequent privileged persistence operations", async () => {
-    const input = await prepare("image_generation");
+    const input = await prepare();
     const paused = await store.pauseRun({ runId: input.runId, userId: input.userId, actorUserId: input.userId,
       expectedControlRevision: 0, createdAt: new Date().toISOString() });
     expect(paused.status).toBe("pause_requested");
-    await expect(reserveImage(input)).rejects.toThrow();
-    const [count] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.image_generation_attempts
-      WHERE execution_run_id = ${input.runId}::uuid`;
-    expect(count!.count).toBe(0);
+    await expect(resolve(input)).rejects.toThrow();
   });
 
   it("rechecks current subscription reasoning entitlement and account disablement", async () => {
-    const downgraded = await prepare("image_generation", randomUUID(), { plan: "pro", reasoningMode: "high" });
+    const downgraded = await prepare(randomUUID(), { plan: "pro", reasoningMode: "high" });
     await sql`UPDATE public.profiles SET plan = 'free' WHERE id = ${downgraded.userId}::uuid`;
     await expect(resolve(downgraded)).rejects.toThrow();
-    const [attemptsAfterDowngrade] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count
-      FROM public.image_generation_attempts WHERE execution_run_id = ${downgraded.runId}::uuid`;
-    expect(attemptsAfterDowngrade!.count).toBe(0);
 
-    const disabled = await prepare("image_generation");
+    const disabled = await prepare();
     await sql`UPDATE auth.users SET banned_until = pg_catalog.clock_timestamp() + interval '1 day'
       WHERE id = ${disabled.userId}::uuid`;
     await expect(resolve(disabled)).rejects.toThrow();

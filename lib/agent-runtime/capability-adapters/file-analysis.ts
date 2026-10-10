@@ -37,6 +37,10 @@ export function createFileAnalysisCapabilityAdapter(
       const attachments = attachmentInputs(inputs);
       if (attachments.length < 1 || attachments.some((item) => item.reference.kind !== "file")) return fail("missing_input");
       const documentIds = attachments.map((item) => item.reference.id);
+      const deadlineAtMs = input.context.executionDeadlineAtMs;
+      if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+        return failWithMetadata("transient_dependency_failure", { phase: "read_only_lookup", retrySafety: "SAFE_RETRY" });
+      }
       let result: FileContextResult;
       try {
         result = await prepare({
@@ -58,6 +62,10 @@ export function createFileAnalysisCapabilityAdapter(
           return failWithMetadata("persistence_failed", { phase: "read_only_lookup", retrySafety: "RECOVERY_REQUIRED" });
         }
         return failWithMetadata("executor_failed", { phase: "read_only_lookup", retrySafety: "RECOVERY_REQUIRED" });
+      }
+      if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+        // File preparation is read-only; defer it without persisting a partial result.
+        return failWithMetadata("transient_dependency_failure", { phase: "read_only_lookup", retrySafety: "SAFE_RETRY" });
       }
       if (!fileContextMatchesExecutionContext(result, {
         authenticatedUserId: binding.userId,

@@ -56,6 +56,8 @@ export type CapabilityExecutionInput = {
     readonly trustedExecutionSubject?: TrustedExecutionSubject;
     /** Absolute server deadline for a bounded worker slice; never persisted or client-visible. */
     readonly executionDeadlineAtMs?: number;
+    /** Earlier absolute deadline for starting/completing synchronous provider work. */
+    readonly providerDeadlineAtMs?: number;
   };
 };
 
