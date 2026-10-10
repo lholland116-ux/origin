@@ -13,7 +13,9 @@ import {
   saveWorkflowTrackingRecord,
   shouldPrepareMultiStepWorkflow,
   workflowProgressRefreshDelay,
+  workflowProgressControls,
   workflowStatusHttpFailure,
+  validateWorkflowReturnRationale,
   WORKFLOW_PROGRESS_MAX_REFRESH_MS,
   WORKFLOW_PROGRESS_REFRESH_MS,
   WORKFLOW_PROGRESS_STORAGE_KEY,
@@ -113,6 +115,26 @@ describe("workflow progress UI contract", () => {
     }));
     expect(completed).toContain("Completed");
     expect(completed).toContain("final response and any available files are attached to this assistant message");
+  });
+
+  it("shows controls only for backend-supported states and validates return rationale", () => {
+    expect(workflowProgressControls(status())).toEqual({ pause: true, resume: false, stop: true, approvalCheckpointId: null });
+    expect(workflowProgressControls(status({ state: "paused", controlState: "paused" }))).toEqual({ pause: false, resume: true, stop: true, approvalCheckpointId: null });
+    const checkpoint = "e4000000-0000-4000-8000-000000000007";
+    expect(workflowProgressControls(status({
+      state: "approval_required",
+      approvalCheckpoints: [{ id: checkpoint, stepId: "review", state: "pending" }],
+    }))).toEqual({ pause: false, resume: false, stop: true, approvalCheckpointId: checkpoint });
+    expect(workflowProgressControls(status({
+      state: "approval_required",
+      controlState: "stop_requested",
+      approvalCheckpoints: [{ id: checkpoint, stepId: "review", state: "pending" }],
+    })).approvalCheckpointId).toBeNull();
+    expect(workflowProgressControls(status({ state: "completed" }))).toEqual({ pause: false, resume: false, stop: false, approvalCheckpointId: null });
+    expect(workflowProgressControls(status({ state: "executing", recoveryRequired: true }))).toEqual({ pause: false, resume: false, stop: true, approvalCheckpointId: null });
+    expect(validateWorkflowReturnRationale("  ")).toContain("reason");
+    expect(validateWorkflowReturnRationale("Please revise the sources.")).toBeNull();
+    expect(validateWorkflowReturnRationale("x".repeat(1001))).toContain("1,000");
   });
 
   it("starts only eligible Auto multi-step candidates and preserves explicit web/image modes", () => {

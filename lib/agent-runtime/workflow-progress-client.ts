@@ -184,6 +184,37 @@ export function isWorkflowProgressTerminal(status: WorkflowProgressDto): boolean
   return status.recoveryRequired || ["completed", "failed", "stopped", "returned"].includes(status.state);
 }
 
+export function workflowProgressControls(status: WorkflowProgressDto): Readonly<{
+  pause: boolean;
+  resume: boolean;
+  stop: boolean;
+  approvalCheckpointId: string | null;
+}> {
+  const hasPendingApproval = status.approvalCheckpoints.find((checkpoint) => checkpoint.state === "pending");
+  const terminal = ["completed", "failed", "stopped", "returned"].includes(status.state);
+  const safeForContinuation = !status.recoveryRequired && !terminal;
+  return {
+    pause: safeForContinuation && ["prepared", "executing"].includes(status.state)
+      && status.controlState === "active",
+    resume: safeForContinuation && ["paused", "pause_requested"].includes(status.state)
+      && ["paused", "pause_requested"].includes(status.controlState) && !hasPendingApproval,
+    // Stop remains available during recovery-required states as a protective control.
+    stop: !terminal && !["stop_requested"].includes(status.state)
+      && !["stop_requested", "stopped", "returned"].includes(status.controlState),
+    approvalCheckpointId: safeForContinuation && status.state === "approval_required"
+      && ["active", "paused", "pause_requested"].includes(status.controlState)
+      ? hasPendingApproval?.id ?? null
+      : null,
+  };
+}
+
+export function validateWorkflowReturnRationale(value: string): string | null {
+  const rationale = value.trim();
+  if (!rationale) return "Enter a reason before returning this checkpoint.";
+  if (rationale.length > 1000) return "The reason must be 1,000 characters or fewer.";
+  return null;
+}
+
 export function workflowProgressRefreshDelay(
   status: WorkflowProgressDto | null,
   consecutiveFailures: number,

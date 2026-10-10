@@ -7,7 +7,9 @@ import {
   isWorkflowProgressTerminal,
   parseWorkflowStatusResponse,
   workflowProgressRefreshDelay,
+  workflowProgressControls,
   workflowStatusHttpFailure,
+  validateWorkflowReturnRationale,
 } from "@/lib/agent-runtime/workflow-progress-client";
 
 type WorkflowProgressPanelProps = Readonly<{
@@ -56,6 +58,13 @@ export default function WorkflowProgressPanel({
 }: WorkflowProgressPanelProps) {
   const [status, setStatus] = useState<WorkflowProgressDto | null>(initialStatus ?? null);
   const [refreshMessage, setRefreshMessage] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+  const [awaitingAuthoritativeStatus, setAwaitingAuthoritativeStatus] = useState(false);
+  const [returnRationale, setReturnRationale] = useState("");
+  const [rationaleError, setRationaleError] = useState("");
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const actionLock = useRef(false);
+  const refreshStatusRef = useRef<() => Promise<WorkflowProgressDto | null>>(async () => null);
   const onCompletedRef = useRef(onCompleted);
   onCompletedRef.current = onCompleted;
   const light = theme.id === "light";
@@ -65,6 +74,10 @@ export default function WorkflowProgressPanel({
     let timer: ReturnType<typeof setTimeout> | undefined;
     let activeController: AbortController | undefined;
     let current = initialStatus ?? null;
+    setStatus(current);
+    setActionMessage("");
+    setAwaitingAuthoritativeStatus(false);
+    setRefreshMessage("");
     let failures = 0;
     let completionNotified = false;
 
@@ -81,7 +94,7 @@ export default function WorkflowProgressPanel({
       timer = setTimeout(() => { void refresh(); }, delay);
     };
 
-    const refresh = async () => {
+    const refresh = async (): Promise<WorkflowProgressDto | null> => {
       if (timer) clearTimeout(timer);
       timer = undefined;
       const controller = new AbortController();
@@ -92,21 +105,21 @@ export default function WorkflowProgressPanel({
           cache: "no-store",
           signal: controller.signal,
         });
-        if (cancelled) return;
+        if (cancelled) return null;
         const responseFailure = workflowStatusHttpFailure(response.status);
         if (responseFailure === "reauthenticate") {
           current = null;
           if (timer) clearTimeout(timer);
           setStatus(null);
           setRefreshMessage("Sign in again to check this workflow's status.");
-          return;
+          return null;
         }
         if (responseFailure === "unavailable") {
           current = null;
           if (timer) clearTimeout(timer);
           setStatus(null);
           setRefreshMessage("Workflow status is unavailable for this conversation.");
-          return;
+          return null;
         }
         if (responseFailure === "retry") throw new Error("status_unavailable");
         const payload: unknown = await response.json();
@@ -116,11 +129,12 @@ export default function WorkflowProgressPanel({
           if (timer) clearTimeout(timer);
           setStatus(null);
           setRefreshMessage("Workflow status is unavailable for this conversation.");
-          return;
+          return null;
         }
         failures = 0;
         current = parsed;
         setStatus(parsed);
+        setAwaitingAuthoritativeStatus(false);
         setRefreshMessage("");
         notifyCompletion(parsed);
         if (isWorkflowProgressTerminal(parsed)) {
@@ -128,13 +142,16 @@ export default function WorkflowProgressPanel({
         } else {
           schedule(workflowProgressRefreshDelay(parsed, failures));
         }
+        return parsed;
       } catch {
-        if (cancelled) return;
+        if (cancelled) return null;
         failures += 1;
         setRefreshMessage("Status could not be refreshed. Retrying automatically.");
         schedule(workflowProgressRefreshDelay(current, failures));
+        return null;
       }
     };
+    refreshStatusRef.current = refresh;
 
     if (initialStatus) {
       notifyCompletion(initialStatus);
@@ -150,10 +167,75 @@ export default function WorkflowProgressPanel({
       cancelled = true;
       if (timer) clearTimeout(timer);
       activeController?.abort();
+      refreshStatusRef.current = async () => null;
     };
   }, [runId, conversationId, initialStatus]);
 
+  const performAction = async (action: "pause" | "resume" | "stop" | "approve" | "return", checkpointId?: string) => {
+    if (!status || awaitingAuthoritativeStatus || actionLock.current) return;
+    let rationale: string | undefined;
+    if (action === "return") {
+      const validationError = validateWorkflowReturnRationale(returnRationale);
+      if (validationError) {
+        setRationaleError(validationError);
+        return;
+      }
+      rationale = returnRationale.trim();
+      if (!window.confirm("Return this checkpoint for changes? The workflow will stop at this checkpoint.")) return;
+    }
+    if (action === "stop" && !window.confirm("Stop this workflow? It will not continue automatically.")) return;
+
+    actionLock.current = true;
+    setAwaitingAuthoritativeStatus(true);
+    setPendingAction(action);
+    setActionMessage("");
+    setRationaleError("");
+    try {
+      const response = await fetch(action === "approve" || action === "return"
+        ? `/api/v1/agent-workflows/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(checkpointId ?? "")}`
+        : `/api/v1/agent-workflows/${encodeURIComponent(runId)}/controls`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify(action === "approve" || action === "return"
+          ? { decision: action, expectedControlRevision: status.controlRevision, ...(rationale ? { rationale } : {}) }
+          : { action, expectedControlRevision: status.controlRevision }),
+      });
+      let payload: unknown = null;
+      try { payload = await response.json(); } catch { /* The authoritative status fetch below resolves the current view. */ }
+      const updated = parseWorkflowStatusResponse(payload, runId, conversationId);
+      if (response.ok && updated) {
+        setStatus(updated);
+        setAwaitingAuthoritativeStatus(false);
+        setActionMessage(action === "pause" ? "Pause requested."
+          : action === "resume" ? "Workflow resumed."
+            : action === "stop" ? "Stop requested."
+              : action === "approve" ? "Checkpoint approved."
+                : "Checkpoint returned for changes.");
+        if (action === "return") setReturnRationale("");
+      } else {
+        const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+        const errorValue = body.error && typeof body.error === "object" ? body.error as Record<string, unknown> : {};
+        const code = typeof errorValue.code === "string" ? errorValue.code : "";
+        setActionMessage(code === "revision_conflict" ? "Workflow status changed. The latest status has been refreshed; review it before trying again."
+          : code === "authorization_denied" ? "Current permissions do not allow this action."
+            : code === "authorization_unavailable" ? "Current permissions could not be verified. Try again after status refresh."
+              : code === "unsafe_boundary" ? "The workflow needs recovery before this action can continue."
+                : code === "invalid_transition" ? "This action is no longer available for the current workflow state."
+                  : response.ok ? "The action response could not be verified. The latest status has been refreshed."
+                    : `The action was not completed (${response.status}). The latest status has been refreshed.`);
+      }
+    } catch {
+      setActionMessage("The result could not be confirmed. The action was not retried; check the refreshed workflow status.");
+    } finally {
+      await refreshStatusRef.current();
+      actionLock.current = false;
+      setPendingAction(null);
+    }
+  };
+
   const active = status ? currentStep(status) : undefined;
+  const controls = status ? workflowProgressControls(status) : null;
 
   return (
     <section
@@ -227,6 +309,31 @@ export default function WorkflowProgressPanel({
               The final response and any available files are attached to this assistant message.
             </p>
           ) : null}
+
+          {awaitingAuthoritativeStatus ? <p className={`mt-3 text-sm ${theme.mutedText}`} role="status" aria-live="polite">Controls are paused until the latest workflow status can be confirmed.</p> : null}
+
+          {!awaitingAuthoritativeStatus && controls && (controls.pause || controls.resume || controls.stop || controls.approvalCheckpointId) ? (
+            <div className="mt-4 min-w-0 space-y-3 border-t border-current/10 pt-3">
+              <div className="flex min-w-0 flex-wrap gap-2">
+                {controls.pause ? <button type="button" disabled={pendingAction !== null} onClick={() => void performAction("pause")} className={`min-h-10 rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${theme.panelBorder} ${light ? "text-slate-800" : "text-zinc-100"}`}> {pendingAction === "pause" ? "Pausing…" : "Pause workflow"}</button> : null}
+                {controls.resume ? <button type="button" disabled={pendingAction !== null} onClick={() => void performAction("resume")} className={`min-h-10 rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${theme.panelBorder} ${light ? "text-slate-800" : "text-zinc-100"}`}>{pendingAction === "resume" ? "Resuming…" : "Resume workflow"}</button> : null}
+                {controls.approvalCheckpointId ? <>
+                  <button type="button" disabled={pendingAction !== null} onClick={() => void performAction("approve", controls.approvalCheckpointId ?? undefined)} className="min-h-10 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">{pendingAction === "approve" ? "Approving…" : "Approve checkpoint"}</button>
+                  <button type="button" disabled={pendingAction !== null} onClick={() => void performAction("return", controls.approvalCheckpointId ?? undefined)} className={`min-h-10 rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${theme.panelBorder} ${light ? "text-slate-800" : "text-zinc-100"}`}>{pendingAction === "return" ? "Returning…" : "Return for changes"}</button>
+                </> : null}
+                {controls.stop ? <button type="button" disabled={pendingAction !== null} onClick={() => void performAction("stop")} className="min-h-10 rounded-lg border border-red-500/40 px-3 py-2 text-sm font-medium text-red-700 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 dark:text-red-200">{pendingAction === "stop" ? "Stopping…" : "Stop workflow"}</button> : null}
+              </div>
+              {controls.approvalCheckpointId ? (
+                <div className="min-w-0">
+                  <label htmlFor={`workflow-return-${runId}`} className={`mb-1 block text-sm font-medium ${light ? "text-slate-800" : "text-zinc-100"}`}>Reason for returning</label>
+                  <textarea id={`workflow-return-${runId}`} value={returnRationale} onChange={(event) => { setReturnRationale(event.target.value); setRationaleError(""); }} maxLength={1000} rows={3} aria-invalid={Boolean(rationaleError)} aria-describedby={`workflow-return-help-${runId}`} disabled={pendingAction !== null} className={`w-full min-w-0 resize-y rounded-lg border bg-transparent px-3 py-2 text-sm disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${theme.panelBorder} ${light ? "text-slate-900" : "text-white"}`} />
+                  <p id={`workflow-return-help-${runId}`} className={`text-xs ${rationaleError ? "text-red-700 dark:text-red-300" : theme.mutedText}`} aria-live="polite">{rationaleError || `${returnRationale.trim().length}/1,000 characters. A reason is required to return this checkpoint.`}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {actionMessage ? <p className={`mt-3 text-sm ${theme.mutedText}`} role="status" aria-live="polite">{actionMessage}</p> : null}
 
           {refreshMessage ? (
             <p className={`mt-3 text-xs ${theme.mutedText}`} role="status">{refreshMessage}</p>
