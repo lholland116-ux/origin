@@ -11,6 +11,7 @@ const PROBE_PATH = '/api/internal/execution-wake';
 const STATUS_PATH = '/probe/status';
 const OBSERVATION_FILE = __DIR__ . '/probe-observation.json';
 const MAX_PROBE_ACTIVE = 8;
+const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 
 function emitResult(string $case, array $results, int $exitCode): never
 {
@@ -216,6 +217,196 @@ function requestProbe(string $origin, string $path, string $timestamp, string $n
         'transport_error' => $body === false ? 'network_error' : null,
         'response_error' => $responseError,
         'observation' => $observation,
+    ];
+}
+
+/** Classify a Location value without returning or persisting any part of its raw URL. */
+function classifyRedirectLocation(string $location, string $approvedOrigin, string $requestPath): array
+{
+    $invalid = [
+        'schemeKind' => 'invalid',
+        'hostClassification' => 'unknown',
+        'portClassification' => 'unknown',
+        'routeKind' => 'unknown',
+    ];
+    if ($location === '' || strlen($location) > 2048
+        || preg_match('/[\x00-\x20\x7f\\\\]/', $location) === 1) {
+        return $invalid;
+    }
+
+    try {
+        $parts = parse_url($location);
+        $approved = parse_url($approvedOrigin);
+    } catch (Throwable) {
+        return $invalid;
+    }
+    if (!is_array($parts) || !is_array($approved)
+        || !isset($approved['host']) || !is_string($approved['host'])) {
+        return $invalid;
+    }
+
+    $absolute = preg_match('/^[a-z][a-z0-9+.-]*:/i', $location) === 1;
+    $schemeRelative = str_starts_with($location, '//');
+    $schemeKind = 'relative';
+    $hostClassification = 'relative';
+    $portClassification = 'relative';
+    $targetPort = null;
+    if ($absolute) {
+        $scheme = strtolower((string)($parts['scheme'] ?? ''));
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return ['schemeKind' => 'other', 'hostClassification' => 'unknown', 'portClassification' => 'unknown', 'routeKind' => 'unknown'];
+        }
+        $schemeKind = $scheme;
+    }
+    if (isset($parts['user']) || isset($parts['pass'])) {
+        return $invalid;
+    }
+    if ($absolute || $schemeRelative) {
+        $host = $parts['host'] ?? null;
+        if (!is_string($host) || $host === '' || str_contains($host, '%')) {
+            return $invalid;
+        }
+        $hasOpeningBracket = str_starts_with($host, '[');
+        $hasClosingBracket = str_ends_with($host, ']');
+        if ($hasOpeningBracket !== $hasClosingBracket
+            || (($hasOpeningBracket || $hasClosingBracket)
+                && filter_var(substr($host, 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false)) {
+            return $invalid;
+        }
+        $normalizedHost = strtolower(trim($host, '[]'));
+        $isIp = filter_var($normalizedHost, FILTER_VALIDATE_IP) !== false;
+        $isHostname = strlen($normalizedHost) <= 253
+            && preg_match('/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/iD', $normalizedHost) === 1;
+        if (!$isIp && !$isHostname) {
+            return $invalid;
+        }
+        $approvedHost = strtolower(trim((string)$approved['host'], '[]'));
+        $targetPort = $parts['port'] ?? null;
+        $approvedPort = $approved['port'] ?? 443;
+        if ($targetPort !== null && (!is_int($targetPort) || $targetPort < 1 || $targetPort > 65535)) {
+            return $invalid;
+        }
+        $effectiveTargetPort = $targetPort ?? ($schemeKind === 'http' ? 80 : 443);
+        $effectiveApprovedPort = $approvedPort;
+        if ($schemeRelative) {
+            $schemeKind = 'relative';
+            $effectiveTargetPort = $targetPort ?? $approvedPort;
+        }
+        $hostClassification = $normalizedHost === $approvedHost ? 'approved_site_b' : 'other_host';
+        $portClassification = $effectiveTargetPort === $effectiveApprovedPort ? 'approved_port' : 'other_port';
+    }
+
+    $path = $parts['path'] ?? '';
+    if (!is_string($path) || preg_match('/[\x00-\x20\x7f]/', $path) === 1) {
+        return $invalid;
+    }
+    if ($path === '') {
+        $path = $requestPath;
+    } elseif ($path[0] !== '/') {
+        $base = substr($requestPath, 0, (int)strrpos($requestPath, '/') + 1);
+        $path = $base . $path;
+    }
+    if (str_contains($path, '%')) {
+        return [
+            'schemeKind' => $schemeKind,
+            'hostClassification' => $hostClassification,
+            'portClassification' => $portClassification,
+            'routeKind' => 'unknown',
+        ];
+    }
+    $segments = [];
+    foreach (explode('/', $path) as $segment) {
+        if ($segment === '' || $segment === '.') {
+            continue;
+        }
+        if ($segment === '..') {
+            if ($segments !== []) {
+                array_pop($segments);
+            }
+            continue;
+        }
+        $segments[] = $segment;
+    }
+    $normalizedPath = '/' . implode('/', $segments);
+    $routeKind = match (true) {
+        preg_match('#^/probe/delay/(?:1|5|30)/?$#D', $normalizedPath) === 1 => 'probe_delay',
+        preg_match('#^/probe/status/?$#D', $normalizedPath) === 1 => 'probe_status',
+        preg_match('#^/api/internal/execution-wake/?$#D', $normalizedPath) === 1 => 'wake_probe',
+        preg_match('#^/healthz/?$#D', $normalizedPath) === 1 => 'health',
+        default => 'other',
+    };
+
+    return [
+        'schemeKind' => $schemeKind,
+        'hostClassification' => $hostClassification,
+        'portClassification' => $portClassification,
+        'routeKind' => $routeKind,
+    ];
+}
+
+/** Track only response facts needed for a redirect diagnosis; never retain raw header values. */
+function redirectHeaderCallback(array &$capture, string $line, string $approvedOrigin, string $requestPath): int
+{
+    $length = strlen($line);
+    if (preg_match('/^HTTP\/\S+\s+(\d{3})(?:\s|$)/i', trim($line), $matches) === 1) {
+        $capture['blocks'][] = [
+            'status' => (int)$matches[1],
+            'locationCount' => 0,
+            'location' => null,
+            'viaPresent' => false,
+        ];
+        $capture['current'] = array_key_last($capture['blocks']);
+        return $length;
+    }
+    if ($line === "\r\n" || $line === "\n") {
+        $capture['current'] = null;
+        return $length;
+    }
+    $index = $capture['current'] ?? null;
+    if (!is_int($index) || !isset($capture['blocks'][$index]) || !str_contains($line, ':')) {
+        return $length;
+    }
+    [$name, $value] = explode(':', $line, 2);
+    $name = strtolower(trim($name));
+    if ($name === 'location') {
+        $capture['blocks'][$index]['locationCount'] += 1;
+        $capture['blocks'][$index]['location'] = classifyRedirectLocation(
+            trim($value, " \t\r\n"),
+            $approvedOrigin,
+            $requestPath
+        );
+    } elseif ($name === 'via' && trim($value, " \t\r\n") !== '') {
+        $capture['blocks'][$index]['viaPresent'] = true;
+    }
+    return $length;
+}
+
+function redirectDiagnostic(array $capture, int $status): array
+{
+    $block = null;
+    foreach (array_reverse($capture['blocks'] ?? []) as $candidate) {
+        if (($candidate['status'] ?? null) === $status) {
+            $block = $candidate;
+            break;
+        }
+    }
+    $count = is_array($block) ? ($block['locationCount'] ?? 0) : 0;
+    $location = is_array($block) ? ($block['location'] ?? null) : null;
+    if ($count !== 1 || !is_array($location)) {
+        $location = [
+            'schemeKind' => $count === 0 ? 'absent' : 'invalid',
+            'hostClassification' => 'unknown',
+            'portClassification' => 'unknown',
+            'routeKind' => 'unknown',
+        ];
+    }
+    return [
+        'status' => in_array($status, REDIRECT_STATUSES, true) ? $status : 0,
+        'locationPresent' => $count > 0,
+        ...$location,
+        'responderHint' => is_array($block) && ($block['viaPresent'] ?? false)
+            ? 'intermediary_indicated'
+            : 'unknown',
     ];
 }
 
@@ -481,6 +672,7 @@ if ($case === 'restart-observe') {
     $signature = hash_hmac('sha256', $signable, $secret);
     $multi = curl_multi_init();
     $handle = curl_init($probeOrigin . $delayPath);
+    $headerCapture = ['blocks' => [], 'current' => null];
     curl_setopt_array($handle, [
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => '',
@@ -498,6 +690,9 @@ if ($case === 'restart-observe') {
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_HEADERFUNCTION => static function ($curlHandle, string $headerLine) use (&$headerCapture, $probeOrigin, $delayPath): int {
+            return redirectHeaderCallback($headerCapture, $headerLine, $probeOrigin, $delayPath);
+        },
     ]);
     curl_multi_add_handle($multi, $handle);
     unset($nonce, $signable, $signature);
@@ -541,6 +736,7 @@ if ($case === 'restart-observe') {
     $transportError = curl_errno($handle) === 0 ? null : 'network_error';
     $delayObservation = null;
     $responseError = null;
+    $redirectDiagnostic = null;
     if (is_string($responseBody) && in_array($httpStatus, [200, 503], true)) {
         try {
             $decoded = json_decode($responseBody, true, 16, JSON_THROW_ON_ERROR);
@@ -551,6 +747,13 @@ if ($case === 'restart-observe') {
         } catch (Throwable) {
             $responseError = 'invalid_response';
         }
+    } elseif (in_array($httpStatus, REDIRECT_STATUSES, true)) {
+        $redirectDiagnostic = redirectDiagnostic($headerCapture, $httpStatus);
+        $responseError = 'unexpected_redirect';
+    }
+    if ($redirectDiagnostic !== null) {
+        $activeObservation = null;
+        $observationSaved = false;
     }
     $delayResult = [
         'http_status' => $httpStatus > 0 ? $httpStatus : null,
@@ -558,6 +761,7 @@ if ($case === 'restart-observe') {
         'transport_error' => $transportError,
         'response_error' => $responseError,
         'observation' => $delayObservation,
+        ...($redirectDiagnostic === null ? [] : ['redirect_diagnostic' => $redirectDiagnostic]),
     ];
     $record = [
         'phase' => $activeObservation === null ? 'active_not_confirmed' : 'delay_result',
@@ -570,6 +774,10 @@ if ($case === 'restart-observe') {
         'delayResult' => $delayResult,
     ];
     $resultSaved = writeObservationRecord($record);
+    if (!$resultSaved && $redirectDiagnostic !== null
+        && is_file(OBSERVATION_FILE) && !is_link(OBSERVATION_FILE)) {
+        @unlink(OBSERVATION_FILE);
+    }
     curl_multi_remove_handle($multi, $handle);
     curl_close($handle);
     curl_multi_close($multi);

@@ -196,6 +196,16 @@ describe("Hostinger test probe protocol", () => {
     expect(php).toContain("CURLOPT_FOLLOWLOCATION => false");
     expect(php).toContain("CURLOPT_SSL_VERIFYPEER => true");
     expect(php).toContain("CURLOPT_PROTOCOLS => CURLPROTO_HTTPS");
+    expect(php).toContain("CURLOPT_HEADERFUNCTION");
+    expect(php).toContain("function classifyRedirectLocation(");
+    expect(php).toContain("function redirectDiagnostic(");
+    expect(php).toContain("'response_error' => $responseError");
+    expect(php).toContain("'unexpected_redirect'");
+    expect(php).toContain("'redirect_diagnostic' => $redirectDiagnostic");
+    expect(php).toContain("'approved_site_b'");
+    expect(php).toContain("'approved_port'");
+    expect(php).toContain("'intermediary_indicated'");
+    expect(php).not.toMatch(/(?:var_dump|print_r)\s*\(/i);
     expect(php).toContain("hostingersite\\.com|hostinger-site\\.com");
     expect(php).toContain("__DIR__ . '/https-probe.key'");
     expect(php).not.toContain("https://lvtchat.com");

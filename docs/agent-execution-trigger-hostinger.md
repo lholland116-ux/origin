@@ -555,3 +555,36 @@ and a test CA. The focused Node/probe and execution-trigger suites passed 27
 tests; TypeScript, targeted ESLint, Node syntax, and `git diff --check` passed.
 Hostinger File Manager live refresh and deployed execution recovery remain
 separate operational checks and are not claimed as passed.
+
+### HTTP redirect diagnostics
+
+The earlier isolated `restart-observe` request received HTTP 307 in 2,417 ms,
+but its caller saved only status and timing. Neither the tracked PHP caller nor
+the Node probe intentionally emits 307, and the saved result omitted the
+response's `Location`; the responder therefore remains unverified. A redirect
+or its timing does not demonstrate process interruption.
+
+The PHP caller now inspects response headers only for the in-flight
+`restart-observe` cURL request. It does not follow redirects or retry the
+signed POST. It keeps only an allowlisted diagnostic: redirect status,
+Location presence, scheme classification, whether its hostname and port match
+the approved Site B origin, a fixed route class, and a coarse `Via`-header
+hint. Multiple Location headers and malformed,
+overlong, credential-bearing, control-containing, or percent-encoded path
+values become invalid/unknown classifications. Query strings, fragments,
+userinfo, raw hostnames, arbitrary paths, body text, response header values,
+and all request authentication material are discarded. An intermediary hint
+is not proof of which component returned the response; absent `Via` remains
+`unknown`.
+
+The sanitized diagnostic is included in `delay_result` in the existing private
+atomic `probe-observation.json` record and in caller output only when a 301,
+302, 303, 307, or 308 response is observed. Redirects remain failures and can
+never leave a final `active_confirmed` record or authorize a restart; if the
+final sanitized record cannot be saved, the caller removes a stale regular
+observation file where possible. For a future isolated
+diagnostic request, first obtain separate owner approval to deploy the updated
+private caller and run that request. Do not restart Site B unless a fresh
+observation independently confirms the request is active. If no redirect
+recurs, the original source remains unknown. Rollback consists of restoring
+the previous private caller and removing only its temporary observation file.
