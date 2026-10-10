@@ -610,6 +610,78 @@ check(delayDisposition(makeRecord('redirect')['delayResult'], $valid['activeObse
 check(delayDisposition(makeRecord('transport')['delayResult'], $valid['activeObservation']) === 'transport_ambiguous', 'transport not ambiguous');
 check(delayDisposition(makeRecord('timeout')['delayResult'], $valid['activeObservation']) === 'timeout_ambiguous', 'timeout not ambiguous');
 check(delayDisposition($valid['delayResult'], null) === 'active_observation_missing', 'missing activity not rejected');
+$approvedOrigin = 'https://fixture.hostingersite.com';
+function classifySyntheticRedirect(?string $location, bool $duplicate = false): array {
+    global $approvedOrigin;
+    $capture = ['blocks' => [], 'current' => null];
+    redirectHeaderCallback($capture, "HTTP/1.1 307 Temporary Redirect\r\n", $approvedOrigin, '/probe/delay/30');
+    if ($location !== null) {
+        redirectHeaderCallback($capture, 'Location: ' . $location . "\r\n", $approvedOrigin, '/probe/delay/30');
+        if ($duplicate) {
+            redirectHeaderCallback($capture, "Location: https://fixture.hostingersite.com/probe/status\r\n",
+                $approvedOrigin, '/probe/delay/30');
+        }
+    }
+    return redirectDiagnostic($capture, 307);
+}
+function redirectRecord(array $diagnostic): array {
+    $record = makeRecord('redirect');
+    $record['delayResult']['redirect_diagnostic'] = $diagnostic;
+    return $record;
+}
+$redirectCases = [
+    ['approved HTTPS host and port', 'https://fixture.hostingersite.com/probe/status',
+        ['https', 'approved_site_b', 'approved_port', 'probe_status', true]],
+    ['different host', 'https://other.example/probe/status',
+        ['https', 'other_host', 'approved_port', 'probe_status', true]],
+    ['unexpected port', 'https://fixture.hostingersite.com:444/probe/status',
+        ['https', 'approved_site_b', 'other_port', 'probe_status', true]],
+    ['relative destination', '/probe/status',
+        ['relative', 'relative', 'relative', 'probe_status', true]],
+    ['other scheme', 'ftp://fixture.hostingersite.com/probe/status',
+        ['other', 'unknown', 'unknown', 'unknown', true]],
+    ['invalid location', 'http://[invalid',
+        ['invalid', 'unknown', 'unknown', 'unknown', true]],
+    ['missing location', null,
+        ['absent', 'unknown', 'unknown', 'unknown', false]],
+    ['duplicate location', 'https://fixture.hostingersite.com/probe/status',
+        ['invalid', 'unknown', 'unknown', 'unknown', true], true],
+    ['embedded credentials', 'https://user:pass@fixture.hostingersite.com/probe/status',
+        ['invalid', 'unknown', 'unknown', 'unknown', true]],
+    ['encoded path', 'https://fixture.hostingersite.com/probe/%73tatus',
+        ['https', 'approved_site_b', 'approved_port', 'unknown', true]],
+];
+foreach ($redirectCases as $redirectCase) {
+    [$label, $location, $expected] = $redirectCase;
+    $duplicate = $redirectCase[3] ?? false;
+    $diagnostic = classifySyntheticRedirect($location, $duplicate);
+    $actual = [$diagnostic['schemeKind'], $diagnostic['hostClassification'], $diagnostic['portClassification'],
+        $diagnostic['routeKind'], $diagnostic['locationPresent']];
+    check($actual === $expected, 'unexpected producer classifications for ' . $label . ': ' . json_encode($actual));
+    $record = redirectRecord($diagnostic);
+    check(validDelayResult($record['delayResult']), 'producer diagnostic rejected by delay validator for ' . $label);
+    check(validObservationRecord($record), 'producer diagnostic rejected by complete record validator for ' . $label);
+    check(delayDisposition($record['delayResult'], $record['activeObservation']) === 'redirect_ambiguous',
+        'redirect evidence not kept ambiguous for ' . $label);
+    check(postRestartAssessment($record, true, true)['interruptionAssessment'] === 'interruption_unproven',
+        'redirect evidence proved interruption for ' . $label);
+}
+$persistedRedirect = redirectRecord(classifySyntheticRedirect('https://other.example/probe/status'));
+check(writeObservationRecord($persistedRedirect), 'valid HTTP 307 producer evidence could not be persisted');
+$readRedirect = readObservationRecord();
+check(is_array($readRedirect) && validObservationRecord($readRedirect)
+    && $readRedirect['delayResult']['redirect_diagnostic'] === $persistedRedirect['delayResult']['redirect_diagnostic'],
+    'persisted HTTP 307 producer evidence did not read back');
+check(!str_contains(file_get_contents(OBSERVATION_FILE), 'other.example'), 'raw redirect URL was persisted');
+$invalidClassification = $persistedRedirect;
+$invalidClassification['delayResult']['redirect_diagnostic']['schemeKind'] = 'gopher';
+check(!validDelayResult($invalidClassification['delayResult']), 'arbitrary redirect scheme classification accepted');
+$invalidClassification = $persistedRedirect;
+$invalidClassification['delayResult']['redirect_diagnostic']['hostClassification'] = 'some_host';
+check(!validObservationRecord($invalidClassification), 'arbitrary redirect host classification accepted');
+$invalidClassification = $persistedRedirect;
+$invalidClassification['delayResult']['redirect_diagnostic']['portClassification'] = 'any_port';
+check(!validObservationRecord($invalidClassification), 'arbitrary redirect port classification accepted');
 $assessmentCases = [
     ['normal', true, true, 'process_replacement_observed', 'delay_completed_normally'],
     ['normal', true, false, 'process_replacement_not_observed', 'interruption_unproven'],
@@ -752,8 +824,9 @@ foreach (['redirect', 'transport', 'timeout'] as $ambiguousKind) {
             && $ambiguousOutput['results'][0]['interruptionAssessment'] === 'interruption_unproven',
             $ambiguousKind . ' plus ' . $instanceMode . ' instance incorrectly qualified interruption');
         $preserved = readObservationRecord();
-        check(is_array($preserved) && $preserved['delayResult'] === $ambiguous['delayResult'],
-            $ambiguousKind . ' evidence was not preserved');
+        check(is_array($preserved) && $preserved['activeObservation'] === $ambiguous['activeObservation']
+            && $preserved['delayResult'] === $ambiguous['delayResult'],
+            $ambiguousKind . ' active or final delay evidence was not preserved');
     }
 }
 foreach (['invalid', 'unauthorized', 'disconnect'] as $failureMode) {
@@ -865,7 +938,12 @@ fclose($server);
           const details = error as NodeJS.ErrnoException & { stderr?: Buffer; stdout?: Buffer };
           throw new Error(`PHP caller fixture failed: ${details.stderr?.toString() ?? ""}${details.stdout?.toString() ?? ""}`);
         }
-        const result = JSON.parse(output.trim()) as Record<string, unknown>;
+        let result: Record<string, unknown>;
+        try {
+          result = JSON.parse(output.trim()) as Record<string, unknown>;
+        } catch (error) {
+          throw new Error(`PHP qualification emitted non-JSON output: ${output.trim().slice(0, 1000)}; ${String(error)}`);
+        }
         expect(result).toMatchObject({ phpVersion: "8.3.35", curl: true, curlMulti: true });
         expect(result.assertions).toBeGreaterThan(100);
       } finally {

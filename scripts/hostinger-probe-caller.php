@@ -242,10 +242,10 @@ function validDelayResult(mixed $delayResult): bool
         || $diagnosticKeys !== ['hostClassification', 'locationPresent', 'portClassification', 'responderHint', 'routeKind', 'schemeKind', 'status']
         || !in_array($diagnostic['status'] ?? null, REDIRECT_STATUSES, true)
         || !is_bool($diagnostic['locationPresent'] ?? null)
-        || !in_array($diagnostic['schemeKind'] ?? null, ['https', 'http', 'relative', 'invalid', 'absent'], true)
+        || !in_array($diagnostic['schemeKind'] ?? null, ['https', 'http', 'relative', 'other', 'invalid', 'absent'], true)
         || !in_array($diagnostic['hostClassification'] ?? null,
-            ['approved_site_b', 'other', 'relative', 'unknown'], true)
-        || !in_array($diagnostic['portClassification'] ?? null, ['approved_port', 'other', 'unknown'], true)
+            ['approved_site_b', 'other_host', 'relative', 'unknown'], true)
+        || !in_array($diagnostic['portClassification'] ?? null, ['approved_port', 'other_port', 'relative', 'unknown'], true)
         || !in_array($diagnostic['routeKind'] ?? null,
             ['probe_delay', 'probe_status', 'wake_probe', 'health', 'other', 'unknown'], true)
         || !in_array($diagnostic['responderHint'] ?? null, ['intermediary_indicated', 'unknown'], true))) {
