@@ -190,6 +190,41 @@ describeDatabase("accepted request execution association (isolated local Postgre
     await sql.end();
   });
 
+  it("maps a PostgreSQL work-discovery connection failure to worker_unavailable and HTTP 503", async () => {
+    const disconnectedSql = postgres(DATABASE_URL, { prepare: false, max: 1 });
+    await disconnectedSql`SELECT 1`;
+    const failingStore = new SupabaseExecutionStore(disconnectedSql);
+    await disconnectedSql.end();
+    const worker = createTrustedExecutionWorker({
+      store: failingStore,
+      runtime: {} as DurableXStateExecutionRuntime,
+      listPendingFinalizationRunIds: async () => [],
+      finalizeAcceptedExecution: async () => ({ status: "unavailable" }),
+    });
+    const secret = "disposable-integration-trigger-secret-at-least-32-bytes";
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const nonce = randomBytes(16).toString("hex");
+    const response = await handleExecutionTrigger(new Request("https://lvtchat.test/api/internal/execution-wake", {
+      method: "POST",
+      headers: {
+        "x-lvtchat-timestamp": timestamp,
+        "x-lvtchat-nonce": nonce,
+        "x-lvtchat-signature": signExecutionTrigger(secret, timestamp, nonce),
+      },
+    }), {
+      enabled: true,
+      secret,
+      consumeNonce: async () => true,
+      acquireInvocation: async () => ({ status: "acquired", fencingGeneration: 1 }),
+      renewInvocation: async () => true,
+      releaseInvocation: async () => true,
+      runOnce: () => worker.runOnce(),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "temporarily_unavailable" });
+  });
+
   it("creates a pending run without provider dispatch and replay preserves the original plan", async () => {
     const accepted = await accept();
     const engine = makeRuntime(store);

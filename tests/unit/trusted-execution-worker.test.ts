@@ -145,4 +145,12 @@ describe("trusted bounded execution worker", () => {
     expect(store.claimExecutionWork).not.toHaveBeenCalled();
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
   });
+
+  it("reports durable discovery failure as unavailable instead of claiming the queue is empty", async () => {
+    const { worker, store, runtime } = setup();
+    vi.mocked(store.discoverExecutionWork).mockRejectedValueOnce(new Error("database unavailable"));
+    expect(await worker.runOnce()).toMatchObject({ status: "worker_unavailable", providerCalls: null });
+    expect(store.claimExecutionWork).not.toHaveBeenCalled();
+    expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
+  });
 });

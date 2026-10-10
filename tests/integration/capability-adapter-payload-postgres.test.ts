@@ -6,10 +6,10 @@ import type { CapabilityId } from "@/lib/ai/capability-registry";
 import { validateIntelligencePlan } from "@/lib/ai/plan-validator";
 import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coordinator";
 import type { StandardOperationInput } from "@/lib/ai/standard-operation-service";
-import type { WebSearchOperationInput } from "@/lib/ai/web-search-operation-service";
 import type { FileContextServiceInput } from "@/lib/ai/file-context-service";
 import type { CapabilityExecutor } from "@/lib/agent-runtime/capability-executor";
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
+import { isAutonomousCapabilityAllowed } from "@/lib/agent-runtime/autonomous-capability-policy";
 import { createStandardCapabilityAdapter, type StandardOperationRunner } from "@/lib/agent-runtime/capability-adapters/standard";
 import { createWebSearchCapabilityAdapter } from "@/lib/agent-runtime/capability-adapters/web-search";
 import { createFileAnalysisCapabilityAdapter, type FileContextPreparer } from "@/lib/agent-runtime/capability-adapters/file-analysis";
@@ -121,10 +121,10 @@ describeDatabase("large capability adapter results through durable PostgreSQL st
     await sql.end();
   });
 
-  it("externalizes and reloads large Standard, Web, and CJK File Context adapter results exactly", async () => {
+  it("externalizes and reloads large Standard and CJK File Context adapter results exactly", async () => {
     const cases: Array<{
-      capability: "standard" | "web_search" | "file_analysis";
-      resultKind: "text" | "search_results" | "structured_data";
+      capability: "standard" | "file_analysis";
+      resultKind: "text" | "structured_data";
       step: PlanStep;
       attachments?: readonly { id: string; kind: "file" }[];
       createAdapter: (binding: RequestMessageBinding) => CapabilityExecutor;
@@ -143,23 +143,6 @@ describeDatabase("large capability adapter results through durable PostgreSQL st
         }),
       },
       {
-        capability: "web_search", resultKind: "search_results",
-        step: { id: "web", capability: "web_search", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "search_results" },
-        createAdapter: (binding) => createWebSearchCapabilityAdapter({
-          runOperation: async (input: WebSearchOperationInput) => {
-            const result = {
-              kind: "web_search_operation" as const, requestId: binding.requestId, userId, conversationId,
-              reply: "web result ".repeat(7_000), sources: [{ title: "Evidence", url: "https://example.test", snippet: "retained" }],
-              sourceCount: 1, widget: null, web: true as const, webSearchCalls: 2, model: "test-model",
-              reasoningEffort: input.reasoningEffort, outcome: "success" as const, latencyMs: 1,
-              usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningTokens: 0, totalTokens: 2 },
-            };
-            return { ok: true as const, result, measurement: { model: "test-model", webSearchCalls: 2,
-              outcome: "success" as const, latencyMs: 1, usage: result.usage } };
-          },
-        }),
-      },
-      {
         capability: "file_analysis", resultKind: "structured_data",
         step: { id: "files", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
         attachments: [{ id: randomUUID(), kind: "file" }],
@@ -174,6 +157,7 @@ describeDatabase("large capability adapter results through durable PostgreSQL st
     ];
 
     for (const item of cases) {
+      expect(isAutonomousCapabilityAllowed(item.capability)).toBe(true);
       const binding = makeBinding(userId, conversationId);
       const adapter = item.createAdapter(binding);
       const runtime = new DurableXStateExecutionRuntime({
@@ -217,6 +201,45 @@ describeDatabase("large capability adapter results through durable PostgreSQL st
       expect(Number(rows[0]!.serialized_size_bytes)).toBe(executionResultJsonBytes(savedResult));
       expect(rows[0]!.result_kind).toBe(item.resultKind);
     }
+  });
+
+  it("rejects autonomous Web Search before persistence or adapter dispatch", async () => {
+    expect(isAutonomousCapabilityAllowed("web_search")).toBe(false);
+    const binding = makeBinding(userId, conversationId);
+    const runId = randomUUID();
+    const runOperation = vi.fn(async () => {
+      throw new Error("The governed runtime must reject before Web Search dispatch.");
+    });
+    const adapter = createWebSearchCapabilityAdapter({ runOperation });
+    const runtime = new DurableXStateExecutionRuntime({
+      store,
+      executor: executorThroughRegistry("web_search", adapter),
+      authorizer: { authorize: async () => ({ allowed: true }) },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: () => runId,
+    });
+
+    const result = await runtime.execute(handoff({
+      id: "web",
+      capability: "web_search",
+      dependsOn: [],
+      inputs: [{ source: "user" }],
+      expectedOutput: "search_results",
+    }), {
+      authenticatedUserId: userId,
+      conversationId,
+      requestMessageBinding: binding,
+      userInput: "Search for current information.",
+    }, `web-search-rejected-${runId}`);
+
+    expect(result).toMatchObject({ kind: "rejected", failure: { code: "unsupported_capability" } });
+    expect(runOperation).not.toHaveBeenCalled();
+    const runs = await sql`SELECT id FROM public.execution_runs WHERE id = ${runId}::uuid`;
+    const steps = await sql`SELECT run_id FROM public.execution_steps WHERE run_id = ${runId}::uuid`;
+    const payloads = await sql`SELECT run_id FROM public.execution_step_result_payloads WHERE run_id = ${runId}::uuid`;
+    expect(runs).toHaveLength(0);
+    expect(steps).toHaveLength(0);
+    expect(payloads).toHaveLength(0);
   });
 
   it("routes a >65 KiB CJK File Context through registry and durable runtime into Standard unchanged", async () => {

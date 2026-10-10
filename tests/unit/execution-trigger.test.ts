@@ -93,6 +93,14 @@ describe("authenticated execution wake-up", () => {
     expect(JSON.stringify(f.log.mock.calls)).not.toContain(SECRET);
   });
 
+  it("maps worker persistence unavailability to a retryable wake response", async () => {
+    const f = fixture({ runOnce: vi.fn(async () => ({ status: "worker_unavailable", durationMs: 7, providerCalls: null })) });
+    const response = await handleExecutionTrigger(request(), f.dependencies as never);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "temporarily_unavailable" });
+    expect(f.releaseInvocation).toHaveBeenCalledOnce();
+  });
+
   it("rejects bad signatures, stale timestamps, malformed authentication, and caller-supplied work arguments", async () => {
     const badSignature = request({ signature: "a".repeat(64) });
     const stale = request({ timestamp: String(Math.floor(NOW / 1000) - 301), nonce: "2234567890abcdef1234567890abcdef" });

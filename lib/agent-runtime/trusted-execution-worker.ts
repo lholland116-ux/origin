@@ -31,6 +31,7 @@ export type TrustedExecutionWorkerOutcome = Readonly<{
     | "recovery_required"
     | "finalization_pending"
     | "finalization_completed"
+    | "worker_unavailable"
     | "terminal";
   runId?: string;
   stepId?: string;
@@ -146,7 +147,9 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
       try {
         discovered = await dependencies.store.discoverExecutionWork({ limit: MAX_DISCOVERY_PER_INVOCATION });
       } catch {
-        return outcome("no_work", started, now);
+        // A persistence outage is not evidence that the durable queue is empty.
+        // Let the wake boundary report a retryable service failure.
+        return outcome("worker_unavailable", started, now, { providerCalls: null });
       }
       const candidate = firstWork(discovered);
       if (!candidate) return outcome("no_work", started, now);
