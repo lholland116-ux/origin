@@ -174,4 +174,35 @@ describe("trusted bounded execution worker", () => {
     expect(store.releaseExecutionWorkClaim).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 0 }));
     expect(pendingRun).toMatchObject({ status: "pending", snapshotRevision: 0, steps: [{ status: "pending" }] });
   });
+
+  it("preserves the runtime authorization phase and code in the worker outcome", async () => {
+    const pendingRun = run();
+    const failedRun = run({
+      status: "failed",
+      snapshotRevision: 3,
+      steps: [{ ...run().steps[0]!, status: "failed", failureCode: "authorization_denied" }],
+    });
+    const { worker, runtime, store } = setup({ currentRun: pendingRun });
+    vi.mocked(store.getAcceptedRunForFinalization)
+      .mockResolvedValueOnce(pendingRun)
+      .mockResolvedValueOnce(failedRun);
+    vi.mocked(runtime.executeClaimedStep).mockResolvedValueOnce({
+      kind: "failed",
+      failure: { code: "authorization_denied", message: "safe test failure" },
+      diagnosticPhase: "trusted_subject_resolution",
+      run: {} as never,
+      stepResults: {},
+      telemetry: {} as never,
+    } as never);
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({
+      status: "authorization_denied",
+      providerCalls: null,
+      diagnosticPhase: "trusted_subject_resolution",
+      diagnosticCode: "authorization_denied",
+    });
+    expect(store.releaseExecutionWorkClaim).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 3 }));
+  });
 });

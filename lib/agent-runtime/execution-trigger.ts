@@ -15,7 +15,9 @@ export type ExecutionTriggerWorkerResult = Readonly<{
   durationMs: number;
   providerCalls: number | null;
   /** Optional safe runtime diagnostics; logged internally and never included in the HTTP response. */
-  diagnosticPhase?: "runtime_threw" | "runtime_recovery" | "runtime_rejected" | "post_runtime_read" | "post_runtime_state_check";
+  diagnosticPhase?: "input_resolution" | "input_validation" | "trusted_subject_resolution" | "capability_authorization"
+    | "capability_adapter" | "runtime_threw" | "runtime_recovery" | "runtime_rejected" | "runtime_failed"
+    | "post_runtime_read" | "post_runtime_state_check" | "worker_run_validation" | "worker_claimed_run_validation";
   diagnosticCode?: ExecutionFailureCode;
 }>;
 

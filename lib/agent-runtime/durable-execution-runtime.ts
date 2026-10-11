@@ -40,6 +40,7 @@ import {
 } from "@/lib/agent-runtime/result-payload-contract";
 import {
   type ExecutionFailure,
+  type ExecutionDiagnosticPhase,
   type ExecutionOutcome,
   type ExecutionRun,
   type ExecutionStepResult,
@@ -1206,9 +1207,11 @@ export class DurableXStateExecutionRuntime {
         correlationId: input.correlationId,
       }, results);
       let stepFailure: ExecutionFailure | null = resolved.inputs ? null : resolved.failure;
+      let diagnosticPhase: ExecutionDiagnosticPhase | undefined = stepFailure ? "input_resolution" : undefined;
 
       if (resolved.inputs?.some((resolvedInput) => resolvedInput.source === "user") && current.runtimeContext.userInput === undefined) {
         stepFailure = executionFailure("missing_input");
+        diagnosticPhase = "input_validation";
       }
 
       const capabilityId = step.capability;
@@ -1226,7 +1229,10 @@ export class DurableXStateExecutionRuntime {
           } catch {
             trustedSubject = undefined;
           }
-          if (!trustedSubject) stepFailure = executionFailure("authorization_denied");
+          if (!trustedSubject) {
+            stepFailure = executionFailure("authorization_denied");
+            diagnosticPhase = "trusted_subject_resolution";
+          }
         }
         if (!stepFailure) {
           const authorization = await this.authorize(current, stepId, capabilityId, resolved.resourceReferences ?? [], resolved.inputs ?? [], {
@@ -1235,7 +1241,10 @@ export class DurableXStateExecutionRuntime {
             executionKey,
             ...(trustedSubject ? { trustedSubject } : {}),
           });
-          if (!authorization.allowed) stepFailure = authorization.failure;
+          if (!authorization.allowed) {
+            stepFailure = authorization.failure;
+            diagnosticPhase = "capability_authorization";
+          }
         }
       }
 
@@ -1369,6 +1378,7 @@ export class DurableXStateExecutionRuntime {
             return { kind: "retry_pending", run: executionRun(retryRun), stepId, nextRetryAt };
           }
           stepFailure = executionFailure(failure.retrySafety === "SAFE_RETRY" ? "retry_exhausted" : failure.code);
+          diagnosticPhase = "capability_adapter";
         }
       }
 
@@ -1399,7 +1409,11 @@ export class DurableXStateExecutionRuntime {
         const reloaded = await this.options.store.getRun({ runId: current.id, userId: current.userId });
         if (!reloaded) return { kind: "rejected", failure: executionFailure("ownership_denied") };
         const run = executionRun(reloaded);
-        return { kind: "failed", run, failure: stepFailure, stepResults: outputResults(reloaded.steps), telemetry: telemetry(run, stepFailure.code, saved.snapshotRevision, true) };
+        return {
+          kind: "failed", run, failure: stepFailure, stepResults: outputResults(reloaded.steps),
+          telemetry: telemetry(run, stepFailure.code, saved.snapshotRevision, true),
+          ...(diagnosticPhase ? { diagnosticPhase } : {}),
+        };
       }
 
       lifecycle.succeed();

@@ -3,7 +3,7 @@ import type { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-
 import { isAutonomousCapabilityAllowed } from "@/lib/agent-runtime/autonomous-capability-policy";
 import type { DiscoveredExecutionWork, ExecutionStore } from "@/lib/agent-runtime/execution-store";
 import { EXECUTION_WORK_LEASE_POLICY } from "@/lib/agent-runtime/execution-store";
-import type { ExecutionFailureCode } from "@/lib/agent-runtime/runtime-contracts";
+import type { ExecutionDiagnosticPhase, ExecutionFailureCode } from "@/lib/agent-runtime/runtime-contracts";
 import {
   EXECUTION_INVOCATION_BUDGET_MS,
   EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS,
@@ -41,7 +41,9 @@ export type TrustedExecutionWorkerOutcome = Readonly<{
   /** Null means the persisted outcome does not prove how many provider calls completed. */
   providerCalls: number | null;
   /** Safe, bounded diagnostics for server logs; never contains exception text or user data. */
-  diagnosticPhase?: "runtime_threw" | "runtime_recovery" | "runtime_rejected" | "post_runtime_read" | "post_runtime_state_check";
+  diagnosticPhase?: ExecutionDiagnosticPhase | "runtime_threw" | "runtime_recovery" | "runtime_rejected"
+    | "runtime_failed" | "post_runtime_read" | "post_runtime_state_check"
+    | "worker_run_validation" | "worker_claimed_run_validation";
   diagnosticCode?: ExecutionFailureCode;
 }>;
 
@@ -197,7 +199,10 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
       if (!run || run.id !== claimResult.runId || !hasAcceptedBinding(run)
         || run.steps.some((step) => !isAutonomousCapabilityAllowed(step.capabilityId))) {
         await releaseIfSafe(dependencies.store, candidate.runId, claimResult.claim);
-        return outcome(run ? "authorization_denied" : "recovery_required", started, now, { runId: candidate.runId, stepId: candidate.stepId });
+        return outcome(run ? "authorization_denied" : "recovery_required", started, now, {
+          runId: candidate.runId, stepId: candidate.stepId,
+          ...(run ? { diagnosticPhase: "worker_run_validation" as const, diagnosticCode: "authorization_denied" as const } : {}),
+        });
       }
       const selected = run.steps.find((step) => step.stepId === claimResult.stepId);
       const hasUnresolvedApproval = run.approvalCheckpoints.some((checkpoint) => checkpoint.status !== "approved");
@@ -209,7 +214,12 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
         await releaseIfSafe(dependencies.store, candidate.runId, claimResult.claim);
         const blocked = run.controlState !== "active" ? "paused_or_stopped"
           : hasUnresolvedApproval ? "waiting_for_approval" : "authorization_denied";
-        return outcome(blocked, started, now, { runId: run.id, stepId: claimResult.stepId, capability: selected?.capabilityId });
+        return outcome(blocked, started, now, {
+          runId: run.id, stepId: claimResult.stepId, capability: selected?.capabilityId,
+          ...(blocked === "authorization_denied"
+            ? { diagnosticPhase: "worker_claimed_run_validation" as const, diagnosticCode: "authorization_denied" as const }
+            : {}),
+        });
       }
 
       const renewed = await dependencies.store.renewExecutionWorkClaim({
@@ -285,10 +295,17 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
         const status = result.failure.code === "quota_exhausted" ? "budget_exhausted"
           : result.failure.code === "authorization_denied" || result.failure.code === "ownership_denied"
             ? "authorization_denied" : "terminal";
-        return outcome(status, started, now, { ...details, providerCalls: null });
+        return outcome(status, started, now, {
+          ...details,
+          providerCalls: null,
+          diagnosticPhase: result.diagnosticPhase ?? "runtime_failed",
+          diagnosticCode: result.failure.code,
+        });
       }
       if (result.kind === "rejected" && result.failure.code === "authorization_denied") {
-        return outcome("authorization_denied", started, now, details);
+        return outcome("authorization_denied", started, now, {
+          ...details, diagnosticPhase: "runtime_rejected", diagnosticCode: result.failure.code,
+        });
       }
       return outcome("recovery_required", started, now, {
         ...details,

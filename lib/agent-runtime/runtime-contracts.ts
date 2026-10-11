@@ -146,6 +146,14 @@ export type ExecutionFailure = {
   readonly message: string;
 };
 
+/** Sanitized execution stage labels for server-side operational logs. */
+export type ExecutionDiagnosticPhase =
+  | "input_resolution"
+  | "input_validation"
+  | "trusted_subject_resolution"
+  | "capability_authorization"
+  | "capability_adapter";
+
 export type ExecutionOperationalMetadata = {
   readonly execution_id: string;
   readonly status: "succeeded" | "failed";
@@ -175,6 +183,7 @@ export type ExecutionOutcome =
       readonly failure: ExecutionFailure;
       readonly stepResults: Readonly<Record<string, ExecutionStepResult>>;
       readonly telemetry: ExecutionOperationalMetadata;
+      readonly diagnosticPhase?: ExecutionDiagnosticPhase;
     }
   | {
       readonly kind: "rejected";

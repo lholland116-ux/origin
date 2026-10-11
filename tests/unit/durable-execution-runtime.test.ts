@@ -249,6 +249,42 @@ describe("durable XState execution runtime", () => {
     expect(userResumeValidator).toHaveBeenCalledOnce();
   });
 
+  it("records a safe trusted-subject phase when the claimed background authorization fails before adapter dispatch", async () => {
+    const store = new InMemoryExecutionStore();
+    const accepted = await runtime(store, async (input) => mockResult(input))
+      .associateAcceptedRequest(handoff(), runtimeInput(), ACCEPTED_REQUEST);
+    expect(accepted.kind).toBe("associated");
+    if (accepted.kind !== "associated") return;
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const resolveSubject = vi.fn(async () => null);
+    const engine = runtime(store, executor, undefined, async () => false, undefined, {
+      resolve: resolveSubject,
+      authorize: () => ({ authorize: async () => ({ allowed: true }) }),
+    });
+
+    const result = await engine.executeClaimedStep({
+      runId: accepted.runId,
+      authenticatedUserId: USER_ID,
+      expectedStepId: "step-1",
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 1 },
+      executionDeadlineAtMs: Date.now() + 30_000,
+      providerDeadlineAtMs: Date.now() + 20_000,
+    });
+
+    expect(result).toMatchObject({
+      kind: "failed",
+      failure: { code: "authorization_denied" },
+      diagnosticPhase: "trusted_subject_resolution",
+    });
+    expect(resolveSubject).toHaveBeenCalledOnce();
+    expect(executor).not.toHaveBeenCalled();
+    const failedRun = await store.getRun({ runId: accepted.runId, userId: USER_ID });
+    expect(failedRun?.status).toBe("failed");
+    expect(failedRun?.steps.map(({ status, failureCode }) => [status, failureCode])).toEqual([
+      ["failed", "authorization_denied"], ["skipped", "dependency_failed"], ["skipped", "dependency_failed"],
+    ]);
+  });
+
   it("atomically associates one validated acceptance without dispatching a capability", async () => {
     const store = new InMemoryExecutionStore();
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
