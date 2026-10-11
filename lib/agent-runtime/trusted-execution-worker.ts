@@ -3,6 +3,7 @@ import type { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-
 import { isAutonomousCapabilityAllowed } from "@/lib/agent-runtime/autonomous-capability-policy";
 import type { DiscoveredExecutionWork, ExecutionStore } from "@/lib/agent-runtime/execution-store";
 import { EXECUTION_WORK_LEASE_POLICY } from "@/lib/agent-runtime/execution-store";
+import type { ExecutionFailureCode } from "@/lib/agent-runtime/runtime-contracts";
 import {
   EXECUTION_INVOCATION_BUDGET_MS,
   EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS,
@@ -39,6 +40,9 @@ export type TrustedExecutionWorkerOutcome = Readonly<{
   durationMs: number;
   /** Null means the persisted outcome does not prove how many provider calls completed. */
   providerCalls: number | null;
+  /** Safe, bounded diagnostics for server logs; never contains exception text or user data. */
+  diagnosticPhase?: "runtime_threw" | "runtime_recovery" | "runtime_rejected" | "post_runtime_read" | "post_runtime_state_check";
+  diagnosticCode?: ExecutionFailureCode;
 }>;
 
 export type TrustedExecutionWorkerDependencies = Readonly<{
@@ -54,7 +58,14 @@ function outcome(
   status: TrustedExecutionWorkerOutcome["status"],
   started: number,
   now: () => number,
-  options: { runId?: string; stepId?: string; capability?: string; providerCalls?: number | null } = {},
+  options: {
+    runId?: string;
+    stepId?: string;
+    capability?: string;
+    providerCalls?: number | null;
+    diagnosticPhase?: TrustedExecutionWorkerOutcome["diagnosticPhase"];
+    diagnosticCode?: ExecutionFailureCode;
+  } = {},
 ): TrustedExecutionWorkerOutcome {
   return Object.freeze({
     status,
@@ -63,6 +74,8 @@ function outcome(
     ...(options.capability ? { capability: options.capability } : {}),
     durationMs: Math.max(0, now() - started),
     providerCalls: Object.prototype.hasOwnProperty.call(options, "providerCalls") ? options.providerCalls! : 0,
+    ...(options.diagnosticPhase ? { diagnosticPhase: options.diagnosticPhase } : {}),
+    ...(options.diagnosticCode ? { diagnosticCode: options.diagnosticCode } : {}),
   });
 }
 
@@ -232,14 +245,24 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
         providerDeadlineAtMs,
       }).catch(() => null);
       if (!result) return outcome("recovery_required", started, now,
-        { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null });
+        { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null, diagnosticPhase: "runtime_threw" });
       if (result.kind === "recovery_required") return outcome("recovery_required", started, now,
-        { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null });
+        { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null,
+          diagnosticPhase: "runtime_recovery", diagnosticCode: result.failure.code });
 
-      const latest = await dependencies.store.getAcceptedRunForFinalization({ runId: run.id }).catch(() => null);
+      let latest;
+      try {
+        latest = await dependencies.store.getAcceptedRunForFinalization({ runId: run.id });
+      } catch {
+        return outcome("recovery_required", started, now,
+          { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null,
+            diagnosticPhase: "post_runtime_read", diagnosticCode: "persistence_failed" });
+      }
       if (!latest || latest.steps.some((step) => step.status === "running")) {
         return outcome("recovery_required", started, now,
-          { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null });
+          { runId: run.id, stepId: selected.stepId, capability: selected.capabilityId, providerCalls: null,
+            diagnosticPhase: "post_runtime_state_check",
+            ...(latest ? { diagnosticCode: "indeterminate_step" as const } : {}) });
       }
       const released = await dependencies.store.releaseExecutionWorkClaim({
         runId: run.id,
@@ -267,7 +290,13 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
       if (result.kind === "rejected" && result.failure.code === "authorization_denied") {
         return outcome("authorization_denied", started, now, details);
       }
-      return outcome("recovery_required", started, now, { ...details, providerCalls: null });
+      return outcome("recovery_required", started, now, {
+        ...details,
+        providerCalls: null,
+        ...(result.kind === "rejected"
+          ? { diagnosticPhase: "runtime_rejected" as const, diagnosticCode: result.failure.code }
+          : {}),
+      });
     },
   });
 }

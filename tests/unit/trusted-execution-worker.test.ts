@@ -153,4 +153,25 @@ describe("trusted bounded execution worker", () => {
     expect(store.claimExecutionWork).not.toHaveBeenCalled();
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
   });
+
+  it("reproduces a pre-transition runtime rejection as recovery_required and logs only its safe phase and code", async () => {
+    const pendingRun = run({ snapshotRevision: 0, status: "pending", steps: [{
+      ...run().steps[0]!, status: "pending",
+    }] });
+    const { worker, runtime, store } = setup({ currentRun: pendingRun });
+    vi.mocked(runtime.executeClaimedStep).mockResolvedValueOnce({
+      kind: "rejected", failure: { code: "snapshot_conflict", message: "safe test failure" },
+    } as never);
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({
+      status: "recovery_required",
+      providerCalls: null,
+      diagnosticPhase: "runtime_rejected",
+      diagnosticCode: "snapshot_conflict",
+    });
+    expect(store.releaseExecutionWorkClaim).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 0 }));
+    expect(pendingRun).toMatchObject({ status: "pending", snapshotRevision: 0, steps: [{ status: "pending" }] });
+  });
 });

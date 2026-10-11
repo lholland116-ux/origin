@@ -107,6 +107,20 @@ describe("authenticated execution wake-up", () => {
     expect(JSON.stringify(f.log.mock.calls)).not.toContain(SECRET);
   });
 
+  it("logs safe worker diagnostics internally without adding them to the HTTP response", async () => {
+    const f = fixture({ runOnce: vi.fn(async () => ({
+      status: "recovery_required", durationMs: 42, providerCalls: null,
+      diagnosticPhase: "runtime_rejected", diagnosticCode: "snapshot_conflict",
+    })) });
+    const response = await handleExecutionTrigger(request(), f.dependencies as never);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "recovery_required", durationMs: 0, providerCalls: null });
+    expect(f.log).toHaveBeenCalledWith(expect.objectContaining({
+      event: "trigger_completed", diagnosticPhase: "runtime_rejected", diagnosticCode: "snapshot_conflict",
+    }));
+  });
+
   it("accepts a zero-byte POST stream and continues through normal authentication", async () => {
     const bodyStream = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
     const f = fixture();

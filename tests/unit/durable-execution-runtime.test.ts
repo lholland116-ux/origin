@@ -208,6 +208,47 @@ describe("durable XState execution runtime", () => {
     });
   });
 
+  it("uses trusted accepted-run validation for a background claim without requiring a customer session", async () => {
+    const store = new InMemoryExecutionStore();
+    const acceptor = runtime(store, async (input) => mockResult(input));
+    const accepted = await acceptor.associateAcceptedRequest(handoff(), runtimeInput(), ACCEPTED_REQUEST);
+    expect(accepted.kind).toBe("associated");
+    if (accepted.kind !== "associated") return;
+
+    const calls: CapabilityExecutionInput[] = [];
+    const backgroundBindingValidator = vi.fn(async () => false);
+    const subject = Object.freeze({ userId: USER_ID, runId: accepted.runId }) as never;
+    const workerRuntime = runtime(store, async (input) => {
+      calls.push(input);
+      return mockResult(input);
+    }, undefined, backgroundBindingValidator, undefined, {
+      resolve: async () => subject,
+      authorize: () => ({ authorize: async () => ({ allowed: true }) }),
+    });
+
+    const result = await workerRuntime.executeClaimedStep({
+      runId: accepted.runId,
+      authenticatedUserId: USER_ID,
+      expectedStepId: "step-1",
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 1 },
+      executionDeadlineAtMs: Date.now() + 30_000,
+      providerDeadlineAtMs: Date.now() + 20_000,
+    });
+
+    expect(result.kind).toBe("slice_yielded");
+    expect(backgroundBindingValidator).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+    expect(await store.getRun({ runId: accepted.runId, userId: USER_ID })).toMatchObject({
+      status: "running", snapshotRevision: expect.any(Number), steps: [{ status: "succeeded" }, { status: "pending" }, { status: "pending" }],
+    });
+
+    const userResumeValidator = vi.fn(async () => false);
+    const userResume = await runtime(store, async (input) => mockResult(input), undefined, userResumeValidator)
+      .resume({ runId: accepted.runId, authenticatedUserId: USER_ID });
+    expect(userResume).toMatchObject({ kind: "rejected", failure: { code: "ownership_denied" } });
+    expect(userResumeValidator).toHaveBeenCalledOnce();
+  });
+
   it("atomically associates one validated acceptance without dispatching a capability", async () => {
     const store = new InMemoryExecutionStore();
     const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));

@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import type { ExecutionFailureCode } from "@/lib/agent-runtime/runtime-contracts";
 
 const TRIGGER_PATH = "/api/internal/execution-wake";
 const MAX_CLOCK_SKEW_SECONDS = 300;
@@ -13,6 +14,9 @@ export type ExecutionTriggerWorkerResult = Readonly<{
   status: string;
   durationMs: number;
   providerCalls: number | null;
+  /** Optional safe runtime diagnostics; logged internally and never included in the HTTP response. */
+  diagnosticPhase?: "runtime_threw" | "runtime_recovery" | "runtime_rejected" | "post_runtime_read" | "post_runtime_state_check";
+  diagnosticCode?: ExecutionFailureCode;
 }>;
 
 export type ExecutionTriggerDependencies = Readonly<{
@@ -209,6 +213,8 @@ export async function handleExecutionTrigger(
     durationMs,
     workCount: result.status === "no_work" || result.status === "busy" ? 0 : 1,
     providerCalls: result.providerCalls,
+    ...(result.diagnosticPhase ? { diagnosticPhase: result.diagnosticPhase } : {}),
+    ...(result.diagnosticCode ? { diagnosticCode: result.diagnosticCode } : {}),
   });
   return json(200, { status: result.status, durationMs, providerCalls: result.providerCalls });
 }

@@ -967,13 +967,19 @@ export class DurableXStateExecutionRuntime {
       if (input.requestId !== undefined && input.requestId !== persistedBinding.requestId) {
         return { kind: "rejected", failure: executionFailure("invalid_persisted_state") };
       }
-      let bindingIsValid = false;
-      try {
-        bindingIsValid = await this.options.requestMessageBindingValidator.validate(persistedBinding);
-      } catch {
-        bindingIsValid = false;
+      if (input.workClaim === undefined || input.expectedStepId === undefined) {
+        let bindingIsValid = false;
+        try {
+          bindingIsValid = await this.options.requestMessageBindingValidator.validate(persistedBinding);
+        } catch {
+          bindingIsValid = false;
+        }
+        if (!bindingIsValid) return { kind: "rejected", failure: executionFailure("ownership_denied") };
       }
-      if (!bindingIsValid) return { kind: "rejected", failure: executionFailure("ownership_denied") };
+      // A trusted background wake has no customer auth session. Its accepted
+      // run is checked by the worker, and resolveTrustedExecutionSubject
+      // revalidates the exact message/conversation binding and live claim
+      // before any capability adapter can run.
       record = {
         ...record,
         runtimeContext: { ...record.runtimeContext, requestMessageBinding: persistedBinding },
