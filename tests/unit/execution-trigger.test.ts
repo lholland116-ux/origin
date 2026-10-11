@@ -7,20 +7,34 @@ const NOW = Date.UTC(2026, 9, 9, 12, 0, 0);
 const NONCE = "1234567890abcdef1234567890abcdef";
 const PATH = "/api/internal/execution-wake";
 
-function request(options: { nonce?: string; timestamp?: string; signature?: string; body?: string; signal?: AbortSignal } = {}): Request {
+function request(options: {
+  nonce?: string;
+  timestamp?: string;
+  signature?: string;
+  body?: string;
+  bodyStream?: ReadableStream<Uint8Array>;
+  contentLength?: string;
+  signal?: AbortSignal;
+} = {}): Request {
   const timestamp = options.timestamp ?? String(Math.floor(NOW / 1000));
   const nonce = options.nonce ?? NONCE;
   const signature = options.signature ?? createHmac("sha256", SECRET)
     .update(`v1\nPOST\n${PATH}\n${timestamp}\n${nonce.toLowerCase()}`, "utf8").digest("hex");
-  return new Request(`https://lvtchat.test${PATH}`, {
+  const headers = new Headers({
+    "x-lvtchat-timestamp": timestamp,
+    "x-lvtchat-nonce": nonce,
+    "x-lvtchat-signature": signature,
+  });
+  if (options.contentLength !== undefined) headers.set("content-length", options.contentLength);
+  const init: RequestInit & { duplex?: "half" } = {
     method: "POST",
-    headers: {
-      "x-lvtchat-timestamp": timestamp,
-      "x-lvtchat-nonce": nonce,
-      "x-lvtchat-signature": signature,
-    },
-    body: options.body,
+    headers,
+    body: options.bodyStream ?? options.body,
     signal: options.signal,
+  };
+  if (options.bodyStream) init.duplex = "half";
+  return new Request(`https://lvtchat.test${PATH}`, {
+    ...init,
   });
 }
 
@@ -79,7 +93,7 @@ describe("authenticated execution wake-up", () => {
     }
   });
 
-  it("accepts a valid HMAC wake-up, invokes exactly one bounded worker call, and sanitizes the result", async () => {
+  it("accepts a valid HMAC wake-up with a null body, invokes one bounded worker call, and sanitizes the result", async () => {
     const f = fixture();
     const response = await handleExecutionTrigger(request(), f.dependencies as never);
     expect(response.status).toBe(200);
@@ -93,6 +107,73 @@ describe("authenticated execution wake-up", () => {
     expect(JSON.stringify(f.log.mock.calls)).not.toContain(SECRET);
   });
 
+  it("accepts a zero-byte POST stream and continues through normal authentication", async () => {
+    const bodyStream = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    const f = fixture();
+    const response = await handleExecutionTrigger(request({ bodyStream }), f.dependencies as never);
+
+    expect(response.status).toBe(200);
+    expect(f.consumeNonce).toHaveBeenCalledOnce();
+    expect(f.runOnce).toHaveBeenCalledOnce();
+  });
+
+  it("accepts Content-Length 0", async () => {
+    const f = fixture();
+    const response = await handleExecutionTrigger(request({ contentLength: "0" }), f.dependencies as never);
+
+    expect(response.status).toBe(200);
+    expect(f.runOnce).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a non-empty body before nonce consumption or worker dispatch", async () => {
+    const f = fixture();
+    const response = await handleExecutionTrigger(request({ body: "unexpected" }), f.dependencies as never);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_request" });
+    expect(f.consumeNonce).not.toHaveBeenCalled();
+    expect(f.runOnce).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit nonzero Content-Length before nonce consumption or worker dispatch", async () => {
+    const f = fixture();
+    const response = await handleExecutionTrigger(request({ contentLength: "1" }), f.dependencies as never);
+
+    expect(response.status).toBe(400);
+    expect(f.consumeNonce).not.toHaveBeenCalled();
+    expect(f.runOnce).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request body stream that does not finish within the validation bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const bodyStream = new ReadableStream<Uint8Array>({ start() {} });
+      const f = fixture();
+      const pendingResponse = handleExecutionTrigger(request({ bodyStream }), f.dependencies as never);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const response = await pendingResponse;
+
+      expect(response.status).toBe(400);
+      expect(f.consumeNonce).not.toHaveBeenCalled();
+      expect(f.runOnce).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a stream that emits repeated zero-length chunks", async () => {
+    const bodyStream = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(0)); },
+    });
+    const f = fixture();
+    const response = await handleExecutionTrigger(request({ bodyStream }), f.dependencies as never);
+
+    expect(response.status).toBe(400);
+    expect(f.consumeNonce).not.toHaveBeenCalled();
+    expect(f.runOnce).not.toHaveBeenCalled();
+  });
+
   it("maps worker persistence unavailability to a retryable wake response", async () => {
     const f = fixture({ runOnce: vi.fn(async () => ({ status: "worker_unavailable", durationMs: 7, providerCalls: null })) });
     const response = await handleExecutionTrigger(request(), f.dependencies as never);
@@ -101,15 +182,14 @@ describe("authenticated execution wake-up", () => {
     expect(f.releaseInvocation).toHaveBeenCalledOnce();
   });
 
-  it("rejects bad signatures, stale timestamps, malformed authentication, and caller-supplied work arguments", async () => {
+  it("rejects bad signatures, stale timestamps, and malformed authentication", async () => {
     const badSignature = request({ signature: "a".repeat(64) });
     const stale = request({ timestamp: String(Math.floor(NOW / 1000) - 301), nonce: "2234567890abcdef1234567890abcdef" });
     const malformed = new Request(`https://lvtchat.test${PATH}`, { method: "POST" });
-    const body = request({ nonce: "3234567890abcdef1234567890abcdef", body: JSON.stringify({ runId: "caller-selected" }) });
-    for (const candidate of [badSignature, stale, malformed, body]) {
+    for (const candidate of [badSignature, stale, malformed]) {
       const f = fixture();
       const response = await handleExecutionTrigger(candidate, f.dependencies as never);
-      expect([400, 401]).toContain(response.status);
+      expect(response.status).toBe(401);
       expect(f.consumeNonce).not.toHaveBeenCalled();
       expect(f.runOnce).not.toHaveBeenCalled();
     }

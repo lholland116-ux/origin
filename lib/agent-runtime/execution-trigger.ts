@@ -6,6 +6,8 @@ const NONCE_PATTERN = /^[0-9a-f]{32}$/i;
 const HEX_SIGNATURE_PATTERN = /^[0-9a-f]{64}$/i;
 const SECRET_MIN_BYTES = 32;
 const GATE_RENEWAL_INTERVAL_MS = 30_000;
+const REQUEST_BODY_VALIDATION_TIMEOUT_MS = 1_000;
+const MAX_EMPTY_BODY_CHUNKS = 16;
 
 export type ExecutionTriggerWorkerResult = Readonly<{
   status: string;
@@ -46,6 +48,45 @@ export function signExecutionTrigger(secret: string, timestamp: string, nonce: s
   return createHmac("sha256", secret).update(signable(timestamp, nonce), "utf8").digest("hex");
 }
 
+async function hasRequestBodyBytes(body: ReadableStream<Uint8Array>): Promise<boolean> {
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = body.getReader();
+  } catch {
+    return true;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let emptyChunkCount = 0;
+  const timedOut = new Promise<null>((resolve) => {
+    timeout = setTimeout(() => resolve(null), REQUEST_BODY_VALIDATION_TIMEOUT_MS);
+  });
+
+  try {
+    while (true) {
+      const result = await Promise.race([reader.read(), timedOut]);
+      if (result === null) {
+        void reader.cancel().catch(() => undefined);
+        return true;
+      }
+      if (result.done) return false;
+      if (result.value.byteLength > 0) {
+        void reader.cancel().catch(() => undefined);
+        return true;
+      }
+      emptyChunkCount += 1;
+      if (emptyChunkCount > MAX_EMPTY_BODY_CHUNKS) {
+        void reader.cancel().catch(() => undefined);
+        return true;
+      }
+    }
+  } catch {
+    void reader.cancel().catch(() => undefined);
+    return true;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 /** Authenticated wake-up only: it accepts no run or owner arguments and performs one bounded worker call. */
 export async function handleExecutionTrigger(
   request: Request,
@@ -68,8 +109,12 @@ export async function handleExecutionTrigger(
   if (request.method !== "POST" || new URL(request.url).pathname !== TRIGGER_PATH) {
     return json(404, { error: "not_found" });
   }
-  if (request.body !== null || (request.headers.has("content-length") && request.headers.get("content-length") !== "0")) {
-    await request.body?.cancel().catch(() => undefined);
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null && contentLength !== "0") {
+    void request.body?.cancel().catch(() => undefined);
+    return json(400, { error: "invalid_request" });
+  }
+  if (request.body !== null && await hasRequestBodyBytes(request.body)) {
     return json(400, { error: "invalid_request" });
   }
 
