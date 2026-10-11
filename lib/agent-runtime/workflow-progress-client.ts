@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { classifyTaskComplexity } from "@/lib/ai/task-complexity";
+import { isPendingAssistantMessage } from "@/lib/chat/request-message-visibility";
 import type { WorkflowProgressDto } from "@/lib/agent-runtime/workflow-http-api";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -66,6 +67,47 @@ export type WorkflowAcceptedStart = Readonly<{
 
 export type WorkflowProgressStorage = Pick<Storage, "getItem" | "setItem">;
 
+export function createWorkflowStatusRequestGeneration() {
+  let current = 0;
+  return Object.freeze({
+    begin: () => ++current,
+    isCurrent: (generation: number) => generation === current,
+    invalidate: () => { current += 1; },
+  });
+}
+
+export function createWorkflowProgressTimer(
+  setTimer: (callback: () => void, delay: number) => ReturnType<typeof setTimeout> = setTimeout,
+  clearTimer: (timer: ReturnType<typeof setTimeout>) => void = clearTimeout,
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Object.freeze({
+    schedule(callback: () => void, delay: number) {
+      if (timer !== undefined) clearTimer(timer);
+      timer = setTimer(() => {
+        timer = undefined;
+        callback();
+      }, delay);
+    },
+    clear() {
+      if (timer !== undefined) clearTimer(timer);
+      timer = undefined;
+    },
+    isPending: () => timer !== undefined,
+  });
+}
+
+export type WorkflowPanelMessage = Readonly<{
+  id: string;
+  role: string;
+  content?: string;
+}>;
+
+export type WorkflowPanelSelection = Readonly<{
+  messageHosted: readonly WorkflowTrackingRecord[];
+  conversationHosted: readonly WorkflowTrackingRecord[];
+}>;
+
 function parseTrackingRecords(value: unknown): WorkflowTrackingRecord[] {
   if (!Array.isArray(value)) return [];
   const unique = new Map<string, WorkflowTrackingRecord>();
@@ -90,6 +132,43 @@ export function readWorkflowTrackingRecords(
   }
 }
 
+/** Selects the single rendering host for each valid workflow in the active conversation. */
+export function selectWorkflowPanelRecords(
+  records: readonly unknown[],
+  conversationId: string,
+  messages: readonly WorkflowPanelMessage[],
+): WorkflowPanelSelection {
+  if (!UUID.test(conversationId)) return { messageHosted: [], conversationHosted: [] };
+
+  const recordsByRun = new Map<string, WorkflowTrackingRecord>();
+  for (const record of parseTrackingRecords(records)) {
+    if (record.conversationId === conversationId && !recordsByRun.has(record.runId)) {
+      recordsByRun.set(record.runId, record);
+    }
+  }
+  const validRecords = [...recordsByRun.values()];
+  const visibleAssistantIds = new Set(messages
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.id));
+
+  return {
+    messageHosted: validRecords.filter((record) => visibleAssistantIds.has(record.assistantMessageId)),
+    conversationHosted: validRecords.filter((record) => !visibleAssistantIds.has(record.assistantMessageId)),
+  };
+}
+
+/** A completed panel is retired only after its accepted destination is visible as final content. */
+export function isFinalizedWorkflowAssistantMessageVisible(
+  record: WorkflowTrackingRecord,
+  messages: readonly WorkflowPanelMessage[],
+): boolean {
+  return messages.some((message) => message.id === record.assistantMessageId
+    && message.role === "assistant"
+    && typeof message.content === "string"
+    && message.content.trim().length > 0
+    && !isPendingAssistantMessage({ role: message.role, content: message.content }));
+}
+
 export function saveWorkflowTrackingRecord(
   storage: WorkflowProgressStorage | null,
   record: WorkflowTrackingRecord,
@@ -107,6 +186,22 @@ export function saveWorkflowTrackingRecord(
   }
 }
 
+export function removeWorkflowTrackingRecord(
+  storage: WorkflowProgressStorage | null,
+  record: WorkflowTrackingRecord,
+): boolean {
+  if (!storage || !trackingRecordSchema.safeParse(record).success) return false;
+  try {
+    const existing = parseTrackingRecords(JSON.parse(storage.getItem(WORKFLOW_PROGRESS_STORAGE_KEY) ?? "[]"));
+    const records = existing.filter((item) => item.conversationId !== record.conversationId
+      || item.assistantMessageId !== record.assistantMessageId);
+    storage.setItem(WORKFLOW_PROGRESS_STORAGE_KEY, JSON.stringify(records));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function upsertWorkflowTrackingRecords(
   records: readonly WorkflowTrackingRecord[],
   record: WorkflowTrackingRecord,
@@ -118,6 +213,14 @@ export function upsertWorkflowTrackingRecords(
       || item.assistantMessageId !== record.assistantMessageId),
     parsed.data,
   ].slice(-250);
+}
+
+export function removeWorkflowTrackingRecords(
+  records: readonly WorkflowTrackingRecord[],
+  record: WorkflowTrackingRecord,
+): WorkflowTrackingRecord[] {
+  return records.filter((item) => item.conversationId !== record.conversationId
+    || item.assistantMessageId !== record.assistantMessageId);
 }
 
 export function parseWorkflowProgress(value: unknown): WorkflowProgressDto | null {

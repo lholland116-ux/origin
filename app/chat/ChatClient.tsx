@@ -78,7 +78,11 @@ import {
   parseAcceptedWorkflowRecovery,
   shouldPrepareMultiStepWorkflow,
   readWorkflowTrackingRecords,
+  isFinalizedWorkflowAssistantMessageVisible,
+  removeWorkflowTrackingRecord,
+  removeWorkflowTrackingRecords,
   saveWorkflowTrackingRecord,
+  selectWorkflowPanelRecords,
   upsertWorkflowTrackingRecords,
   WORKFLOW_PROGRESS_STORAGE_KEY,
   type WorkflowTrackingRecord,
@@ -3421,6 +3425,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
   async function refreshMessagesForConversation(
     targetConversationId: string,
+    onAppliedMessages?: (messages: Message[]) => void,
   ): Promise<boolean> {
     const requestGeneration = ++messageLoadGenerationRef.current;
 
@@ -3444,6 +3449,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         targetConversationId === conversationId
       ) {
         setMessages(refreshedMessages);
+        onAppliedMessages?.(refreshedMessages);
       }
 
       return true;
@@ -3452,8 +3458,17 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
   }
 
-  function refreshWorkflowMessage(): void {
-    void refreshMessagesForConversation(conversationId);
+  function refreshWorkflowMessage(record: WorkflowTrackingRecord): void {
+    void refreshMessagesForConversation(record.conversationId, (refreshedMessages) => {
+      if (!isFinalizedWorkflowAssistantMessageVisible(record, refreshedMessages)) return;
+      setWorkflowTrackingRecords((previous) => removeWorkflowTrackingRecords(previous, record));
+      removeWorkflowTrackingRecord(workflowProgressStorage(), record);
+      setWorkflowInitialStatuses((previous) => {
+        const next = { ...previous };
+        delete next[record.assistantMessageId];
+        return next;
+      });
+    });
   }
 
   async function handleImageEditSubmit(): Promise<void> {
@@ -6024,6 +6039,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     );
   }
 
+  const workflowPanelSelection = selectWorkflowPanelRecords(
+    workflowTrackingRecords,
+    conversationId,
+    messages,
+  );
+
   return (
     <>
       <OnboardingModal />
@@ -6234,7 +6255,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                     const isLatestMessage = message.id === messages[messages.length - 1]?.id;
                     const isRegeneratingImage = regeneratingMessageId === message.id;
                     const workflowRecord = message.role === "assistant"
-                      ? workflowTrackingRecords.find((record) => record.conversationId === conversationId
+                      ? workflowPanelSelection.messageHosted.find((record) => record.conversationId === conversationId
                         && record.assistantMessageId === message.id)
                       : undefined;
 
@@ -6309,7 +6330,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               conversationId={workflowRecord.conversationId}
                               initialStatus={workflowInitialStatuses[message.id]}
                               theme={activeTheme}
-                              onCompleted={refreshWorkflowMessage}
+                              onCompleted={() => refreshWorkflowMessage(workflowRecord)}
                             />
                           ) : null}
 
@@ -6660,6 +6681,18 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       </div>
                     );
                   })}
+
+                  {workflowPanelSelection.conversationHosted.map((record) => (
+                    <div key={`${record.conversationId}:${record.assistantMessageId}`} className={`${ASSISTANT_BUBBLE_CLASS} mx-auto min-w-0`}>
+                      <WorkflowProgressPanel
+                        runId={record.runId}
+                        conversationId={record.conversationId}
+                        initialStatus={workflowInitialStatuses[record.assistantMessageId]}
+                        theme={activeTheme}
+                        onCompleted={() => refreshWorkflowMessage(record)}
+                      />
+                    </div>
+                  ))}
 
                   {loading && messages.length > 0 && (
                     <div className={`${ASSISTANT_BUBBLE_CLASS} mx-auto text-xs ${activeTheme.mutedText}`}>

@@ -5,6 +5,8 @@ import type { ChatTheme } from "@/lib/chat-themes";
 import type { WorkflowProgressDto } from "@/lib/agent-runtime/workflow-http-api";
 import {
   isWorkflowProgressTerminal,
+  createWorkflowProgressTimer,
+  createWorkflowStatusRequestGeneration,
   parseWorkflowStatusResponse,
   workflowProgressRefreshDelay,
   workflowProgressControls,
@@ -71,7 +73,8 @@ export default function WorkflowProgressPanel({
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pollTimer = createWorkflowProgressTimer();
+    const requestGeneration = createWorkflowStatusRequestGeneration();
     let activeController: AbortController | undefined;
     let current = initialStatus ?? null;
     setStatus(current);
@@ -90,13 +93,13 @@ export default function WorkflowProgressPanel({
 
     const schedule = (delay: number) => {
       if (cancelled || (current && isWorkflowProgressTerminal(current))) return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { void refresh(); }, delay);
+      pollTimer.schedule(() => { void refresh(); }, delay);
     };
 
     const refresh = async (): Promise<WorkflowProgressDto | null> => {
-      if (timer) clearTimeout(timer);
-      timer = undefined;
+      pollTimer.clear();
+      const generation = requestGeneration.begin();
+      activeController?.abort();
       const controller = new AbortController();
       activeController = controller;
       try {
@@ -105,28 +108,29 @@ export default function WorkflowProgressPanel({
           cache: "no-store",
           signal: controller.signal,
         });
-        if (cancelled) return null;
+        if (cancelled || !requestGeneration.isCurrent(generation)) return null;
         const responseFailure = workflowStatusHttpFailure(response.status);
         if (responseFailure === "reauthenticate") {
           current = null;
-          if (timer) clearTimeout(timer);
+          pollTimer.clear();
           setStatus(null);
           setRefreshMessage("Sign in again to check this workflow's status.");
           return null;
         }
         if (responseFailure === "unavailable") {
           current = null;
-          if (timer) clearTimeout(timer);
+          pollTimer.clear();
           setStatus(null);
           setRefreshMessage("Workflow status is unavailable for this conversation.");
           return null;
         }
         if (responseFailure === "retry") throw new Error("status_unavailable");
         const payload: unknown = await response.json();
+        if (cancelled || !requestGeneration.isCurrent(generation)) return null;
         const parsed = parseWorkflowStatusResponse(payload, runId, conversationId);
         if (!parsed) {
           current = null;
-          if (timer) clearTimeout(timer);
+          pollTimer.clear();
           setStatus(null);
           setRefreshMessage("Workflow status is unavailable for this conversation.");
           return null;
@@ -138,17 +142,19 @@ export default function WorkflowProgressPanel({
         setRefreshMessage("");
         notifyCompletion(parsed);
         if (isWorkflowProgressTerminal(parsed)) {
-          if (timer) clearTimeout(timer);
+          pollTimer.clear();
         } else {
           schedule(workflowProgressRefreshDelay(parsed, failures));
         }
         return parsed;
       } catch {
-        if (cancelled) return null;
+        if (cancelled || !requestGeneration.isCurrent(generation)) return null;
         failures += 1;
         setRefreshMessage("Status could not be refreshed. Retrying automatically.");
         schedule(workflowProgressRefreshDelay(current, failures));
         return null;
+      } finally {
+        if (activeController === controller) activeController = undefined;
       }
     };
     refreshStatusRef.current = refresh;
@@ -165,7 +171,8 @@ export default function WorkflowProgressPanel({
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      requestGeneration.invalidate();
+      pollTimer.clear();
       activeController?.abort();
       refreshStatusRef.current = async () => null;
     };

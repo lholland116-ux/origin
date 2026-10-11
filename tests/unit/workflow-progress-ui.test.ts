@@ -10,8 +10,15 @@ import {
   parseAcceptedWorkflowStart,
   parseWorkflowStatusResponse,
   readWorkflowTrackingRecords,
+  removeWorkflowTrackingRecord,
+  removeWorkflowTrackingRecords,
   saveWorkflowTrackingRecord,
+  selectWorkflowPanelRecords,
   shouldPrepareMultiStepWorkflow,
+  isFinalizedWorkflowAssistantMessageVisible,
+  createWorkflowProgressTimer,
+  createWorkflowStatusRequestGeneration,
+  upsertWorkflowTrackingRecords,
   workflowProgressRefreshDelay,
   workflowProgressControls,
   workflowStatusHttpFailure,
@@ -22,6 +29,7 @@ import {
   WORKFLOW_PROGRESS_WAIT_REFRESH_MS,
 } from "@/lib/agent-runtime/workflow-progress-client";
 import { reconcileAcceptedWorkflowMessages } from "@/app/chat/ChatClient";
+import { createPendingAssistantMessageContent, omitPendingAssistantMessages } from "@/lib/chat/request-message-visibility";
 
 const RUN = "e4000000-0000-4000-8000-000000000001";
 const CONVERSATION = "e4000000-0000-4000-8000-000000000002";
@@ -176,6 +184,128 @@ describe("workflow progress UI contract", () => {
     expect(readWorkflowTrackingRecords(storage, CONVERSATION)).toEqual([record]);
     expect(readWorkflowTrackingRecords(storage, "e4000000-0000-4000-8000-000000000099")).toEqual([]);
     expect(storage.getItem(WORKFLOW_PROGRESS_STORAGE_KEY)).not.toContain("private prompt");
+  });
+
+  it("keeps accepted workflows visible when pending assistant destinations are omitted", () => {
+    const accepted = parseAcceptedWorkflowStart({
+      accepted: true,
+      acceptedRequest: { requestId: REQUEST, userMessageId: USER_MESSAGE, assistantMessageId: ASSISTANT_MESSAGE, idempotencyKey: IDEMPOTENCY },
+      status: status(),
+    }, CONVERSATION, IDEMPOTENCY);
+    expect(accepted).not.toBeNull();
+    if (!accepted) return;
+
+    const tracking = {
+      runId: accepted.status.runId,
+      conversationId: accepted.status.conversationId,
+      assistantMessageId: accepted.acceptedRequest.assistantMessageId,
+    };
+    const acceptedTracking = upsertWorkflowTrackingRecords([], tracking);
+    expect(acceptedTracking).toEqual([tracking]);
+    const conversationMessages = omitPendingAssistantMessages([
+      { id: USER_MESSAGE, role: "user", content: "request" },
+      { id: ASSISTANT_MESSAGE, role: "assistant", content: createPendingAssistantMessageContent(REQUEST, USER_MESSAGE) },
+    ]);
+    expect(conversationMessages.map((message) => message.id)).toEqual([USER_MESSAGE]);
+
+    // This is the same selector ChatClient uses after acceptance refresh and on reload.
+    expect(selectWorkflowPanelRecords(acceptedTracking, CONVERSATION, conversationMessages).conversationHosted)
+      .toEqual([tracking]);
+  });
+
+  it("restores only the active conversation's panels and avoids duplicates when the assistant row is visible", () => {
+    const first = { runId: RUN, conversationId: CONVERSATION, assistantMessageId: ASSISTANT_MESSAGE };
+    const otherConversation = {
+      ...first,
+      runId: "e4000000-0000-4000-8000-000000000011",
+      conversationId: "e4000000-0000-4000-8000-000000000012",
+    };
+    const storage = memoryStorage();
+    expect(saveWorkflowTrackingRecord(storage, first)).toBe(true);
+    expect(saveWorkflowTrackingRecord(storage, otherConversation)).toBe(true);
+
+    const restored = readWorkflowTrackingRecords(storage, CONVERSATION);
+    expect(selectWorkflowPanelRecords(restored, CONVERSATION, []).conversationHosted).toEqual([first]);
+    expect(selectWorkflowPanelRecords([first, otherConversation], otherConversation.conversationId, []).conversationHosted)
+      .toEqual([otherConversation]);
+    expect(selectWorkflowPanelRecords([first, first], CONVERSATION, []).conversationHosted).toEqual([first]);
+    expect(selectWorkflowPanelRecords([
+      first,
+      { ...first, assistantMessageId: "e4000000-0000-4000-8000-000000000013" },
+    ], CONVERSATION, []).conversationHosted).toEqual([first]);
+
+    const visible = [{ id: ASSISTANT_MESSAGE, role: "assistant", content: "Final answer" }];
+    expect(selectWorkflowPanelRecords([first], CONVERSATION, visible)).toEqual({
+      messageHosted: [first],
+      conversationHosted: [],
+    });
+    expect(selectWorkflowPanelRecords([first], "not-a-conversation-id", []).conversationHosted).toEqual([]);
+  });
+
+  it("retires a completed panel only after the original finalized assistant message is visible", () => {
+    const record = { runId: RUN, conversationId: CONVERSATION, assistantMessageId: ASSISTANT_MESSAGE };
+    const pending = [{
+      id: ASSISTANT_MESSAGE,
+      role: "assistant",
+      content: createPendingAssistantMessageContent(REQUEST, USER_MESSAGE),
+    }];
+    expect(isFinalizedWorkflowAssistantMessageVisible(record, pending)).toBe(false);
+
+    const finalized = [{ id: ASSISTANT_MESSAGE, role: "assistant", content: "Final answer" }];
+    expect(isFinalizedWorkflowAssistantMessageVisible(record, finalized)).toBe(true);
+    const remaining = removeWorkflowTrackingRecords([record], record);
+    expect(remaining).toEqual([]);
+    expect(selectWorkflowPanelRecords(remaining, CONVERSATION, finalized)).toEqual({
+      messageHosted: [],
+      conversationHosted: [],
+    });
+    expect(finalized).toHaveLength(1);
+
+    const storage = memoryStorage();
+    expect(saveWorkflowTrackingRecord(storage, record)).toBe(true);
+    expect(removeWorkflowTrackingRecord(storage, record)).toBe(true);
+    expect(readWorkflowTrackingRecords(storage, CONVERSATION)).toEqual([]);
+  });
+
+  it("rejects malformed tracking records and preserves ordinary message visibility", () => {
+    const valid = { runId: RUN, conversationId: CONVERSATION, assistantMessageId: ASSISTANT_MESSAGE };
+    const malformed = { ...valid, runId: "not-a-run-id" };
+    expect(selectWorkflowPanelRecords([malformed, valid], CONVERSATION, []).conversationHosted).toEqual([valid]);
+
+    const messages = omitPendingAssistantMessages([
+      { id: USER_MESSAGE, role: "user", content: "ordinary user turn" },
+      { id: ASSISTANT_MESSAGE, role: "assistant", content: "ordinary assistant turn" },
+      { id: REQUEST, role: "assistant", content: createPendingAssistantMessageContent(REQUEST, USER_MESSAGE) },
+    ]);
+    expect(messages.map(({ content }) => content)).toEqual(["ordinary user turn", "ordinary assistant turn"]);
+  });
+
+  it("invalidates stale status responses and clears scheduled polling on cleanup", () => {
+    const generation = createWorkflowStatusRequestGeneration();
+    const stale = generation.begin();
+    const latest = generation.begin();
+    expect(generation.isCurrent(stale)).toBe(false);
+    expect(generation.isCurrent(latest)).toBe(true);
+    generation.invalidate();
+    expect(generation.isCurrent(latest)).toBe(false);
+
+    let nextId = 0;
+    const activeTimers = new Set<number>();
+    const timer = createWorkflowProgressTimer(
+      (callback) => {
+        void callback;
+        const id = ++nextId;
+        activeTimers.add(id);
+        return id as unknown as ReturnType<typeof setTimeout>;
+      },
+      (handle) => { activeTimers.delete(handle as unknown as number); },
+    );
+    timer.schedule(() => undefined, WORKFLOW_PROGRESS_REFRESH_MS);
+    expect(timer.isPending()).toBe(true);
+    expect(activeTimers.size).toBe(1);
+    timer.clear();
+    expect(timer.isPending()).toBe(false);
+    expect(activeTimers.size).toBe(0);
   });
 
   it("reconciles accepted messages onto the server-bound assistant destination exactly once", () => {
