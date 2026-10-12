@@ -14,6 +14,7 @@ import {
 } from "@/lib/documents/generated-document-contracts";
 import { getDocumentMimeType, isSupportedDocumentFormat } from "@/lib/documents/generation/mime";
 import { isSafeFilename } from "@/lib/documents/generation/filenames";
+import { canonicalizeGeneratedDocumentCreatedAt } from "@/lib/documents/generated-document-timestamp";
 import type { GeneratedArtifact } from "@/lib/documents/generation/contracts";
 import { isTrustedExecutionSubject, type TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 import {
@@ -82,6 +83,8 @@ export class GeneratedDocumentPersistenceError extends Error {
 }
 
 function referenceFromRecord(record: GeneratedDocumentPersistenceRecord): GeneratedDocumentReference {
+  const createdAt = canonicalizeGeneratedDocumentCreatedAt(record.createdAt);
+  if (createdAt === null) throw new GeneratedDocumentPersistenceError("persistence_failure");
   const parsed = generatedDocumentReferenceSchema.safeParse({
     kind: "generated_document",
     artifactId: record.id,
@@ -91,7 +94,7 @@ function referenceFromRecord(record: GeneratedDocumentPersistenceRecord): Genera
     format: record.format,
     mimeType: record.mimeType,
     sizeBytes: record.sizeBytes,
-    createdAt: record.createdAt,
+    createdAt,
   });
   if (!parsed.success) throw new GeneratedDocumentPersistenceError("persistence_failure");
   return parsed.data;

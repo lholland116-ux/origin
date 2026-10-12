@@ -147,6 +147,74 @@ describe("conversation-bound generated document persistence service", () => {
     expect(result.reference.messageId).toBe(ASSISTANT_MESSAGE_ID);
   });
 
+  it.each([
+    ["2026-10-07T12:00:00.000Z", "2026-10-07T12:00:00.000Z"],
+    ["2026-10-07T12:00:00+00:00", "2026-10-07T12:00:00.000Z"],
+    ["2026-10-07T08:00:00.123456-04:00", "2026-10-07T12:00:00.123456Z"],
+  ])("returns a checkpoint-ready reference for persisted timestamp %s", async (createdAt, expected) => {
+    const { dependencies, persistForExistingMessage } = setup({
+      findById: vi.fn(async () => record({ messageId: ASSISTANT_MESSAGE_ID, createdAt })),
+    });
+    const result = await persistForExistingMessage({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      generationRequestId: REQUEST_ID,
+      templateId: "business-report",
+      generatedOutput: input.generatedOutput,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+    expect(result.reference.createdAt).toBe(expected);
+    expect(dependencies.persistChatForExistingMessage).toHaveBeenCalledOnce();
+    expect(dependencies.remove).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid persisted timestamp without deleting the committed artifact", async () => {
+    const { dependencies, persistForExistingMessage } = setup({
+      findById: vi.fn(async () => record({ messageId: ASSISTANT_MESSAGE_ID, createdAt: "not-a-date" })),
+    });
+    await expect(persistForExistingMessage({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      generationRequestId: REQUEST_ID,
+      templateId: "business-report",
+      generatedOutput: input.generatedOutput,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    })).rejects.toMatchObject({ code: "persistence_failure" });
+    expect(dependencies.remove).not.toHaveBeenCalled();
+  });
+
+  it("reuses the execution-key artifact after a replay and removes only the duplicate upload", async () => {
+    const existingBytes = new Uint8Array([9, 8, 7]);
+    const { dependencies, persistForExistingMessage } = setup({
+      persistChatForExistingMessage: vi.fn(async () => [{
+        assistant_message_id: ASSISTANT_MESSAGE_ID,
+        generated_document_id: GENERATED_ID,
+        was_existing: true,
+      }]),
+      findById: vi.fn(async () => record({
+        messageId: ASSISTANT_MESSAGE_ID,
+        createdAt: "2026-10-07T12:00:00+00:00",
+      })),
+      download: vi.fn(async () => existingBytes),
+    });
+    const result = await persistForExistingMessage({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      generationRequestId: REQUEST_ID,
+      templateId: "business-report",
+      generatedOutput: input.generatedOutput,
+      assistantMessageId: ASSISTANT_MESSAGE_ID,
+    });
+    expect(result.reference).toMatchObject({
+      artifactId: GENERATED_ID,
+      messageId: ASSISTANT_MESSAGE_ID,
+      createdAt: "2026-10-07T12:00:00.000Z",
+    });
+    expect(result.delivery.bytes).toEqual(existingBytes);
+    expect(dependencies.persistChatForExistingMessage).toHaveBeenCalledOnce();
+    expect(dependencies.remove).toHaveBeenCalledOnce();
+  });
+
   it("rejects an invalid existing assistant ID before uploading or persisting", async () => {
     const { dependencies, persistForExistingMessage } = setup();
     await expect(persistForExistingMessage({

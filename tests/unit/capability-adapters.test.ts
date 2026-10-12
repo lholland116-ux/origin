@@ -883,7 +883,7 @@ describe("six independent capability adapters", () => {
           mimeType: input.generatedOutput.mimeType.split(";", 1)[0]!,
           sizeBytes: input.generatedOutput.sizeBytes,
           templateId: input.templateId,
-          createdAt: new Date().toISOString(),
+          createdAt: "2026-10-12T12:00:00+00:00",
         };
         return [{ assistant_message_id: input.assistantMessageId, generated_document_id: input.generatedDocumentId, was_existing: false }];
       },
@@ -945,7 +945,7 @@ describe("six independent capability adapters", () => {
     expect(saved?.steps[2]?.result).toMatchObject({
       kind: "document",
       value: { kind: "generated_document", conversationId: CONVERSATION_ID, messageId: runtimeBinding.assistantMessageId,
-        format: "pdf", mimeType: "application/pdf" },
+        format: "pdf", mimeType: "application/pdf", createdAt: "2026-10-12T12:00:00.000Z" },
     });
   });
 

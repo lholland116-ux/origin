@@ -186,6 +186,31 @@ describe("accepted execution finalization", () => {
     expect(deps.finalizeAtomically).toHaveBeenCalledWith({ runId, finalText: "Your requested image is ready." });
   });
 
+  it("finalizes a checkpointed generated PDF at the original assistant message", async () => {
+    const documentRun = completedRun({
+      executionPlan: {
+        ...completedRun().executionPlan,
+        steps: [{ id: "document", capability: "document_generation", dependsOn: [], inputs: [{ source: "user" }], expectedOutput: "document" }],
+        orderedStepIds: ["document"],
+        governance: { ...completedRun().executionPlan.governance, capabilityIds: ["document_generation"] },
+      },
+      steps: [{
+        ...completedRun().steps[0]!, stepId: "document", capabilityId: "document_generation",
+        result: { kind: "document", value: {
+          kind: "generated_document", artifactId: "f5000000-0000-4000-8000-000000000002",
+          conversationId: binding.conversationId, messageId: binding.assistantMessageId,
+          filename: "report.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 128,
+          createdAt: "2026-10-12T12:00:00.000Z",
+        } },
+      }],
+    });
+    const deps = dependencies(documentRun);
+    expect(await createAcceptedExecutionFinalizer(deps).finalize(runId)).toEqual({
+      status: "finalized", assistantMessageId: binding.assistantMessageId,
+    });
+    expect(deps.finalizeAtomically).toHaveBeenCalledWith({ runId, finalText: "Your requested document is ready." });
+  });
+
   it("discovers only valid bounded run IDs for later recovery, without dispatch", async () => {
     const deps = dependencies(undefined, {
       listPendingRunIds: vi.fn(async () => [runId, "bad-id", "d5000000-0000-4000-8000-000000000002"]),

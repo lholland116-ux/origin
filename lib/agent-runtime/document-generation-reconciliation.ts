@@ -1,6 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
-import { z } from "zod";
 import {
   generatedDocumentReferenceSchema,
 } from "@/lib/agent-runtime/application-contracts";
@@ -11,6 +10,7 @@ import {
   findGeneratedDocumentByRequest,
 } from "@/lib/documents/generated-document-server";
 import { validateGeneratedDocumentStoragePath } from "@/lib/documents/generated-document-storage";
+import { canonicalizeGeneratedDocumentCreatedAt } from "@/lib/documents/generated-document-timestamp";
 import { createExecutionRunLifecycle, createExecutionStepLifecycle } from "@/lib/agent-runtime/execution-lifecycle";
 import { validateExecutionSnapshot } from "@/lib/agent-runtime/execution-snapshot";
 import { validateExecutionStepResult } from "@/lib/agent-runtime/xstate-runtime-adapter";
@@ -20,8 +20,6 @@ if (typeof window !== "undefined") throw new Error("Document reconciliation is s
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RECONCILIATION_BYTES = 10 * 1024 * 1024;
 const AUTHORIZATION_PURPOSE = "owner_approved_document_reconciliation";
-const isoDateTimeWithOffsetSchema = z.string().datetime({ offset: true });
-const ISO_DATE_TIME_PATTERN = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 export type DocumentGenerationReconciliationAuthorization = Readonly<{
   /** This token is supplied only by a separately approved server operator. */
@@ -116,26 +114,8 @@ function buildSnapshot(run: DurableExecutionRun, stepId: string): ExecutionSnaps
   }
 }
 
-/**
- * Supabase may serialize timestamptz values with an explicit offset. Keep the
- * exact fractional precision while presenting the strict result contract with
- * a canonical UTC suffix. Invalid ISO timestamps remain rejected.
- */
-function canonicalizeCreatedAt(value: string): string | null {
-  const parsed = isoDateTimeWithOffsetSchema.safeParse(value);
-  if (!parsed.success) return null;
-  const match = ISO_DATE_TIME_PATTERN.exec(parsed.data);
-  if (!match) return null;
-  const instant = new Date(`${match[1]}${match[3]}`);
-  if (!Number.isFinite(instant.getTime())) return null;
-  const canonical = instant.toISOString();
-  return match[2]
-    ? `${canonical.slice(0, -5)}${match[2]}Z`
-    : canonical;
-}
-
 function documentResult(record: GeneratedDocumentPersistenceRecord, binding: NonNullable<DurableExecutionRun["runtimeContext"]["requestMessageBinding"]>): unknown {
-  const createdAt = canonicalizeCreatedAt(record.createdAt);
+  const createdAt = canonicalizeGeneratedDocumentCreatedAt(record.createdAt);
   if (createdAt === null) return null;
   const reference = generatedDocumentReferenceSchema.safeParse({
     kind: "generated_document",

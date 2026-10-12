@@ -584,6 +584,45 @@ describe("durable XState execution runtime", () => {
     expect(uncertain?.steps.map(({ status }) => status)).toEqual(["running", "pending", "pending"]);
   });
 
+  it("does not create another document when its result checkpoint is rejected", async () => {
+    const base = new InMemoryExecutionStore();
+    const delegate = storeWithClaim(base, (input) => base.claimStep(input));
+    const store: ExecutionStore = {
+      ...delegate,
+      checkpoint: (input) => input.updates.some((update) => update.stepId === "document")
+        ? Promise.resolve({ status: "conflict" })
+        : base.checkpoint(input),
+    };
+    const document = vi.fn(async (): Promise<ExecutionStepResult> => ({
+      kind: "document",
+      value: {
+        kind: "generated_document", artifactId: "d2000000-0000-4000-8000-000000000009",
+        conversationId: REQUEST_BINDING.conversationId,
+        messageId: REQUEST_BINDING.assistantMessageId,
+        filename: "analysis.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 100,
+        createdAt: "2026-10-12T12:00:00.000Z",
+      },
+    }));
+    const documentPlan = handoff([{
+      id: "document", capability: "document_generation", dependsOn: [],
+      inputs: [{ source: "user" }], expectedOutput: "document",
+    }]);
+    const interrupted = await runtime(store, document).execute(documentPlan, runtimeInput(), "document-checkpoint-failure");
+    expect(interrupted).toMatchObject({
+      kind: "recovery_required", stepId: "document", failure: { code: "snapshot_conflict" },
+    });
+    expect(document).toHaveBeenCalledOnce();
+    const pending = await base.getRun({ runId: RUN_ID, userId: USER_ID });
+    expect(pending).toMatchObject({ status: "running", steps: [{ status: "running" }] });
+    expect(pending?.steps[0]).not.toHaveProperty("result");
+
+    const resumed = await runtime(base, document).resume({ runId: RUN_ID, authenticatedUserId: USER_ID });
+    expect(resumed).toMatchObject({
+      kind: "recovery_required", stepId: "document", failure: { code: "indeterminate_step" },
+    });
+    expect(document).toHaveBeenCalledOnce();
+  });
+
   it("resumes retry-pending state without claiming or dispatching it, while a claimed running retry stays fail-closed", async () => {
     let storeNow = new Date("1999-12-31T23:59:59.000Z");
     const store = new InMemoryExecutionStore(() => new Date(storeNow));
