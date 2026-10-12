@@ -146,6 +146,47 @@ describe("governed document-generation artifact reconciliation", () => {
     }));
   });
 
+  it.each([
+    ["2026-10-12T12:00:07.000Z", "2026-10-12T12:00:07.000Z"],
+    ["2026-10-12T12:00:07.000+00:00", "2026-10-12T12:00:07.000Z"],
+    ["2026-10-12T07:00:07.123456-05:00", "2026-10-12T12:00:07.123456Z"],
+  ] as const)("accepts %s and constructs a canonical %s result timestamp", async (createdAt, canonicalCreatedAt) => {
+    const bytes = await validPdf();
+    const reconcile = vi.fn(async () => ({ status: "reconciled" as const, snapshotRevision: 7 }));
+    const deps = dependencies({
+      findDocument: vi.fn(async () => ({ ...record, sizeBytes: bytes.byteLength, createdAt })),
+      downloadDocument: vi.fn(async () => bytes),
+      reconcile,
+    });
+    const reconciler = createDocumentGenerationArtifactReconciler(deps);
+
+    await expect(reconciler({ runId: RUN_ID, authorization: AUTHORIZATION })).resolves.toEqual({
+      status: "reconciled",
+      snapshotRevision: 7,
+    });
+    expect(reconcile).toHaveBeenCalledWith(expect.objectContaining({
+      result: { kind: "document", value: expect.objectContaining({ createdAt: canonicalCreatedAt }) },
+    }));
+  });
+
+  it.each([
+    "not-a-timestamp",
+    "2026-10-12",
+    "2026-10-12T12:00:07+99:99",
+  ])("rejects invalid document timestamp %s before reconciliation", async (createdAt) => {
+    const bytes = await validPdf();
+    const reconcile = vi.fn(async () => ({ status: "reconciled" as const, snapshotRevision: 7 }));
+    const deps = dependencies({
+      findDocument: vi.fn(async () => ({ ...record, sizeBytes: bytes.byteLength, createdAt })),
+      downloadDocument: vi.fn(async () => bytes),
+      reconcile,
+    });
+    const reconciler = createDocumentGenerationArtifactReconciler(deps);
+
+    await expect(reconciler({ runId: RUN_ID, authorization: AUTHORIZATION })).resolves.toEqual({ status: "not_eligible" });
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
   it("is idempotent after a completed reconciliation and never downloads again", async () => {
     const deps = dependencies({
       loadAcceptedRun: vi.fn(async () => run({
