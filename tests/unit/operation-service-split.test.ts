@@ -95,6 +95,25 @@ beforeEach(() => {
 });
 
 describe("Standard core operation", () => {
+  it("instructs report-source responses to contain report content without delivery disclaimers", async () => {
+    mocks.provider.responses.stream.mockResolvedValue(responseStream(
+      { type: "response.output_text.delta", delta: "## Findings\n\nThe report content." },
+      { type: "response.completed" },
+    ));
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    for await (const event of operation.run(standardInput({
+      objective: "Analyze the uploaded spreadsheet and create a PDF report.",
+      history: [{ role: "user", content: "Analyze the uploaded spreadsheet and create a PDF report." }],
+      fileContext,
+    }))) void event;
+
+    const request = mocks.provider.responses.stream.mock.calls[0]?.[0] as { instructions?: string };
+    expect(request.instructions).toContain("Write the report content directly");
+    expect(request.instructions).toContain("Do not discuss your ability to");
+    expect(request.instructions).toContain("Preserve factual findings");
+    expect(request.instructions).toContain("preserve it as source material");
+  });
+
   it("streams deltas and returns a bounded completion without request-level side effects", async () => {
     mocks.provider.responses.stream.mockResolvedValue(responseStream(
       { type: "response.output_text.delta", delta: "A useful Standard answer." },

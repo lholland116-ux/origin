@@ -1,5 +1,7 @@
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
+import { PDFParse } from "pdf-parse";
+import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import {
   createTemplateRegistry,
@@ -73,6 +75,15 @@ function assertStructuredRequest(
 ): asserts request is StructuredDocumentRequest {
   if (request.format !== "docx" && request.format !== "pdf") {
     throw new Error("Expected structured document request.");
+  }
+}
+
+async function extractPdfText(bytes: Uint8Array): Promise<string> {
+  const parser = new PDFParse({ data: bytes });
+  try {
+    return (await parser.getText()).text;
+  } finally {
+    await parser.destroy();
   }
 }
 
@@ -211,6 +222,80 @@ describe("document generation templates", () => {
     }
     expect(new TextDecoder().decode(artifact.bytes, { stream: false })).toContain("%PDF-");
     expect(JSON.stringify(request.sections)).not.toMatch(/Summary|Verification|Conclusion|filler/i);
+  });
+
+  it("renders Markdown report structure in PDF while preserving source syntax in other exports", async () => {
+    const body = [
+      "# Markdown Report",
+      "",
+      "## Findings",
+      "The **bold finding** is supported by the source.",
+      "Measured value**units** remains adjacent.",
+      "",
+      "- First finding",
+      "- Second finding",
+      "",
+      "1. Review source",
+      "2. Confirm result",
+      "",
+      "| Metric | Value |",
+      "| --- | --- |",
+      "| Accuracy | 98% |",
+      "| Status | **Ready** |",
+    ].join("\n");
+    const pdfRequest = renderTemplate({
+      templateId: "simple-document",
+      format: "pdf",
+      variables: { title: "Markdown Report", body },
+    });
+    const pdf = await generateArtifact(pdfRequest);
+    const pdfText = await extractPdfText(pdf.bytes);
+
+    expect(pdfText).toContain("Markdown Report");
+    expect(pdfText.match(/Markdown Report/g)).toHaveLength(1);
+    expect(pdfText).toContain("Findings");
+    expect(pdfText).toContain("bold finding");
+    expect(pdfText).toContain("valueunits");
+    expect(pdfText).toContain("First finding");
+    expect(pdfText).toContain("Review source");
+    expect(pdfText).toContain("Accuracy");
+    expect(pdfText).toContain("98%");
+    expect(pdfText).toContain("Ready");
+    expect(pdfText).not.toContain("**");
+    expect(pdfText).not.toContain("# Findings");
+    expect(pdfText).not.toContain("| Metric | Value |");
+
+    const markdownRequest = renderTemplate({
+      templateId: "simple-document",
+      format: "md",
+      variables: { title: "Markdown Report", body },
+    });
+    expect(markdownRequest.format === "md" ? markdownRequest.content : "").toContain("**bold finding**");
+
+    const docxRequest = renderTemplate({
+      templateId: "simple-document",
+      format: "docx",
+      variables: { title: "Markdown Report", body },
+    });
+    expect(docxRequest.format === "docx" ? docxRequest.sections[0]?.type : undefined).toBe("paragraph");
+    expect(JSON.stringify(docxRequest)).toContain("**bold finding**");
+  });
+
+  it("wraps multiline report content across PDF pages without changing values", async () => {
+    const body = Array.from({ length: 140 }, (_, index) =>
+      `Row ${index + 1}: this is a deliberately long report line that must wrap within the page content area.`,
+    ).join("\n");
+    const request = renderTemplate({
+      templateId: "simple-document",
+      format: "pdf",
+      variables: { title: "Long Report", body },
+    });
+    const artifact = await generateArtifact(request);
+    const pdf = await PDFDocument.load(artifact.bytes);
+    expect(pdf.getPageCount()).toBeGreaterThan(1);
+    const text = await extractPdfText(artifact.bytes);
+    expect(text).toContain("Row 1:");
+    expect(text).toContain("Row 140:");
   });
 
   it("omits bullets when simple-document bullets are omitted or null", () => {
