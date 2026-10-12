@@ -856,7 +856,7 @@ describe("six independent capability adapters", () => {
 
   it("generates a PDF from a spreadsheet source through a persisted three-step runtime", async () => {
     const context = fileResult("Synthetic spreadsheet findings for a PDF report.");
-    const standard = standardResult("The uploaded spreadsheet shows stable results.", RUNTIME_REQUEST_ID);
+    const standard = standardResult("Summary:\n- The uploaded spreadsheet shows stable results.\n- No material anomalies were found.", RUNTIME_REQUEST_ID);
     const file = createFileAnalysisCapabilityAdapter({ prepareFileContext: vi.fn(async () => context) });
     const runStandard = vi.fn(async function* () { yield* standardEvents(standard); });
     const standardAdapter = createStandardCapabilityAdapter({ runOperation: runStandard as unknown as StandardOperationRunner });

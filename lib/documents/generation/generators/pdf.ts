@@ -42,6 +42,10 @@ type TextStyle = {
 
 function unsupportedCharacter(text: string, characterSet: Set<number>): string | null {
   for (const character of text) {
+    // wrapText normalizes these controls into line breaks or spaces before
+    // passing text to pdf-lib. Validate the characters that reach the font,
+    // while allowing the bounded whitespace the renderer already handles.
+    if (character === "\n" || character === "\r" || character === "\t" || character === "\f" || character === "\v") continue;
     if (!characterSet.has(character.codePointAt(0) ?? 0)) return character;
   }
   return null;
