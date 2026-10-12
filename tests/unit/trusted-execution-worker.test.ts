@@ -190,6 +190,7 @@ describe("trusted bounded execution worker", () => {
       kind: "failed",
       failure: { code: "authorization_denied", message: "safe test failure" },
       diagnosticPhase: "trusted_subject_resolution",
+      diagnosticPredicate: "trusted_subject_resolution_failed",
       run: {} as never,
       stepResults: {},
       telemetry: {} as never,
@@ -202,6 +203,7 @@ describe("trusted bounded execution worker", () => {
       providerCalls: null,
       diagnosticPhase: "trusted_subject_resolution",
       diagnosticCode: "authorization_denied",
+      diagnosticPredicate: "trusted_subject_resolution_failed",
     });
     expect(store.releaseExecutionWorkClaim).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 3 }));
   });

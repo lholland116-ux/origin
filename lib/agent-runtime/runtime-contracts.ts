@@ -154,6 +154,41 @@ export type ExecutionDiagnosticPhase =
   | "capability_authorization"
   | "capability_adapter";
 
+/** Safe predicate labels for internal operational logs; never include resource or identity values. */
+export type ExecutionAuthorizationDiagnosticPredicate =
+  | "capability_invalid"
+  | "request_binding_mismatch"
+  | "authenticated_identity_mismatch"
+  | "accepted_run_association_mismatch"
+  | "account_plan_unavailable"
+  | "request_options_invalid"
+  | "resolved_inputs_invalid"
+  | "capability_input_shape_invalid"
+  | "attachment_reference_invalid"
+  | "step_result_invalid"
+  | "step_result_reference_invalid"
+  | "file_analysis_input_shape"
+  | "document_not_owned_or_found"
+  | "document_not_ready_or_size_invalid"
+  | "file_attachment_limit_exceeded"
+  | "message_binding_not_current"
+  | "trusted_subject_context_mismatch"
+  | "trusted_subject_no_longer_current"
+  | "trusted_subject_resolution_failed"
+  | "preflight_unauthenticated"
+  | "preflight_account_state_unavailable"
+  | "preflight_conversation_required"
+  | "preflight_conversation_not_owned"
+  | "preflight_conversation_unavailable"
+  | "preflight_capability_not_entitled"
+  | "preflight_reasoning_not_entitled"
+  | "preflight_resource_not_owned"
+  | "preflight_resource_unavailable"
+  | "preflight_quota_unavailable"
+  | "preflight_quota_limit_reached"
+  | "preflight_capability_disabled"
+  | "authorization_dependency_unavailable";
+
 export type ExecutionOperationalMetadata = {
   readonly execution_id: string;
   readonly status: "succeeded" | "failed";
@@ -184,6 +219,7 @@ export type ExecutionOutcome =
       readonly stepResults: Readonly<Record<string, ExecutionStepResult>>;
       readonly telemetry: ExecutionOperationalMetadata;
       readonly diagnosticPhase?: ExecutionDiagnosticPhase;
+      readonly diagnosticPredicate?: ExecutionAuthorizationDiagnosticPredicate;
     }
   | {
       readonly kind: "rejected";

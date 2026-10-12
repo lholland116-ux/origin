@@ -2,7 +2,11 @@ import type { CapabilityId, CapabilityOutputKind } from "@/lib/ai/capability-reg
 import type { RequestMessageBinding } from "@/lib/agent-runtime/application-contracts";
 import type { UserReasoningMode } from "@/lib/ai/reasoning-mode";
 import type { ExecutionWorkClaim } from "@/lib/agent-runtime/execution-store";
-import type { ExecutionStepResult, JsonValue } from "@/lib/agent-runtime/runtime-contracts";
+import type {
+  ExecutionAuthorizationDiagnosticPredicate,
+  ExecutionStepResult,
+  JsonValue,
+} from "@/lib/agent-runtime/runtime-contracts";
 import type { ProviderCostInvocationContext } from "@/lib/agent-runtime/provider-cost-ledger";
 import type { TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 
@@ -93,7 +97,11 @@ export type ExecutionAuthorizationInput = {
 
 export type ExecutionAuthorizationDecision =
   | { readonly allowed: true }
-  | { readonly allowed: false; readonly reasonCode?: string };
+  | {
+      readonly allowed: false;
+      readonly reasonCode?: string;
+      readonly diagnosticPredicate?: ExecutionAuthorizationDiagnosticPredicate;
+    };
 
 export interface ExecutionAuthorizer {
   authorize(input: ExecutionAuthorizationInput): Promise<ExecutionAuthorizationDecision>;

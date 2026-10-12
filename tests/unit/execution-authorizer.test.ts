@@ -137,14 +137,38 @@ describe("concrete execution authorizer", () => {
 
   it("rejects another owner's conversation and keeps resource existence private", async () => {
     const denied = fixture({ overrides: { checkConversationOwnership: async () => "not_owned" } });
-    expect(await denied.authorizer.authorize(input())).toEqual({ allowed: false, reasonCode: "denied" });
+    expect(await denied.authorizer.authorize(input())).toEqual({
+      allowed: false, reasonCode: "denied", diagnosticPredicate: "preflight_conversation_not_owned",
+    });
     const inaccessible = fixture({ overrides: { checkDocument: async () => ({ ownership: "not_owned" }) } });
     const result = await inaccessible.authorizer.authorize(input("file_analysis", [
       { source: "attachment", reference: { id: FILE, kind: "file" } },
       { source: "user", value: "Analyze." },
     ]));
-    expect(result).toEqual({ allowed: false, reasonCode: "denied" });
+    expect(result).toEqual({ allowed: false, reasonCode: "denied", diagnosticPredicate: "document_not_owned_or_found" });
     expect(JSON.stringify(result)).not.toContain(FILE);
+  });
+
+  it("reports sanitized File Analysis input and document predicates", async () => {
+    const fileInput = input("file_analysis", [
+      { source: "attachment", reference: { id: FILE, kind: "file" } },
+      { source: "user", value: "Analyze." },
+    ]);
+    const notReady = fixture({ overrides: {
+      checkDocument: async () => ({ ownership: "owned", sizeBytes: 20, ready: false }),
+    } });
+    expect(await notReady.authorizer.authorize(fileInput)).toEqual({
+      allowed: false,
+      reasonCode: "denied",
+      diagnosticPredicate: "document_not_ready_or_size_invalid",
+    });
+
+    const missingFileInput = fixture();
+    expect(await missingFileInput.authorizer.authorize(input("file_analysis", [{ source: "user", value: "Analyze." }]))).toEqual({
+      allowed: false,
+      reasonCode: "denied",
+      diagnosticPredicate: "file_analysis_input_shape",
+    });
   });
 
   it("rejects another owner's uploaded or generated image and cross-conversation image references", async () => {
@@ -224,7 +248,7 @@ describe("concrete execution authorizer", () => {
     expect(await fixture({ association: null }).authorizer.authorize(input())).toMatchObject({ allowed: false, reasonCode: "denied" });
     expect(await fixture({ currentUser: null }).authorizer.authorize(input())).toMatchObject({ allowed: false });
     expect(await fixture({ overrides: { loadAssociation: async () => { throw new Error("private DB detail"); } } }).authorizer.authorize(input()))
-      .toEqual({ allowed: false, reasonCode: "authorization_unavailable" });
+      .toEqual({ allowed: false, reasonCode: "authorization_unavailable", diagnosticPredicate: "authorization_dependency_unavailable" });
   });
 
   it("does not reserve chat usage or invoke providers; authorization has no side-effect dependency", async () => {

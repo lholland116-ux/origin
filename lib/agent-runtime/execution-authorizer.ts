@@ -10,6 +10,7 @@ import { EXECUTION_CAPABILITY_IDS } from "@/lib/agent-runtime/execution-registry
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { isTrustedExecutionSubject, type TrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
+import type { ExecutionAuthorizationDiagnosticPredicate } from "@/lib/agent-runtime/runtime-contracts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -94,31 +95,50 @@ function capabilitySupported(capabilityId: string): capabilityId is CapabilityId
   return EXECUTION_CAPABILITY_IDS.includes(capabilityId as CapabilityId) && CAPABILITY_REGISTRY.has(capabilityId);
 }
 
+function denied(diagnosticPredicate: ExecutionAuthorizationDiagnosticPredicate) {
+  return { allowed: false as const, reasonCode: "denied", diagnosticPredicate };
+}
+
+function preflightDiagnosticPredicate(reason: string): ExecutionAuthorizationDiagnosticPredicate {
+  switch (reason) {
+    case "unauthenticated": return "preflight_unauthenticated";
+    case "account_state_unavailable": return "preflight_account_state_unavailable";
+    case "conversation_required": return "preflight_conversation_required";
+    case "capability_not_entitled": return "preflight_capability_not_entitled";
+    case "reasoning_not_entitled": return "preflight_reasoning_not_entitled";
+    case "resource_not_owned": return "preflight_resource_not_owned";
+    case "resource_unavailable": return "preflight_resource_unavailable";
+    case "quota_unavailable": return "preflight_quota_unavailable";
+    case "quota_limit_reached": return "preflight_quota_limit_reached";
+    default: return "preflight_capability_disabled";
+  }
+}
+
 /** Creates an authorizer that trusts only the current Supabase session, never persisted/caller identity alone. */
 export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDependencies) {
   return Object.freeze({
     async authorize(input: ExecutionAuthorizationInput): Promise<ExecutionAuthorizationDecision> {
       if (!input || typeof input !== "object" || !capabilitySupported(input.capabilityId)) {
-        return { allowed: false, reasonCode: "denied" };
+        return denied("capability_invalid");
       }
       const binding = requestMessageBindingSchema.safeParse(input.requestMessageBinding);
       if (!binding.success || binding.data.userId !== input.authenticatedUserId
         || binding.data.conversationId !== input.conversationId || binding.data.requestId !== input.requestId) {
-        return { allowed: false, reasonCode: "denied" };
+        return denied("request_binding_mismatch");
       }
 
       try {
         const currentUserId = await dependencies.authenticate();
-        if (!currentUserId || currentUserId !== input.authenticatedUserId) return { allowed: false, reasonCode: "denied" };
+        if (!currentUserId || currentUserId !== input.authenticatedUserId) return denied("authenticated_identity_mismatch");
 
         const association = await dependencies.loadAssociation(input);
-        if (!association || !associationMatches(association, input)) return { allowed: false, reasonCode: "denied" };
+        if (!association || !associationMatches(association, input)) return denied("accepted_run_association_mismatch");
 
         const account: AccountPlanResolution = await resolveAccountPlan({ userId: currentUserId, lookup: dependencies.loadAccountPlan });
-        if (account.kind !== "resolved") return { allowed: false, reasonCode: "authorization_unavailable" };
+        if (account.kind !== "resolved") return { allowed: false, reasonCode: "authorization_unavailable", diagnosticPredicate: "account_plan_unavailable" };
 
         const parsedReasoning = parseUserReasoningMode(executionRequestOptions(association));
-        if (parsedReasoning.kind === "invalid") return { allowed: false, reasonCode: "denied" };
+        if (parsedReasoning.kind === "invalid") return denied("request_options_invalid");
         const reasoning = input.capabilityId === "standard" || input.capabilityId === "web_search"
           ? parsedReasoning
           : undefined;
@@ -127,11 +147,11 @@ export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDepen
         const attachments: Array<{ id: string; kind: "file" | "image" }> = [];
         const userInputs: string[] = [];
         const refs = input.resolvedInputs;
-        if (!Array.isArray(refs)) return { allowed: false, reasonCode: "denied" };
+        if (!Array.isArray(refs)) return denied("resolved_inputs_invalid");
         for (const resolved of refs) {
-          if (!record(resolved)) return { allowed: false, reasonCode: "denied" };
+          if (!record(resolved)) return denied("resolved_inputs_invalid");
           if (resolved.source === "user") {
-            if (typeof resolved.value !== "string") return { allowed: false, reasonCode: "denied" };
+            if (typeof resolved.value !== "string") return denied("resolved_inputs_invalid");
             userInputs.push(resolved.value);
             continue;
           }
@@ -139,7 +159,7 @@ export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDepen
             const reference = resolved.reference;
             if (!record(reference) || typeof reference.id !== "string" || !UUID_PATTERN.test(reference.id)
               || (reference.kind !== "file" && reference.kind !== "image")) {
-              return { allowed: false, reasonCode: "denied" };
+              return denied("attachment_reference_invalid");
             }
             const kind = reference.kind;
             const resourceId = reference.id as string;
@@ -158,13 +178,13 @@ export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDepen
             continue;
           }
           if (resolved.source !== "step" || !record(resolved.result) || typeof resolved.stepId !== "string") {
-            return { allowed: false, reasonCode: "denied" };
+            return denied("step_result_invalid");
           }
           const result = resolved.result;
           const rawResultRef = result.ref;
           if (rawResultRef !== undefined && (!record(rawResultRef) || typeof rawResultRef.id !== "string"
             || !UUID_PATTERN.test(rawResultRef.id) || !["file", "image", "artifact", "document"].includes(String(rawResultRef.kind)))) {
-            return { allowed: false, reasonCode: "denied" };
+            return denied("step_result_reference_invalid");
           }
           const resultRef = rawResultRef as { id: string; kind: "file" | "image" | "artifact" | "document" } | undefined;
           if (result.kind === "image") {
@@ -172,7 +192,7 @@ export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDepen
             if (!image || image.conversationId !== input.conversationId || image.userMessageId !== binding.data.userMessageId
               || image.assistantMessageId !== binding.data.assistantMessageId
               || (resultRef !== undefined && (resultRef.id !== image.imageId || resultRef.kind !== "image"))) {
-              return { allowed: false, reasonCode: "denied" };
+              return denied("step_result_invalid");
             }
             candidates.push({
               reference: { id: image.imageId, kind: "image" },
@@ -182,7 +202,7 @@ export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDepen
             const document = generatedDocumentValue(result.value);
             if (!document || document.conversationId !== input.conversationId || document.messageId !== binding.data.assistantMessageId
               || (resultRef !== undefined && (resultRef.id !== document.artifactId || !["document", "artifact"].includes(resultRef.kind)))) {
-              return { allowed: false, reasonCode: "denied" };
+              return denied("step_result_invalid");
             }
             candidates.push({
               reference: { id: document.artifactId, kind: "artifact" },
@@ -204,41 +224,46 @@ export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDepen
 
         const stepInputs = refs.filter((item) => item.source === "step");
         if (["standard", "web_search", "image_generation", "image_editing"].includes(input.capabilityId)
-          && (userInputs.length !== 1 || !userInputs[0]?.trim())) return { allowed: false, reasonCode: "denied" };
+          && (userInputs.length !== 1 || !userInputs[0]?.trim())) return denied("capability_input_shape_invalid");
         if ((input.capabilityId === "file_analysis" || input.capabilityId === "document_generation") && userInputs.length > 1) {
-          return { allowed: false, reasonCode: "denied" };
+          return denied(input.capabilityId === "file_analysis" ? "file_analysis_input_shape" : "capability_input_shape_invalid");
         }
         if (input.capabilityId === "file_analysis" && (attachments.length < 1 || attachments.some((item) => item.kind !== "file"))) {
-          return { allowed: false, reasonCode: "denied" };
+          return denied("file_analysis_input_shape");
         }
         if (input.capabilityId === "image_editing" && (attachments.length < 1 || attachments.some((item) => item.kind !== "image")
-          || stepInputs.length !== 1 || stepInputs[0]?.result.kind !== "image")) return { allowed: false, reasonCode: "denied" };
+          || stepInputs.length !== 1 || stepInputs[0]?.result.kind !== "image")) return denied("capability_input_shape_invalid");
         if ((input.capabilityId === "image_generation" || input.capabilityId === "web_search")
-          && (attachments.length > 0 || stepInputs.length > 0)) return { allowed: false, reasonCode: "denied" };
+          && (attachments.length > 0 || stepInputs.length > 0)) return denied("capability_input_shape_invalid");
         if (input.capabilityId === "document_generation") {
-          if (attachments.length > 0 || stepInputs.length !== 1 || stepInputs[0]?.result.kind !== "text") return { allowed: false, reasonCode: "denied" };
+          if (attachments.length > 0 || stepInputs.length !== 1 || stepInputs[0]?.result.kind !== "text") return denied("capability_input_shape_invalid");
           const standard = standardOperationResultSchema.safeParse(stepInputs[0]?.result.value);
           if (!standard.success || standard.data.requestId !== binding.data.requestId || standard.data.userId !== currentUserId
-            || standard.data.conversationId !== input.conversationId) return { allowed: false, reasonCode: "denied" };
+            || standard.data.conversationId !== input.conversationId) return denied("step_result_invalid");
         }
 
         const typedResources = new Map<string, OwnershipResult>();
         for (const candidate of candidates) {
           const result = await candidate.check();
-          let ownership = result.ownership;
+          const ownership = result.ownership;
           if (ownership === "owned" && candidate.reference.kind === "file") {
             const limits = getDocumentLimits(account.plan);
             if (!result.ready || !Number.isSafeInteger(result.sizeBytes) || (result.sizeBytes ?? 0) <= 0
-              || (result.sizeBytes ?? 0) > limits.maxFileSizeBytes) ownership = "not_owned";
+              || (result.sizeBytes ?? 0) > limits.maxFileSizeBytes) {
+              return denied("document_not_ready_or_size_invalid");
+            }
           }
           typedResources.set(`${candidate.reference.kind}:${candidate.reference.id}`, ownership);
-          if (ownership !== "owned") return { allowed: false, reasonCode: ownership === "unavailable" ? "authorization_unavailable" : "denied" };
+          if (ownership !== "owned") {
+            if (ownership === "unavailable") return { allowed: false, reasonCode: "authorization_unavailable", diagnosticPredicate: "authorization_dependency_unavailable" };
+            return denied(candidate.reference.kind === "file" ? "document_not_owned_or_found" : "preflight_resource_not_owned");
+          }
         }
         if (attachments.filter((item) => item.kind === "file").length > getDocumentLimits(account.plan).maxFilesPerMessage) {
-          return { allowed: false, reasonCode: "denied" };
+          return denied("file_attachment_limit_exceeded");
         }
 
-        if (await dependencies.validateBinding(binding.data) !== true) return { allowed: false, reasonCode: "denied" };
+        if (await dependencies.validateBinding(binding.data) !== true) return denied("message_binding_not_current");
 
         const serviceContext: CapabilityServiceContext = {
           kind: "conversation",
@@ -250,22 +275,42 @@ export function createExecutionAuthorizer(dependencies: ExecutionAuthorizerDepen
           ...(reasoning?.kind === "valid" ? { reasoningMode: reasoning.mode } : {}),
           requestId: input.requestId,
         };
+        let preflightPredicate: ExecutionAuthorizationDiagnosticPredicate | undefined;
         const policy: CapabilityPreflightPolicy = {
           isEnabled: (capabilityId) => EXECUTION_CAPABILITY_IDS.includes(capabilityId),
           // Existing product routes make all six registered capabilities available on Free and Pro;
           // plan-specific document/image/chat quotas are enforced by their existing atomic services.
           isEntitled: (plan, capabilityId) => (plan === "free" || plan === "pro") && EXECUTION_CAPABILITY_IDS.includes(capabilityId),
-          checkConversationOwnership: dependencies.checkConversationOwnership,
-          checkOwnership: async (_userId, resource) => typedResources.get(`${resource.kind}:${resource.id}`) ?? "not_owned",
+          checkConversationOwnership: async (userId, conversationId) => {
+            try {
+              const ownership = await dependencies.checkConversationOwnership(userId, conversationId);
+              if (ownership === "not_owned") preflightPredicate = "preflight_conversation_not_owned";
+              return ownership;
+            } catch (error) {
+              preflightPredicate = "preflight_conversation_unavailable";
+              throw error;
+            }
+          },
+          checkOwnership: async (_userId, resource) => {
+            const ownership = typedResources.get(`${resource.kind}:${resource.id}`) ?? "not_owned";
+            if (ownership === "not_owned") preflightPredicate = "preflight_resource_not_owned";
+            if (ownership === "unavailable") preflightPredicate = "preflight_resource_unavailable";
+            return ownership;
+          },
         };
         const preflight = await preflightCapability({ context: serviceContext, capabilityId: input.capabilityId, account, ...(reasoning ? { reasoning } : {}), policy });
         if (preflight.kind === "denied") {
-          return { allowed: false, reasonCode: preflight.reason === "resource_unavailable" || preflight.reason === "account_state_unavailable"
-            || preflight.reason === "quota_unavailable" ? "authorization_unavailable" : "denied" };
+          const unavailable = preflight.reason === "resource_unavailable" || preflight.reason === "account_state_unavailable"
+            || preflight.reason === "quota_unavailable";
+          return {
+            allowed: false,
+            reasonCode: unavailable ? "authorization_unavailable" : "denied",
+            diagnosticPredicate: preflightPredicate ?? preflightDiagnosticPredicate(preflight.reason),
+          };
         }
         return { allowed: true };
       } catch {
-        return { allowed: false, reasonCode: "authorization_unavailable" };
+        return { allowed: false, reasonCode: "authorization_unavailable", diagnosticPredicate: "authorization_dependency_unavailable" };
       }
     },
   });
@@ -383,12 +428,22 @@ export function createTrustedBackgroundExecutionAuthorizer(subject: TrustedExecu
       const { data: run, error: runError } = await admin.from("execution_runs")
         .select("id,user_id,accepted_request_id,acceptance_fingerprint,idempotency_key,request_fingerprint,runtime_context,execution_plan")
         .eq("id", subject.runId).eq("user_id", subject.userId).maybeSingle();
-      if (runError || !run) return null;
-      const { data: acceptance, error: acceptanceError } = await admin.from("agent_request_acceptances")
-        .select("request_id,user_id,conversation_id,user_message_id,assistant_message_id,idempotency_key,request_fingerprint,request_options")
-        .eq("request_id", subject.requestId).eq("user_id", subject.userId).maybeSingle();
-      if (acceptanceError || !acceptance || !(await subject.assertCurrent())) return null;
-      return { run: run as unknown as Record<string, unknown>, acceptance: acceptance as unknown as Record<string, unknown> };
+      if (runError || !run || !(await subject.assertCurrent())) return null;
+      // The acceptance ledger intentionally denies direct service_role reads. The
+      // fenced SECURITY DEFINER resolver has already verified this run against
+      // that ledger, including its owner, message binding, key, fingerprint and
+      // reasoning mode. Reconstruct only the fields needed by the shared checks.
+      const acceptance = {
+        request_id: subject.requestId,
+        user_id: subject.userId,
+        conversation_id: subject.conversationId,
+        user_message_id: subject.userMessageId,
+        assistant_message_id: subject.assistantMessageId,
+        idempotency_key: run.idempotency_key,
+        request_fingerprint: run.acceptance_fingerprint,
+        request_options: subject.reasoningMode === undefined ? {} : { reasoningMode: subject.reasoningMode },
+      };
+      return { run: run as unknown as Record<string, unknown>, acceptance };
     },
     validateBinding: async (binding) => binding.requestId === subject.requestId
       && binding.userId === subject.userId && binding.conversationId === subject.conversationId
@@ -447,10 +502,11 @@ export function createTrustedBackgroundExecutionAuthorizer(subject: TrustedExecu
         || input.acceptedRequestId !== subject.requestId
         || input.conversationId !== subject.conversationId
         || input.requestMessageBinding.userMessageId !== subject.userMessageId
-        || input.requestMessageBinding.assistantMessageId !== subject.assistantMessageId
-        || !(await subject.assertCurrent())) return { allowed: false, reasonCode: "denied" };
+        || input.requestMessageBinding.assistantMessageId !== subject.assistantMessageId) return denied("trusted_subject_context_mismatch");
+      if (!(await subject.assertCurrent())) return denied("trusted_subject_no_longer_current");
       const decision = await authorizePersistedPredicates.authorize(input);
-      if (!decision.allowed || !(await subject.assertCurrent())) return { allowed: false, reasonCode: "denied" };
+      if (!decision.allowed) return decision;
+      if (!(await subject.assertCurrent())) return denied("trusted_subject_no_longer_current");
       return decision;
     },
   });

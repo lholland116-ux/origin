@@ -3,7 +3,11 @@ import type { DurableXStateExecutionRuntime } from "@/lib/agent-runtime/durable-
 import { isAutonomousCapabilityAllowed } from "@/lib/agent-runtime/autonomous-capability-policy";
 import type { DiscoveredExecutionWork, ExecutionStore } from "@/lib/agent-runtime/execution-store";
 import { EXECUTION_WORK_LEASE_POLICY } from "@/lib/agent-runtime/execution-store";
-import type { ExecutionDiagnosticPhase, ExecutionFailureCode } from "@/lib/agent-runtime/runtime-contracts";
+import type {
+  ExecutionAuthorizationDiagnosticPredicate,
+  ExecutionDiagnosticPhase,
+  ExecutionFailureCode,
+} from "@/lib/agent-runtime/runtime-contracts";
 import {
   EXECUTION_INVOCATION_BUDGET_MS,
   EXECUTION_MIN_PROVIDER_DISPATCH_REMAINING_MS,
@@ -45,6 +49,7 @@ export type TrustedExecutionWorkerOutcome = Readonly<{
     | "runtime_failed" | "post_runtime_read" | "post_runtime_state_check"
     | "worker_run_validation" | "worker_claimed_run_validation";
   diagnosticCode?: ExecutionFailureCode;
+  diagnosticPredicate?: ExecutionAuthorizationDiagnosticPredicate;
 }>;
 
 export type TrustedExecutionWorkerDependencies = Readonly<{
@@ -67,6 +72,7 @@ function outcome(
     providerCalls?: number | null;
     diagnosticPhase?: TrustedExecutionWorkerOutcome["diagnosticPhase"];
     diagnosticCode?: ExecutionFailureCode;
+    diagnosticPredicate?: ExecutionAuthorizationDiagnosticPredicate;
   } = {},
 ): TrustedExecutionWorkerOutcome {
   return Object.freeze({
@@ -78,6 +84,7 @@ function outcome(
     providerCalls: Object.prototype.hasOwnProperty.call(options, "providerCalls") ? options.providerCalls! : 0,
     ...(options.diagnosticPhase ? { diagnosticPhase: options.diagnosticPhase } : {}),
     ...(options.diagnosticCode ? { diagnosticCode: options.diagnosticCode } : {}),
+    ...(options.diagnosticPredicate ? { diagnosticPredicate: options.diagnosticPredicate } : {}),
   });
 }
 
@@ -300,6 +307,7 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
           providerCalls: null,
           diagnosticPhase: result.diagnosticPhase ?? "runtime_failed",
           diagnosticCode: result.failure.code,
+          ...(result.diagnosticPredicate ? { diagnosticPredicate: result.diagnosticPredicate } : {}),
         });
       }
       if (result.kind === "rejected" && result.failure.code === "authorization_denied") {

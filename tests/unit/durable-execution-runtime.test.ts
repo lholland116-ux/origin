@@ -275,6 +275,7 @@ describe("durable XState execution runtime", () => {
       kind: "failed",
       failure: { code: "authorization_denied" },
       diagnosticPhase: "trusted_subject_resolution",
+      diagnosticPredicate: "trusted_subject_resolution_failed",
     });
     expect(resolveSubject).toHaveBeenCalledOnce();
     expect(executor).not.toHaveBeenCalled();
@@ -306,6 +307,46 @@ describe("durable XState execution runtime", () => {
     expect(await store.lookupAcceptedRequestRun(ACCEPTED_REQUEST)).toMatchObject({
       status: "found", run: { id: RUN_ID, runtimeContext: { reasoningMode: "high" } },
     });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("preserves the sanitized trusted authorization predicate through durable failure persistence", async () => {
+    const store = new InMemoryExecutionStore();
+    const fileId = "c2000000-0000-4000-8000-000000000004";
+    const filePlan = handoff([
+      { id: "file-step", capability: "file_analysis", dependsOn: [], inputs: [{ source: "attachment", output: "file" }], expectedOutput: "structured_data" },
+    ]);
+    const accepted = await runtime(store, async (input) => mockResult(input))
+      .associateAcceptedRequest(filePlan, runtimeInput({ attachments: [{ id: fileId, kind: "file" }] }), ACCEPTED_REQUEST);
+    expect(accepted.kind).toBe("associated");
+    if (accepted.kind !== "associated") return;
+
+    const executor = vi.fn(async (input: CapabilityExecutionInput) => mockResult(input));
+    const trustedSubject = Object.freeze({ userId: USER_ID, runId: accepted.runId }) as never;
+    const engine = runtime(store, executor, undefined, undefined, undefined, {
+      resolve: async () => trustedSubject,
+      authorize: () => ({ authorize: async () => ({
+        allowed: false,
+        reasonCode: "denied",
+        diagnosticPredicate: "document_not_ready_or_size_invalid" as const,
+      }) }),
+    });
+    const result = await engine.executeClaimedStep({
+      runId: accepted.runId,
+      authenticatedUserId: USER_ID,
+      expectedStepId: "file-step",
+      workClaim: { claimId: "e2000000-0000-4000-8000-000000000001", fencingGeneration: 1 },
+      executionDeadlineAtMs: Date.now() + 30_000,
+      providerDeadlineAtMs: Date.now() + 20_000,
+    });
+
+    expect(result).toMatchObject({
+      kind: "failed",
+      failure: { code: "authorization_denied" },
+      diagnosticPhase: "capability_authorization",
+      diagnosticPredicate: "document_not_ready_or_size_invalid",
+    });
+    expect(JSON.stringify(result)).not.toContain(fileId);
     expect(executor).not.toHaveBeenCalled();
   });
 

@@ -41,6 +41,7 @@ import {
 import {
   type ExecutionFailure,
   type ExecutionDiagnosticPhase,
+  type ExecutionAuthorizationDiagnosticPredicate,
   type ExecutionOutcome,
   type ExecutionRun,
   type ExecutionStepResult,
@@ -1208,6 +1209,7 @@ export class DurableXStateExecutionRuntime {
       }, results);
       let stepFailure: ExecutionFailure | null = resolved.inputs ? null : resolved.failure;
       let diagnosticPhase: ExecutionDiagnosticPhase | undefined = stepFailure ? "input_resolution" : undefined;
+      let diagnosticPredicate: ExecutionAuthorizationDiagnosticPredicate | undefined;
 
       if (resolved.inputs?.some((resolvedInput) => resolvedInput.source === "user") && current.runtimeContext.userInput === undefined) {
         stepFailure = executionFailure("missing_input");
@@ -1232,6 +1234,7 @@ export class DurableXStateExecutionRuntime {
           if (!trustedSubject) {
             stepFailure = executionFailure("authorization_denied");
             diagnosticPhase = "trusted_subject_resolution";
+            diagnosticPredicate = "trusted_subject_resolution_failed";
           }
         }
         if (!stepFailure) {
@@ -1244,6 +1247,7 @@ export class DurableXStateExecutionRuntime {
           if (!authorization.allowed) {
             stepFailure = authorization.failure;
             diagnosticPhase = "capability_authorization";
+            diagnosticPredicate = authorization.diagnosticPredicate;
           }
         }
       }
@@ -1413,6 +1417,7 @@ export class DurableXStateExecutionRuntime {
           kind: "failed", run, failure: stepFailure, stepResults: outputResults(reloaded.steps),
           telemetry: telemetry(run, stepFailure.code, saved.snapshotRevision, true),
           ...(diagnosticPhase ? { diagnosticPhase } : {}),
+          ...(diagnosticPredicate ? { diagnosticPredicate } : {}),
         };
       }
 
@@ -1492,13 +1497,17 @@ export class DurableXStateExecutionRuntime {
       readonly executionKey?: string;
       readonly trustedSubject?: TrustedExecutionSubject;
     },
-  ): Promise<{ readonly allowed: true } | { readonly allowed: false; readonly failure: ExecutionFailure }> {
+  ): Promise<{ readonly allowed: true } | {
+    readonly allowed: false;
+    readonly failure: ExecutionFailure;
+    readonly diagnosticPredicate: ExecutionAuthorizationDiagnosticPredicate;
+  }> {
     try {
       const authorizer = context.trustedSubject
         ? this.options.createTrustedBackgroundAuthorizer?.(context.trustedSubject)
         : this.options.authorizer;
       if (!authorizer || (context.workClaim && (!context.executionKey || !context.trustedSubject))) {
-        return { allowed: false, failure: executionFailure("authorization_denied") };
+        return { allowed: false, failure: executionFailure("authorization_denied"), diagnosticPredicate: "trusted_subject_context_mismatch" };
       }
       const decision = await authorizer.authorize({
         executionId: record.id,
@@ -1518,12 +1527,24 @@ export class DurableXStateExecutionRuntime {
         requestId: record.runtimeContext.requestMessageBinding!.requestId,
         ...(context.correlationId ? { correlationId: context.correlationId } : {}),
       });
-      if (!decision || typeof decision.allowed !== "boolean") return { allowed: false, failure: executionFailure("authorization_failed") };
+      if (!decision || typeof decision.allowed !== "boolean") return {
+        allowed: false,
+        failure: executionFailure("authorization_failed"),
+        diagnosticPredicate: "authorization_dependency_unavailable",
+      };
       return decision.allowed
         ? { allowed: true }
-        : { allowed: false, failure: executionFailure(decision.reasonCode === "authorization_unavailable" ? "authorization_failed" : "authorization_denied") };
+        : {
+          allowed: false,
+          failure: executionFailure(decision.reasonCode === "authorization_unavailable" ? "authorization_failed" : "authorization_denied"),
+          diagnosticPredicate: decision.diagnosticPredicate ?? "authorization_dependency_unavailable",
+        };
     } catch {
-      return { allowed: false, failure: executionFailure("authorization_failed") };
+      return {
+        allowed: false,
+        failure: executionFailure("authorization_failed"),
+        diagnosticPredicate: "authorization_dependency_unavailable",
+      };
     }
   }
 }

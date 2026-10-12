@@ -117,6 +117,41 @@ describe("trusted background execution authorizer", () => {
       resourceReferences: [],
       requestId,
     });
-    expect(decision).toEqual({ allowed: false, reasonCode: "denied" });
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "denied",
+      diagnosticPredicate: "preflight_reasoning_not_entitled",
+    });
+  });
+
+  it("distinguishes a trusted claim context mismatch without exposing identity values", async () => {
+    const binding = fixture("medium");
+    const subject = await resolveTrustedExecutionSubject({ runId, stepId, executionKey,
+      claimId: "33333333-3333-4333-8333-333333333333", fencingGeneration: 2 });
+    expect(subject).not.toBeNull();
+    const authorizer = createTrustedBackgroundExecutionAuthorizer(subject!);
+    const decision = await authorizer.authorize({
+      executionId: runId,
+      stepId: "different-step",
+      capabilityId: "standard",
+      authenticatedUserId: userId,
+      acceptedRequestId: requestId,
+      acceptanceFingerprint: acceptedFingerprint,
+      idempotencyKey: "idempotency-key",
+      requestFingerprint: planFingerprint,
+      conversationId,
+      requestMessageBinding: binding,
+      reasoningMode: "medium",
+      resolvedInputs: [{ source: "user", value: "Please summarize this." }],
+      resourceReferences: [],
+      requestId,
+    });
+
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "denied",
+      diagnosticPredicate: "trusted_subject_context_mismatch",
+    });
+    expect(JSON.stringify(decision)).not.toContain(userId);
   });
 });

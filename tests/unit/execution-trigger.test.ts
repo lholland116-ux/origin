@@ -111,14 +111,18 @@ describe("authenticated execution wake-up", () => {
     const f = fixture({ runOnce: vi.fn(async () => ({
       status: "recovery_required", durationMs: 42, providerCalls: null,
       diagnosticPhase: "runtime_rejected", diagnosticCode: "snapshot_conflict",
+      diagnosticPredicate: "document_not_ready_or_size_invalid",
     })) });
     const response = await handleExecutionTrigger(request(), f.dependencies as never);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "recovery_required", durationMs: 0, providerCalls: null });
+    const body = await response.json();
+    expect(body).toEqual({ status: "recovery_required", durationMs: 0, providerCalls: null });
     expect(f.log).toHaveBeenCalledWith(expect.objectContaining({
       event: "trigger_completed", diagnosticPhase: "runtime_rejected", diagnosticCode: "snapshot_conflict",
+      diagnosticPredicate: "document_not_ready_or_size_invalid",
     }));
+    expect(JSON.stringify(body)).not.toContain("diagnosticPredicate");
   });
 
   it("accepts a zero-byte POST stream and continues through normal authentication", async () => {
