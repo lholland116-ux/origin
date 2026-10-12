@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { PDFDocument } from "pdf-lib";
 import type { PlanStep } from "@/lib/ai/intelligence-plan";
+import { createMultiStepPlanner } from "@/lib/ai/multi-step-planner";
 import { validateIntelligencePlan } from "@/lib/ai/plan-validator";
 import type { PlannedExecutionHandoff } from "@/lib/ai/intelligence-decision-coordinator";
 import type { CapabilityExecutionInput, CapabilityExecutor, ExecutionRuntimeInput } from "@/lib/agent-runtime/capability-executor";
@@ -8,11 +10,17 @@ import type { RequestMessageBinding, StandardOperationResult, WebSearchOperation
 import { FileContextPreparationError } from "@/lib/ai/file-context-service";
 import type { FileContextServiceInput } from "@/lib/ai/file-context-service";
 import { ImageGenerationServiceError } from "@/lib/ai/image-generation-service";
-import { GeneratedDocumentPersistenceError } from "@/lib/ai/generated-document-persistence-service";
+import {
+  createGeneratedDocumentPersistenceServiceForExistingMessage,
+  GeneratedDocumentPersistenceError,
+} from "@/lib/ai/generated-document-persistence-service";
+import type { GeneratedDocumentPersistenceRecord } from "@/lib/documents/generated-document-contracts";
+import { buildGeneratedDocumentStoragePath } from "@/lib/documents/generated-document-storage";
 import { ImageEditOrchestrationError } from "@/lib/image-generation/image-edit-orchestrator";
 import type { ImageEditExistingMessageOrchestratorInput } from "@/lib/image-generation/image-edit-orchestrator";
 import { StandardOperationError, type StandardOperationInput } from "@/lib/ai/standard-operation-service";
 import type { GeneratedArtifact } from "@/lib/documents/generation/contracts";
+import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
 import type { DocumentRenderer, ExistingMessageDocumentPersister } from "@/lib/agent-runtime/capability-adapters/document-generation";
 import type { ExistingMessageImageGenerator } from "@/lib/agent-runtime/capability-adapters/image-generation";
 import type { ExistingMessageImageEditor, ExistingMessageImageEditDependenciesFactory } from "@/lib/agent-runtime/capability-adapters/image-editing";
@@ -473,6 +481,33 @@ describe("six independent capability adapters", () => {
     expect(persistMock).toHaveBeenCalledTimes(1);
   });
 
+  it("labels Document Generation validation branches without recording user content", async () => {
+    const predecessor = { source: "step" as const, stepId: "standard", result: { kind: "text" as const, value: standardResult() } };
+    const persist = vi.fn() as unknown as ExistingMessageDocumentPersister;
+    const render = vi.fn(async () => { throw new DocumentGenerationValidationError(["Sensitive validation detail"]); });
+    const adapter = createDocumentGenerationCapabilityAdapter({ render: render as unknown as DocumentRenderer, persist });
+    await expect(adapter.execute(executionInput("document_generation", [predecessor], { executionKey: undefined })))
+      .rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "missing_execution_key" });
+    await expect(adapter.execute(executionInput("document_generation", [
+      { source: "step", stepId: "standard", result: { kind: "text", value: standardResult("Private answer", OTHER_USER_ID) } },
+    ]))).rejects.toMatchObject({ code: "missing_predecessor_result", diagnosticSubreason: "predecessor_validation" });
+    await expect(adapter.execute(executionInput("document_generation", [
+      { source: "user", value: "Create an XLSX spreadsheet with private data." }, predecessor,
+    ]))).rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "format_rejection" });
+    await expect(adapter.execute(executionInput("document_generation", [predecessor])))
+      .rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "document_render_validation" });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("classifies an unsupported PDF character from the exact predecessor-only input", async () => {
+    const persist = vi.fn() as unknown as ExistingMessageDocumentPersister;
+    const adapter = createDocumentGenerationCapabilityAdapter({ persist });
+    await expect(adapter.execute(executionInput("document_generation", [
+      { source: "step", stepId: "step-2", result: { kind: "text", value: standardResult("Synthetic 漢字 summary.") } },
+    ]))).rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "document_render_validation" });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("does not mistake ordinary mentions of text for a TXT format option", async () => {
     const artifact = { bytes: new Uint8Array([1]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 1 } as GeneratedArtifact;
     const renderMock = vi.fn(async () => artifact);
@@ -817,6 +852,101 @@ describe("six independent capability adapters", () => {
     expect(saved?.status).toBe("succeeded");
     expect(saved?.runtimeContext.requestMessageBinding).toEqual(runtimeBinding);
     expect(saved?.steps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+  });
+
+  it("generates a PDF from a spreadsheet source through a persisted three-step runtime", async () => {
+    const context = fileResult("Synthetic spreadsheet findings for a PDF report.");
+    const standard = standardResult("The uploaded spreadsheet shows stable results.", RUNTIME_REQUEST_ID);
+    const file = createFileAnalysisCapabilityAdapter({ prepareFileContext: vi.fn(async () => context) });
+    const runStandard = vi.fn(async function* () { yield* standardEvents(standard); });
+    const standardAdapter = createStandardCapabilityAdapter({ runOperation: runStandard as unknown as StandardOperationRunner });
+    const storedFiles = new Map<string, Uint8Array>();
+    let persistedRecord: GeneratedDocumentPersistenceRecord | null = null;
+    const persist = createGeneratedDocumentPersistenceServiceForExistingMessage({
+      createId: () => "a3100000-0000-4000-8000-000000000052",
+      upload: async (input) => {
+        const path = buildGeneratedDocumentStoragePath(input);
+        storedFiles.set(path, input.bytes);
+        return path;
+      },
+      persistChat: async () => { throw new Error("Direct chat persistence must not be used."); },
+      persistChatForExistingMessage: async (input) => {
+        persistedRecord = {
+          id: input.generatedDocumentId,
+          userId: input.userId,
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          generationRequestId: input.generationRequestId,
+          storagePath: input.storagePath,
+          filename: input.generatedOutput.filename,
+          format: input.generatedOutput.format,
+          mimeType: input.generatedOutput.mimeType.split(";", 1)[0]!,
+          sizeBytes: input.generatedOutput.sizeBytes,
+          templateId: input.templateId,
+          createdAt: new Date().toISOString(),
+        };
+        return [{ assistant_message_id: input.assistantMessageId, generated_document_id: input.generatedDocumentId, was_existing: false }];
+      },
+      remove: async ({ storagePath }) => { storedFiles.delete(storagePath); },
+      findById: async ({ userId, generatedDocumentId }) => persistedRecord?.userId === userId
+        && persistedRecord.id === generatedDocumentId ? persistedRecord : null,
+      download: async (record) => storedFiles.get(record.storagePath) ?? new Uint8Array(),
+    });
+    const document = createDocumentGenerationCapabilityAdapter({ persist });
+    const calls: CapabilityExecutionInput[] = [];
+    const selectedAdapters = registryExecutor({
+      fileAnalysisExecutor: file,
+      standardExecutor: standardAdapter,
+      documentGenerationExecutor: document,
+    });
+    const store = new InMemoryExecutionStore();
+    let sequence = 0;
+    const runtime = new DurableXStateExecutionRuntime({
+      store,
+      executor: { execute: async (input) => { calls.push(input); return selectedAdapters.execute(input); } },
+      authorizer: { authorize: async () => ({ allowed: true }) },
+      requestMessageBindingValidator: { validate: async () => true },
+      createExecutionId: () => "a3100000-0000-4000-8000-000000000050",
+      createExecutionKey: () => `a3100000-0000-4000-8000-${String(51 + sequence++).padStart(12, "0")}`,
+    });
+    const objective = "Analyze the uploaded XLSX spreadsheet and create a PDF summary.";
+    const runtimeBinding = { ...REQUEST_BINDING, requestId: RUNTIME_REQUEST_ID };
+    const planned = await createMultiStepPlanner({ generateStructuredPlan: vi.fn(async () => {
+      throw new Error("Deterministic planning must not call a provider.");
+    }) }).plan({ objective, attachments: ["file"], modelPlanningAllowed: false });
+    expect(planned.kind).toBe("planned");
+    if (planned.kind !== "planned") throw new Error("Expected deterministic plan.");
+    expect(planned.source).toBe("deterministic");
+    expect(planned.plan.steps.map((step) => step.capability)).toEqual(["file_analysis", "standard", "document_generation"]);
+    expect(planned.plan.steps[2]?.inputs).toEqual([{ source: "step", stepId: "step-2", output: "text" }]);
+
+    const outcome = await runtime.execute(runtimeHandoff(planned.plan.steps), {
+      authenticatedUserId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      requestMessageBinding: runtimeBinding,
+      userInput: objective,
+      attachments: [{ id: context.documents[0]!.documentId, kind: "file" }],
+    }, "spreadsheet-source-pdf-regression");
+
+    expect(outcome.kind).toBe("succeeded");
+    expect(calls.map((call) => call.capabilityId)).toEqual(["file_analysis", "standard", "document_generation"]);
+    expect(calls[2]?.inputs).toEqual([{ source: "step", stepId: "step-2", result: { kind: "text", value: standard } }]);
+    expect(persistedRecord).not.toBeNull();
+    expect(persistedRecord).toMatchObject({ userId: USER_ID, conversationId: CONVERSATION_ID,
+      messageId: runtimeBinding.assistantMessageId, format: "pdf", mimeType: "application/pdf" });
+    const persisted = persistedRecord!;
+    const storedPdf = storedFiles.get(persisted.storagePath);
+    expect(storedPdf).toBeInstanceOf(Uint8Array);
+    const pdf = await PDFDocument.load(storedPdf!);
+    expect(pdf.getPageCount()).toBeGreaterThan(0);
+    expect(persisted.messageId).toBe(runtimeBinding.assistantMessageId);
+    const saved = await store.getRun({ runId: "a3100000-0000-4000-8000-000000000050", userId: USER_ID });
+    expect(saved?.steps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+    expect(saved?.steps[2]?.result).toMatchObject({
+      kind: "document",
+      value: { kind: "generated_document", conversationId: CONVERSATION_ID, messageId: runtimeBinding.assistantMessageId,
+        format: "pdf", mimeType: "application/pdf" },
+    });
   });
 
   it("resumes a safe Standard retry through the same static registry and adapter", async () => {

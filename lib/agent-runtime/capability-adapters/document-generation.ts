@@ -10,7 +10,8 @@ import type { GeneratedArtifact } from "@/lib/documents/generation/contracts";
 import type { TemplateOutputFormat } from "@/lib/documents/generation/templates/types";
 import {
   assertAdapterInput,
-  fail,
+  CapabilityAdapterError,
+  failDocumentGeneration,
   failWithMetadata,
   normalizedInputs,
   predecessorInputs,
@@ -28,10 +29,10 @@ export type DocumentGenerationCapabilityAdapterDependencies = Readonly<{
 
 function documentOptions(inputs: ReturnType<typeof normalizedInputs>): string {
   const userInputs = inputs.filter((item) => item.source === "user");
-  if (userInputs.length > 1) return fail("missing_input");
-  if (inputs.some((item) => item.source === "attachment")) return fail("missing_input");
+  if (userInputs.length > 1) return failDocumentGeneration("missing_input", "input_shape");
+  if (inputs.some((item) => item.source === "attachment")) return failDocumentGeneration("missing_input", "input_shape");
   const objective = userInputs[0]?.value.trim() ?? "";
-  if (userInputs.length === 1 && !objective) return fail("missing_input");
+  if (userInputs.length === 1 && !objective) return failDocumentGeneration("missing_input", "input_shape");
   return objective;
 }
 
@@ -44,13 +45,26 @@ const supportedFormatMap: Readonly<Record<string, TemplateOutputFormat>> = Objec
 });
 
 function requestedFormat(objective: string): TemplateOutputFormat {
-  if (/\b(?:xlsx|spreadsheet|pptx|presentation|slides?|zip|archive)\b/i.test(objective)) return fail("missing_input");
+  const unsupportedFormats = /\b(?:xlsx|spreadsheet|pptx|presentation|slides?|zip|archive)\b/gi;
+  const outputAction = /\b(?:create|generate|export|save|deliver|produce|make|provide|want|need|request)\b/gi;
+  for (const match of objective.matchAll(unsupportedFormats)) {
+    const prefix = objective.slice(0, match.index);
+    const clauseStart = Math.max(prefix.lastIndexOf("."), prefix.lastIndexOf("!"), prefix.lastIndexOf("?"), prefix.lastIndexOf(";")) + 1;
+    const clause = prefix.slice(clauseStart);
+    const actions = [...clause.matchAll(outputAction)];
+    const action = actions.at(-1);
+    if (!action) continue;
+    const betweenActionAndFormat = clause.slice(action.index! + action[0].length);
+    if (!/\b(?:from|using|based\s+on|about|for|of|with|analy[sz]e|review|summari[sz]e)\b/i.test(betweenActionAndFormat)) {
+      return failDocumentGeneration("missing_input", "format_rejection");
+    }
+  }
   const matches = [...objective.matchAll(/\b(txt|md|markdown|docx|pdf)\b/gi)]
     .map((match) => supportedFormatMap[match[1]!.toLowerCase()]!);
   if (/\bword\s+(?:document|file|format)\b/i.test(objective)) matches.push("docx");
   if (/\b(?:plain\s+)?text\s+(?:file|document|format)\b/i.test(objective)) matches.push("txt");
   const unique = [...new Set(matches)];
-  if (unique.length > 1) return fail("missing_input");
+  if (unique.length > 1) return failDocumentGeneration("missing_input", "format_rejection");
   return unique[0] ?? "pdf";
 }
 
@@ -67,19 +81,45 @@ export function createDocumentGenerationCapabilityAdapter(
   return Object.freeze({
     async execute(input: CapabilityExecutionInput): Promise<CapabilityExecutionResult> {
       const binding = assertAdapterInput(input, "document_generation");
-      const inputs = normalizedInputs(input);
+      let inputs: ReturnType<typeof normalizedInputs>;
+      try {
+        inputs = normalizedInputs(input);
+      } catch (error) {
+        if (error instanceof CapabilityAdapterError && error.code === "missing_input") {
+          return failDocumentGeneration("missing_input", "input_shape");
+        }
+        throw error;
+      }
       // A later document step may run after the runtime has safely discarded user
       // text. In that case the validated Standard predecessor is sufficient and
       // the narrow V1 defaults apply (simple-document, PDF, generic title).
       const objective = documentOptions(inputs);
       const predecessors = predecessorInputs(inputs);
-      if (predecessors.length !== 1) return fail("missing_predecessor_result");
-      const standardValue = requireResultKind(predecessors[0]!.result, "text");
+      if (predecessors.length !== 1) return failDocumentGeneration("missing_predecessor_result", "predecessor_validation");
+      let standardValue: unknown;
+      try {
+        standardValue = requireResultKind(predecessors[0]!.result, "text");
+      } catch (error) {
+        if (error instanceof CapabilityAdapterError && error.code === "missing_predecessor_result") {
+          return failDocumentGeneration("missing_predecessor_result", "predecessor_validation");
+        }
+        throw error;
+      }
       const standard = standardOperationResultSchema.safeParse(standardValue);
       if (!standard.success || standard.data.requestId !== binding.requestId || standard.data.userId !== binding.userId
-        || standard.data.conversationId !== binding.conversationId) return fail("missing_predecessor_result");
+        || standard.data.conversationId !== binding.conversationId) {
+        return failDocumentGeneration("missing_predecessor_result", "predecessor_validation");
+      }
 
-      const generationRequestId = requireExecutionKey(input);
+      let generationRequestId: string;
+      try {
+        generationRequestId = requireExecutionKey(input);
+      } catch (error) {
+        if (error instanceof CapabilityAdapterError && error.code === "missing_input") {
+          return failDocumentGeneration("missing_input", "missing_execution_key");
+        }
+        throw error;
+      }
       const format = requestedFormat(objective);
       const deadlineAtMs = input.context.executionDeadlineAtMs;
       if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
@@ -94,7 +134,9 @@ export function createDocumentGenerationCapabilityAdapter(
           packageAsZip: false,
         });
       } catch (error) {
-        if (error instanceof DocumentGenerationValidationError) return fail("missing_input");
+        if (error instanceof DocumentGenerationValidationError) {
+          return failDocumentGeneration("missing_input", "document_render_validation");
+        }
         return failWithMetadata("executor_failed", { phase: "pre_execution", retrySafety: "TERMINAL" });
       }
       if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {

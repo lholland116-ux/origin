@@ -29,11 +29,19 @@ const TERMINAL_FAILURE_CODES = new Set<ExecutionFailureCode>([
 
 export type AdapterFailureMetadata = Omit<ExecutionFailureDescriptor, "code">;
 
+export type DocumentGenerationDiagnosticSubreason =
+  | "input_shape"
+  | "missing_execution_key"
+  | "predecessor_validation"
+  | "format_rejection"
+  | "document_render_validation";
+
 /** Safe adapter failure. Raw provider, storage, and database errors never cross this boundary. */
 export class CapabilityAdapterError extends Error {
   readonly descriptor: ExecutionFailureDescriptor;
 
-  constructor(readonly code: ExecutionFailureCode, metadata?: AdapterFailureMetadata) {
+  constructor(readonly code: ExecutionFailureCode, metadata?: AdapterFailureMetadata,
+    readonly diagnosticSubreason?: DocumentGenerationDiagnosticSubreason) {
     super("The requested step could not be completed.");
     this.name = "CapabilityAdapterError";
     this.descriptor = Object.freeze({
@@ -52,6 +60,13 @@ export function fail(code: ExecutionFailureCode): never {
 
 export function failWithMetadata(code: ExecutionFailureCode, metadata: AdapterFailureMetadata): never {
   throw new CapabilityAdapterError(code, metadata);
+}
+
+export function failDocumentGeneration(
+  code: "missing_input" | "missing_predecessor_result",
+  subreason: DocumentGenerationDiagnosticSubreason,
+): never {
+  throw new CapabilityAdapterError(code, undefined, subreason);
 }
 
 export function assertAdapterInput(input: CapabilityExecutionInput, capabilityId: string): RequestMessageBinding {

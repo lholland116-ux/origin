@@ -1333,6 +1333,13 @@ export class DurableXStateExecutionRuntime {
           }
           else result = executorResult;
         } catch (error) {
+          if (error instanceof CapabilityAdapterError && error.diagnosticSubreason) {
+            console.warn(JSON.stringify({
+              event: "execution_adapter_validation_failed",
+              capability: capabilityId,
+              subreason: error.diagnosticSubreason,
+            }));
+          }
           const failure = error instanceof CapabilityAdapterError
             ? error.descriptor
             : { code: "executor_failed" as const, phase: "unknown" as const, retrySafety: "RECOVERY_REQUIRED" as const };
