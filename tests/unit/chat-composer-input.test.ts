@@ -118,6 +118,21 @@ describe("composer large-input handling", () => {
     expect(clientSource.slice(switchStart, switchEnd)).toContain("setWebSearchOverride(false)");
   });
 
+  it("blocks image and chat submission while a conversation transition is persisting", () => {
+    const composerStart = clientSource.indexOf("const composerDisabled =");
+    const composerEnd = clientSource.indexOf(";", composerStart);
+    expect(clientSource.slice(composerStart, composerEnd)).toContain("sidebarLoading");
+
+    const submitStart = clientSource.indexOf("async function handleSubmit(");
+    const submitGuardEnd = clientSource.indexOf(") {", submitStart);
+    const submitGuard = clientSource.slice(submitStart, clientSource.indexOf("    ) {", submitGuardEnd));
+    expect(submitGuard).toContain("sidebarLoading");
+
+    const regenerateStart = clientSource.indexOf("async function handleRegenerateImage(");
+    const regenerateGuardEnd = clientSource.indexOf("\n\n    const prompt", regenerateStart);
+    expect(clientSource.slice(regenerateStart, regenerateGuardEnd)).toContain("sidebarLoading");
+  });
+
   it("keeps ordinary pastes inline and converts only oversized pastes", () => {
     expect(shouldConvertLargePasteToAttachment("x".repeat(2000))).toBe(false);
     expect(shouldConvertLargePasteToAttachment("x".repeat(2001))).toBe(true);

@@ -3339,7 +3339,11 @@ export default function ChatClient({
   }, [pendingImageLimitExceeded, plan]);
 
   const composerDisabled =
-    loading || uploadingImages || isUploadingDocuments || isLimitReached;
+    loading ||
+    sidebarLoading ||
+    uploadingImages ||
+    isUploadingDocuments ||
+    isLimitReached;
 
   const micDisabled =
     !speechSupported ||
@@ -4889,6 +4893,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     if (
       loading ||
+      sidebarLoading ||
       uploadingImages ||
       isUploadingDocuments ||
       freshImageEditPreparationRef.current
@@ -5641,7 +5646,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function handleRegenerateImage(messageId: string): Promise<void> {
-    if (loading || regenerationInFlightRef.current) return;
+    if (loading || sidebarLoading || regenerationInFlightRef.current) return;
 
     const prompt = resolveGeneratedImagePrompt(messages, messageId);
     if (!prompt) {
@@ -6428,7 +6433,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                                       <button
                                         type="button"
                                         onClick={() => void handleRegenerateImage(message.id)}
-                                        disabled={loading || deletingGeneratedImageId !== null}
+                                        disabled={loading || sidebarLoading || deletingGeneratedImageId !== null}
                                         aria-busy={isRegeneratingImage}
                                         className={cx(
                                           "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-50",
