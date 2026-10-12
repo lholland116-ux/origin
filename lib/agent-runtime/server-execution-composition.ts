@@ -21,6 +21,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createProviderCostLedger } from "@/lib/agent-runtime/provider-cost-ledger";
 import { resolveTrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 import { createTrustedExecutionWorker } from "@/lib/agent-runtime/trusted-execution-worker";
+import { createDocumentGenerationArtifactReconciler } from "@/lib/agent-runtime/document-generation-reconciliation";
 
 if (typeof window !== "undefined") throw new Error("Server execution composition is server-only");
 
@@ -89,6 +90,36 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
     finalizeAcceptedExecution: finalizer.finalize,
     listPendingFinalizationRunIds: finalizer.listPendingRunIds,
   });
+  const reconcileDocumentGenerationArtifact = createDocumentGenerationArtifactReconciler({
+    enabled: process.env.AGENT_EXECUTION_RECOVERY_ENABLED === "true",
+    expectedAuthorizationSecret: process.env.AGENT_EXECUTION_RECOVERY_AUTHORIZATION,
+    loadAcceptedRun: (runId) => store.getAcceptedRunForFinalization({ runId }),
+    reconcile: async (input) => {
+      const admin = createAdminClient();
+      const { data, error } = await admin.rpc("reconcile_trusted_document_generation_artifact", {
+        p_run_id: input.runId,
+        p_step_id: input.stepId,
+        p_execution_key: input.executionKey,
+        p_expected_snapshot_revision: input.expectedSnapshotRevision,
+        p_snapshot: input.snapshot,
+        p_result_envelope: input.result,
+        p_artifact_sha256: input.artifactSha256,
+      });
+      if (error) throw new Error("Document generation reconciliation was unavailable.");
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.status !== "string") {
+        throw new Error("Document generation reconciliation returned invalid data.");
+      }
+      const status = row.status;
+      if (!["reconciled", "already_reconciled", "not_found", "not_eligible", "conflict", "stale_claim"].includes(status)) {
+        throw new Error("Document generation reconciliation returned an unknown status.");
+      }
+      return {
+        status: status as "reconciled" | "already_reconciled" | "not_found" | "not_eligible" | "conflict" | "stale_claim",
+        ...(Number.isSafeInteger(row.snapshot_revision) ? { snapshotRevision: Number(row.snapshot_revision) } : {}),
+      };
+    },
+  });
   return Object.freeze({
     ...composer,
     // Internal server/worker-compatible persistence operation only.
@@ -96,6 +127,9 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
     listPendingExecutionFinalizations: finalizer.listPendingRunIds,
     // Internal-only bounded invocation; only the HMAC-protected wake boundary calls it.
     runTrustedExecutionWorkerOnce: worker.runOnce,
+    // Explicitly owner-authorized, server-only recovery; no client route accepts
+    // artifact identifiers and the feature is disabled unless both gates pass.
+    reconcileDocumentGenerationArtifact,
     control: Object.freeze({
       pause: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.pause(input),
       resume: (input: { runId: string; authenticatedUserId: string; expectedControlRevision: number }) => runtime.resumeControlOnly(input),

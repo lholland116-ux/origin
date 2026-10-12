@@ -6,6 +6,11 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { requestMessageBindingValidator } from "@/lib/agent-runtime/request-message-binding";
 import { createWorkflowHttpHandlers, readWorkflowFeatureGate } from "@/lib/agent-runtime/workflow-http-api";
 import type { ExecutionStore } from "@/lib/agent-runtime/execution-store";
+import type {
+  DocumentGenerationReconciliationAuthorization,
+  DocumentGenerationReconciliationResult,
+} from "@/lib/agent-runtime/document-generation-reconciliation";
+import type { AcceptedExecutionFinalizationResult } from "@/lib/agent-runtime/accepted-execution-finalization";
 
 let store: ExecutionStore | undefined;
 let composer: ReturnType<typeof createServerAcceptedExecutionComposition> | undefined;
@@ -23,6 +28,19 @@ function getComposer(): ReturnType<typeof createServerAcceptedExecutionCompositi
 /** Internal wake-up only; callers provide no run/user identity. */
 export function runTrustedExecutionWorkerOnce() {
   return getComposer().runTrustedExecutionWorkerOnce();
+}
+
+/** Server-only recovery operation; no client identity or artifact is accepted. */
+export function reconcileDocumentGenerationArtifact(input: Readonly<{
+  runId: string;
+  authorization: DocumentGenerationReconciliationAuthorization;
+}>): Promise<DocumentGenerationReconciliationResult> {
+  return getComposer().reconcileDocumentGenerationArtifact(input);
+}
+
+/** Finalizes an already-complete accepted run through the existing idempotent boundary. */
+export function finalizeAcceptedExecution(runId: string): Promise<AcceptedExecutionFinalizationResult> {
+  return getComposer().finalizeAcceptedExecution(runId);
 }
 
 export const workflowHttpHandlers = createWorkflowHttpHandlers({
