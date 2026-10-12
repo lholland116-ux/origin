@@ -13,6 +13,10 @@ const HEX_SIGNATURE_PATTERN = /^[0-9a-f]{64}$/i;
 const REQUEST_BODY_VALIDATION_TIMEOUT_MS = 1_000;
 const MAX_EMPTY_BODY_CHUNKS = 16;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const REJECTION_STATUSES = ["not_found", "not_eligible", "artifact_invalid", "conflict", "stale_claim"] as const;
+
+type RecoveryRejectionStatus = typeof REJECTION_STATUSES[number];
+type RecoveryRejectionPhase = "pre_rpc" | "rpc";
 
 export type DocumentGenerationRecoveryEnvironment = Readonly<Record<string, string | undefined>>;
 export type DocumentGenerationRecoveryConfig = Readonly<{
@@ -129,6 +133,20 @@ function reconciled(status: DocumentGenerationReconciliationResult["status"]): b
   return status === "reconciled" || status === "already_reconciled";
 }
 
+function isRecoveryRejectionStatus(status: DocumentGenerationReconciliationResult["status"]): status is RecoveryRejectionStatus {
+  return (REJECTION_STATUSES as readonly string[]).includes(status);
+}
+
+function rejectionPhase(
+  status: RecoveryRejectionStatus,
+  source: DocumentGenerationReconciliationResult["source"],
+): RecoveryRejectionPhase {
+  if (source === "rpc" || source === "pre_rpc") return source;
+  // Preserve useful diagnostics for injected/test repositories that predate the
+  // source marker. The production RPC adapter always supplies source="rpc".
+  return status === "conflict" || status === "stale_claim" ? "rpc" : "pre_rpc";
+}
+
 /** Fixed-run, server-authenticated recovery boundary. */
 export async function handleDocumentGenerationRecovery(
   request: Request,
@@ -201,8 +219,16 @@ export async function handleDocumentGenerationRecovery(
     return json(503, { error: "temporarily_unavailable" });
   }
   if (!reconciled(recovery.status)) {
-    safeLog(dependencies, "recovery_completed", { status: "not_applied" });
-    return json(409, { error: "recovery_not_applied" });
+    const status = isRecoveryRejectionStatus(recovery.status) ? recovery.status : undefined;
+    const phase = status === undefined ? undefined : rejectionPhase(status, recovery.source);
+    safeLog(dependencies, "recovery_completed", {
+      status: recovery.status,
+      ...(phase ? { phase } : {}),
+    });
+    return json(409, {
+      error: "recovery_not_applied",
+      ...(status ? { status, phase } : {}),
+    });
   }
 
   let finalization: Awaited<ReturnType<DocumentGenerationRecoveryDependencies["finalize"]>>;

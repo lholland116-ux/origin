@@ -116,6 +116,7 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
       }
       return {
         status: status as "reconciled" | "already_reconciled" | "not_found" | "not_eligible" | "conflict" | "stale_claim",
+        source: "rpc" as const,
         ...(Number.isSafeInteger(row.snapshot_revision) ? { snapshotRevision: Number(row.snapshot_revision) } : {}),
       };
     },

@@ -228,8 +228,38 @@ describe("controlled document-generation recovery endpoint", () => {
     const f = fixture({ reconcile: vi.fn(async () => ({ status: "conflict" as const })) });
     const response = await handleDocumentGenerationRecovery(request(), f.dependencies);
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "recovery_not_applied" });
+    expect(await response.json()).toEqual({ error: "recovery_not_applied", status: "conflict", phase: "rpc" });
     expect(f.finalize).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["not_found", "pre_rpc"],
+    ["not_eligible", "pre_rpc"],
+    ["artifact_invalid", "pre_rpc"],
+    ["conflict", "rpc"],
+    ["stale_claim", "rpc"],
+  ] as const)("returns only the allowlisted %s rejection status and phase", async (status, phase) => {
+    const f = fixture({ reconcile: vi.fn(async () => ({ status })) });
+    const response = await handleDocumentGenerationRecovery(request(), f.dependencies);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "recovery_not_applied", status, phase });
+    expect(f.finalize).not.toHaveBeenCalled();
+    expect(f.log).toHaveBeenLastCalledWith({ event: "recovery_completed", status, phase });
+  });
+
+  it("uses the RPC source marker when the RPC returns not_eligible", async () => {
+    const f = fixture({ reconcile: vi.fn(async () => ({ status: "not_eligible" as const, source: "rpc" as const })) });
+    const response = await handleDocumentGenerationRecovery(request(), f.dependencies);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "recovery_not_applied", status: "not_eligible", phase: "rpc" });
+  });
+
+  it("does not expose an unallowlisted reconciler status", async () => {
+    const f = fixture({ reconcile: vi.fn(async () => ({ status: "disabled" as const })) });
+    const response = await handleDocumentGenerationRecovery(request(), f.dependencies);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "recovery_not_applied" });
+    expect(f.log).toHaveBeenLastCalledWith({ event: "recovery_completed", status: "disabled" });
   });
 
   it("serializes replay decisions through the nonce and governed repository boundaries", async () => {

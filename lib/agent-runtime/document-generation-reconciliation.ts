@@ -29,6 +29,8 @@ export type DocumentGenerationReconciliationAuthorization = Readonly<{
 export type DocumentGenerationReconciliationResult = Readonly<{
   status: "reconciled" | "already_reconciled" | "disabled" | "not_found" | "not_eligible"
     | "artifact_invalid" | "conflict" | "stale_claim";
+  /** Set by the server RPC adapter; omitted for pre-RPC validation results. */
+  source?: "pre_rpc" | "rpc";
   snapshotRevision?: number;
 }>;
 
