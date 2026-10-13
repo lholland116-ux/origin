@@ -31,6 +31,13 @@ const GENERATED_MIME_EXTENSIONS: Readonly<Record<string, string>> = {
   "image/jpeg": "jpg",
 };
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IMAGE_GENERATION_AUTH_DIAGNOSTIC_EVENT = "image_generation_authorization_diagnostic";
+
+type ImageGenerationAuthDiagnosticPhase = "user_scoped_lookup" | "quota_rpc";
+type ImageGenerationAuthDiagnosticReason =
+  | "not_owned_or_missing"
+  | "conversation_not_found"
+  | "infrastructure_error";
 
 export type ImageGenerationServiceInput = Readonly<{
   userId: string;
@@ -153,6 +160,18 @@ function extractMessage(error: unknown): string {
   return error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string"
     ? (error as { message: string }).message
     : "";
+}
+
+function logImageGenerationAuthDiagnostic(
+  dependencies: ImageGenerationServiceDependencies,
+  phase: ImageGenerationAuthDiagnosticPhase,
+  reason: ImageGenerationAuthDiagnosticReason,
+): void {
+  try {
+    dependencies.logFailure(IMAGE_GENERATION_AUTH_DIAGNOSTIC_EVENT, { phase, reason });
+  } catch {
+    // Diagnostic logging must not change authorization or request behavior.
+  }
 }
 
 function durableIds(data: unknown): { userMessageId: string; assistantMessageId: string; imageId: string } | null {
@@ -310,9 +329,13 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
       try {
         conversationOwned = await dependencies.verifyConversation({ userId: input.userId, conversationId: input.conversationId });
       } catch {
+        logImageGenerationAuthDiagnostic(dependencies, "user_scoped_lookup", "infrastructure_error");
         throw new ImageGenerationServiceError("internal_failure");
       }
-      if (!conversationOwned) throw new ImageGenerationServiceError("conversation_not_found");
+      if (!conversationOwned) {
+        logImageGenerationAuthDiagnostic(dependencies, "user_scoped_lookup", "not_owned_or_missing");
+        throw new ImageGenerationServiceError("conversation_not_found");
+      }
     }
 
     let attemptId: string;
@@ -323,8 +346,12 @@ function createImageGenerationOperation<TInput extends ImageGenerationServiceInp
       const message = extractMessage(error);
       if (message === "IMAGE_DAILY_LIMIT_REACHED") throw new ImageGenerationServiceError("daily_limit_reached");
       if (message === "IMAGE_MONTHLY_LIMIT_REACHED") throw new ImageGenerationServiceError("monthly_limit_reached");
-      if (message === "CONVERSATION_NOT_FOUND") throw new ImageGenerationServiceError("conversation_not_found");
+      if (message === "CONVERSATION_NOT_FOUND") {
+        logImageGenerationAuthDiagnostic(dependencies, "quota_rpc", "conversation_not_found");
+        throw new ImageGenerationServiceError("conversation_not_found");
+      }
       if (message === "UNAUTHORIZED") throw new ImageGenerationServiceError("unauthorized");
+      logImageGenerationAuthDiagnostic(dependencies, "quota_rpc", "infrastructure_error");
       throw new ImageGenerationServiceError("internal_failure");
     }
 

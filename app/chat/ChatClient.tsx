@@ -1137,6 +1137,12 @@ export class ImageGenerationClientError extends Error {
   }
 }
 
+export function tryAcquireImageGenerationRequest(lock: { current: boolean }): boolean {
+  if (lock.current) return false;
+  lock.current = true;
+  return true;
+}
+
 export function isAbortError(error: unknown): boolean {
   return (
     (typeof DOMException !== "undefined" &&
@@ -1164,6 +1170,8 @@ export function getImageGenerationErrorMessage(
       return "Please enter a valid image prompt.";
     case 401:
       return "Your session has expired. Please sign in again.";
+    case 404:
+      return "This conversation is no longer available. Select another chat or start a new chat before generating an image.";
     case 413:
       return "That image request is too large. Please shorten the prompt.";
     case 415:
@@ -2919,6 +2927,7 @@ export default function ChatClient({
   const abortRef = useRef<AbortController | null>(null);
   const messageLoadGenerationRef = useRef(0);
   const imageRequestGenerationRef = useRef(0);
+  const imageGenerationInFlightRef = useRef(false);
   const generatedImageUrlsRef = useRef<Set<string>>(new Set());
   const regenerationInFlightRef = useRef(false);
   const imageEditOperationRef = useRef<ImageEditOperation | null>(null);
@@ -4619,6 +4628,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function loadConversation(nextConversationId: string) {
     if (
       loading ||
+      imageGenerationInFlightRef.current ||
       imageEditInFlightRef.current ||
       nextConversationId === conversationId
     ) {
@@ -4694,7 +4704,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function handleNewChat() {
-    if (loading || imageEditInFlightRef.current) return;
+    if (loading || imageGenerationInFlightRef.current || imageEditInFlightRef.current) return;
 
     setWebSearchOverride(false);
 
@@ -4893,6 +4903,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     if (
       loading ||
+      imageGenerationInFlightRef.current ||
       sidebarLoading ||
       uploadingImages ||
       isUploadingDocuments ||
@@ -5133,6 +5144,13 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     const payloadImages = buildStoredImagePayload(pendingImageSnapshot);
     const payloadDocumentIds = [...readyDocumentIds];
     const generationRequestId = createId();
+
+    if (
+      routeDecision.route === "image_generation" &&
+      !tryAcquireImageGenerationRequest(imageGenerationInFlightRef)
+    ) {
+      return;
+    }
 
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
@@ -5453,6 +5471,11 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
         if (isAbortError(error)) {
           setUiError("Image generation stopped.");
+        } else if (error instanceof ImageGenerationClientError && error.status === 404) {
+          // A 404 is returned before quota reservation and provider dispatch. Keep
+          // the draft available while the user selects or creates a valid chat.
+          setInput(effectiveMessage);
+          setUiError(error.message);
         } else {
           setUiError(
             error instanceof ImageGenerationClientError
@@ -5494,6 +5517,9 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     } finally {
       abortRef.current = null;
       setLoading(false);
+      if (routeDecision.route === "image_generation") {
+        imageGenerationInFlightRef.current = false;
+      }
     }
   }
 
@@ -5646,7 +5672,12 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   }
 
   async function handleRegenerateImage(messageId: string): Promise<void> {
-    if (loading || sidebarLoading || regenerationInFlightRef.current) return;
+    if (
+      loading ||
+      sidebarLoading ||
+      imageGenerationInFlightRef.current ||
+      regenerationInFlightRef.current
+    ) return;
 
     const prompt = resolveGeneratedImagePrompt(messages, messageId);
     if (!prompt) {
@@ -5656,6 +5687,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       return;
     }
 
+    if (!tryAcquireImageGenerationRequest(imageGenerationInFlightRef)) return;
     regenerationInFlightRef.current = true;
     const requestGeneration = ++imageRequestGenerationRef.current;
     const controller = new AbortController();
@@ -5732,6 +5764,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         setRegeneratingMessageId(null);
       }
       regenerationInFlightRef.current = false;
+      imageGenerationInFlightRef.current = false;
     }
   }
 

@@ -12,12 +12,73 @@ import {
   reconcileGeneratedImageMessages,
   resolveGeneratedImagePrompt,
   shouldRevokeGeneratedImageUrl,
+  tryAcquireImageGenerationRequest,
 } from "@/app/chat/ChatClient";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
+const chatPageSource = readFileSync("app/chat/page.tsx", "utf8");
+const conversationRouteSource = readFileSync("app/api/conversations/route.ts", "utf8");
 const CONVERSATION_ID = "20000000-0000-4000-8000-000000000001";
 
 describe("chat image-generation mode", () => {
+  it("serializes image generation submissions synchronously", () => {
+    const lock = { current: false };
+
+    expect(tryAcquireImageGenerationRequest(lock)).toBe(true);
+    expect(tryAcquireImageGenerationRequest(lock)).toBe(false);
+
+    lock.current = false;
+    expect(tryAcquireImageGenerationRequest(lock)).toBe(true);
+  });
+
+  it("persists new conversations for the authenticated user before selecting them", () => {
+    expect(chatPageSource).toContain('.from("conversations")');
+    expect(chatPageSource).toContain('.insert({\n        user_id: user.id,\n        title: "New Chat",');
+    expect(chatPageSource).toContain("initialConversationId={activeConversationId}");
+
+    const newChatStart = clientSource.indexOf("async function handleNewChat()");
+    const newChatEnd = clientSource.indexOf("async function handleRenameConversation", newChatStart);
+    const newChatSource = clientSource.slice(newChatStart, newChatEnd);
+    expect(newChatSource).toContain('fetch("/api/conversations", {');
+    expect(newChatSource).toContain('method: "POST"');
+    expect(newChatSource).toContain("setConversationId(newConversationId)");
+    expect(newChatSource.indexOf("if (!newConversationId)")).toBeLessThan(
+      newChatSource.indexOf("setConversationId(newConversationId)"),
+    );
+    expect(conversationRouteSource).toContain("user_id: user.id");
+  });
+
+  it("loads existing conversations before enabling submission with their ID", () => {
+    const loadStart = clientSource.indexOf("async function loadConversation(");
+    const loadEnd = clientSource.indexOf("async function handleMobileConversationOpen", loadStart);
+    const loadSource = clientSource.slice(loadStart, loadEnd);
+    const submitStart = clientSource.indexOf("async function handleSubmit(");
+    const submitEnd = clientSource.indexOf("async function handleDownloadGeneratedImage", submitStart);
+    const submitSource = clientSource.slice(submitStart, submitEnd);
+
+    expect(loadSource).toContain("setSidebarLoading(true)");
+    expect(loadSource.indexOf("if (!res.ok)")).toBeLessThan(
+      loadSource.indexOf("setConversationId(nextConversationId)"),
+    );
+    expect(loadSource).toContain("setSidebarLoading(false)");
+    expect(submitSource).toContain("sidebarLoading ||");
+    expect(submitSource).toContain('if (!conversationId)');
+    expect(submitSource).toContain("conversationId,");
+  });
+
+  it("returns a specific stale-conversation message for the pre-provider 404", () => {
+    expect(getImageGenerationErrorMessage(404, "INVALID_REQUEST")).toBe(
+      "This conversation is no longer available. Select another chat or start a new chat before generating an image.",
+    );
+
+    const submitStart = clientSource.indexOf("async function handleSubmit(");
+    const submitEnd = clientSource.indexOf("async function handleDownloadGeneratedImage", submitStart);
+    const submitSource = clientSource.slice(submitStart, submitEnd);
+    expect(submitSource).toContain("error.status === 404");
+    expect(submitSource).toContain("setInput(effectiveMessage)");
+    expect(submitSource).toContain("imageGenerationInFlightRef.current = false");
+  });
+
   it("posts only the conversation envelope and prompt, then turns an accepted image response into a blob URL", async () => {
     const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       expect(url).toBe("/api/image-generation");
@@ -399,6 +460,23 @@ describe("chat image-generation mode", () => {
         message: "Could not reach image generation. Please try again.",
       })
     );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the conversation lookup 404 without retrying the request", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        { error: { code: "INVALID_REQUEST", message: "Conversation not found." } },
+        { status: 404 },
+      ),
+    );
+
+    await expect(
+      fetchGeneratedImage("A prompt", { conversationId: CONVERSATION_ID, fetcher }),
+    ).rejects.toMatchObject({
+      status: 404,
+      message: "This conversation is no longer available. Select another chat or start a new chat before generating an image.",
+    });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 

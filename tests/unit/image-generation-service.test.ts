@@ -86,12 +86,78 @@ describe("Image Generation application service", () => {
   });
 
   it("denies an unowned conversation before quota, provider, storage, or persistence work", async () => {
-    const { dependencies, generateImage, run } = setup({ verifyConversation: vi.fn(async () => false) });
+    const logFailure = vi.fn();
+    const { dependencies, generateImage, run } = setup({
+      verifyConversation: vi.fn(async () => false),
+      logFailure,
+    });
     await expect(run(input)).rejects.toMatchObject({ code: "conversation_not_found" });
+    expect(logFailure).toHaveBeenCalledExactlyOnceWith(
+      "image_generation_authorization_diagnostic",
+      { phase: "user_scoped_lookup", reason: "not_owned_or_missing" },
+    );
     expect(dependencies.reserveQuota).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
     expect(dependencies.uploadImage).not.toHaveBeenCalled();
     expect(dependencies.completeGeneration).not.toHaveBeenCalled();
+  });
+
+  it("reports a user-scoped conversation lookup infrastructure failure without changing the public error", async () => {
+    const privateError = new Error(`query failed for ${USER_ID} ${CONVERSATION_ID}`);
+    const logFailure = vi.fn();
+    const { dependencies, generateImage, run } = setup({
+      verifyConversation: vi.fn(async () => { throw privateError; }),
+      logFailure,
+    });
+
+    await expect(run(input)).rejects.toMatchObject({ code: "internal_failure", status: 500 });
+    expect(logFailure).toHaveBeenCalledExactlyOnceWith(
+      "image_generation_authorization_diagnostic",
+      { phase: "user_scoped_lookup", reason: "infrastructure_error" },
+    );
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(USER_ID);
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(CONVERSATION_ID);
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(privateError.message);
+    expect(dependencies.reserveQuota).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes a quota RPC conversation rejection and preserves the same 404", async () => {
+    const logFailure = vi.fn();
+    const { dependencies, generateImage, run } = setup({
+      reserveQuota: vi.fn(async () => { throw new Error("CONVERSATION_NOT_FOUND"); }),
+      logFailure,
+    });
+
+    await expect(run(input)).rejects.toMatchObject({ code: "conversation_not_found", status: 404 });
+    expect(logFailure).toHaveBeenCalledExactlyOnceWith(
+      "image_generation_authorization_diagnostic",
+      { phase: "quota_rpc", reason: "conversation_not_found" },
+    );
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(USER_ID);
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(CONVERSATION_ID);
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(dependencies.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it("reports unexpected quota RPC infrastructure errors once without exposing error details", async () => {
+    const privateError = new Error(`database error for ${CONVERSATION_ID}`);
+    const logFailure = vi.fn();
+    const { dependencies, generateImage, run } = setup({
+      reserveQuota: vi.fn(async () => { throw privateError; }),
+      logFailure,
+    });
+
+    await expect(run(input)).rejects.toMatchObject({ code: "internal_failure", status: 500 });
+    expect(logFailure).toHaveBeenCalledExactlyOnceWith(
+      "image_generation_authorization_diagnostic",
+      { phase: "quota_rpc", reason: "infrastructure_error" },
+    );
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(USER_ID);
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(CONVERSATION_ID);
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(privateError.message);
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(dependencies.uploadImage).not.toHaveBeenCalled();
   });
 
   it("maps quota denial before provider work", async () => {
