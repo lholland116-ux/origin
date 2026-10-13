@@ -55,8 +55,8 @@ export type TrustedExecutionWorkerOutcome = Readonly<{
 export type TrustedExecutionWorkerDependencies = Readonly<{
   store: ExecutionStore;
   runtime: DurableXStateExecutionRuntime;
-  listPendingFinalizationRunIds(limit: number): Promise<readonly string[]>;
   finalizeAcceptedExecution(runId: string): Promise<{ status: string }>;
+  isPilotUserId(userId: string): boolean;
   createClaimId?: () => string;
   now?: () => number;
 }>;
@@ -148,66 +148,82 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
   const createClaimId = dependencies.createClaimId ?? randomUUID;
 
   return Object.freeze({
-    async runOnce(): Promise<TrustedExecutionWorkerOutcome> {
+    async runOnce(runId: string): Promise<TrustedExecutionWorkerOutcome> {
       const started = now();
       if (!Number.isSafeInteger(started) || !validWorkerBounds()) return outcome("recovery_required", started, now);
 
-      let pendingFinalizations: readonly string[];
+      if (!UUID.test(runId)) return outcome("authorization_denied", started, now);
+      let targetRun;
       try {
-        pendingFinalizations = await dependencies.listPendingFinalizationRunIds(1);
+        targetRun = await dependencies.store.getAcceptedRunForFinalization({ runId });
       } catch {
-        return outcome("finalization_pending", started, now);
+        return outcome("worker_unavailable", started, now, { runId, providerCalls: null });
       }
-      const finalizationId = pendingFinalizations.find((id) => UUID.test(id));
-      if (finalizationId) {
-        const finalized = await dependencies.finalizeAcceptedExecution(finalizationId).catch(() => ({ status: "unavailable" }));
+      if (!targetRun || targetRun.id !== runId || !hasAcceptedBinding(targetRun)
+        || !dependencies.isPilotUserId(targetRun.userId)
+        || targetRun.steps.some((step) => !isAutonomousCapabilityAllowed(step.capabilityId))) {
+        return outcome("authorization_denied", started, now, {
+          runId, diagnosticPhase: "worker_run_validation", diagnosticCode: "authorization_denied",
+        });
+      }
+      if (targetRun.controlState !== "active") return outcome("paused_or_stopped", started, now, { runId });
+      if (targetRun.approvalCheckpoints.some((checkpoint) => checkpoint.status !== "approved")) {
+        return outcome("waiting_for_approval", started, now, { runId });
+      }
+      if (targetRun.status === "succeeded") {
+        const finalized = await dependencies.finalizeAcceptedExecution(runId).catch(() => ({ status: "unavailable" }));
         return outcome(finalized.status === "finalized" || finalized.status === "replayed"
-          ? "finalization_completed" : "finalization_pending", started, now, { runId: finalizationId });
+          ? "finalization_completed" : "finalization_pending", started, now, { runId });
+      }
+      if (targetRun.status === "failed" || (targetRun.status !== "pending" && targetRun.status !== "running")) {
+        return outcome("terminal", started, now, { runId });
       }
 
       let discovered: readonly DiscoveredExecutionWork[];
       try {
-        discovered = await dependencies.store.discoverExecutionWork({ limit: MAX_DISCOVERY_PER_INVOCATION });
+        discovered = await dependencies.store.discoverExecutionWorkForRun({ runId, limit: MAX_DISCOVERY_PER_INVOCATION });
       } catch {
-        // A persistence outage is not evidence that the durable queue is empty.
-        // Let the wake boundary report a retryable service failure.
-        return outcome("worker_unavailable", started, now, { providerCalls: null });
+        // A persistence outage is not evidence that this run has no work. Never
+        // widen a targeted invocation to the global queue.
+        return outcome("worker_unavailable", started, now, { runId, providerCalls: null });
       }
       const candidate = firstWork(discovered);
-      if (!candidate) return outcome("no_work", started, now);
+      if (!candidate) return outcome("no_work", started, now, { runId });
+      if (candidate.runId !== runId) return outcome("authorization_denied", started, now, { runId });
       if (candidate.kind === "recovery_required") {
-        return outcome("recovery_required", started, now, { runId: candidate.runId, stepId: candidate.stepId });
+        return outcome("recovery_required", started, now, { runId, stepId: candidate.stepId });
       }
 
-      if (now() - started >= MAX_SLICE_WALL_TIME_MS) return outcome("bounded_yield", started, now, { runId: candidate.runId, stepId: candidate.stepId });
+      if (now() - started >= MAX_SLICE_WALL_TIME_MS) return outcome("bounded_yield", started, now, { runId, stepId: candidate.stepId });
       const claimId = createClaimId();
-      if (!UUID.test(claimId)) return outcome("lease_lost", started, now, { runId: candidate.runId, stepId: candidate.stepId });
+      if (!UUID.test(claimId)) return outcome("lease_lost", started, now, { runId, stepId: candidate.stepId });
       const claimResult = await dependencies.store.claimExecutionWork({
-        runId: candidate.runId,
+        runId,
         claimId,
         leaseSeconds: LEASE_SECONDS,
       }).catch(() => ({ status: "ineligible" as const }));
-      if (claimResult.status === "recovery_required") return outcome("recovery_required", started, now, { runId: candidate.runId, stepId: candidate.stepId });
+      if (claimResult.status === "recovery_required") return outcome("recovery_required", started, now, { runId, stepId: candidate.stepId });
       if (claimResult.status !== "claimed") {
-        return outcome("lease_lost", started, now, { runId: candidate.runId, stepId: candidate.stepId });
+        return outcome("lease_lost", started, now, { runId, stepId: candidate.stepId });
       }
-      if (claimResult.stepId !== candidate.stepId) {
-        await releaseIfSafe(dependencies.store, candidate.runId, claimResult.claim);
-        return outcome("lease_lost", started, now, { runId: candidate.runId, stepId: candidate.stepId });
+      if (claimResult.runId !== runId || claimResult.stepId !== candidate.stepId) {
+        if (claimResult.runId === runId) await releaseIfSafe(dependencies.store, runId, claimResult.claim);
+        return outcome("lease_lost", started, now, { runId, stepId: candidate.stepId });
       }
 
       let run;
       try {
         // Owner and immutable accepted-request binding are loaded from persisted relationships, never caller input.
-        run = await dependencies.store.getAcceptedRunForFinalization({ runId: candidate.runId });
+        run = await dependencies.store.getAcceptedRunForFinalization({ runId });
       } catch {
         run = null;
       }
-      if (!run || run.id !== claimResult.runId || !hasAcceptedBinding(run)
+      if (!run || run.id !== runId || run.userId !== targetRun.userId || !hasAcceptedBinding(run)
+        || !dependencies.isPilotUserId(run.userId)
         || run.steps.some((step) => !isAutonomousCapabilityAllowed(step.capabilityId))) {
-        await releaseIfSafe(dependencies.store, candidate.runId, claimResult.claim);
+        await releaseIfSafe(dependencies.store, runId, claimResult.claim);
         return outcome(run ? "authorization_denied" : "recovery_required", started, now, {
-          runId: candidate.runId, stepId: candidate.stepId,
+          runId, stepId: candidate.stepId,
           ...(run ? { diagnosticPhase: "worker_run_validation" as const, diagnosticCode: "authorization_denied" as const } : {}),
         });
       }
@@ -218,7 +234,7 @@ export function createTrustedExecutionWorker(dependencies: TrustedExecutionWorke
         || run.steps.some((step) => step.status === "running")
         || selected.dependencyIds.some((id) => run!.steps.find((step) => step.stepId === id)?.status !== "succeeded")
         || run.controlState !== "active" || hasUnresolvedApproval) {
-        await releaseIfSafe(dependencies.store, candidate.runId, claimResult.claim);
+        await releaseIfSafe(dependencies.store, runId, claimResult.claim);
         const blocked = run.controlState !== "active" ? "paused_or_stopped"
           : hasUnresolvedApproval ? "waiting_for_approval" : "authorization_denied";
         return outcome(blocked, started, now, {

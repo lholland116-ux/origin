@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { handleExecutionTrigger, type ExecutionTriggerDependencies } from "@/lib/agent-runtime/execution-trigger";
 import { runTrustedExecutionWorkerOnce } from "@/lib/agent-runtime/server-workflow-http";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { readWorkflowFeatureGate } from "@/lib/agent-runtime/workflow-http-api";
 
 function oneRpcRow(value: unknown): Record<string, unknown> | null {
   const row = Array.isArray(value) ? value[0] : value;
@@ -10,8 +11,9 @@ function oneRpcRow(value: unknown): Record<string, unknown> | null {
 }
 
 export function createServerExecutionTriggerDependencies(): ExecutionTriggerDependencies {
+  const workflowGate = readWorkflowFeatureGate();
   return {
-    enabled: process.env.AGENT_EXECUTION_TRIGGER_ENABLED === "true",
+    enabled: process.env.AGENT_EXECUTION_TRIGGER_ENABLED === "true" && workflowGate.enabled,
     secret: process.env.AGENT_EXECUTION_TRIGGER_SECRET,
     consumeNonce: async (nonceHash) => {
       const { data, error } = await createAdminClient().rpc("consume_agent_execution_trigger_nonce", {

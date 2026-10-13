@@ -317,6 +317,27 @@ export class SupabaseExecutionStore implements ExecutionStore {
     });
   }
 
+  async discoverExecutionWorkForRun(input: { readonly runId: string; readonly limit?: number }): Promise<readonly DiscoveredExecutionWork[]> {
+    const limit = input.limit ?? 50;
+    if (!UUID_PATTERN.test(input.runId) || !Number.isInteger(limit)
+      || limit < 1 || limit > EXECUTION_WORK_LEASE_POLICY.maximumDiscoveryBatch) return [];
+    const rows = await this.sql`SELECT * FROM public.discover_agent_execution_work_for_run(${input.runId}::uuid, ${limit})` as readonly Row[];
+    return rows.flatMap((row) => {
+      const generation = Number(row.fencing_generation);
+      const dueAt = iso(row.due_at);
+      if (row.run_id !== input.runId || typeof row.step_id !== "string"
+        || !["pending_step", "safe_retry", "recovery_required"].includes(String(row.work_kind))
+        || !dueAt || !Number.isSafeInteger(generation) || generation < 0) return [];
+      return [{
+        runId: input.runId,
+        stepId: row.step_id,
+        kind: row.work_kind === "recovery_required" ? "recovery_required" as const : "runnable" as const,
+        dueAt,
+        fencingGeneration: generation,
+      }];
+    });
+  }
+
   async claimExecutionWork(input: { readonly runId: string; readonly claimId: string; readonly leaseSeconds?: number }): Promise<ExecutionWorkClaimResult> {
     if (!UUID_PATTERN.test(input.runId) || !UUID_PATTERN.test(input.claimId)
       || !Number.isInteger(input.leaseSeconds ?? EXECUTION_WORK_LEASE_POLICY.defaultSeconds)

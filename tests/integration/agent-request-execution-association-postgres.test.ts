@@ -198,18 +198,20 @@ describeDatabase("accepted request execution association (isolated local Postgre
     const worker = createTrustedExecutionWorker({
       store: failingStore,
       runtime: {} as DurableXStateExecutionRuntime,
-      listPendingFinalizationRunIds: async () => [],
       finalizeAcceptedExecution: async () => ({ status: "unavailable" }),
+      isPilotUserId: () => true,
     });
     const secret = "disposable-integration-trigger-secret-at-least-32-bytes";
+    const runId = randomUUID();
     const timestamp = String(Math.floor(Date.now() / 1000));
     const nonce = randomBytes(16).toString("hex");
     const response = await handleExecutionTrigger(new Request("https://lvtchat.test/api/internal/execution-wake", {
       method: "POST",
       headers: {
+        "x-lvtchat-run-id": runId,
         "x-lvtchat-timestamp": timestamp,
         "x-lvtchat-nonce": nonce,
-        "x-lvtchat-signature": signExecutionTrigger(secret, timestamp, nonce),
+        "x-lvtchat-signature": signExecutionTrigger(secret, timestamp, nonce, runId),
       },
     }), {
       enabled: true,
@@ -218,7 +220,7 @@ describeDatabase("accepted request execution association (isolated local Postgre
       acquireInvocation: async () => ({ status: "acquired", fencingGeneration: 1 }),
       renewInvocation: async () => true,
       releaseInvocation: async () => true,
-      runOnce: () => worker.runOnce(),
+      runOnce: () => worker.runOnce(runId),
     });
 
     expect(response.status).toBe(503);
@@ -247,6 +249,20 @@ describeDatabase("accepted request execution association (isolated local Postgre
     });
     expect(persisted?.steps.map((step) => step.stepId).sort()).toEqual(["document", "synthesis"]);
     expect(persisted?.steps.every((step) => step.status === "pending")).toBe(true);
+
+    const otherAccepted = await accept({ key: randomUUID() });
+    const otherAssociated = await engine.runtime.associateAcceptedRequest(
+      plan("another accepted run"), runtimeInput(otherAccepted.identity), otherAccepted.identity,
+    );
+    expect(otherAssociated.kind).toBe("associated");
+    if (otherAssociated.kind !== "associated") return;
+    const targeted = await store.discoverExecutionWorkForRun({ runId: first.runId, limit: 10 });
+    expect(targeted.length).toBeGreaterThan(0);
+    expect(targeted.every((item) => item.runId === first.runId)).toBe(true);
+    expect(targeted).not.toContainEqual(expect.objectContaining({ runId: otherAssociated.runId }));
+    const otherTargeted = await store.discoverExecutionWorkForRun({ runId: otherAssociated.runId, limit: 10 });
+    expect(otherTargeted.length).toBeGreaterThan(0);
+    expect(otherTargeted.every((item) => item.runId === otherAssociated.runId)).toBe(true);
   });
 
   it("looks up only the durable run whose complete accepted identity matches", async () => {
@@ -680,8 +696,8 @@ describeDatabase("accepted request execution association (isolated local Postgre
         return rows.map((row) => row.run_id);
       },
     });
-    const worker = createTrustedExecutionWorker({ store, runtime, listPendingFinalizationRunIds: finalizer.listPendingRunIds,
-      finalizeAcceptedExecution: finalizer.finalize, createClaimId: randomUUID });
+    const worker = createTrustedExecutionWorker({ store, runtime,
+      finalizeAcceptedExecution: finalizer.finalize, isPilotUserId: () => true, createClaimId: randomUUID });
     const triggerSecret = "disposable-integration-trigger-secret-at-least-32-bytes";
     let workerInvocations = 0;
     const triggerWorkerOnce = async (options: { nonce?: string; timestamp?: string; expectedStatus?: number } = {}) => {
@@ -690,9 +706,10 @@ describeDatabase("accepted request execution association (isolated local Postgre
       const response = await handleExecutionTrigger(new Request("https://lvtchat.test/api/internal/execution-wake", {
         method: "POST",
         headers: {
+          "x-lvtchat-run-id": associated.runId,
           "x-lvtchat-timestamp": timestamp,
           "x-lvtchat-nonce": nonce,
-          "x-lvtchat-signature": signExecutionTrigger(triggerSecret, timestamp, nonce),
+          "x-lvtchat-signature": signExecutionTrigger(triggerSecret, timestamp, nonce, associated.runId),
         },
       }), {
         enabled: true,
@@ -719,7 +736,7 @@ describeDatabase("accepted request execution association (isolated local Postgre
         },
         runOnce: async () => {
           workerInvocations += 1;
-          return worker.runOnce();
+          return worker.runOnce(associated.runId);
         },
       });
       expect(response.status).toBe(options.expectedStatus ?? 200);

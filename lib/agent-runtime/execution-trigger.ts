@@ -12,6 +12,7 @@ const SECRET_MIN_BYTES = 32;
 const GATE_RENEWAL_INTERVAL_MS = 30_000;
 const REQUEST_BODY_VALIDATION_TIMEOUT_MS = 1_000;
 const MAX_EMPTY_BODY_CHUNKS = 16;
+const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type ExecutionTriggerWorkerResult = Readonly<{
   status: string;
@@ -35,7 +36,7 @@ export type ExecutionTriggerDependencies = Readonly<{
   acquireInvocation(claimId: string): Promise<{ status: "acquired"; fencingGeneration: number } | { status: "busy" }>;
   renewInvocation(claimId: string, fencingGeneration: number): Promise<boolean>;
   releaseInvocation(claimId: string, fencingGeneration: number): Promise<boolean>;
-  runOnce(): Promise<ExecutionTriggerWorkerResult>;
+  runOnce(runId: string): Promise<ExecutionTriggerWorkerResult>;
   log?(event: Readonly<Record<string, string | number | null>>): void;
 }>;
 
@@ -46,16 +47,16 @@ function json(status: number, body: Record<string, unknown>): Response {
   });
 }
 
-function signable(timestamp: string, nonce: string): string {
-  return `v1\nPOST\n${TRIGGER_PATH}\n${timestamp}\n${nonce.toLowerCase()}`;
+function signable(timestamp: string, nonce: string, runId: string): string {
+  return `v2\nPOST\n${TRIGGER_PATH}\n${runId.toLowerCase()}\n${timestamp}\n${nonce.toLowerCase()}`;
 }
 
 function validSecret(secret: string | undefined): secret is string {
   return typeof secret === "string" && Buffer.byteLength(secret, "utf8") >= SECRET_MIN_BYTES;
 }
 
-export function signExecutionTrigger(secret: string, timestamp: string, nonce: string): string {
-  return createHmac("sha256", secret).update(signable(timestamp, nonce), "utf8").digest("hex");
+export function signExecutionTrigger(secret: string, timestamp: string, nonce: string, runId: string): string {
+  return createHmac("sha256", secret).update(signable(timestamp, nonce, runId), "utf8").digest("hex");
 }
 
 async function hasRequestBodyBytes(body: ReadableStream<Uint8Array>): Promise<boolean> {
@@ -97,7 +98,7 @@ async function hasRequestBodyBytes(body: ReadableStream<Uint8Array>): Promise<bo
   }
 }
 
-/** Authenticated wake-up only: it accepts no run or owner arguments and performs one bounded worker call. */
+/** Authenticated wake-up only: it accepts one signed run identity and performs one bounded worker call for that run. */
 export async function handleExecutionTrigger(
   request: Request,
   dependencies: ExecutionTriggerDependencies,
@@ -128,6 +129,13 @@ export async function handleExecutionTrigger(
     return json(400, { error: "invalid_request" });
   }
 
+  const requestedRunId = request.headers.get("x-lvtchat-run-id") ?? "";
+  if (!RUN_ID_PATTERN.test(requestedRunId)) {
+    log({ event: "trigger_rejected", reason: "invalid_run_identity" });
+    return json(400, { error: "invalid_request" });
+  }
+  const runId = requestedRunId.toLowerCase();
+
   const timestamp = request.headers.get("x-lvtchat-timestamp") ?? "";
   const nonce = request.headers.get("x-lvtchat-nonce") ?? "";
   const signature = request.headers.get("x-lvtchat-signature") ?? "";
@@ -142,7 +150,7 @@ export async function handleExecutionTrigger(
     log({ event: "trigger_rejected", reason: "stale_authentication" });
     return json(401, { error: "unauthorized" });
   }
-  const expected = Buffer.from(signExecutionTrigger(dependencies.secret, timestamp, nonce), "hex");
+  const expected = Buffer.from(signExecutionTrigger(dependencies.secret, timestamp, nonce, runId), "hex");
   const supplied = Buffer.from(signature, "hex");
   if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
     log({ event: "trigger_rejected", reason: "invalid_authentication" });
@@ -190,7 +198,7 @@ export async function handleExecutionTrigger(
       .finally(() => { pendingRenewal = undefined; });
   }, GATE_RENEWAL_INTERVAL_MS);
   try {
-    result = await dependencies.runOnce();
+    result = await dependencies.runOnce(runId);
   } catch {
     result = { status: "worker_unavailable", durationMs: Math.max(0, now() - startedAt), providerCalls: null };
   } finally {

@@ -22,6 +22,7 @@ import { createProviderCostLedger } from "@/lib/agent-runtime/provider-cost-ledg
 import { resolveTrustedExecutionSubject } from "@/lib/agent-runtime/trusted-execution-subject";
 import { createTrustedExecutionWorker } from "@/lib/agent-runtime/trusted-execution-worker";
 import { createDocumentGenerationArtifactReconciler } from "@/lib/agent-runtime/document-generation-reconciliation";
+import { readWorkflowFeatureGate } from "@/lib/agent-runtime/workflow-http-api";
 
 if (typeof window !== "undefined") throw new Error("Server execution composition is server-only");
 
@@ -88,7 +89,10 @@ export function createServerAcceptedExecutionComposition(store: ExecutionStore) 
     store,
     runtime,
     finalizeAcceptedExecution: finalizer.finalize,
-    listPendingFinalizationRunIds: finalizer.listPendingRunIds,
+    isPilotUserId: (userId) => {
+      const gate = readWorkflowFeatureGate();
+      return gate.enabled && gate.pilotUserIds.has(userId.toLowerCase());
+    },
   });
   const reconcileDocumentGenerationArtifact = createDocumentGenerationArtifactReconciler({
     enabled: process.env.AGENT_EXECUTION_RECOVERY_ENABLED === "true",

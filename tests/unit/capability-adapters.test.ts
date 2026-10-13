@@ -1031,6 +1031,7 @@ describe("six independent capability adapters", () => {
     const authorizedSteps: string[] = [];
     const reopenStore = (): ExecutionStore => ({
       discoverExecutionWork: (input) => persistentBackend.discoverExecutionWork(input),
+      discoverExecutionWorkForRun: (input) => persistentBackend.discoverExecutionWorkForRun(input),
       claimExecutionWork: (input) => persistentBackend.claimExecutionWork(input),
       renewExecutionWorkClaim: (input) => persistentBackend.renewExecutionWorkClaim(input),
       releaseExecutionWorkClaim: (input) => persistentBackend.releaseExecutionWorkClaim(input),

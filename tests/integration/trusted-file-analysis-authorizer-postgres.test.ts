@@ -252,11 +252,12 @@ describeDatabase("trusted File Analysis authorization with real isolated Postgre
       WHERE run_id<>${fixture.runId}::uuid`;
     bridge.deniedLedgerReads = 0;
     const worker = createTrustedExecutionWorker({
-      store, runtime, listPendingFinalizationRunIds: async () => [],
+      store, runtime,
       finalizeAcceptedExecution: async () => { throw new Error("Finalization is outside this test."); },
+      isPilotUserId: () => true,
       createClaimId: randomUUID,
     });
-    const result = await worker.runOnce();
+    const result = await worker.runOnce(fixture.runId);
     expect(result).toMatchObject({ status: "step_completed", capability: "file_analysis", providerCalls: 0 });
     expect(bridge.deniedLedgerReads).toBe(0);
     expect(authorizedInputs).toHaveLength(1);

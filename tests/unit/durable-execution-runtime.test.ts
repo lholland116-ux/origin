@@ -117,6 +117,7 @@ function runtime(
 function storeWithClaim(base: InMemoryExecutionStore, claim: ExecutionStore["claimStep"]): ExecutionStore {
   return {
     discoverExecutionWork: (input) => base.discoverExecutionWork(input),
+    discoverExecutionWorkForRun: (input) => base.discoverExecutionWorkForRun(input),
     claimExecutionWork: (input) => base.claimExecutionWork(input),
     renewExecutionWorkClaim: (input) => base.renewExecutionWorkClaim(input),
     releaseExecutionWorkClaim: (input) => base.releaseExecutionWorkClaim(input),

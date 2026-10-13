@@ -100,12 +100,14 @@ describeDatabase("execution trigger replay and overlap controls (isolated Postgr
 
     function request(nonce: string): Request {
       const timestamp = String(Math.floor(Date.now() / 1000));
+      const runId = "b2000000-0000-4000-8000-000000000001";
       return new Request("https://local.test/api/internal/execution-wake", {
         method: "POST",
         headers: {
+          "x-lvtchat-run-id": runId,
           "x-lvtchat-timestamp": timestamp,
           "x-lvtchat-nonce": nonce,
-          "x-lvtchat-signature": signExecutionTrigger(TEST_SECRET, timestamp, nonce),
+          "x-lvtchat-signature": signExecutionTrigger(TEST_SECRET, timestamp, nonce, runId),
         },
       });
     }

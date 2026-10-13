@@ -7,6 +7,7 @@ const OWNER = "a2000000-0000-4000-8000-000000000001";
 const RUN_ID = "b2000000-0000-4000-8000-000000000001";
 const REQUEST_ID = "d2000000-0000-4000-8000-000000000001";
 const CLAIM_ID = "c2000000-0000-4000-8000-000000000001";
+const OTHER_RUN_ID = "b2000000-0000-4000-8000-000000000002";
 
 function run(overrides: Partial<DurableExecutionRun> = {}): DurableExecutionRun {
   return {
@@ -39,10 +40,10 @@ function run(overrides: Partial<DurableExecutionRun> = {}): DurableExecutionRun 
   } as DurableExecutionRun;
 }
 
-function setup(options: { currentRun?: DurableExecutionRun; pendingFinalizations?: readonly string[]; now?: () => number; afterRenew?: () => void } = {}) {
+function setup(options: { currentRun?: DurableExecutionRun; now?: () => number; afterRenew?: () => void } = {}) {
   const currentRun = options.currentRun ?? run();
   const store = {
-    discoverExecutionWork: vi.fn(async () => [{ runId: RUN_ID, stepId: "step-1", kind: "runnable", dueAt: "2026-10-09T12:00:00.000Z", fencingGeneration: 0 }]),
+    discoverExecutionWorkForRun: vi.fn(async ({ runId }: { runId: string }) => [{ runId, stepId: "step-1", kind: "runnable", dueAt: "2026-10-09T12:00:00.000Z", fencingGeneration: 0 }]),
     claimExecutionWork: vi.fn(async () => ({ status: "claimed", claim: { claimId: CLAIM_ID, fencingGeneration: 1 }, runId: RUN_ID,
       stepId: "step-1", snapshotRevision: currentRun.snapshotRevision, leaseExpiresAt: "2026-10-09T12:02:00.000Z" })),
     renewExecutionWorkClaim: vi.fn(async () => {
@@ -55,12 +56,11 @@ function setup(options: { currentRun?: DurableExecutionRun; pendingFinalizations
   const runtime = { executeClaimedStep: vi.fn(async () => ({
     kind: "slice_yielded", run: {} as never, stepResults: {}, telemetry: {} as never,
   })) } as unknown as DurableXStateExecutionRuntime;
-  const finalizations = options.pendingFinalizations ?? [];
   const worker = createTrustedExecutionWorker({
     store,
     runtime,
-    listPendingFinalizationRunIds: vi.fn(async () => finalizations),
     finalizeAcceptedExecution: vi.fn(async () => ({ status: "finalized" })),
+    isPilotUserId: () => true,
     createClaimId: () => CLAIM_ID,
     now: options.now ?? (() => 1_000),
   });
@@ -70,10 +70,10 @@ function setup(options: { currentRun?: DurableExecutionRun; pendingFinalizations
 describe("trusted bounded execution worker", () => {
   it("claims, renews, advances one step as the persisted owner, and releases at the checkpoint revision", async () => {
     const { worker, store, runtime } = setup();
-    const result = await worker.runOnce();
+    const result = await worker.runOnce(RUN_ID);
 
     expect(result).toMatchObject({ status: "bounded_yield", runId: RUN_ID, stepId: "step-1", capability: "standard", durationMs: 0 });
-    expect(store.discoverExecutionWork).toHaveBeenCalledWith({ limit: 10 });
+    expect(store.discoverExecutionWorkForRun).toHaveBeenCalledWith({ runId: RUN_ID, limit: 10 });
     expect(store.claimExecutionWork).toHaveBeenCalledWith(expect.objectContaining({ runId: RUN_ID, claimId: CLAIM_ID, leaseSeconds: 120 }));
     expect(store.renewExecutionWorkClaim).toHaveBeenCalledWith(expect.objectContaining({ runId: RUN_ID, claim: { claimId: CLAIM_ID, fencingGeneration: 1 } }));
     expect(runtime.executeClaimedStep).toHaveBeenCalledWith(expect.objectContaining({
@@ -89,7 +89,7 @@ describe("trusted bounded execution worker", () => {
   it("defers a provider step when setup leaves less than the minimum dispatch budget", async () => {
     let clock = 1_000;
     const { worker, runtime, store } = setup({ now: () => clock, afterRenew: () => { clock = 17_000; } });
-    expect(await worker.runOnce()).toMatchObject({ status: "bounded_yield", runId: RUN_ID, stepId: "step-1" });
+    expect(await worker.runOnce(RUN_ID)).toMatchObject({ status: "bounded_yield", runId: RUN_ID, stepId: "step-1" });
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
     expect(store.releaseExecutionWorkClaim).toHaveBeenCalledOnce();
   });
@@ -97,59 +97,97 @@ describe("trusted bounded execution worker", () => {
   it("never dispatches a non-allowlisted capability from a forged/stale discovery result", async () => {
     const runWithDeferred = run({ steps: [{ ...run().steps[0]!, capabilityId: "web_search" }] });
     const { worker, runtime, store } = setup({ currentRun: runWithDeferred });
-    expect((await worker.runOnce()).status).toBe("authorization_denied");
+    expect((await worker.runOnce(RUN_ID)).status).toBe("authorization_denied");
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
-    expect(store.releaseExecutionWorkClaim).toHaveBeenCalledOnce();
+    expect(store.claimExecutionWork).not.toHaveBeenCalled();
+    expect(store.releaseExecutionWorkClaim).not.toHaveBeenCalled();
   });
 
   it("does not run a step when the current persisted owner/control/approval state blocks it", async () => {
     const paused = run({ controlState: "paused" });
     const { worker, runtime, store } = setup({ currentRun: paused });
-    expect((await worker.runOnce()).status).toBe("paused_or_stopped");
+    expect((await worker.runOnce(RUN_ID)).status).toBe("paused_or_stopped");
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
-    expect(store.releaseExecutionWorkClaim).toHaveBeenCalledOnce();
+    expect(store.claimExecutionWork).not.toHaveBeenCalled();
+    expect(store.releaseExecutionWorkClaim).not.toHaveBeenCalled();
 
     const approvalPending = run({ approvalCheckpoints: [{ id: "g2000000-0000-4000-8000-000000000001",
       runId: RUN_ID, userId: OWNER, stepId: "step-1", planFingerprint: "c".repeat(64), stepFingerprint: "d".repeat(64),
       status: "pending", source: "runtime_policy", createdAt: "2026-10-09T12:00:00.000Z" }] });
     const pendingSetup = setup({ currentRun: approvalPending });
-    expect((await pendingSetup.worker.runOnce()).status).toBe("waiting_for_approval");
+    expect((await pendingSetup.worker.runOnce(RUN_ID)).status).toBe("waiting_for_approval");
     expect(pendingSetup.runtime.executeClaimedStep).not.toHaveBeenCalled();
   });
 
   it("refuses unassociated runs and never invents accepted-request metadata", async () => {
     const unassociated = run({ acceptedRequestId: undefined, acceptanceFingerprint: undefined });
     const { worker, runtime, store } = setup({ currentRun: unassociated });
-    expect((await worker.runOnce()).status).toBe("authorization_denied");
+    expect((await worker.runOnce(RUN_ID)).status).toBe("authorization_denied");
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
-    expect(store.releaseExecutionWorkClaim).toHaveBeenCalledOnce();
+    expect(store.claimExecutionWork).not.toHaveBeenCalled();
+    expect(store.releaseExecutionWorkClaim).not.toHaveBeenCalled();
   });
 
-  it("finalizes only one existing assistant destination before trying to claim more work", async () => {
-    const { store, runtime } = setup({ pendingFinalizations: [RUN_ID] });
+  it("finalizes only the exact target run before discovering or claiming work", async () => {
+    const { store, runtime } = setup({ currentRun: run({ status: "succeeded" }) });
     const finalizer = vi.fn(async () => ({ status: "replayed" }));
-    const worker = createTrustedExecutionWorker({ store, runtime, listPendingFinalizationRunIds: async () => [RUN_ID],
-      finalizeAcceptedExecution: finalizer, now: () => 1_000 });
-    expect(await worker.runOnce()).toMatchObject({ status: "finalization_completed", runId: RUN_ID });
+    const worker = createTrustedExecutionWorker({ store, runtime,
+      finalizeAcceptedExecution: finalizer, isPilotUserId: () => true, now: () => 1_000 });
+    expect(await worker.runOnce(RUN_ID)).toMatchObject({ status: "finalization_completed", runId: RUN_ID });
     expect(finalizer).toHaveBeenCalledOnce();
-    expect(store.discoverExecutionWork).not.toHaveBeenCalled();
+    expect(finalizer).toHaveBeenCalledWith(RUN_ID);
+    expect(store.discoverExecutionWorkForRun).not.toHaveBeenCalled();
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
   });
 
   it("surfaces ambiguous recovery work without acquiring a claim or replaying a provider call", async () => {
     const { worker, runtime, store } = setup();
-    vi.mocked(store.discoverExecutionWork).mockResolvedValue([{
+    vi.mocked(store.discoverExecutionWorkForRun).mockResolvedValue([{
       runId: RUN_ID, stepId: "step-1", kind: "recovery_required", dueAt: "2026-10-09T12:00:00.000Z", fencingGeneration: 1,
     }]);
-    expect(await worker.runOnce()).toMatchObject({ status: "recovery_required", runId: RUN_ID });
+    expect(await worker.runOnce(RUN_ID)).toMatchObject({ status: "recovery_required", runId: RUN_ID });
+    expect(store.claimExecutionWork).not.toHaveBeenCalled();
+    expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
+  });
+
+  it("rejects discovery for a different run before claim or provider dispatch", async () => {
+    const { worker, store, runtime } = setup();
+    vi.mocked(store.discoverExecutionWorkForRun).mockResolvedValue([{
+      runId: OTHER_RUN_ID, stepId: "other-step", kind: "runnable", dueAt: "2026-10-09T12:00:00.000Z", fencingGeneration: 0,
+    }]);
+    expect(await worker.runOnce(RUN_ID)).toMatchObject({ status: "authorization_denied" });
+    expect(store.claimExecutionWork).not.toHaveBeenCalled();
+    expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
+  });
+
+  it("rejects a claim result for another run before runtime dispatch", async () => {
+    const { worker, store, runtime } = setup();
+    vi.mocked(store.claimExecutionWork).mockResolvedValue({
+      status: "claimed", runId: OTHER_RUN_ID, stepId: "step-1",
+      claim: { claimId: CLAIM_ID, fencingGeneration: 1 }, snapshotRevision: 0,
+      leaseExpiresAt: "2026-10-09T12:02:00.000Z",
+    });
+    expect(await worker.runOnce(RUN_ID)).toMatchObject({ status: "lease_lost" });
+    expect(store.releaseExecutionWorkClaim).not.toHaveBeenCalled();
+    expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
+  });
+
+  it("requires the persisted run owner to remain in the workflow pilot allowlist", async () => {
+    const { store, runtime } = setup();
+    const worker = createTrustedExecutionWorker({
+      store, runtime, finalizeAcceptedExecution: vi.fn(async () => ({ status: "finalized" })),
+      isPilotUserId: () => false, now: () => 1_000,
+    });
+    expect(await worker.runOnce(RUN_ID)).toMatchObject({ status: "authorization_denied" });
+    expect(store.discoverExecutionWorkForRun).not.toHaveBeenCalled();
     expect(store.claimExecutionWork).not.toHaveBeenCalled();
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
   });
 
   it("reports durable discovery failure as unavailable instead of claiming the queue is empty", async () => {
     const { worker, store, runtime } = setup();
-    vi.mocked(store.discoverExecutionWork).mockRejectedValueOnce(new Error("database unavailable"));
-    expect(await worker.runOnce()).toMatchObject({ status: "worker_unavailable", providerCalls: null });
+    vi.mocked(store.discoverExecutionWorkForRun).mockRejectedValueOnce(new Error("database unavailable"));
+    expect(await worker.runOnce(RUN_ID)).toMatchObject({ status: "worker_unavailable", providerCalls: null });
     expect(store.claimExecutionWork).not.toHaveBeenCalled();
     expect(runtime.executeClaimedStep).not.toHaveBeenCalled();
   });
@@ -163,7 +201,7 @@ describe("trusted bounded execution worker", () => {
       kind: "rejected", failure: { code: "snapshot_conflict", message: "safe test failure" },
     } as never);
 
-    const result = await worker.runOnce();
+    const result = await worker.runOnce(RUN_ID);
 
     expect(result).toMatchObject({
       status: "recovery_required",
@@ -185,6 +223,7 @@ describe("trusted bounded execution worker", () => {
     const { worker, runtime, store } = setup({ currentRun: pendingRun });
     vi.mocked(store.getAcceptedRunForFinalization)
       .mockResolvedValueOnce(pendingRun)
+      .mockResolvedValueOnce(pendingRun)
       .mockResolvedValueOnce(failedRun);
     vi.mocked(runtime.executeClaimedStep).mockResolvedValueOnce({
       kind: "failed",
@@ -196,7 +235,7 @@ describe("trusted bounded execution worker", () => {
       telemetry: {} as never,
     } as never);
 
-    const result = await worker.runOnce();
+    const result = await worker.runOnce(RUN_ID);
 
     expect(result).toMatchObject({
       status: "authorization_denied",

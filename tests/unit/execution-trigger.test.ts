@@ -6,10 +6,13 @@ const SECRET = "local-test-only-secret-material-at-least-32-bytes";
 const NOW = Date.UTC(2026, 9, 9, 12, 0, 0);
 const NONCE = "1234567890abcdef1234567890abcdef";
 const PATH = "/api/internal/execution-wake";
+const RUN_ID = "b2000000-0000-4000-8000-000000000001";
 
 function request(options: {
   nonce?: string;
   timestamp?: string;
+  runId?: string;
+  signedRunId?: string;
   signature?: string;
   body?: string;
   bodyStream?: ReadableStream<Uint8Array>;
@@ -18,9 +21,11 @@ function request(options: {
 } = {}): Request {
   const timestamp = options.timestamp ?? String(Math.floor(NOW / 1000));
   const nonce = options.nonce ?? NONCE;
+  const runId = options.runId ?? RUN_ID;
   const signature = options.signature ?? createHmac("sha256", SECRET)
-    .update(`v1\nPOST\n${PATH}\n${timestamp}\n${nonce.toLowerCase()}`, "utf8").digest("hex");
+    .update(`v2\nPOST\n${PATH}\n${(options.signedRunId ?? runId).toLowerCase()}\n${timestamp}\n${nonce.toLowerCase()}`, "utf8").digest("hex");
   const headers = new Headers({
+    "x-lvtchat-run-id": runId,
     "x-lvtchat-timestamp": timestamp,
     "x-lvtchat-nonce": nonce,
     "x-lvtchat-signature": signature,
@@ -100,6 +105,7 @@ describe("authenticated execution wake-up", () => {
     expect(f.consumeNonce).toHaveBeenCalledWith(createHash("sha256").update(NONCE).digest("hex"));
     expect(f.acquireInvocation).toHaveBeenCalledWith("claim-id");
     expect(f.runOnce).toHaveBeenCalledTimes(1);
+    expect(f.runOnce).toHaveBeenCalledWith(RUN_ID);
     expect(f.releaseInvocation).toHaveBeenCalledWith("claim-id", 1);
     const body = await response.json();
     expect(body).toEqual({ status: "step_completed", durationMs: 0, providerCalls: 1 });
@@ -203,7 +209,9 @@ describe("authenticated execution wake-up", () => {
   it("rejects bad signatures, stale timestamps, and malformed authentication", async () => {
     const badSignature = request({ signature: "a".repeat(64) });
     const stale = request({ timestamp: String(Math.floor(NOW / 1000) - 301), nonce: "2234567890abcdef1234567890abcdef" });
-    const malformed = new Request(`https://lvtchat.test${PATH}`, { method: "POST" });
+    const malformed = new Request(`https://lvtchat.test${PATH}`, {
+      method: "POST", headers: { "x-lvtchat-run-id": RUN_ID },
+    });
     for (const candidate of [badSignature, stale, malformed]) {
       const f = fixture();
       const response = await handleExecutionTrigger(candidate, f.dependencies as never);
@@ -211,6 +219,33 @@ describe("authenticated execution wake-up", () => {
       expect(f.consumeNonce).not.toHaveBeenCalled();
       expect(f.runOnce).not.toHaveBeenCalled();
     }
+  });
+
+  it("binds the signed identity to the exact run and rejects a changed run header", async () => {
+    const f = fixture();
+    const response = await handleExecutionTrigger(request({
+      runId: "b2000000-0000-4000-8000-000000000002", signedRunId: RUN_ID,
+    }), f.dependencies as never);
+    expect(response.status).toBe(401);
+    expect(f.consumeNonce).not.toHaveBeenCalled();
+    expect(f.runOnce).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing or malformed run identity before nonce use", async () => {
+    const malformed = new Request(`https://lvtchat.test${PATH}`, {
+      method: "POST",
+      headers: {
+        "x-lvtchat-timestamp": String(Math.floor(NOW / 1000)),
+        "x-lvtchat-nonce": NONCE,
+        "x-lvtchat-signature": "a".repeat(64),
+        "x-lvtchat-run-id": "not-a-uuid",
+      },
+    });
+    const f = fixture();
+    const response = await handleExecutionTrigger(malformed, f.dependencies as never);
+    expect(response.status).toBe(400);
+    expect(f.consumeNonce).not.toHaveBeenCalled();
+    expect(f.runOnce).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported HTTP methods before consuming a nonce or dispatching work", async () => {

@@ -25,9 +25,9 @@ function getComposer(): ReturnType<typeof createServerAcceptedExecutionCompositi
   return composer;
 }
 
-/** Internal wake-up only; callers provide no run/user identity. */
-export function runTrustedExecutionWorkerOnce() {
-  return getComposer().runTrustedExecutionWorkerOnce();
+/** Internal HMAC wake-up; the signed run identity is enforced by discovery and claim. */
+export function runTrustedExecutionWorkerOnce(runId: string) {
+  return getComposer().runTrustedExecutionWorkerOnce(runId);
 }
 
 /** Server-only recovery operation; no client identity or artifact is accepted. */

@@ -1,15 +1,19 @@
 # Agent execution wake-up (dormant)
 
 The internal `POST /api/internal/execution-wake` endpoint is only a wake-up. It
-accepts no user, run, conversation, or step identifiers and delegates once to
-the existing trusted worker. PostgreSQL remains authoritative for due-work
-discovery, per-run claims/fencing, authorization, cost admission, controls,
+accepts one run ID in a signed header and delegates once to the existing trusted
+worker for that exact run. Discovery, claim acquisition, post-claim ownership
+validation, and finalization remain bound to this identity; an empty target queue
+never falls back to another workflow. PostgreSQL remains authoritative for
+eligibility, per-run claims/fencing, authorization, cost admission, controls,
 checkpoints, and finalization.
 
 The endpoint is disabled unless `AGENT_EXECUTION_TRIGGER_ENABLED` is exactly
-`true`. It also requires `AGENT_EXECUTION_TRIGGER_SECRET` to contain at least
-32 UTF-8 bytes. Missing/invalid configuration fails closed. Never place this
-secret in a URL, repository, browser bundle, request body, or logs.
+`true` and the workflow feature gate is enabled for the persisted run owner in
+the pilot allowlist. It also requires `AGENT_EXECUTION_TRIGGER_SECRET` to
+contain at least 32 UTF-8 bytes. Missing/invalid configuration fails closed.
+Never place this secret in a URL, repository, browser bundle, request body, or
+logs.
 
 ## Request contract
 
@@ -17,11 +21,12 @@ The trigger accepts only an empty-body `POST` with these headers:
 
 - `x-lvtchat-timestamp`: Unix seconds, within five minutes of server time
 - `x-lvtchat-nonce`: 16 random bytes encoded as 32 hexadecimal characters
+- `x-lvtchat-run-id`: exact workflow UUID to wake
 - `x-lvtchat-signature`: lowercase or uppercase hex HMAC-SHA256 of this exact
   UTF-8 message, using the server-only secret:
 
   ```text
-  v1\nPOST\n/api/internal/execution-wake\n{timestamp}\n{lowercase_nonce}
+  v2\nPOST\n/api/internal/execution-wake\n{lowercase_run_id}\n{timestamp}\n{lowercase_nonce}
   ```
 
 The server compares signatures in constant time and stores only SHA-256 of the
@@ -35,9 +40,9 @@ execution claims.
 The route awaits the worker and returns only a sanitized status, duration, and
 provider-call count. Logs contain an invocation ID and safe classifications;
 they must not contain prompts, provider results, user/run IDs, secrets, or raw
-nonces. A lost trigger response is safe to retry only with a new nonce; the
-durable worker checkpoint and claims remain the authority for whether work
-advances.
+nonces. A timed-out or otherwise ambiguous operator request must not be retried
+automatically. First read the authenticated owner status for the same run; a
+subsequent separately authorized wake must use a fresh nonce.
 
 ## Hostinger status
 
@@ -84,6 +89,32 @@ durable run. Later cron wakes continue from persisted predecessor results; the
 final response is attached to the original assistant message. A workflow with
 multiple steps may therefore span several cron intervals. The worker must not
 open one long request to execute the whole workflow.
+
+## Attended one-command operator runner
+
+`node scripts/run-agent-workflow.mjs <workflow-run-id>` is a local operator
+command for an already accepted, owner-authorized workflow. It asks the
+operator to type `RUN <exact-run-id>` once, then asks for the HMAC trigger
+secret and the owner's current authenticated Supabase browser `Cookie` header
+through hidden terminal input. Use the cookie only from the owner's signed-in
+session; never put either value in shell arguments, environment variables,
+files, logs, or screenshots. The runner sends the cookie only to the fixed
+`https://lvtchat.com` owner-scoped status route. The HMAC secret is used only
+to sign wake requests and is never sent to the server.
+
+Before and after each wake the runner reads the authenticated status endpoint
+for that exact run. It sends one step wake at a time and continues only after
+the ordered step state is authoritatively `succeeded`. A zero-provider
+`bounded_yield` may be followed by a small, capped number of fresh-nonce wakes
+only when owner status proves no step changed and the target remains pending.
+Once all steps succeed it sends the normal finalization wake and requires both
+the sanitized `finalization_completed` result and completed owner status.
+HTTP errors, timeouts, replay responses, recovery-required or unexpected
+states stop the command; a lost/ambiguous wake is never resent. A read-only
+status check may follow an ambiguous wake, but execution never resumes
+automatically afterward. The tool does not reset, repair, or recover workflow
+state. Existing trigger/workflow gates, pilot allowlisting, worker budgets,
+claim fencing, and provider cost admission remain authoritative.
 
 OpenAI durable requests use the shared absolute provider deadline and disable
 SDK retries. The optional image-answer fallback is skipped when too little

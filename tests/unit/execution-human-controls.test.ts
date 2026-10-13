@@ -260,6 +260,7 @@ describe("durable execution human controls", () => {
     let calls = 0;
     const crashAtCheckpoint: ExecutionStore = {
     discoverExecutionWork: (value) => backend.discoverExecutionWork(value),
+      discoverExecutionWorkForRun: (value) => backend.discoverExecutionWorkForRun(value),
     claimExecutionWork: (value) => backend.claimExecutionWork(value),
     renewExecutionWorkClaim: (value) => backend.renewExecutionWorkClaim(value),
     releaseExecutionWorkClaim: (value) => backend.releaseExecutionWorkClaim(value),

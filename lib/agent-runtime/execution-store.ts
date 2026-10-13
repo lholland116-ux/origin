@@ -248,6 +248,8 @@ export type DecideHumanApprovalInput = {
 export interface ExecutionStore {
   /** Bounded, content-free server discovery; this never claims or dispatches work. */
   discoverExecutionWork(input: { readonly limit?: number }): Promise<readonly DiscoveredExecutionWork[]>;
+  /** Bounded, content-free discovery constrained to one exact run; never widens to the global queue. */
+  discoverExecutionWorkForRun(input: { readonly runId: string; readonly limit?: number }): Promise<readonly DiscoveredExecutionWork[]>;
   /** Atomically claims an eligible accepted execution using a caller-generated idempotency identity. */
   claimExecutionWork(input: { readonly runId: string; readonly claimId: string; readonly leaseSeconds?: number }): Promise<ExecutionWorkClaimResult>;
   renewExecutionWorkClaim(input: { readonly runId: string; readonly claim: ExecutionWorkClaim; readonly leaseSeconds?: number }): Promise<ExecutionWorkLeaseResult>;
