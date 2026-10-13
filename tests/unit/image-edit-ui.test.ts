@@ -190,7 +190,9 @@ describe("image-edit UI contracts", () => {
     expect(clientSource).toContain("const idempotencyKey = current.idempotencyKey ?? createId();");
     expect(clientSource).toContain("status: \"in_progress\"");
     expect(clientSource).toContain("imageEditInFlightRef.current ||");
-    expect(clientSource).toContain("if (loading || imageEditInFlightRef.current) return;");
+    expect(clientSource).toContain(
+      "if (loading || imageGenerationInFlightRef.current || imageEditInFlightRef.current) return;",
+    );
   });
 
   it("exposes edit actions for generated images and ordinal-qualified uploaded images only", () => {
