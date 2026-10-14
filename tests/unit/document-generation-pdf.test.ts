@@ -65,7 +65,7 @@ describe("PDF generator", () => {
   });
 
   it("preserves AI-style Unicode minus signs, arrows, punctuation, and symbols in generated PDFs", async () => {
-    const body = "Balance −12.50 → 0.00; tolerance ≤ 3%; value ≈ €42; status ✓ — confirmed.";
+    const body = "Revenue increased 12.5% from $80.00 to $90.00. Operating revenue change −8.2% (−$7.38) → $82.62; next-period outlook ↓ 4.0%. Tolerance ≤ 3%; value ≈ €42; status ✓ — confirmed.";
     const artifact = await generateTemplateOutput({
       templateId: "simple-document",
       formats: ["pdf"],
@@ -78,7 +78,10 @@ describe("PDF generator", () => {
     expect(artifact.bytes.byteLength).toBeGreaterThan(0);
     expect(artifact.bytes.byteLength).toBeLessThan(300_000);
     expect(Buffer.from(artifact.bytes).subarray(0, 5).toString()).toBe("%PDF-");
-    expect(readBack).toContain("−12.50 → 0.00");
+    expect(readBack).toContain("increased 12.5% from $80.00 to $90.00");
+    expect(readBack).toContain("−8.2% (−$7.38)");
+    expect(readBack).toContain("→ $82.62");
+    expect(readBack).toContain("↓ 4.0%");
     expect(readBack).toContain("≤ 3%");
     expect(readBack).toContain("≈ €42");
     expect(readBack).toContain("✓ — confirmed");
@@ -106,6 +109,26 @@ describe("PDF generator", () => {
     expect(loaded.getPageCount()).toBeGreaterThan(1);
     expect(readBack).toContain("Paragraph 1");
     expect(readBack).toContain("Paragraph 100");
+  });
+
+  it("uses PDFKit table pagination and numeric alignment with negative revenue values", async () => {
+    const rows = Array.from({ length: 75 }, (_, index) => [
+      `Period ${index + 1}`,
+      index % 2 === 0 ? "$1,250.00" : "−$125.50",
+      index % 2 === 0 ? "12.5%" : "−8.2%",
+    ]);
+    const artifact = await generatePdfArtifact(completeRequest({
+      title: "Revenue by Period",
+      sections: [{ type: "table", columns: ["Period", "Revenue Change", "Growth"], rows }],
+    }));
+    const loaded = await PDFDocument.load(artifact.bytes);
+    const readBack = await extractTextFromFile(Buffer.from(artifact.bytes), "application/pdf");
+
+    expect(loaded.getPageCount()).toBeGreaterThan(1);
+    expect(readBack).toContain("Revenue Change");
+    expect(readBack).toContain("$1,250.00");
+    expect(readBack).toContain("−$125.50");
+    expect(readBack).toContain("Period 75");
   });
 
   it("uses shared filename, MIME, and artifact validation behavior", async () => {
@@ -160,5 +183,16 @@ describe("PDF generator", () => {
         }),
       ),
     ).rejects.toThrow("table rows do not match");
+  });
+
+  it("rejects empty document input and empty simple-document bodies", async () => {
+    await expect(generatePdfArtifact({ format: "pdf", sections: [] }))
+      .rejects.toThrow("PDF content is required");
+    await expect(generateTemplateOutput({
+      templateId: "simple-document",
+      formats: ["pdf"],
+      variables: { title: "Empty report", body: " \n\t " },
+      packageAsZip: false,
+    })).rejects.toThrow("body is required");
   });
 });

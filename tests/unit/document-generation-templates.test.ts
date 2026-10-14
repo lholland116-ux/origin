@@ -255,7 +255,7 @@ describe("document generation templates", () => {
     expect(pdfText.match(/Markdown Report/g)).toHaveLength(1);
     expect(pdfText).toContain("Findings");
     expect(pdfText).toContain("bold finding");
-    expect(pdfText).toContain("valueunits");
+    expect(pdfText).toMatch(/value\s*units/);
     expect(pdfText).toContain("First finding");
     expect(pdfText).toContain("Review source");
     expect(pdfText).toContain("Accuracy");
