@@ -2,6 +2,7 @@ import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import {
   generatePdfArtifact,
+  generateTemplateOutput,
   MAX_ARTIFACT_BYTES,
   validateGeneratedArtifact,
 } from "@/lib/documents/generation";
@@ -61,6 +62,26 @@ describe("PDF generator", () => {
     expect(readBack).toContain("One");
     expect(readBack).toContain("Alpha");
     expect(readBack).toContain("Pending");
+  });
+
+  it("preserves AI-style Unicode minus signs, arrows, punctuation, and symbols in generated PDFs", async () => {
+    const body = "Balance −12.50 → 0.00; tolerance ≤ 3%; value ≈ €42; status ✓ — confirmed.";
+    const artifact = await generateTemplateOutput({
+      templateId: "simple-document",
+      formats: ["pdf"],
+      variables: { title: "Unicode Findings", body },
+      packageAsZip: false,
+    });
+    const readBack = await extractTextFromFile(Buffer.from(artifact.bytes), "application/pdf");
+
+    expect(artifact.format).toBe("pdf");
+    expect(artifact.bytes.byteLength).toBeGreaterThan(0);
+    expect(artifact.bytes.byteLength).toBeLessThan(300_000);
+    expect(Buffer.from(artifact.bytes).subarray(0, 5).toString()).toBe("%PDF-");
+    expect(readBack).toContain("−12.50 → 0.00");
+    expect(readBack).toContain("≤ 3%");
+    expect(readBack).toContain("≈ €42");
+    expect(readBack).toContain("✓ — confirmed");
   });
 
   it("wraps content and continues onto multiple pages", async () => {

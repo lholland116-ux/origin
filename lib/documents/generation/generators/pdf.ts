@@ -1,7 +1,9 @@
+import * as fontkit from "@pdf-lib/fontkit";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   PDFDocument,
   PageSizes,
-  StandardFonts,
   rgb,
   type PDFFont,
   type PDFPage,
@@ -33,6 +35,19 @@ const TABLE_PADDING_X = 5;
 const TABLE_PADDING_Y = 5;
 const SECTION_GAP = 12;
 const HEADING_GAPS: Record<1 | 2 | 3, number> = { 1: 20, 2: 16, 3: 14 };
+// These licensed assets ship with the application ZIP; production does not
+// depend on fonts installed on the Hostinger machine.
+const FONT_ASSET_DIRECTORY = join(process.cwd(), "lib/documents/generation/assets");
+
+let embeddedFontBytes: Promise<readonly [Uint8Array, Uint8Array]> | undefined;
+
+function loadEmbeddedFontBytes(): Promise<readonly [Uint8Array, Uint8Array]> {
+  embeddedFontBytes ??= Promise.all([
+    readFile(join(FONT_ASSET_DIRECTORY, "DejaVuSans.ttf")),
+    readFile(join(FONT_ASSET_DIRECTORY, "DejaVuSans-Bold.ttf")),
+  ]);
+  return embeddedFontBytes;
+}
 
 type TextStyle = {
   readonly font: PDFFont;
@@ -87,7 +102,7 @@ function validateSupportedText(
         .padStart(4, "0")}`;
       throw new DocumentGenerationValidationError([
         `PDF text contains an unsupported character (${codePoint}).`,
-        "PDF generation currently supports Western Unicode and typographic punctuation only.",
+        "The embedded PDF font does not support this character.",
       ]);
     }
   }
@@ -503,8 +518,10 @@ export async function generatePdfArtifact(
 ): Promise<GeneratedArtifact> {
   assertValidGenerationRequest(request);
   const document = await PDFDocument.create({ updateMetadata: false });
-  const bodyFont = await document.embedFont(StandardFonts.Helvetica);
-  const boldFont = await document.embedFont(StandardFonts.HelveticaBold);
+  document.registerFontkit(fontkit);
+  const [bodyFontBytes, boldFontBytes] = await loadEmbeddedFontBytes();
+  const bodyFont = await document.embedFont(bodyFontBytes, { subset: true });
+  const boldFont = await document.embedFont(boldFontBytes, { subset: true });
   validateSupportedText(request, new Set(bodyFont.getCharacterSet()));
 
   const layout = new PdfLayout(document, bodyFont);

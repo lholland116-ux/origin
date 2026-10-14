@@ -21,6 +21,7 @@ import type { ImageEditExistingMessageOrchestratorInput } from "@/lib/image-gene
 import { StandardOperationError, type StandardOperationInput } from "@/lib/ai/standard-operation-service";
 import type { GeneratedArtifact } from "@/lib/documents/generation/contracts";
 import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
+import { extractTextFromFile } from "@/lib/documents/extract-text";
 import type { DocumentRenderer, ExistingMessageDocumentPersister } from "@/lib/agent-runtime/capability-adapters/document-generation";
 import type { ExistingMessageImageGenerator } from "@/lib/agent-runtime/capability-adapters/image-generation";
 import type { ExistingMessageImageEditor, ExistingMessageImageEditDependenciesFactory } from "@/lib/agent-runtime/capability-adapters/image-editing";
@@ -506,6 +507,36 @@ describe("six independent capability adapters", () => {
       { source: "step", stepId: "step-2", result: { kind: "text", value: standardResult("Synthetic 漢字 summary.") } },
     ]))).rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "document_render_validation" });
     expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("passes Standard predecessor Unicode through PDF rendering and artifact persistence", async () => {
+    const body = "AI result: −8 → −3; threshold ≤ 5; value ≈ €10; verified ✓.";
+    const persistMock = vi.fn(async (input: { generatedOutput: GeneratedArtifact }) => ({
+      reference: generatedDocument(),
+      delivery: {
+        bytes: input.generatedOutput.bytes,
+        filename: input.generatedOutput.filename,
+        mimeType: input.generatedOutput.mimeType,
+        format: input.generatedOutput.format,
+      },
+    }));
+    const adapter = createDocumentGenerationCapabilityAdapter({
+      persist: persistMock as unknown as ExistingMessageDocumentPersister,
+    });
+
+    const result = await adapter.execute(executionInput("document_generation", [
+      { source: "step", stepId: "step-2", result: { kind: "text", value: standardResult(body) } },
+    ]));
+    const artifact = persistMock.mock.calls[0]?.[0].generatedOutput;
+    expect(result).toEqual({ kind: "document", value: generatedDocument() });
+    expect(artifact?.format).toBe("pdf");
+    expect(artifact?.bytes.byteLength).toBeGreaterThan(0);
+    expect(Buffer.from(artifact!.bytes).subarray(0, 5).toString()).toBe("%PDF-");
+    const readBack = await extractTextFromFile(Buffer.from(artifact!.bytes), "application/pdf");
+    expect(readBack).toContain("−8 → −3");
+    expect(readBack).toContain("≤ 5");
+    expect(readBack).toContain("≈ €10");
+    expect(readBack).toContain("verified ✓");
   });
 
   it("does not mistake ordinary mentions of text for a TXT format option", async () => {

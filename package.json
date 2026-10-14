@@ -23,6 +23,7 @@
     "@dagrejs/graphlib": "4.0.5",
     "@lofcz/pptxgenjs": "^4.1.17",
     "@napi-rs/canvas": "^0.1.97",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.99.2",
     "docx": "^9.8.1",
