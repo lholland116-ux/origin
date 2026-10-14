@@ -927,7 +927,20 @@ describe("six independent capability adapters", () => {
     },
   ])("generates $label through the persisted three-step runtime", async ({ objective, format, mimeType, filename }) => {
     const context = fileResult("Synthetic spreadsheet findings for a PDF report.");
-    const standard = standardResult("Summary:\n- The uploaded spreadsheet shows stable results.\n- No material anomalies were found.", RUNTIME_REQUEST_ID);
+    const docxReport = [
+      "# Quarterly Revenue Analysis",
+      "",
+      "## Revenue performance",
+      "",
+      "| Comparison | Revenue change | Percentage change |",
+      "| --- | ---: | ---: |",
+      "| Q1 to Q2 | +50 | +25% |",
+      "| Q2 to Q3 | -25 | -10% |",
+      "| Q1 to Q3 | +25 | +12.5% |",
+    ].join("\n");
+    const standard = standardResult(format === "docx"
+      ? docxReport
+      : "Summary:\n- The uploaded spreadsheet shows stable results.\n- No material anomalies were found.", RUNTIME_REQUEST_ID);
     const file = createFileAnalysisCapabilityAdapter({ prepareFileContext: vi.fn(async () => context) });
     const runStandard = vi.fn(async function* () { yield* standardEvents(standard); });
     const standardAdapter = createStandardCapabilityAdapter({ runOperation: runStandard as unknown as StandardOperationRunner });
@@ -1019,7 +1032,9 @@ describe("six independent capability adapters", () => {
       expect(Array.from(storedArtifact!.slice(0, 4))).toEqual([0x50, 0x4b, 0x03, 0x04]);
       const extracted = await mammoth.extractRawText({ buffer: Buffer.from(storedArtifact!) });
       expect(extracted.value).toContain("Quarterly Revenue Analysis");
-      expect(extracted.value).toContain(standard.reply);
+      expect(extracted.value).toContain("Revenue performance");
+      expect(extracted.value).toContain("Q1 to Q2");
+      expect(extracted.value).toContain("+12.5%");
     } else {
       const pdf = await PDFDocument.load(storedArtifact!);
       expect(pdf.getPageCount()).toBeGreaterThan(0);

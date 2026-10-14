@@ -1,4 +1,5 @@
 import mammoth from "mammoth";
+import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import {
   generateDocxArtifact,
@@ -63,6 +64,85 @@ describe("DOCX generator", () => {
     expect(readBack.value).toContain("Two");
     expect(readBack.value).toContain("Alpha");
     expect(readBack.value).toContain("Pending 日本語");
+  });
+
+  it("renders report Markdown as formatted Word OOXML without changing values", async () => {
+    const report = [
+      "# Quarterly Revenue Report",
+      "",
+      "## Revenue performance",
+      "",
+      "Revenue increased from Q1 to Q2 and then decreased from Q2 to Q3.",
+      "",
+      "# Executive Summary",
+      "",
+      "| Comparison | Revenue change | Percentage change |",
+      "| --- | ---: | ---: |",
+      "| Q1 to Q2 | +50 | +25% |",
+      "| Q2 to Q3 | -25 | -10% |",
+      "| Q1 to Q3 | +25 | +12.5% |",
+      "",
+      "**Key finding:** Revenue moved from 200 to 250, then to 225 (−25, −10%) →.",
+      "",
+      "- Revenue grew by 25% in Q2.",
+      "- Revenue remained above the Q1 baseline in Q3.",
+      "",
+      "1. Review the Q2 increase.",
+      "2. Monitor the Q3 decrease.",
+    ].join("\n");
+    const artifact = await generateDocxArtifact({
+      format: "docx",
+      title: "Quarterly Revenue Report",
+      filename: "quarterly-revenue-report.docx",
+      sections: [{ type: "paragraph", text: report }],
+    });
+
+    const archive = unzipSync(Buffer.from(artifact.bytes));
+    const documentXml = strFromU8(archive["word/document.xml"]!);
+    const numberingXml = strFromU8(archive["word/numbering.xml"]!);
+    const tableXml = documentXml.match(/<w:tbl\b[\s\S]*?<\/w:tbl>/)?.[0];
+    const cells = [...(tableXml ?? "").matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map(([cell]) => cell);
+    const readBack = await mammoth.extractRawText({ buffer: Buffer.from(artifact.bytes) });
+
+    expect(artifact.filename).toBe("quarterly-revenue-report.docx");
+    expect(artifact.mimeType).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    expect(artifact.format).toBe("docx");
+    expect(artifact.sizeBytes).toBe(artifact.bytes.byteLength);
+    expect(artifact.sizeBytes).toBeLessThanOrEqual(MAX_ARTIFACT_BYTES);
+
+    expect(documentXml).toMatch(/<w:pStyle w:val="Title"\/>/);
+    expect(documentXml).toMatch(/<w:sz w:val="38"\/>/);
+    expect(documentXml).toMatch(/<w:pStyle w:val="Heading1"\/>/);
+    expect(documentXml).toMatch(/<w:pStyle w:val="Heading2"\/>/);
+    expect(numberingXml).toContain('<w:numFmt w:val="bullet"/>');
+    expect(numberingXml).toContain('<w:numFmt w:val="decimal"/>');
+    expect(documentXml).toContain("<w:tbl>");
+    expect(documentXml).toContain("<w:tblBorders>");
+    expect(documentXml).toContain("<w:tcMar>");
+    expect(documentXml).toContain("<w:numPr>");
+    expect(documentXml).toContain("<w:jc w:val=\"right\"/>");
+    expect(cells).toHaveLength(12);
+    expect(cells.find((cell) => /<w:t[^>]*>-25<\/w:t>/.test(cell))).toContain("<w:jc w:val=\"right\"/>");
+
+    expect(documentXml).not.toContain("# Quarterly Revenue Report");
+    expect(documentXml).not.toContain("## Revenue performance");
+    expect(documentXml).not.toContain("| Q1 to Q2 |");
+    expect(documentXml).not.toContain("| --- | ---:");
+    expect(documentXml).not.toContain("**Key finding:**");
+    expect(documentXml.match(/Quarterly Revenue Report/g)).toHaveLength(1);
+    expect(readBack.value).toContain("Q1 to Q2");
+    expect(readBack.value).toContain("200");
+    expect(readBack.value).toContain("250");
+    expect(readBack.value).toContain("225");
+    expect(readBack.value).toContain("+50");
+    expect(readBack.value).toContain("+25%");
+    expect(readBack.value).toContain("-25");
+    expect(readBack.value).toContain("-10%");
+    expect(readBack.value).toContain("+12.5%");
+    expect(readBack.value).toContain("Revenue moved from 200 to 250, then to 225 (−25, −10%) →.");
+    expect(readBack.value).toContain("Review the Q2 increase.");
+    expect(readBack.value).toContain("Monitor the Q3 decrease.");
+    expect(documentXml.match(/<w:p[ >]/g)?.length).toBeGreaterThan(12);
   });
 
   it("normalizes default, custom, wrong-extension, and traversal filenames", async () => {
