@@ -65,9 +65,11 @@ describe("multi-step planner deterministic path", () => {
     expect(result.plan.steps[1]!.inputs?.filter(({ source }) => source === "user")).toHaveLength(1);
     expect(result.plan.steps[2]).toMatchObject({
       dependsOn: ["step-2"],
-      inputs: [{ source: "step", stepId: "step-2", output: "text" }],
+      inputs: [{ source: "user" }, { source: "step", stepId: "step-2", output: "text" }],
       expectedOutput: "document",
     });
+    expect(result.plan.steps[2]!.inputs?.filter(({ source }) => source === "user")).toHaveLength(1);
+    expect(result.plan.steps[2]!.inputs?.some(({ source }) => source === "attachment")).toBe(false);
     expect(validateIntelligencePlan(result.plan).valid).toBe(true);
     expect(modelClient.generateStructuredPlan).not.toHaveBeenCalled();
   });
@@ -98,7 +100,12 @@ describe("multi-step planner deterministic path", () => {
       expectedOutput: "text",
     });
     expect(result.plan.steps[1]!.inputs?.filter(({ source }) => source === "user")).toHaveLength(1);
-    expect(result.plan.steps[2].dependsOn).toEqual(["step-2"]);
+    expect(result.plan.steps[2]).toMatchObject({
+      dependsOn: ["step-2"],
+      inputs: [{ source: "user" }, { source: "step", stepId: "step-2", output: "text" }],
+    });
+    expect(result.plan.steps[2]!.inputs?.filter(({ source }) => source === "user")).toHaveLength(1);
+    expect(result.plan.steps[2]!.inputs?.some(({ source }) => source === "attachment")).toBe(false);
     expect(validateIntelligencePlan(result.plan).valid).toBe(true);
     expect(modelClient.generateStructuredPlan).not.toHaveBeenCalled();
   });

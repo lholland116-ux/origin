@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { PDFDocument } from "pdf-lib";
+import mammoth from "mammoth";
 import type { PlanStep } from "@/lib/ai/intelligence-plan";
 import { createMultiStepPlanner } from "@/lib/ai/multi-step-planner";
 import { validateIntelligencePlan } from "@/lib/ai/plan-validator";
@@ -415,6 +416,23 @@ describe("six independent capability adapters", () => {
     }));
     expect(output).toEqual({ kind: "document", value: generatedDocument() });
     expect(JSON.stringify(output)).not.toContain("bytes");
+  });
+
+  it("rejects conflicting explicit document formats before rendering", async () => {
+    const standard = standardResult("Validated document body.");
+    const render = vi.fn();
+    const persist = vi.fn();
+    const adapter = createDocumentGenerationCapabilityAdapter({
+      render: render as unknown as DocumentRenderer,
+      persist: persist as unknown as ExistingMessageDocumentPersister,
+    });
+
+    await expect(adapter.execute(executionInput("document_generation", [
+      { source: "user", value: "Create a DOCX and PDF report." },
+      { source: "step", stepId: "standard", result: { kind: "text", value: standard } },
+    ]))).rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "format_rejection" });
+    expect(render).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it("does not persist a locally rendered document after the invocation deadline", async () => {
@@ -885,7 +903,29 @@ describe("six independent capability adapters", () => {
     expect(saved?.steps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
   });
 
-  it("generates a PDF from a spreadsheet source through a persisted three-step runtime", async () => {
+  it.each([
+    {
+      label: "DOCX when explicitly requested",
+      objective: 'Analyze the uploaded XLSX workbook and create a DOCX Word document titled "Quarterly Revenue Analysis".',
+      format: "docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      filename: "Quarterly-Revenue-Analysis.docx",
+    },
+    {
+      label: "the existing PDF default when no format is requested",
+      objective: 'Analyze the uploaded XLSX workbook and create a document titled "Quarterly Revenue Analysis".',
+      format: "pdf",
+      mimeType: "application/pdf",
+      filename: "Quarterly-Revenue-Analysis.pdf",
+    },
+    {
+      label: "PDF when explicitly requested",
+      objective: 'Analyze the uploaded XLSX workbook and create a PDF summary titled "Quarterly Revenue Analysis".',
+      format: "pdf",
+      mimeType: "application/pdf",
+      filename: "Quarterly-Revenue-Analysis.pdf",
+    },
+  ])("generates $label through the persisted three-step runtime", async ({ objective, format, mimeType, filename }) => {
     const context = fileResult("Synthetic spreadsheet findings for a PDF report.");
     const standard = standardResult("Summary:\n- The uploaded spreadsheet shows stable results.\n- No material anomalies were found.", RUNTIME_REQUEST_ID);
     const file = createFileAnalysisCapabilityAdapter({ prepareFileContext: vi.fn(async () => context) });
@@ -940,7 +980,6 @@ describe("six independent capability adapters", () => {
       createExecutionId: () => "a3100000-0000-4000-8000-000000000050",
       createExecutionKey: () => `a3100000-0000-4000-8000-${String(51 + sequence++).padStart(12, "0")}`,
     });
-    const objective = "Analyze the uploaded XLSX spreadsheet and create a PDF summary.";
     const runtimeBinding = { ...REQUEST_BINDING, requestId: RUNTIME_REQUEST_ID };
     const planned = await createMultiStepPlanner({ generateStructuredPlan: vi.fn(async () => {
       throw new Error("Deterministic planning must not call a provider.");
@@ -949,7 +988,10 @@ describe("six independent capability adapters", () => {
     if (planned.kind !== "planned") throw new Error("Expected deterministic plan.");
     expect(planned.source).toBe("deterministic");
     expect(planned.plan.steps.map((step) => step.capability)).toEqual(["file_analysis", "standard", "document_generation"]);
-    expect(planned.plan.steps[2]?.inputs).toEqual([{ source: "step", stepId: "step-2", output: "text" }]);
+    expect(planned.plan.steps[2]?.inputs).toEqual([
+      { source: "user" },
+      { source: "step", stepId: "step-2", output: "text" },
+    ]);
 
     const outcome = await runtime.execute(runtimeHandoff(planned.plan.steps), {
       authenticatedUserId: USER_ID,
@@ -957,26 +999,38 @@ describe("six independent capability adapters", () => {
       requestMessageBinding: runtimeBinding,
       userInput: objective,
       attachments: [{ id: context.documents[0]!.documentId, kind: "file" }],
-    }, "spreadsheet-source-pdf-regression");
+    }, `spreadsheet-source-${format}-regression`);
 
     expect(outcome.kind).toBe("succeeded");
     expect(calls.map((call) => call.capabilityId)).toEqual(["file_analysis", "standard", "document_generation"]);
-    expect(calls[2]?.inputs).toEqual([{ source: "step", stepId: "step-2", result: { kind: "text", value: standard } }]);
+    expect(calls[2]?.inputs).toEqual([
+      { source: "user", value: objective },
+      { source: "step", stepId: "step-2", result: { kind: "text", value: standard } },
+    ]);
+    expect(calls[2]?.inputs?.filter((input) => input.source === "user")).toHaveLength(1);
+    expect(calls[2]?.inputs?.some((input) => input.source === "attachment")).toBe(false);
     expect(persistedRecord).not.toBeNull();
     expect(persistedRecord).toMatchObject({ userId: USER_ID, conversationId: CONVERSATION_ID,
-      messageId: runtimeBinding.assistantMessageId, format: "pdf", mimeType: "application/pdf" });
+      messageId: runtimeBinding.assistantMessageId, format, mimeType, filename });
     const persisted = persistedRecord!;
-    const storedPdf = storedFiles.get(persisted.storagePath);
-    expect(storedPdf).toBeInstanceOf(Uint8Array);
-    const pdf = await PDFDocument.load(storedPdf!);
-    expect(pdf.getPageCount()).toBeGreaterThan(0);
+    const storedArtifact = storedFiles.get(persisted.storagePath);
+    expect(storedArtifact).toBeInstanceOf(Uint8Array);
+    if (format === "docx") {
+      expect(Array.from(storedArtifact!.slice(0, 4))).toEqual([0x50, 0x4b, 0x03, 0x04]);
+      const extracted = await mammoth.extractRawText({ buffer: Buffer.from(storedArtifact!) });
+      expect(extracted.value).toContain("Quarterly Revenue Analysis");
+      expect(extracted.value).toContain(standard.reply);
+    } else {
+      const pdf = await PDFDocument.load(storedArtifact!);
+      expect(pdf.getPageCount()).toBeGreaterThan(0);
+    }
     expect(persisted.messageId).toBe(runtimeBinding.assistantMessageId);
     const saved = await store.getRun({ runId: "a3100000-0000-4000-8000-000000000050", userId: USER_ID });
     expect(saved?.steps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
     expect(saved?.steps[2]?.result).toMatchObject({
       kind: "document",
       value: { kind: "generated_document", conversationId: CONVERSATION_ID, messageId: runtimeBinding.assistantMessageId,
-        format: "pdf", mimeType: "application/pdf", createdAt: "2026-10-12T12:00:00.000Z" },
+        format, mimeType, filename, createdAt: "2026-10-12T12:00:00.000Z" },
     });
   });
 

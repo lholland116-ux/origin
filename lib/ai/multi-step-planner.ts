@@ -172,7 +172,9 @@ function deterministicPlan(
     id: `step-${steps.length + 1}`,
     capability: "document_generation",
     dependsOn: [synthesisId],
-    inputs: [{ source: "step", stepId: synthesisId, output: "text" }],
+    // Keep the original request available for format/title selection. The
+    // document body still comes exclusively from the bound synthesis result.
+    inputs: [{ source: "user" }, { source: "step", stepId: synthesisId, output: "text" }],
     expectedOutput: "document",
   });
 
