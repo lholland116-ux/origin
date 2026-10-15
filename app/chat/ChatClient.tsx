@@ -78,11 +78,12 @@ import {
   parseAcceptedWorkflowRecovery,
   shouldPrepareMultiStepWorkflow,
   readWorkflowTrackingRecords,
-  isFinalizedWorkflowAssistantMessageVisible,
+  isFinalizedWorkflowDeliveryVisible,
   removeWorkflowTrackingRecord,
   removeWorkflowTrackingRecords,
   saveWorkflowTrackingRecord,
   selectWorkflowPanelRecords,
+  synchronizeFinalizedWorkflowDelivery,
   upsertWorkflowTrackingRecords,
   WORKFLOW_PROGRESS_STORAGE_KEY,
   type WorkflowTrackingRecord,
@@ -2932,6 +2933,10 @@ export default function ChatClient({
   const regenerationInFlightRef = useRef(false);
   const imageEditOperationRef = useRef<ImageEditOperation | null>(null);
   const imageEditInFlightRef = useRef(false);
+  const activeConversationIdRef = useRef(conversationId);
+  activeConversationIdRef.current = conversationId;
+  const workflowDeliverySyncGenerationRef = useRef(0);
+  const workflowDeliverySyncRunGenerationsRef = useRef(new Map<string, number>());
   const freshImageEditPreparationRef = useRef(false);
   const pastedTextUploadInFlightRef = useRef<string | null>(null);
   useEffect(() => {
@@ -3042,6 +3047,10 @@ export default function ChatClient({
   useEffect(() => {
     setWorkflowTrackingRecords(readWorkflowTrackingRecords(workflowProgressStorage(), conversationId));
   }, [conversationId]);
+
+  useEffect(() => {
+    return () => { workflowDeliverySyncGenerationRef.current += 1; };
+  }, []);
 
   useEffect(() => {
     if (plan !== "pro" && reasoningMode === "high") {
@@ -3471,16 +3480,38 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     }
   }
 
-  function refreshWorkflowMessage(record: WorkflowTrackingRecord): void {
-    void refreshMessagesForConversation(record.conversationId, (refreshedMessages) => {
-      if (!isFinalizedWorkflowAssistantMessageVisible(record, refreshedMessages)) return;
-      setWorkflowTrackingRecords((previous) => removeWorkflowTrackingRecords(previous, record));
-      removeWorkflowTrackingRecord(workflowProgressStorage(), record);
-      setWorkflowInitialStatuses((previous) => {
-        const next = { ...previous };
-        delete next[record.assistantMessageId];
-        return next;
-      });
+  function refreshWorkflowMessage(record: WorkflowTrackingRecord, status: WorkflowProgressDto): void {
+    const recordKey = `${record.conversationId}:${record.assistantMessageId}`;
+    const generation = (workflowDeliverySyncRunGenerationsRef.current.get(recordKey) ?? 0) + 1;
+    workflowDeliverySyncRunGenerationsRef.current.set(recordKey, generation);
+    const scopeGeneration = workflowDeliverySyncGenerationRef.current;
+    const requiresGeneratedDocument = status.steps.some((step) => step.capabilityLabel === "Document creation");
+    void synchronizeFinalizedWorkflowDelivery({
+      shouldContinue: () => workflowDeliverySyncGenerationRef.current === scopeGeneration
+        && workflowDeliverySyncRunGenerationsRef.current.get(recordKey) === generation
+        && activeConversationIdRef.current === record.conversationId,
+      refresh: async () => {
+        let deliveryVisible = false;
+        await refreshMessagesForConversation(record.conversationId, (refreshedMessages) => {
+          if (workflowDeliverySyncGenerationRef.current !== scopeGeneration
+            || workflowDeliverySyncRunGenerationsRef.current.get(recordKey) !== generation
+            || activeConversationIdRef.current !== record.conversationId) return;
+          deliveryVisible = isFinalizedWorkflowDeliveryVisible(record, refreshedMessages, requiresGeneratedDocument);
+          if (!deliveryVisible) return;
+          setWorkflowTrackingRecords((previous) => removeWorkflowTrackingRecords(previous, record));
+          removeWorkflowTrackingRecord(workflowProgressStorage(), record);
+          setWorkflowInitialStatuses((previous) => {
+            const next = { ...previous };
+            delete next[record.assistantMessageId];
+            return next;
+          });
+        });
+        return deliveryVisible;
+      },
+    }).finally(() => {
+      if (workflowDeliverySyncRunGenerationsRef.current.get(recordKey) === generation) {
+        workflowDeliverySyncRunGenerationsRef.current.delete(recordKey);
+      }
     });
   }
 
@@ -4595,6 +4626,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
   async function handleSignOut() {
     try {
       setUiError("");
+      workflowDeliverySyncGenerationRef.current += 1;
       discardPendingImages();
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
@@ -4634,6 +4666,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     ) {
       return;
     }
+
+    workflowDeliverySyncGenerationRef.current += 1;
 
     setWebSearchOverride(false);
 
@@ -4705,6 +4739,8 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
   async function handleNewChat() {
     if (loading || imageGenerationInFlightRef.current || imageEditInFlightRef.current) return;
+
+    workflowDeliverySyncGenerationRef.current += 1;
 
     setWebSearchOverride(false);
 
@@ -6368,7 +6404,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                               conversationId={workflowRecord.conversationId}
                               initialStatus={workflowInitialStatuses[message.id]}
                               theme={activeTheme}
-                              onCompleted={() => refreshWorkflowMessage(workflowRecord)}
+                              onCompleted={(status) => refreshWorkflowMessage(workflowRecord, status)}
                             />
                           ) : null}
 
@@ -6727,7 +6763,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                         conversationId={record.conversationId}
                         initialStatus={workflowInitialStatuses[record.assistantMessageId]}
                         theme={activeTheme}
-                        onCompleted={() => refreshWorkflowMessage(record)}
+                        onCompleted={(status) => refreshWorkflowMessage(record, status)}
                       />
                     </div>
                   ))}

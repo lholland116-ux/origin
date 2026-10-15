@@ -58,6 +58,8 @@ export const WORKFLOW_PROGRESS_STORAGE_KEY = "lvtchat.workflow-progress.v1";
 export const WORKFLOW_PROGRESS_REFRESH_MS = 30_000;
 export const WORKFLOW_PROGRESS_WAIT_REFRESH_MS = 60_000;
 export const WORKFLOW_PROGRESS_MAX_REFRESH_MS = 120_000;
+export const WORKFLOW_FINAL_DELIVERY_SYNC_ATTEMPTS = 15;
+export const WORKFLOW_FINAL_DELIVERY_SYNC_DELAY_MS = 1_000;
 
 export type WorkflowTrackingRecord = Readonly<z.infer<typeof trackingRecordSchema>>;
 export type WorkflowAcceptedStart = Readonly<{
@@ -101,6 +103,11 @@ export type WorkflowPanelMessage = Readonly<{
   id: string;
   role: string;
   content?: string;
+  generatedDocuments?: readonly Readonly<{
+    id?: string;
+    messageId?: string;
+    conversationId?: string;
+  }>[];
 }>;
 
 export type WorkflowPanelSelection = Readonly<{
@@ -162,11 +169,47 @@ export function isFinalizedWorkflowAssistantMessageVisible(
   record: WorkflowTrackingRecord,
   messages: readonly WorkflowPanelMessage[],
 ): boolean {
-  return messages.some((message) => message.id === record.assistantMessageId
-    && message.role === "assistant"
-    && typeof message.content === "string"
-    && message.content.trim().length > 0
-    && !isPendingAssistantMessage({ role: message.role, content: message.content }));
+  return isFinalizedWorkflowDeliveryVisible(record, messages);
+}
+
+/** A document workflow is delivered only after its owner-scoped attachment is hydrated. */
+export function isFinalizedWorkflowDeliveryVisible(
+  record: WorkflowTrackingRecord,
+  messages: readonly WorkflowPanelMessage[],
+  requiresGeneratedDocument = false,
+): boolean {
+  const message = messages.find((candidate) => candidate.id === record.assistantMessageId
+    && candidate.role === "assistant"
+    && typeof candidate.content === "string"
+    && candidate.content.trim().length > 0
+    && !isPendingAssistantMessage({ role: candidate.role, content: candidate.content }));
+  if (!message) return false;
+  if (!requiresGeneratedDocument) return true;
+  return message.generatedDocuments?.some((document) => UUID.test(document.id ?? "")
+    && document.messageId === record.assistantMessageId
+    && document.conversationId === record.conversationId) ?? false;
+}
+
+/** Bounded message synchronization for the gap between run completion and finalization. */
+export async function synchronizeFinalizedWorkflowDelivery(options: Readonly<{
+  refresh: () => Promise<boolean>;
+  shouldContinue: () => boolean;
+  wait?: (delayMs: number) => Promise<void>;
+}>): Promise<boolean> {
+  const wait = options.wait ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+  for (let attempt = 0; attempt < WORKFLOW_FINAL_DELIVERY_SYNC_ATTEMPTS; attempt += 1) {
+    if (!options.shouldContinue()) return false;
+    try {
+      if (await options.refresh()) return true;
+    } catch {
+      // A transient message fetch failure is retried only within the fixed bound.
+    }
+    if (attempt + 1 < WORKFLOW_FINAL_DELIVERY_SYNC_ATTEMPTS) {
+      if (!options.shouldContinue()) return false;
+      await wait(WORKFLOW_FINAL_DELIVERY_SYNC_DELAY_MS);
+    }
+  }
+  return false;
 }
 
 export function saveWorkflowTrackingRecord(

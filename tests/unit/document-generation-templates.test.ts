@@ -759,4 +759,46 @@ describe("document generation templates", () => {
     expect(documentXml).toContain("w:numPr");
     expect(documentXml).not.toContain("| Metric | Result |");
   });
+
+  it("allocates DOCX table width for short header words while wrapping long labels within the page", async () => {
+    const report = [
+      "| Quarter | Revenue | Quarter-over-quarter revenue change | Percentage change compared with prior quarter |",
+      "| --- | ---: | ---: | ---: |",
+      "| Q1 | 200 | +50 | +25% |",
+      "| Q2 | 250 | -25 | -10% |",
+      "| Q3 | 225 | +25 | +12.5% |",
+    ].join("\n");
+    const request = renderTemplate({
+      templateId: "simple-document",
+      format: "docx",
+      variables: { title: "Revenue Performance", body: report },
+    });
+    if (request.format !== "docx") throw new Error("Expected DOCX output.");
+
+    const artifact = await generateDocxArtifact(request as Parameters<typeof generateDocxArtifact>[0]);
+    const archive = await JSZip.loadAsync(Buffer.from(artifact.bytes));
+    const xml = await archive.file("word/document.xml")?.async("text");
+    expect(xml).toBeDefined();
+    const gridWidths = [...(xml ?? "").matchAll(/<w:gridCol w:w="(\d+)"\/>/g)]
+      .map((match) => Number(match[1]));
+    const headerCellWidths = [...(xml ?? "").matchAll(/<w:tcW\b([^>]*)\/?\s*>/g)]
+      .slice(0, 4)
+      .map((match) => Number(/w:w="(\d+)"/.exec(match[1] ?? "")?.[1]));
+
+    expect(gridWidths).toHaveLength(4);
+    expect(gridWidths.reduce((sum, width) => sum + width, 0)).toBe(9_000);
+    expect(gridWidths[0]).toBeGreaterThanOrEqual(860);
+    expect(gridWidths[1]).toBeGreaterThanOrEqual(860);
+    expect(headerCellWidths).toEqual(gridWidths);
+    expect(xml).toContain("Quarter-over-quarter revenue change");
+    expect(xml).toContain("Percentage change compared with prior quarter");
+    expect(xml).toContain(">200</w:t>");
+    expect(xml).toContain(">+50</w:t>");
+    expect(xml).toContain(">+12.5%</w:t>");
+    expect(xml).not.toContain("w:noWrap");
+    expect(xml).toContain('<w:jc w:val="right"/>');
+    expect(xml).toContain('<w:left w:type="dxa" w:w="80"/>');
+    expect(xml).toContain("<w:tblBorders>");
+    expect(xml).toContain("<w:tblGrid>");
+  });
 });

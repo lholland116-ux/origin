@@ -16,13 +16,17 @@ import {
   selectWorkflowPanelRecords,
   shouldPrepareMultiStepWorkflow,
   isFinalizedWorkflowAssistantMessageVisible,
+  isFinalizedWorkflowDeliveryVisible,
   createWorkflowProgressTimer,
   createWorkflowStatusRequestGeneration,
+  synchronizeFinalizedWorkflowDelivery,
   upsertWorkflowTrackingRecords,
   workflowProgressRefreshDelay,
   workflowProgressControls,
   workflowStatusHttpFailure,
   validateWorkflowReturnRationale,
+  WORKFLOW_FINAL_DELIVERY_SYNC_ATTEMPTS,
+  WORKFLOW_FINAL_DELIVERY_SYNC_DELAY_MS,
   WORKFLOW_PROGRESS_MAX_REFRESH_MS,
   WORKFLOW_PROGRESS_REFRESH_MS,
   WORKFLOW_PROGRESS_STORAGE_KEY,
@@ -122,7 +126,7 @@ describe("workflow progress UI contract", () => {
       theme: getChatThemeById("midnight-blue"),
     }));
     expect(completed).toContain("Completed");
-    expect(completed).toContain("final response and any available files are attached to this assistant message");
+    expect(completed).toContain("final response and any available files are being synchronized to this conversation");
   });
 
   it("shows controls only for backend-supported states and validates return rationale", () => {
@@ -265,6 +269,62 @@ describe("workflow progress UI contract", () => {
     expect(saveWorkflowTrackingRecord(storage, record)).toBe(true);
     expect(removeWorkflowTrackingRecord(storage, record)).toBe(true);
     expect(readWorkflowTrackingRecords(storage, CONVERSATION)).toEqual([]);
+  });
+
+  it("keeps a completed document workflow pending until its finalized message and attached document are hydrated", async () => {
+    const record = { runId: RUN, conversationId: CONVERSATION, assistantMessageId: ASSISTANT_MESSAGE };
+    const finalized = { id: ASSISTANT_MESSAGE, role: "assistant", content: "Your requested document is ready." };
+    const wrongBinding = {
+      ...finalized,
+      generatedDocuments: [{ id: "e4000000-0000-4000-8000-000000000007", messageId: ASSISTANT_MESSAGE, conversationId: REQUEST }],
+    };
+    const delivered = {
+      ...finalized,
+      generatedDocuments: [{ id: "e4000000-0000-4000-8000-000000000007", messageId: ASSISTANT_MESSAGE, conversationId: CONVERSATION }],
+    };
+
+    expect(isFinalizedWorkflowDeliveryVisible(record, [finalized], true)).toBe(false);
+    expect(isFinalizedWorkflowDeliveryVisible(record, [wrongBinding], true)).toBe(false);
+    expect(isFinalizedWorkflowDeliveryVisible(record, [delivered], true)).toBe(true);
+
+    const snapshots = [[], [finalized], [delivered]];
+    const waitCalls: number[] = [];
+    let lastApplied: typeof snapshots[number] = [];
+    const synchronized = await synchronizeFinalizedWorkflowDelivery({
+      refresh: async () => {
+        lastApplied = snapshots.shift() ?? [];
+        return isFinalizedWorkflowDeliveryVisible(record, lastApplied, true);
+      },
+      shouldContinue: () => true,
+      wait: async (delay) => { waitCalls.push(delay); },
+    });
+
+    expect(synchronized).toBe(true);
+    expect(waitCalls).toEqual([WORKFLOW_FINAL_DELIVERY_SYNC_DELAY_MS, WORKFLOW_FINAL_DELIVERY_SYNC_DELAY_MS]);
+    expect(lastApplied.filter((message) => message.id === ASSISTANT_MESSAGE)).toHaveLength(1);
+  });
+
+  it("bounds completion-message refreshes and cancels them after a conversation switch", async () => {
+    let attempts = 0;
+    let waits = 0;
+    const boundedResult = await synchronizeFinalizedWorkflowDelivery({
+      refresh: async () => { attempts += 1; return false; },
+      shouldContinue: () => true,
+      wait: async () => { waits += 1; },
+    });
+    expect(boundedResult).toBe(false);
+    expect(attempts).toBe(WORKFLOW_FINAL_DELIVERY_SYNC_ATTEMPTS);
+    expect(waits).toBe(WORKFLOW_FINAL_DELIVERY_SYNC_ATTEMPTS - 1);
+
+    attempts = 0;
+    let active = true;
+    const switchedResult = await synchronizeFinalizedWorkflowDelivery({
+      refresh: async () => { attempts += 1; return false; },
+      shouldContinue: () => active,
+      wait: async () => { active = false; },
+    });
+    expect(switchedResult).toBe(false);
+    expect(attempts).toBe(1);
   });
 
   it("rejects malformed tracking records and preserves ordinary message visibility", () => {

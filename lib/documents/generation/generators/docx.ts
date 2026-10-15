@@ -28,6 +28,8 @@ import {
 
 const ORDERED_LIST_REFERENCE = "lvtchat-ordered-list";
 const TABLE_WIDTH_TWIPS = 9_000;
+const TABLE_CELL_HORIZONTAL_PADDING_TWIPS = 80;
+const HEADER_CHARACTER_WIDTH_TWIPS = 100;
 const TABLE_BORDER = { style: BorderStyle.SINGLE, size: 4, color: "D6DEE8" } as const;
 
 type ReportBlock =
@@ -206,16 +208,27 @@ function isNumericCell(value: string): boolean {
 }
 
 function tableColumnWidths(columns: readonly string[], rows: readonly (readonly string[])[]): number[] {
-  const weights = columns.map((column, index) => Math.min(36, Math.max(
+  // Header phrases should wrap between words instead of taking width away
+  // from neighboring columns. Reserve enough room for each header's longest
+  // word, then distribute the remaining page width based on cell content.
+  const weights = columns.map((_, index) => Math.min(36, Math.max(
     8,
-    ...[column, ...rows.map((row) => row[index] ?? "")].map((value) => value.length),
+    ...rows.map((row) => row[index] ?? "").map((value) => value.length),
   )));
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const minimums = columns.map((column) => {
+    const longestWord = column.trim().split(/\s+/).reduce((longest, word) => Math.max(longest, word.length), 0);
+    return longestWord * HEADER_CHARACTER_WIDTH_TWIPS + TABLE_CELL_HORIZONTAL_PADDING_TWIPS * 2;
+  });
+  const minimumTotal = minimums.reduce((sum, width) => sum + width, 0);
+  const minimumScale = minimumTotal > TABLE_WIDTH_TWIPS ? TABLE_WIDTH_TWIPS / minimumTotal : 1;
+  const scaledMinimums = minimums.map((width) => Math.floor(width * minimumScale));
+  const distributableWidth = TABLE_WIDTH_TWIPS - scaledMinimums.reduce((sum, width) => sum + width, 0);
   let assigned = 0;
   return weights.map((weight, index) => {
     const width = index === weights.length - 1
       ? TABLE_WIDTH_TWIPS - assigned
-      : Math.floor(TABLE_WIDTH_TWIPS * weight / totalWeight);
+      : scaledMinimums[index]! + Math.floor(distributableWidth * weight / totalWeight);
     assigned += width;
     return width;
   });
@@ -252,7 +265,7 @@ function tableCell(
       }),
     ],
     width: { size: options.width, type: WidthType.DXA },
-    margins: { top: 90, bottom: 90, left: 110, right: 110 },
+    margins: { top: 90, bottom: 90, left: TABLE_CELL_HORIZONTAL_PADDING_TWIPS, right: TABLE_CELL_HORIZONTAL_PADDING_TWIPS },
     verticalAlign: "center",
     ...(options.header ? { shading: { fill: "EAF1F8" } } : {}),
     borders: { top: TABLE_BORDER, bottom: TABLE_BORDER, left: TABLE_BORDER, right: TABLE_BORDER },

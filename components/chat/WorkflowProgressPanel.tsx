@@ -19,7 +19,7 @@ type WorkflowProgressPanelProps = Readonly<{
   conversationId: string;
   initialStatus?: WorkflowProgressDto;
   theme: ChatTheme;
-  onCompleted?: () => void;
+  onCompleted?: (status: WorkflowProgressDto) => void;
 }>;
 
 const STATUS_LABELS: Readonly<Record<WorkflowProgressDto["state"], string>> = Object.freeze({
@@ -87,7 +87,7 @@ export default function WorkflowProgressPanel({
     const notifyCompletion = (next: WorkflowProgressDto) => {
       if (next.state === "completed" && !completionNotified) {
         completionNotified = true;
-        onCompletedRef.current?.();
+        onCompletedRef.current?.(next);
       }
     };
 
@@ -313,7 +313,7 @@ export default function WorkflowProgressPanel({
 
           {status.state === "completed" ? (
             <p className={`mt-3 text-sm ${theme.mutedText}`}>
-              The final response and any available files are attached to this assistant message.
+              The final response and any available files are being synchronized to this conversation.
             </p>
           ) : null}
 
