@@ -33,7 +33,8 @@ export type DocumentSection =
       readonly rows: readonly (readonly string[])[];
     };
 
-export type WorkbookCell = string | number | boolean | null;
+export type WorkbookDateCell = Readonly<{ type: "date"; value: string }>;
+export type WorkbookCell = string | number | boolean | null | WorkbookDateCell;
 
 export type WorkbookSheet = {
   readonly name: string;

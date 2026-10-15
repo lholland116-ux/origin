@@ -25,6 +25,7 @@ export const MAX_SECTION_COUNT = 200;
 export const MAX_TABLE_COLUMNS = 100;
 export const MAX_TABLE_ROWS = 2_000;
 export const MAX_SHEETS = 50;
+export const MAX_WORKBOOK_CELL_TEXT_LENGTH = 32_767;
 export const MAX_WORKSHEET_NAME_LENGTH = 31;
 export const MAX_PRESENTATION_SLIDES = 100;
 export const MAX_PRESENTATION_TITLE_LENGTH = 160;
@@ -51,12 +52,22 @@ export class DocumentGenerationValidationError extends Error {
   }
 }
 
+export function isValidWorkbookIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  if (year < 1900 || year > 9999) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 function isWorkbookCell(value: WorkbookCell): boolean {
   return (
     value === null ||
-    typeof value === "string" ||
+    (typeof value === "string" && value.length <= MAX_WORKBOOK_CELL_TEXT_LENGTH) ||
     typeof value === "boolean" ||
-    (typeof value === "number" && Number.isFinite(value))
+    (typeof value === "number" && Number.isFinite(value)) ||
+    (typeof value === "object" && value !== null && Object.keys(value).length === 2
+      && value.type === "date" && typeof value.value === "string" && isValidWorkbookIsoDate(value.value))
   );
 }
 
@@ -137,7 +148,8 @@ export function validateWorkbookSheet(sheet: WorkbookSheet, index: number): stri
   if (columns.length > MAX_TABLE_COLUMNS) {
     issues.push(`Sheet ${index + 1} has too many columns.`);
   }
-  if (columns.some((column) => typeof column !== "string" || !column.trim())) {
+  if (columns.some((column) => typeof column !== "string" || !column.trim()
+    || column.length > MAX_WORKBOOK_CELL_TEXT_LENGTH)) {
     issues.push(`Sheet ${index + 1} column names must be non-empty strings.`);
   }
   if (!Array.isArray(sheet.rows) || rows.length > MAX_TABLE_ROWS) {
@@ -315,6 +327,10 @@ export function neutralizeWorkbookString(value: string): string {
   return value.length > 0 && FORMULA_PREFIXES.has(value[0] ?? "") ? `'${value}` : value;
 }
 
-export function normalizeWorkbookCell(value: WorkbookCell): WorkbookCell {
-  return typeof value === "string" ? neutralizeWorkbookString(value) : value;
+export function normalizeWorkbookCell(value: WorkbookCell): WorkbookCell | Date {
+  if (typeof value === "string") return neutralizeWorkbookString(value);
+  if (typeof value === "object" && value !== null && value.type === "date") {
+    return new Date(`${value.value}T00:00:00.000Z`);
+  }
+  return value;
 }

@@ -10,6 +10,7 @@ import type { CapabilityExecutionInput, CapabilityExecutionResult, CapabilityExe
 import { runStandardOperation, StandardOperationError, type StandardOperationEvent, type StandardOperationInput } from "@/lib/ai/standard-operation-service";
 import { mapUserReasoningModeToProviderEffort } from "@/lib/ai/reasoning-mode";
 import type { ProviderCostLedger } from "@/lib/agent-runtime/provider-cost-ledger";
+import { selectDocumentOutputFormat } from "@/lib/agent-runtime/document-output-format";
 import {
   assertAdapterInput,
   CapabilityAdapterError,
@@ -70,11 +71,14 @@ export function createStandardCapabilityAdapter(
       }
       const objective = userObjective(inputs);
       const { fileContext, webSearchResult } = matchingPredecessors(inputs, binding);
+      const outputFormat = selectDocumentOutputFormat(objective);
+      const workbookExtraction = outputFormat.kind === "selected" && outputFormat.format === "xlsx";
       const operationInput: StandardOperationInput = {
         requestContext: requestContextFromBinding(binding),
         objective,
         reasoningEffort: mapUserReasoningModeToProviderEffort(input.context.reasoningMode ?? "medium"),
         history: [{ role: "user", content: objective }],
+        ...(workbookExtraction ? { workbookExtraction: true } : {}),
         executionMode: "durable_runtime_single_attempt",
         ...(input.context.executionDeadlineAtMs
           ? { executionDeadlineAtMs: input.context.executionDeadlineAtMs }

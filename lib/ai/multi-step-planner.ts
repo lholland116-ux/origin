@@ -153,7 +153,7 @@ function deterministicPlan(
       capability: "file_analysis",
       dependsOn: [],
       inputs: unique(attachments).map((kind) => ({ source: "attachment", output: kind })),
-      expectedOutput: "text",
+      expectedOutput: "structured_data",
     });
     sourceStepIds.push(id);
   }
@@ -165,7 +165,17 @@ function deterministicPlan(
     dependsOn: [...sourceStepIds],
     // Preserve the original objective alongside the predecessor results so
     // synthesis remains anchored to what the user actually requested.
-    inputs: [{ source: "user" }, ...sourceStepIds.map((stepId) => ({ source: "step" as const, stepId }))],
+    inputs: [
+      { source: "user" },
+      ...sourceStepIds.map((stepId) => {
+        const sourceStep = steps.find((step) => step.id === stepId);
+        return {
+          source: "step" as const,
+          stepId,
+          ...(sourceStep?.expectedOutput ? { output: sourceStep.expectedOutput } : {}),
+        };
+      }),
+    ],
     expectedOutput: "text",
   });
   steps.push({

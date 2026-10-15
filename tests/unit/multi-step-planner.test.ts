@@ -36,6 +36,32 @@ function mockModelClient(...responses: unknown[]): MultiStepPlannerModelClient {
 }
 
 describe("multi-step planner deterministic path", () => {
+  it("plans DOCX to XLSX as File Analysis, one Standard extraction, and Document Generation", async () => {
+    const result = await createMultiStepPlanner(mockModelClient()).plan({
+      objective: "Analyze the attached DOCX and create an XLSX workbook.",
+      attachments: ["file"],
+    });
+
+    expect(result.kind).toBe("planned");
+    if (result.kind !== "planned") return;
+    expect(result.source).toBe("deterministic");
+    expect(result.plan.steps.map((step) => [step.capability, step.expectedOutput])).toEqual([
+      ["file_analysis", "structured_data"],
+      ["standard", "text"],
+      ["document_generation", "document"],
+    ]);
+    expect(result.plan.steps[0]?.inputs).toEqual([{ source: "attachment", output: "file" }]);
+    expect(result.plan.steps[1]?.inputs).toEqual([
+      { source: "user" },
+      { source: "step", stepId: "step-1", output: "structured_data" },
+    ]);
+    expect(result.plan.steps[2]?.inputs).toEqual([
+      { source: "user" },
+      { source: "step", stepId: "step-2", output: "text" },
+    ]);
+    expect(validateIntelligencePlan(result.plan).valid).toBe(true);
+  });
+
   it.each([
     ["Search the latest FDA QMSR changes and create a PDF briefing.", []],
     ["Search the latest FDA QMSR changes and create a PPTX briefing.", []],
@@ -92,11 +118,11 @@ describe("multi-step planner deterministic path", () => {
     ]);
     expect(result.plan.steps[0]).toMatchObject({
       inputs: [attachmentInput(attachments[0])],
-      expectedOutput: "text",
+      expectedOutput: "structured_data",
     });
     expect(result.plan.steps[1]).toMatchObject({
       dependsOn: ["step-1"],
-      inputs: [{ source: "user" }, { source: "step", stepId: "step-1" }],
+      inputs: [{ source: "user" }, { source: "step", stepId: "step-1", output: "structured_data" }],
       expectedOutput: "text",
     });
     expect(result.plan.steps[1]!.inputs?.filter(({ source }) => source === "user")).toHaveLength(1);

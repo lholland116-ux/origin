@@ -96,6 +96,7 @@ describe("document generation templates", () => {
       "executive-summary",
       "comparison-report",
       "general-presentation",
+      "tabular-workbook",
     ]);
     expect(templates.every((template) => template.version === 1)).toBe(true);
     expect(templates.every((template) => !("render" in template))).toBe(true);

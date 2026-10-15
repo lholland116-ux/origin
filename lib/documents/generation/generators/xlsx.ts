@@ -20,6 +20,7 @@ const CELL_PADDING = 2;
 
 function displayCellValue(value: WorkbookSheet["rows"][number][number]): string {
   if (value === null) return "";
+  if (typeof value === "object" && value.type === "date") return value.value;
   return String(normalizeWorkbookCell(value));
 }
 

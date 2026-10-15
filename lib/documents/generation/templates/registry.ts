@@ -3,6 +3,7 @@ import { executiveSummaryTemplate } from "./executive-summary";
 import { generalPresentationTemplate } from "./general-presentation";
 import { generalReportTemplate } from "./general-report";
 import { simpleDocumentTemplate } from "./simple-document";
+import { workbookTemplate } from "./workbook";
 import {
   TemplateValidationError,
   type DocumentTemplate,
@@ -49,6 +50,7 @@ export const templateRegistry = createTemplateRegistry([
   executiveSummaryTemplate,
   comparisonReportTemplate,
   generalPresentationTemplate,
+  workbookTemplate,
 ]);
 
 export function getTemplate(id: string): DocumentTemplate | undefined {

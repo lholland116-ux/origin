@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import ExcelJS from "exceljs";
 import { PDFDocument } from "pdf-lib";
 import mammoth from "mammoth";
 import type { PlanStep } from "@/lib/ai/intelligence-plan";
@@ -239,6 +240,28 @@ describe("six independent capability adapters", () => {
     ]));
     expect(runOperation).toHaveBeenCalledTimes(1);
     expect(runOperation.mock.calls[0]![0].fileContext).toEqual(context);
+  });
+
+  it("enables structured workbook extraction only for an explicit XLSX output", async () => {
+    const context = fileResult();
+    const xlsxRunner = standardRunner(standardResult("{}"));
+    await createStandardCapabilityAdapter({ runOperation: xlsxRunner as unknown as StandardOperationRunner }).execute(
+      executionInput("standard", [
+        { source: "user", value: "Analyze the attached DOCX and create an XLSX workbook." },
+        { source: "step", stepId: "file", result: { kind: "structured_data", value: context } },
+      ]),
+    );
+    expect(xlsxRunner).toHaveBeenCalledOnce();
+    expect(xlsxRunner.mock.calls[0]![0]).toMatchObject({ workbookExtraction: true, fileContext: context });
+
+    const docxRunner = standardRunner(standardResult("A document report."));
+    await createStandardCapabilityAdapter({ runOperation: docxRunner as unknown as StandardOperationRunner }).execute(
+      executionInput("standard", [
+        { source: "user", value: "Analyze the attached DOCX and create a DOCX report." },
+        { source: "step", stepId: "file", result: { kind: "structured_data", value: context } },
+      ]),
+    );
+    expect(docxRunner.mock.calls[0]![0].workbookExtraction).toBeUndefined();
   });
 
   it("accepts a validated Web Search predecessor", async () => {
@@ -497,6 +520,71 @@ describe("six independent capability adapters", () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it("validates structured Standard output and persists an owner-bound XLSX artifact", async () => {
+    const workbookJson = JSON.stringify({
+      sheetName: "Revenue",
+      columns: ["Quarter", "Revenue", "As of", "Note"],
+      rows: [
+        ["Q1", 200, { type: "date", value: "2026-01-31" }, null],
+        ["Q2", 250, null, "Reviewed"],
+      ],
+    });
+    const standard = standardResult(workbookJson);
+    const persistMock = vi.fn(async (input: { generatedOutput: GeneratedArtifact }) => {
+      void input;
+      return { reference: generatedDocument(), delivery: { format: "xlsx" } };
+    });
+    const result = await createDocumentGenerationCapabilityAdapter({
+      persist: persistMock as unknown as ExistingMessageDocumentPersister,
+    }).execute(executionInput("document_generation", [
+      { source: "user", value: "Analyze the attached DOCX and create an XLSX workbook." },
+      { source: "step", stepId: "standard", result: { kind: "text", value: standard } },
+    ]));
+
+    expect(result).toEqual({ kind: "document", value: generatedDocument() });
+    expect(persistMock).toHaveBeenCalledOnce();
+    expect(persistMock).toHaveBeenCalledWith(expect.objectContaining({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      assistantMessageId: REQUEST_BINDING.assistantMessageId,
+      templateId: "tabular-workbook",
+      generatedOutput: expect.objectContaining({
+        format: "xlsx",
+        filename: "Generated-document.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    }));
+    const artifact = persistMock.mock.calls[0]?.[0].generatedOutput;
+    expect(Buffer.from(artifact!.bytes).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(artifact!.bytes) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+    const sheet = workbook.getWorksheet("Revenue");
+    expect(sheet?.getRow(1).values).toEqual([, "Quarter", "Revenue", "As of", "Note"]);
+    expect(sheet?.getCell(2, 1).value).toBe("Q1");
+    expect(sheet?.getCell(2, 2).value).toBe(200);
+    expect(sheet?.getCell(2, 3).value).toBeInstanceOf(Date);
+    expect((sheet?.getCell(2, 3).value as Date).toISOString()).toBe("2026-01-31T00:00:00.000Z");
+    expect(sheet?.getCell(2, 4).value).toBeNull();
+    expect(sheet?.getCell(3, 2).value).toBe(250);
+    expect(sheet?.getCell(3, 3).value).toBeNull();
+    expect(sheet?.getCell(3, 4).value).toBe("Reviewed");
+  });
+
+  it("does not render or persist malformed structured workbook output", async () => {
+    const render = vi.fn();
+    const persist = vi.fn();
+    const adapter = createDocumentGenerationCapabilityAdapter({
+      render: render as unknown as DocumentRenderer,
+      persist: persist as unknown as ExistingMessageDocumentPersister,
+    });
+    await expect(adapter.execute(executionInput("document_generation", [
+      { source: "user", value: "Create an XLSX workbook." },
+      { source: "step", stepId: "standard", result: { kind: "text", value: standardResult(JSON.stringify({ sheetName: "Sheet1", columns: ["A", "B"], rows: [[1]] })) } },
+    ]))).rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "document_render_validation" });
+    expect(render).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("does not persist a locally rendered document after the invocation deadline", async () => {
     const standard = standardResult("Validated document body.");
     const render = vi.fn(async () => ({ bytes: new Uint8Array([1]), filename: "generated-document.pdf", format: "pdf", mimeType: "application/pdf", sizeBytes: 1 } as GeneratedArtifact));
@@ -573,7 +661,7 @@ describe("six independent capability adapters", () => {
       { source: "step", stepId: "standard", result: { kind: "text", value: standardResult("Private answer", OTHER_USER_ID) } },
     ]))).rejects.toMatchObject({ code: "missing_predecessor_result", diagnosticSubreason: "predecessor_validation" });
     await expect(adapter.execute(executionInput("document_generation", [
-      { source: "user", value: "Create an XLSX spreadsheet with private data." }, predecessor,
+      { source: "user", value: "Create a PowerPoint presentation." }, predecessor,
     ]))).rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "format_rejection" });
     await expect(adapter.execute(executionInput("document_generation", [predecessor])))
       .rejects.toMatchObject({ code: "missing_input", diagnosticSubreason: "document_render_validation" });
@@ -987,8 +1075,20 @@ describe("six independent capability adapters", () => {
       mimeType: "application/pdf",
       filename: "Quarterly-Revenue-Analysis.pdf",
     },
+    {
+      label: "an XLSX workbook from an attached DOCX table",
+      objective: 'Analyze the attached DOCX and create an XLSX workbook titled "Revenue Extraction".',
+      format: "xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      filename: "Revenue-Extraction.xlsx",
+    },
   ])("generates $label through the persisted three-step runtime", async ({ objective, format, mimeType, filename }) => {
-    const context = fileResult("Synthetic spreadsheet findings for a PDF report.");
+    const tableContext = `DOCX_TABLE_JSON ${JSON.stringify({ rows: [
+      { header: true, cells: ["Quarter", "Revenue", "As of", "Note"] },
+      { header: false, cells: ["Q1", "200", "2026-01-31", ""] },
+      { header: false, cells: ["Q2", "250", "", "Reviewed"] },
+    ] })}`;
+    const context = fileResult(format === "xlsx" ? tableContext : "Synthetic spreadsheet findings for a document report.");
     const docxReport = [
       "# Quarterly Revenue Analysis",
       "",
@@ -1002,7 +1102,16 @@ describe("six independent capability adapters", () => {
     ].join("\n");
     const standard = standardResult(format === "docx"
       ? docxReport
-      : "Summary:\n- The uploaded spreadsheet shows stable results.\n- No material anomalies were found.", RUNTIME_REQUEST_ID);
+      : format === "xlsx"
+        ? JSON.stringify({
+          sheetName: "Revenue",
+          columns: ["Quarter", "Revenue", "As of", "Note"],
+          rows: [
+            ["Q1", 200, { type: "date", value: "2026-01-31" }, null],
+            ["Q2", 250, null, "Reviewed"],
+          ],
+        })
+        : "Summary:\n- The uploaded spreadsheet shows stable results.\n- No material anomalies were found.", RUNTIME_REQUEST_ID);
     const file = createFileAnalysisCapabilityAdapter({ prepareFileContext: vi.fn(async () => context) });
     const runStandard = vi.fn(async function* () { yield* standardEvents(standard); });
     const standardAdapter = createStandardCapabilityAdapter({ runOperation: runStandard as unknown as StandardOperationRunner });
@@ -1097,6 +1206,17 @@ describe("six independent capability adapters", () => {
       expect(extracted.value).toContain("Revenue performance");
       expect(extracted.value).toContain("Q1 to Q2");
       expect(extracted.value).toContain("+12.5%");
+    } else if (format === "xlsx") {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(Buffer.from(storedArtifact!) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+      const sheet = workbook.getWorksheet("Revenue");
+      expect(sheet?.getCell(1, 1).value).toBe("Quarter");
+      expect(sheet?.getCell(2, 2).value).toBe(200);
+      expect(sheet?.getCell(2, 3).value).toBeInstanceOf(Date);
+      expect(sheet?.getCell(2, 4).value).toBeNull();
+      expect(sheet?.getCell(3, 2).value).toBe(250);
+      expect(sheet?.getCell(3, 3).value).toBeNull();
+      expect(sheet?.getCell(3, 4).value).toBe("Reviewed");
     } else {
       const pdf = await PDFDocument.load(storedArtifact!);
       expect(pdf.getPageCount()).toBeGreaterThan(0);

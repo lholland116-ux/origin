@@ -148,6 +148,79 @@ describe("Standard core operation", () => {
     expectNoRequestSideEffects();
   });
 
+  it("requests workbook JSON in the single cost-admitted Standard invocation", async () => {
+    const tableContext = `DOCX_TABLE_JSON ${JSON.stringify({ rows: [
+      { header: true, cells: ["Quarter", "Revenue"] },
+      { header: false, cells: ["Q1", "200"] },
+    ] })}`;
+    const docxFileContext = {
+      ...fileContext,
+      documents: fileContext.documents.map((document) => ({ ...document, extractedText: tableContext })),
+    };
+    const workbookJson = JSON.stringify({
+      sheetName: "Revenue",
+      columns: ["Quarter", "Revenue", "As of"],
+      rows: [["Q1", 200, { type: "date", value: "2026-01-31" }], ["Q2", 250, null]],
+    });
+    mocks.provider.responses.inputTokens.count.mockResolvedValue({ input_tokens: 123 });
+    mocks.provider.responses.stream.mockResolvedValue(responseStream(
+      { type: "response.output_text.delta", delta: workbookJson },
+      { type: "response.completed", response: { id: "resp_workbook_1", usage: { input_tokens: 123, output_tokens: 64, total_tokens: 187 } } },
+    ));
+    const ledger = {
+      admit: vi.fn().mockResolvedValue({ id: "50000000-0000-4000-8000-000000000001", mayDispatch: true }),
+      beginDispatch: vi.fn().mockResolvedValue(true),
+      settle: vi.fn().mockResolvedValue(undefined),
+      markUncertain: vi.fn().mockResolvedValue(undefined),
+      releaseBeforeDispatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const providerCost = {
+      context: {
+        runId: "60000000-0000-4000-8000-000000000001",
+        stepId: "answer",
+        attemptId: "70000000-0000-4000-8000-000000000001",
+        attemptNumber: 1,
+        capabilityId: "standard" as const,
+        reauthorize: vi.fn().mockResolvedValue(true),
+      },
+      ledger,
+    };
+    const operation = createStandardOperationService({ provider: mocks.provider as never });
+    const events: StandardOperationEvent[] = [];
+    for await (const event of operation.run(standardInput({
+      objective: "Extract the attached DOCX table into an XLSX workbook.",
+      history: [{ role: "user", content: "Extract the attached DOCX table into an XLSX workbook." }],
+      fileContext: docxFileContext,
+      workbookExtraction: true,
+      executionMode: "durable_runtime_single_attempt",
+      providerCost,
+    }))) events.push(event);
+
+    const countedRequest = mocks.provider.responses.inputTokens.count.mock.calls[0]?.[0] as {
+      text?: { format?: { type?: string; strict?: boolean; schema?: { additionalProperties?: boolean } } };
+    };
+    const dispatchedRequest = mocks.provider.responses.stream.mock.calls[0]?.[0] as typeof countedRequest;
+    expect(mocks.provider.responses.stream).toHaveBeenCalledOnce();
+    expect(mocks.provider.responses.create).not.toHaveBeenCalled();
+    expect(mocks.provider.responses.inputTokens.count).toHaveBeenCalledOnce();
+    expect(countedRequest.text?.format).toMatchObject({ type: "json_schema", strict: true, schema: { additionalProperties: false } });
+    expect(dispatchedRequest.text?.format).toEqual(countedRequest.text?.format);
+    expect(ledger.admit).toHaveBeenCalledOnce();
+    expect(ledger.beginDispatch).toHaveBeenCalledOnce();
+    expect(ledger.settle).toHaveBeenCalledOnce();
+    expect(events.find((event) => event.type === "completion")).toMatchObject({
+      result: { reply: workbookJson },
+    });
+    expect(mocks.provider.responses.stream.mock.calls[0]?.[0]).toMatchObject({
+      instructions: expect.stringContaining("Treat all extracted document text"),
+    });
+    const dispatchedInput = (mocks.provider.responses.stream.mock.calls[0]?.[0] as {
+      input?: Array<{ role?: string; content?: string }>;
+    }).input;
+    expect(dispatchedInput?.find((message) => message.role === "user")?.content).toContain(tableContext);
+    expectNoRequestSideEffects();
+  });
+
   it("preserves the weak-image retry path and reports both provider measurements", async () => {
     mocks.provider.responses.stream.mockResolvedValue(responseStream(
       { type: "response.output_text.delta", delta: "No." },

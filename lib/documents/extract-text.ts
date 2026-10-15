@@ -2,6 +2,7 @@ import mammoth from "mammoth";
 import ExcelJS from "exceljs";
 import { extractPptxText } from "@/lib/documents/extract-pptx";
 import { MAX_EXTRACTED_TEXT_LENGTH } from "@/lib/documents/extract-limits";
+import { extractDocxTableContext } from "@/lib/documents/extract-docx-table-context";
 
 // Official pdf-parse Node/Vercel setup.
 // Load worker support first, then use CanvasFactory + PDFParse.
@@ -191,6 +192,8 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
 }
 
 async function extractDocxText(buffer: Buffer): Promise<string> {
+  const tableContext = await extractDocxTableContext(buffer);
+  if (tableContext !== null) return tableContext;
   const result = await mammoth.extractRawText({ buffer });
   return finalizeText(result.value || "");
 }

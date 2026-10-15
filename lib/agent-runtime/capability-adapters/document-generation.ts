@@ -2,12 +2,14 @@ import {
   generatedDocumentReferenceSchema,
   standardOperationResultSchema,
 } from "@/lib/agent-runtime/application-contracts";
+import { selectDocumentOutputFormat } from "@/lib/agent-runtime/document-output-format";
 import type { CapabilityExecutionInput, CapabilityExecutionResult, CapabilityExecutor } from "@/lib/agent-runtime/capability-executor";
 import { GeneratedDocumentPersistenceError, persistGeneratedDocumentForExistingMessage } from "@/lib/ai/generated-document-persistence-service";
 import { generateTemplateOutput } from "@/lib/documents/generation/generate";
+import { parseWorkbookExtractionReply } from "@/lib/documents/generation/workbook-extraction-contract";
 import { DocumentGenerationValidationError } from "@/lib/documents/generation/validation";
 import type { GeneratedArtifact } from "@/lib/documents/generation/contracts";
-import type { TemplateOutputFormat } from "@/lib/documents/generation/templates/types";
+import type { TemplateVariablesRecord } from "@/lib/documents/generation/templates/types";
 import {
   assertAdapterInput,
   CapabilityAdapterError,
@@ -34,58 +36,6 @@ function documentOptions(inputs: ReturnType<typeof normalizedInputs>): string {
   const objective = userInputs[0]?.value.trim() ?? "";
   if (userInputs.length === 1 && !objective) return failDocumentGeneration("missing_input", "input_shape");
   return objective;
-}
-
-const supportedFormatMap: Readonly<Record<string, TemplateOutputFormat>> = Object.freeze({
-  txt: "txt",
-  md: "md",
-  markdown: "md",
-  docx: "docx",
-  pdf: "pdf",
-});
-
-function outputIntentSegments(objective: string): string[] {
-  const outputAction = /\b(?:create|generate|export|save|deliver|produce|make|provide|want|need|request)\b/gi;
-  const actions = [...objective.matchAll(outputAction)];
-  if (actions.length === 0) return [objective];
-
-  return actions.map((action, index) => {
-    const start = action.index ?? 0;
-    const end = actions[index + 1]?.index ?? objective.length;
-    let segment = objective.slice(start, end);
-
-    // A format named as the source of a generated document is not an output
-    // request (for example, "create DOCX from the attached PDF").
-    const sourceClause = /\b(?:from|using|based\s+(?:on|upon)|about|(?:for|of)\s+(?:the\s+)?(?:attached|uploaded|source|input))\b/i.exec(segment);
-    if (sourceClause) segment = segment.slice(0, sourceClause.index);
-    return segment;
-  });
-}
-
-function requestedFormat(objective: string): TemplateOutputFormat {
-  const outputSegments = outputIntentSegments(objective);
-  const unsupportedFormats = /\b(?:xlsx|spreadsheet|pptx|presentation|slides?|zip|archive)\b/gi;
-  const outputAction = /\b(?:create|generate|export|save|deliver|produce|make|provide|want|need|request)\b/gi;
-  for (const match of objective.matchAll(unsupportedFormats)) {
-    const prefix = objective.slice(0, match.index);
-    const clauseStart = Math.max(prefix.lastIndexOf("."), prefix.lastIndexOf("!"), prefix.lastIndexOf("?"), prefix.lastIndexOf(";")) + 1;
-    const clause = prefix.slice(clauseStart);
-    const actions = [...clause.matchAll(outputAction)];
-    const action = actions.at(-1);
-    if (!action) continue;
-    const betweenActionAndFormat = clause.slice(action.index! + action[0].length);
-    if (!/\b(?:from|using|based\s+on|about|for|of|with|analy[sz]e|review|summari[sz]e)\b/i.test(betweenActionAndFormat)) {
-      return failDocumentGeneration("missing_input", "format_rejection");
-    }
-  }
-
-  const matches = outputSegments.flatMap((segment) => [...segment.matchAll(/\b(txt|md|markdown|docx|pdf)\b/gi)]
-    .map((match) => supportedFormatMap[match[1]!.toLowerCase()]!));
-  if (outputSegments.some((segment) => /\bword\s+(?:document|file|format)\b/i.test(segment))) matches.push("docx");
-  if (outputSegments.some((segment) => /\b(?:plain\s+)?text\s+(?:file|document|format)\b/i.test(segment))) matches.push("txt");
-  const unique = [...new Set(matches)];
-  if (unique.length > 1) return failDocumentGeneration("missing_input", "format_rejection");
-  return unique[0] ?? "pdf";
 }
 
 function requestedTitle(objective: string): string {
@@ -140,7 +90,29 @@ export function createDocumentGenerationCapabilityAdapter(
         }
         throw error;
       }
-      const format = requestedFormat(objective);
+      const formatSelection = selectDocumentOutputFormat(objective);
+      if (formatSelection.kind !== "selected") {
+        return failDocumentGeneration("missing_input", "format_rejection");
+      }
+      const format = formatSelection.format;
+      const templateId = format === "xlsx" ? "tabular-workbook" : "simple-document";
+      let variables: TemplateVariablesRecord;
+      if (format === "xlsx") {
+        let workbook;
+        try {
+          workbook = parseWorkbookExtractionReply(standard.data.reply);
+        } catch {
+          return failDocumentGeneration("missing_input", "document_render_validation");
+        }
+        variables = {
+          title: requestedTitle(objective),
+          sheetName: workbook.sheetName,
+          columns: workbook.columns,
+          rows: workbook.rows,
+        };
+      } else {
+        variables = { title: requestedTitle(objective), body: standard.data.reply };
+      }
       const deadlineAtMs = input.context.executionDeadlineAtMs;
       if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
         return failWithMetadata("transient_dependency_failure", { phase: "pre_execution", retrySafety: "SAFE_RETRY" });
@@ -148,9 +120,9 @@ export function createDocumentGenerationCapabilityAdapter(
       let artifact: GeneratedArtifact;
       try {
         artifact = await render({
-          templateId: "simple-document",
+          templateId,
           formats: [format],
-          variables: { title: requestedTitle(objective), body: standard.data.reply },
+          variables,
           packageAsZip: false,
         });
       } catch (error) {
@@ -172,7 +144,7 @@ export function createDocumentGenerationCapabilityAdapter(
           userId: binding.userId,
           conversationId: binding.conversationId,
           generationRequestId,
-          templateId: "simple-document",
+          templateId,
           generatedOutput: artifact,
           assistantMessageId: binding.assistantMessageId,
           ...(input.context.trustedExecutionSubject

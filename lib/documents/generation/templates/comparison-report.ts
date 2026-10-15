@@ -50,7 +50,11 @@ function isComparisonCell(value: unknown): value is WorkbookCell {
     (typeof value === "string" && /\S/.test(value)) ||
     (typeof value === "number" && Number.isFinite(value)) ||
     typeof value === "boolean" ||
-    value === null
+    value === null ||
+    (typeof value === "object" && value !== null && !Array.isArray(value)
+      && Object.keys(value).length === 2
+      && (value as { type?: unknown }).type === "date"
+      && typeof (value as { value?: unknown }).value === "string")
   );
 }
 
@@ -77,6 +81,7 @@ function requiredComparisonCellArray(
 }
 
 function displayComparisonCell(value: WorkbookCell): string {
+  if (typeof value === "object" && value !== null && value.type === "date") return value.value;
   return value === null ? "" : String(value);
 }
 
