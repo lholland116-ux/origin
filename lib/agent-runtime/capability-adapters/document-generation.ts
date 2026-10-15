@@ -44,7 +44,26 @@ const supportedFormatMap: Readonly<Record<string, TemplateOutputFormat>> = Objec
   pdf: "pdf",
 });
 
+function outputIntentSegments(objective: string): string[] {
+  const outputAction = /\b(?:create|generate|export|save|deliver|produce|make|provide|want|need|request)\b/gi;
+  const actions = [...objective.matchAll(outputAction)];
+  if (actions.length === 0) return [objective];
+
+  return actions.map((action, index) => {
+    const start = action.index ?? 0;
+    const end = actions[index + 1]?.index ?? objective.length;
+    let segment = objective.slice(start, end);
+
+    // A format named as the source of a generated document is not an output
+    // request (for example, "create DOCX from the attached PDF").
+    const sourceClause = /\b(?:from|using|based\s+(?:on|upon)|about|(?:for|of)\s+(?:the\s+)?(?:attached|uploaded|source|input))\b/i.exec(segment);
+    if (sourceClause) segment = segment.slice(0, sourceClause.index);
+    return segment;
+  });
+}
+
 function requestedFormat(objective: string): TemplateOutputFormat {
+  const outputSegments = outputIntentSegments(objective);
   const unsupportedFormats = /\b(?:xlsx|spreadsheet|pptx|presentation|slides?|zip|archive)\b/gi;
   const outputAction = /\b(?:create|generate|export|save|deliver|produce|make|provide|want|need|request)\b/gi;
   for (const match of objective.matchAll(unsupportedFormats)) {
@@ -59,10 +78,11 @@ function requestedFormat(objective: string): TemplateOutputFormat {
       return failDocumentGeneration("missing_input", "format_rejection");
     }
   }
-  const matches = [...objective.matchAll(/\b(txt|md|markdown|docx|pdf)\b/gi)]
-    .map((match) => supportedFormatMap[match[1]!.toLowerCase()]!);
-  if (/\bword\s+(?:document|file|format)\b/i.test(objective)) matches.push("docx");
-  if (/\b(?:plain\s+)?text\s+(?:file|document|format)\b/i.test(objective)) matches.push("txt");
+
+  const matches = outputSegments.flatMap((segment) => [...segment.matchAll(/\b(txt|md|markdown|docx|pdf)\b/gi)]
+    .map((match) => supportedFormatMap[match[1]!.toLowerCase()]!));
+  if (outputSegments.some((segment) => /\bword\s+(?:document|file|format)\b/i.test(segment))) matches.push("docx");
+  if (outputSegments.some((segment) => /\b(?:plain\s+)?text\s+(?:file|document|format)\b/i.test(segment))) matches.push("txt");
   const unique = [...new Set(matches)];
   if (unique.length > 1) return failDocumentGeneration("missing_input", "format_rejection");
   return unique[0] ?? "pdf";

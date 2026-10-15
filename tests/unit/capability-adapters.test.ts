@@ -418,6 +418,68 @@ describe("six independent capability adapters", () => {
     expect(JSON.stringify(output)).not.toContain("bytes");
   });
 
+  it.each([
+    {
+      label: "DOCX when the attached source is described as a text file",
+      objective: 'Analyze the attached text file and create a professionally formatted Microsoft Word (.docx) report titled "Service Operations Summary".',
+      format: "docx",
+    },
+    {
+      label: "DOCX when the attached source is a PDF",
+      objective: 'Analyze the attached PDF and create a professionally formatted Microsoft Word (.docx) report titled "Quarterly Revenue Review".',
+      format: "docx",
+    },
+    {
+      label: "DOCX when the attached source is an XLSX workbook",
+      objective: "Analyze the attached XLSX workbook and create a DOCX report.",
+      format: "docx",
+    },
+    {
+      label: "DOCX when an XLSX source is named after the output request",
+      objective: "Create a DOCX report from the attached XLSX workbook.",
+      format: "docx",
+    },
+    {
+      label: "TXT when TXT is explicitly requested as the output",
+      objective: "Analyze the attached text file and create a TXT file.",
+      format: "txt",
+    },
+    {
+      label: "PDF when PDF is explicitly requested as the output",
+      objective: "Analyze the attached text file and create a PDF report.",
+      format: "pdf",
+    },
+  ])("selects $label", async ({ objective, format }) => {
+    const standard = standardResult("Validated synthetic predecessor result.");
+    const artifact = {
+      bytes: new Uint8Array([1, 2, 3]),
+      filename: `generated-document.${format}`,
+      format,
+      mimeType: format === "docx"
+        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        : format === "txt" ? "text/plain" : "application/pdf",
+      sizeBytes: 3,
+    } as GeneratedArtifact;
+    const render = vi.fn(async () => artifact);
+    const persist = vi.fn(async () => ({ reference: generatedDocument(), delivery: artifact }));
+
+    await createDocumentGenerationCapabilityAdapter({
+      render: render as unknown as DocumentRenderer,
+      persist: persist as unknown as ExistingMessageDocumentPersister,
+    }).execute(executionInput("document_generation", [
+      { source: "user", value: objective },
+      { source: "step", stepId: "standard", result: { kind: "text", value: standard } },
+    ]));
+
+    expect(render).toHaveBeenCalledOnce();
+    expect(render).toHaveBeenCalledWith(expect.objectContaining({ formats: [format] }));
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({
+      assistantMessageId: REQUEST_BINDING.assistantMessageId,
+      generatedOutput: artifact,
+    }));
+  });
+
   it("rejects conflicting explicit document formats before rendering", async () => {
     const standard = standardResult("Validated document body.");
     const render = vi.fn();
