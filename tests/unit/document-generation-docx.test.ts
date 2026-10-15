@@ -83,6 +83,8 @@ describe("DOCX generator", () => {
       "| Q1 to Q3 | +25 | +12.5% |",
       "",
       "**Key finding:** Revenue moved from 200 to 250, then to 225 (−25, −10%) →.",
+      "*Revenue units were not specified in the workbook.*",
+      "Literal multiplication remains: 2 * 3 = 6.",
       "",
       "- Revenue grew by 25% in Q2.",
       "- Revenue remained above the Q1 baseline in Q3.",
@@ -102,6 +104,8 @@ describe("DOCX generator", () => {
     const numberingXml = strFromU8(archive["word/numbering.xml"]!);
     const tableXml = documentXml.match(/<w:tbl\b[\s\S]*?<\/w:tbl>/)?.[0];
     const cells = [...(tableXml ?? "").matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map(([cell]) => cell);
+    const boldRun = documentXml.match(/<w:r>[\s\S]*?<w:t[^>]*>Key finding:<\/w:t>[\s\S]*?<\/w:r>/)?.[0];
+    const italicRun = documentXml.match(/<w:r>[\s\S]*?<w:t[^>]*>Revenue units were not specified in the workbook\.<\/w:t>[\s\S]*?<\/w:r>/)?.[0];
     const readBack = await mammoth.extractRawText({ buffer: Buffer.from(artifact.bytes) });
 
     expect(artifact.filename).toBe("quarterly-revenue-report.docx");
@@ -129,6 +133,10 @@ describe("DOCX generator", () => {
     expect(documentXml).not.toContain("| Q1 to Q2 |");
     expect(documentXml).not.toContain("| --- | ---:");
     expect(documentXml).not.toContain("**Key finding:**");
+    expect(documentXml).not.toContain("*Revenue units were not specified in the workbook.*");
+    expect(boldRun).toContain("<w:b/>");
+    expect(italicRun).toContain("<w:i/>");
+    expect(documentXml).toContain("2 * 3 = 6.");
     expect(documentXml.match(/Quarterly Revenue Report/g)).toHaveLength(1);
     expect(readBack.value).toContain("Q1 to Q2");
     expect(readBack.value).toContain("200");
@@ -140,9 +148,32 @@ describe("DOCX generator", () => {
     expect(readBack.value).toContain("-10%");
     expect(readBack.value).toContain("+12.5%");
     expect(readBack.value).toContain("Revenue moved from 200 to 250, then to 225 (−25, −10%) →.");
+    expect(readBack.value).toContain("Revenue units were not specified in the workbook.");
+    expect(readBack.value).toContain("Literal multiplication remains: 2 * 3 = 6.");
     expect(readBack.value).toContain("Review the Q2 increase.");
     expect(readBack.value).toContain("Monitor the Q3 decrease.");
     expect(documentXml.match(/<w:p[ >]/g)?.length).toBeGreaterThan(12);
+  });
+
+  it("deduplicates only an equivalent leading report title", async () => {
+    const artifact = await generateDocxArtifact({
+      format: "docx",
+      title: "Quarterly Revenue Analysis.",
+      sections: [
+        { type: "paragraph", text: "#   quarterly revenue analysis   " },
+        {
+          type: "paragraph",
+          text: "# Quarterly Revenue Analysis\n\n# Executive Summary",
+        },
+      ],
+    });
+    const documentXml = strFromU8(unzipSync(Buffer.from(artifact.bytes))["word/document.xml"]!);
+    const readBack = await mammoth.extractRawText({ buffer: Buffer.from(artifact.bytes) });
+
+    expect(documentXml.match(/Quarterly Revenue Analysis\./g)).toHaveLength(1);
+    expect(documentXml).toContain("<w:pStyle w:val=\"Heading1\"/>");
+    expect(readBack.value).toContain("Executive Summary");
+    expect(readBack.value.match(/Quarterly Revenue Analysis/g)).toHaveLength(2);
   });
 
   it("normalizes default, custom, wrong-extension, and traversal filenames", async () => {

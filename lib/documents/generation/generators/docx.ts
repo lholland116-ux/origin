@@ -36,7 +36,7 @@ type ReportBlock =
   | { readonly type: "list"; readonly ordered: boolean; readonly items: readonly string[] }
   | { readonly type: "table"; readonly columns: readonly string[]; readonly rows: readonly (readonly string[])[] };
 
-type MarkdownRun = Readonly<{ text: string; bold: boolean }>;
+type MarkdownRun = Readonly<{ text: string; bold: boolean; italics: boolean }>;
 
 function splitTableRow(line: string): string[] {
   let value = line.trim();
@@ -65,18 +65,30 @@ function isTableDelimiter(line: string): boolean {
 }
 
 function sameTitle(left: string, right: string): boolean {
-  return left.trim().replace(/\s+/g, " ").toLocaleLowerCase()
-    === right.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const normalize = (value: string): string => value
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\p{P}+$/u, "")
+    .trim()
+    .toLowerCase();
+  return normalize(left) === normalize(right);
 }
 
 /** Parse only the report Markdown emitted in generated-document body text. */
-function parseReportMarkdown(text: string, titleToSuppress?: string): ReportBlock[] {
+function parseReportMarkdown(
+  text: string,
+  titleToSuppress?: string,
+): { readonly blocks: ReportBlock[]; readonly hasContent: boolean } {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReportBlock[] = [];
   let paragraph: string[] = [];
+  let leadingBlock = true;
   const flushParagraph = (): void => {
     const value = paragraph.join(" ").trim();
-    if (value) blocks.push({ type: "paragraph", text: value });
+    if (value) {
+      blocks.push({ type: "paragraph", text: value });
+      leadingBlock = false;
+    }
     paragraph = [];
   };
 
@@ -101,9 +113,12 @@ function parseReportMarkdown(text: string, titleToSuppress?: string): ReportBloc
       flushParagraph();
       const level = heading[1]!.length as 1 | 2 | 3;
       const headingText = heading[2]?.trim() ?? "";
-      if (!(level === 1 && titleToSuppress && sameTitle(headingText, titleToSuppress))) {
+      const isDuplicateTitle = leadingBlock && level === 1 && titleToSuppress
+        && sameTitle(headingText, titleToSuppress);
+      if (!isDuplicateTitle) {
         blocks.push({ type: "heading", level, text: headingText });
       }
+      leadingBlock = false;
       index += 1;
       continue;
     }
@@ -122,6 +137,7 @@ function parseReportMarkdown(text: string, titleToSuppress?: string): ReportBloc
         index += 1;
       }
       blocks.push({ type: "list", ordered: isOrdered, items });
+      leadingBlock = false;
       continue;
     }
 
@@ -142,6 +158,7 @@ function parseReportMarkdown(text: string, titleToSuppress?: string): ReportBloc
       if (validRows && delimiter.length === tableHeader.length) {
         flushParagraph();
         blocks.push({ type: "table", columns: tableHeader, rows });
+        leadingBlock = false;
         index = next;
         continue;
       }
@@ -151,23 +168,32 @@ function parseReportMarkdown(text: string, titleToSuppress?: string): ReportBloc
     index += 1;
   }
   flushParagraph();
-  return blocks;
+  return { blocks, hasContent: !leadingBlock };
 }
 
 function markdownRuns(text: string, forceBold = false): TextRun[] {
   const runs: MarkdownRun[] = [];
-  const pattern = /(\*\*|__)(?=\S)([\s\S]*?\S)\1/g;
+  const pattern = /(\*\*|__)(?=\S)([\s\S]*?\S)\1|(?<![\w\\*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
-    if (index > cursor) runs.push({ text: text.slice(cursor, index), bold: false });
-    runs.push({ text: match[2] ?? "", bold: true });
+    if (index > cursor) runs.push({ text: text.slice(cursor, index), bold: false, italics: false });
+    const isBold = match[2] !== undefined;
+    runs.push({
+      text: match[2] ?? match[3] ?? "",
+      bold: isBold,
+      italics: !isBold,
+    });
     cursor = index + match[0].length;
   }
-  if (cursor < text.length) runs.push({ text: text.slice(cursor), bold: false });
-  return (runs.length ? runs : [{ text, bold: false }])
+  if (cursor < text.length) runs.push({ text: text.slice(cursor), bold: false, italics: false });
+  return (runs.length ? runs : [{ text, bold: false, italics: false }])
     .filter((run) => run.text.length > 0)
-    .map((run) => new TextRun({ text: run.text, bold: forceBold || run.bold }));
+    .map((run) => new TextRun({
+      text: run.text,
+      bold: forceBold || run.bold,
+      italics: run.italics,
+    }));
 }
 
 function titleMatches(left: string | undefined, right: string): boolean {
@@ -272,7 +298,10 @@ function sectionChildren(sections: readonly DocumentSection[], title?: string): 
 
   for (const section of sections) {
     if (section.type === "heading") {
-      if (firstBodyBlock && section.level === 1 && titleMatches(title, section.text)) continue;
+      if (firstBodyBlock && section.level === 1 && titleMatches(title, section.text)) {
+        firstBodyBlock = false;
+        continue;
+      }
       children.push(new Paragraph({
         children: markdownRuns(section.text),
         heading: headingLevel(section.level),
@@ -281,9 +310,9 @@ function sectionChildren(sections: readonly DocumentSection[], title?: string): 
       }));
       firstBodyBlock = false;
     } else if (section.type === "paragraph") {
-      const blocks = parseReportMarkdown(section.text, firstBodyBlock ? title : undefined);
-      for (const block of blocks) children.push(...blockParagraphs(block));
-      firstBodyBlock = firstBodyBlock && blocks.length === 0 ? firstBodyBlock : false;
+      const parsed = parseReportMarkdown(section.text, firstBodyBlock ? title : undefined);
+      for (const block of parsed.blocks) children.push(...blockParagraphs(block));
+      firstBodyBlock = firstBodyBlock && !parsed.hasContent ? firstBodyBlock : false;
     } else if (section.type === "list") {
       children.push(...listParagraphs(section));
       firstBodyBlock = false;
