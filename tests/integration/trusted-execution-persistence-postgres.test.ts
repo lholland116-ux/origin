@@ -239,6 +239,102 @@ describeDatabase("trusted execution persistence PostgreSQL boundary (isolated lo
     expect(messages!.count).toBe(2);
   });
 
+  it("persists XLSX and existing supported formats with the accepted owner and assistant binding", async () => {
+    const formats = [
+      { format: "xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", extension: "xlsx" },
+      { format: "docx", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", extension: "docx" },
+      { format: "pdf", mime: "application/pdf", extension: "pdf" },
+      { format: "txt", mime: "text/plain", extension: "txt" },
+      { format: "md", mime: "text/markdown", extension: "md" },
+    ] as const;
+
+    for (const [index, format] of formats.entries()) {
+      const input = await prepare();
+      const documentId = randomUUID();
+      const filename = `result-${index}.${format.extension}`;
+      const storagePath = `${input.userId}/${input.conversationId}/generated/${documentId}/${filename}`;
+      await sql`INSERT INTO storage.objects (bucket_id, name, metadata)
+        VALUES ('documents', ${storagePath}, ${sql.json({ mimetype: format.mime, size: 64 })}::jsonb)`;
+      const persist = (id: string, path: string) => sql.begin(async (tx) => {
+        await tx`SET LOCAL ROLE service_role`;
+        return tx<{ assistant_message_id: string; generated_document_id: string; was_existing: boolean }[]>`
+          SELECT * FROM public.persist_trusted_generated_document_for_execution(
+            ${input.runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
+            ${input.claim.claimId}::uuid, ${input.claim.fencingGeneration}::bigint,
+            ${id}::uuid, ${path}, ${filename}, ${format.format}, ${format.mime}, 64, 'spreadsheet-report')`;
+      });
+
+      const [saved] = await persist(documentId, storagePath);
+      expect(saved).toMatchObject({ assistant_message_id: input.identity.assistantMessageId,
+        generated_document_id: documentId, was_existing: false });
+      const [metadata] = await sql<{ user_id: string; conversation_id: string; message_id: string;
+        storage_path: string; filename: string; format: string; mime_type: string; size_bytes: string }[]>`
+        SELECT user_id,conversation_id,message_id,storage_path,filename,format,mime_type,size_bytes
+        FROM public.generated_documents WHERE generation_request_id=${input.executionKey}::uuid`;
+      expect(metadata).toMatchObject({ user_id: input.userId, conversation_id: input.conversationId,
+        message_id: input.identity.assistantMessageId, storage_path: storagePath, filename,
+        format: format.format, mime_type: format.mime, size_bytes: "64" });
+
+      if (format.format === "xlsx") {
+        const replayDocumentId = randomUUID();
+        const replayPath = `${input.userId}/${input.conversationId}/generated/${replayDocumentId}/${filename}`;
+        await sql`INSERT INTO storage.objects (bucket_id, name, metadata)
+          VALUES ('documents', ${replayPath}, ${sql.json({ mimetype: format.mime, size: 64 })}::jsonb)`;
+        const [replay] = await persist(replayDocumentId, replayPath);
+        expect(replay).toMatchObject({ assistant_message_id: input.identity.assistantMessageId,
+          generated_document_id: documentId, was_existing: true });
+        const [count] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.generated_documents
+          WHERE generation_request_id=${input.executionKey}::uuid`;
+        expect(count!.count).toBe(1);
+      }
+    }
+  });
+
+  it("rejects unsupported format, incorrect XLSX MIME, and stale trusted execution fencing", async () => {
+    const input = await prepare();
+    const documentId = randomUUID();
+    const filename = "result.xlsx";
+    const storagePath = `${input.userId}/${input.conversationId}/generated/${documentId}/${filename}`;
+    await sql`INSERT INTO storage.objects (bucket_id, name, metadata)
+      VALUES ('documents', ${storagePath}, ${sql.json({ mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 64 })}::jsonb)`;
+
+    const invoke = (format: string, mime: string, fencingGeneration: number, runId = input.runId) => sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE service_role`;
+      return tx`SELECT * FROM public.persist_trusted_generated_document_for_execution(
+        ${runId}::uuid, 'trusted-step', ${input.executionKey}::uuid,
+        ${input.claim.claimId}::uuid, ${fencingGeneration}::bigint,
+        ${documentId}::uuid, ${storagePath}, ${filename}, ${format}, ${mime}, 64, 'spreadsheet-report')`;
+    });
+
+    await expect(invoke("csv", "text/csv", input.claim.fencingGeneration)).rejects.toThrow(/INVALID_GENERATED_DOCUMENT/);
+    await expect(invoke("xlsx", "application/octet-stream", input.claim.fencingGeneration))
+      .rejects.toThrow(/INVALID_GENERATED_DOCUMENT/);
+    await expect(invoke("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      input.claim.fencingGeneration + 1)).rejects.toThrow();
+    await expect(invoke("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      input.claim.fencingGeneration, randomUUID())).rejects.toThrow();
+    const [count] = await sql<{ count: number }[]>`SELECT count(*)::integer AS count FROM public.generated_documents
+      WHERE generation_request_id=${input.executionKey}::uuid`;
+    expect(count!.count).toBe(0);
+  });
+
+  it("keeps trusted generated-document persistence SECURITY DEFINER with a locked search_path and service-role-only execute grant", async () => {
+    const [contract] = await sql<{ security_definer: boolean; config: string[] | null;
+      service_role_execute: boolean; anon_execute: boolean; authenticated_execute: boolean }[]>`
+      SELECT procedure.prosecdef AS security_definer, procedure.proconfig AS config,
+        has_function_privilege('service_role', procedure.oid, 'EXECUTE') AS service_role_execute,
+        has_function_privilege('anon', procedure.oid, 'EXECUTE') AS anon_execute,
+        has_function_privilege('authenticated', procedure.oid, 'EXECUTE') AS authenticated_execute
+      FROM pg_catalog.pg_proc AS procedure
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid=procedure.pronamespace
+      WHERE namespace.nspname='public' AND procedure.proname='persist_trusted_generated_document_for_execution'`;
+    expect(contract?.security_definer).toBe(true);
+    expect(contract?.config).toContain('search_path=""');
+    expect(contract?.service_role_execute).toBe(true);
+    expect(contract?.anon_execute).toBe(false);
+    expect(contract?.authenticated_execute).toBe(false);
+  });
+
   it("enforces pause before subsequent privileged persistence operations", async () => {
     const input = await prepare();
     const paused = await store.pauseRun({ runId: input.runId, userId: input.userId, actorUserId: input.userId,
