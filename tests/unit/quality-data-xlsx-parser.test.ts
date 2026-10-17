@@ -3,7 +3,7 @@ import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { QUALITY_DATA_MAX_SOURCE_BYTES } from "../../lib/quality-data/quality-data-contract";
-import { parseQualityDataXlsx, type QualityDataXlsxMapping } from "../../lib/quality-data/xlsx-quality-data-parser";
+import { inspectQualityDataXlsx, parseQualityDataXlsx, type QualityDataXlsxMapping } from "../../lib/quality-data/xlsx-quality-data-parser";
 
 const mapping: QualityDataXlsxMapping = {
   worksheet_name: "Inspection Data",
@@ -36,6 +36,30 @@ async function goodWorkbook(): Promise<Uint8Array> {
 }
 
 describe("deterministic quality-data XLSX parser", () => {
+  it("exposes bounded worksheet metadata and only the explicitly selected header row", async () => {
+    const bytes = await goodWorkbook();
+    const inventory = await inspectQualityDataXlsx(bytes);
+    expect(inventory).toMatchObject({ status: "inspected", worksheets: [
+      { name: "Read me", visible: true },
+      { name: "Inspection Data", visible: true },
+    ] });
+    expect(inventory).not.toHaveProperty("headers");
+    const selected = await inspectQualityDataXlsx(bytes, "Inspection Data", 2);
+    expect(selected).toMatchObject({
+      status: "inspected",
+      selected_worksheet: "Inspection Data",
+      header_row: 2,
+      headers: [
+        { column_reference: "A2", value: "Part Number" },
+        { column_reference: "B2", value: "Defect Count" },
+        { column_reference: "C2", value: "Inspection Date" },
+        { column_reference: "D2", value: "Accepted" },
+        { column_reference: "E2", value: "Operator Note" },
+      ],
+    });
+    expect(JSON.stringify(selected)).not.toContain("P-001");
+  });
+
   it("uses only the explicitly selected worksheet and mapping, preserving typed values and exact cell lineage", async () => {
     const result = await parseQualityDataXlsx(await goodWorkbook(), mapping);
     expect(result.status).toBe("parsed");

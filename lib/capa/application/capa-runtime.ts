@@ -120,6 +120,7 @@ import type {
 } from "../ai/capa-implementation-evidence-advisory-adoption-service";
 import type { ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult } from "./reconcile-capa-investigation-active-workspace-adoptions";
 import type { RequestTrace, CapaCaseId } from "../domain/capa-types";
+import type { QualityDataXlsxIngestionDependencies } from "../../quality-data/xlsx-quality-data-ingestion";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -132,6 +133,12 @@ import type { RequestTrace, CapaCaseId } from "../domain/capa-types";
  * environments.
  */
 export interface CapaRuntime {
+  /**
+   * Server-only quality-data XLSX ingestion composition. Development runtimes
+   * may omit this capability; API callers then fail closed as unavailable.
+   */
+  readonly create_quality_data_xlsx_ingestion_dependencies?: () => QualityDataXlsxIngestionDependencies;
+
   readonly participant_eligibility_repository: CapaParticipantEligibilityRepository;
   /**
    * Tenant-scoped repository used by read operations.

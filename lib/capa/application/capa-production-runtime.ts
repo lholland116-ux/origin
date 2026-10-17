@@ -201,6 +201,10 @@ import {
 import {
   SupabaseAuditRepository,
 } from "../../database/supabase/supabase-audit-repository";
+import { SupabaseQualityDataRepository } from "../../database/supabase/supabase-quality-data-repository";
+import { SupabaseQualityDataSourceStorage } from "../../database/supabase/supabase-quality-data-source-storage";
+import { PolicyBackedQualityDataIngestionAuthorizer } from "../../quality-data/quality-data-authorization";
+import { createAdminClient } from "../../supabase/admin";
 
 import {
   SupabaseCapaCaseNumberAllocator,
@@ -958,6 +962,11 @@ export function createCapaProductionRuntime(
       },
     );
 
+  const qualityDataAuthorizer =
+    new PolicyBackedQualityDataIngestionAuthorizer(
+      authorizationPolicy,
+    );
+
   const contextResolver =
     new SupabaseCapaDurableContextResolver(
       sql,
@@ -1416,6 +1425,29 @@ export function createCapaProductionRuntime(
   });
 
   return {
+    create_quality_data_xlsx_ingestion_dependencies() {
+      return {
+        repository: new SupabaseQualityDataRepository(sql),
+        audit_repository: auditRepository,
+        transaction_manager: transactionManager,
+        authorizer: qualityDataAuthorizer,
+        ids: {
+          event_id: () => generateUuid() as AuditEventId,
+          uuid: generateUuid,
+        },
+        clock: { now },
+        source_storage: new SupabaseQualityDataSourceStorage({
+          storage: {
+            from(bucket: string) {
+              // Create the service-role client only when an authorized
+              // ingestion reaches private Storage; preview never accesses it.
+              return createAdminClient().storage.from(bucket);
+            },
+          },
+        }),
+      };
+    },
+
     database:
       capaRepository,
 

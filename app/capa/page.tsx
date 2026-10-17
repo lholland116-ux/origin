@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
@@ -44,6 +45,11 @@ export default async function CapaPage() {
       </div>
 
       <div className="relative">
+        <div className="mx-auto w-full max-w-7xl px-4 pt-5 sm:px-6">
+          <Link className="inline-flex rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-100 hover:bg-slate-800" href="/quality-data">
+            Import manufacturing quality data
+          </Link>
+        </div>
         <CapaIntakeClient
           currentUserId={user.id}
           userEmail={user.email ?? ""}

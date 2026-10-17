@@ -103,7 +103,30 @@ export interface QualityDataXlsxParseFailure {
   readonly diagnostics_truncated: boolean;
 }
 
+export interface QualityDataXlsxInspection {
+  readonly status: "inspected";
+  readonly worksheets: readonly {
+    readonly name: string;
+    readonly visible: boolean;
+    readonly row_count: number;
+    readonly column_count: number;
+  }[];
+  readonly selected_worksheet?: string;
+  readonly header_row?: number;
+  readonly headers?: readonly {
+    readonly column_reference: string;
+    readonly value: string;
+  }[];
+}
+
+export interface QualityDataXlsxInspectionFailure {
+  readonly status: "invalid";
+  readonly diagnostics: readonly QualityDataXlsxDiagnostic[];
+}
+
 export type QualityDataXlsxParseResult = QualityDataXlsxParseSuccess | QualityDataXlsxParseFailure;
+
+export type QualityDataXlsxInspectionResult = QualityDataXlsxInspection | QualityDataXlsxInspectionFailure;
 
 interface ArchiveEntry {
   readonly name: string;
@@ -327,6 +350,69 @@ function rangeIntersectsData(merge: string, firstRow: number, lastRow: number, l
   if (!a || !b) return true;
   return Math.max(a.row, b.row) >= firstRow && Math.min(a.row, b.row) <= lastRow
     && Math.max(a.column, b.column) >= 1 && Math.min(a.column, b.column) <= lastColumn;
+}
+
+/**
+ * Returns bounded worksheet metadata and, when requested, only one selected
+ * header row. Cell values outside that row are never returned to the client.
+ */
+export async function inspectQualityDataXlsx(
+  bytes: Uint8Array,
+  worksheetName?: string,
+  headerRow?: number,
+): Promise<QualityDataXlsxInspectionResult> {
+  const fail = (code: QualityDataXlsxDiagnosticCode): QualityDataXlsxInspectionFailure => ({
+    status: "invalid",
+    diagnostics: [{ code }],
+  });
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0 || bytes.byteLength > QUALITY_DATA_MAX_SOURCE_BYTES) {
+    return fail("XLSX_ARCHIVE_LIMIT_EXCEEDED");
+  }
+  const archive = inspectXlsxArchive(bytes);
+  if (typeof archive === "string") return fail(archive);
+  const expansion = await verifyActualArchiveExpansion(bytes, archive);
+  if (expansion === "limit") return fail("XLSX_ARCHIVE_LIMIT_EXCEEDED");
+  if (expansion !== "valid") return fail("INVALID_XLSX_ARCHIVE");
+
+  let workbook: ExcelJS.Workbook;
+  try {
+    workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(bytes) as never);
+  } catch {
+    return fail("XLSX_WORKBOOK_INVALID");
+  }
+  if (workbook.worksheets.length > QUALITY_DATA_XLSX_MAX_WORKSHEETS) return fail("XLSX_WORKSHEET_LIMIT_EXCEEDED");
+  const worksheets = workbook.worksheets.map((worksheet) => ({
+    name: worksheet.name,
+    visible: worksheet.state === "visible",
+    row_count: worksheet.rowCount,
+    column_count: worksheet.columnCount,
+  }));
+  if (worksheetName === undefined && headerRow === undefined) {
+    return { status: "inspected", worksheets: worksheets.filter((worksheet) => worksheet.visible) };
+  }
+  if (worksheetName === undefined || headerRow === undefined || !Number.isSafeInteger(headerRow) || headerRow < 1 || headerRow > 10_000) {
+    return fail("XLSX_HEADER_ROW_INVALID");
+  }
+  const worksheet = workbook.getWorksheet(worksheetName);
+  if (!worksheet) return fail("XLSX_WORKSHEET_NOT_FOUND");
+  if (worksheet.state !== "visible") return fail("XLSX_WORKSHEET_NOT_VISIBLE");
+  if (worksheet.rowCount > QUALITY_DATA_MAX_RECORDS + headerRow || worksheet.rowCount > 1_048_576) return fail("XLSX_ROW_LIMIT_EXCEEDED");
+  if (worksheet.columnCount > QUALITY_DATA_XLSX_MAX_COLUMNS || worksheet.columnCount > 16_384) return fail("XLSX_COLUMN_LIMIT_EXCEEDED");
+  if (headerRow > worksheet.rowCount || worksheet.columnCount === 0) return fail("XLSX_HEADER_ROW_INVALID");
+
+  const header = worksheet.getRow(headerRow);
+  const headers: { column_reference: string; value: string }[] = [];
+  for (let column = 1; column <= worksheet.columnCount; column += 1) {
+    const value = header.getCell(column).value;
+    if (value === null || value === undefined) continue;
+    if (formulaLike(value) || typeof value !== "string" || value.trim().length === 0 || value.trim().length > 200) {
+      return fail(formulaLike(value) ? "XLSX_FORMULA_UNSUPPORTED" : "XLSX_HEADER_ROW_INVALID");
+    }
+    headers.push({ column_reference: `${excelColumnName(column)}${headerRow}`, value: value.trim() });
+  }
+  if (headers.length === 0) return fail("XLSX_HEADER_MISSING");
+  return { status: "inspected", worksheets, selected_worksheet: worksheet.name, header_row: headerRow, headers };
 }
 
 export async function parseQualityDataXlsx(
