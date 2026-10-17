@@ -62,6 +62,8 @@ const NOT_CASE_OWNER_RELATIONSHIP =
 
 const OPERATION_PERMISSION = {
   create_case: "capa.case.create",
+  ingest_quality_data_source: "quality_data.source.ingest",
+  read_quality_data_source: "quality_data.source.read",
   view_case: "capa.case.view",
   edit_case: "capa.case.edit",
   submit_intake: "capa.case.submit",
@@ -141,6 +143,10 @@ const OPERATION_PERMISSION = {
 const OPERATION_PURPOSE = {
   create_case:
     "CAPA_CASE_CREATION",
+  ingest_quality_data_source:
+    "QUALITY_DATA_SOURCE_INGESTION",
+  read_quality_data_source:
+    "QUALITY_DATA_SOURCE_READ",
   view_case:
     "CAPA_CASE_ACCESS",
   edit_case:

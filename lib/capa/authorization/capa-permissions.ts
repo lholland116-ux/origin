@@ -36,6 +36,8 @@ import {
 
 export type CapaAuthorizationOperation =
   | "create_case"
+  | "ingest_quality_data_source"
+  | "read_quality_data_source"
   | "view_case"
   | "edit_case"
   | "submit_intake"
@@ -84,6 +86,8 @@ export type CapaAuthorizationOperation =
 export const HUMAN_ONLY_CAPA_OPERATIONS =
   new Set<CapaAuthorizationOperation>([
     "submit_intake",
+    "ingest_quality_data_source",
+    "read_quality_data_source",
     "submit_action_plan",
     "review_knowledge_citation",
     "request_ai_intake_advisory",
