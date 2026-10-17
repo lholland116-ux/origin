@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { CapaRequestContext, SupabaseCapaSessionFacts, SupabaseCapaContextResolver } from "../security/supabase-capa-context";
 import type { RequestId, CorrelationId, IdempotencyKey, RequestTrace } from "../capa/domain/capa-types";
 import { QUALITY_DATA_MAX_SOURCE_BYTES } from "./quality-data-contract";
+import { isQualityDataPilotOrganizationAllowed, type QualityDataPilotGate } from "./quality-data-pilot-gate";
 import type { QualityDataXlsxIngestionDependencies } from "./xlsx-quality-data-ingestion";
 import { QualityDataServiceError } from "./quality-data-service";
 import { ingestQualityDataXlsx } from "./xlsx-quality-data-ingestion";
@@ -15,26 +16,31 @@ const BODY_READ_TIMEOUT_MS = 20_000;
 const RATE_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_RATE_ENTRIES = 4_096;
 
-type Action = "inspect" | "preview" | "ingest";
+export type QualityDataXlsxApiAction = "inspect" | "preview" | "ingest";
+export type QualityDataXlsxApiRateLimitResult = "allowed" | "limited" | "unavailable";
+export type QualityDataXlsxApiParseSlotResult =
+  | { readonly release: () => void | Promise<void> }
+  | "busy"
+  | "unavailable";
 
 export interface QualityDataXlsxApiRateLimiter {
-  consume(userId: string, action: Action, nowMs: number): boolean;
-  acquireParseSlot(): (() => void) | null;
+  consume(userId: string, action: QualityDataXlsxApiAction, nowMs: number): QualityDataXlsxApiRateLimitResult | Promise<QualityDataXlsxApiRateLimitResult>;
+  acquireParseSlot(userId: string): QualityDataXlsxApiParseSlotResult | Promise<QualityDataXlsxApiParseSlotResult>;
 }
 
-/** Bounded process-local abuse guard; platform edge limits remain an operational prerequisite. */
+/** Local fallback and per-process resource cap; request-rate enforcement is shared by the production PostgreSQL RPC. */
 export class InMemoryQualityDataXlsxApiRateLimiter implements QualityDataXlsxApiRateLimiter {
   private readonly entries = new Map<string, { startedAt: number; count: number }>();
   private activeParses = 0;
 
-  consume(userId: string, action: Action, nowMs: number): boolean {
+  consume(userId: string, action: QualityDataXlsxApiAction, nowMs: number): QualityDataXlsxApiRateLimitResult {
     for (const [key, value] of this.entries) {
       if (nowMs - value.startedAt >= RATE_WINDOW_MS) this.entries.delete(key);
     }
     const key = `${userId}:${action}`;
-    const limits: Record<Action, number> = { inspect: 12, preview: 12, ingest: 5 };
+    const limits: Record<QualityDataXlsxApiAction, number> = { inspect: 12, preview: 12, ingest: 5 };
     const current = this.entries.get(key);
-    if (current && current.count >= limits[action]) return false;
+    if (current && current.count >= limits[action]) return "limited";
     if (!current && this.entries.size >= MAX_RATE_ENTRIES) {
       const oldest = this.entries.keys().next().value;
       if (oldest !== undefined) this.entries.delete(oldest);
@@ -42,22 +48,20 @@ export class InMemoryQualityDataXlsxApiRateLimiter implements QualityDataXlsxApi
     this.entries.set(key, current
       ? { ...current, count: current.count + 1 }
       : { startedAt: nowMs, count: 1 });
-    return true;
+    return "allowed";
   }
 
-  acquireParseSlot(): (() => void) | null {
-    if (this.activeParses >= 2) return null;
+  acquireParseSlot(): QualityDataXlsxApiParseSlotResult {
+    if (this.activeParses >= 2) return "busy";
     this.activeParses += 1;
     let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      this.activeParses = Math.max(0, this.activeParses - 1);
-    };
+    return { release: () => {
+        if (released) return;
+        released = true;
+        this.activeParses = Math.max(0, this.activeParses - 1);
+      } };
   }
 }
-
-const defaultRateLimiter = new InMemoryQualityDataXlsxApiRateLimiter();
 
 export interface QualityDataXlsxApiDependencies {
   readonly get_session_facts: () => Promise<SupabaseCapaSessionFacts | null>;
@@ -65,7 +69,8 @@ export interface QualityDataXlsxApiDependencies {
   readonly get_ingestion_dependencies: () => QualityDataXlsxIngestionDependencies | null;
   readonly now: () => Date;
   readonly generate_uuid: () => string;
-  readonly rate_limiter?: QualityDataXlsxApiRateLimiter;
+  readonly rate_limiter: QualityDataXlsxApiRateLimiter;
+  readonly pilot_gate?: QualityDataPilotGate;
   readonly configured_app_url?: string;
 }
 
@@ -209,7 +214,7 @@ export async function handleQualityDataXlsxPost(
 ): Promise<Response> {
   const trace = requestTrace(request, dependencies.generate_uuid);
   const correlationId = trace.correlation_id;
-  const action = new URL(request.url).searchParams.get("action") as Action | null;
+  const action = new URL(request.url).searchParams.get("action") as QualityDataXlsxApiAction | null;
   if (action !== "inspect" && action !== "preview" && action !== "ingest") {
     return error("invalid_request", "Choose a supported workbook action.", 400, correlationId);
   }
@@ -235,11 +240,26 @@ export async function handleQualityDataXlsxPost(
     return error("quality_data_forbidden", "You are not authorized to ingest quality data for an organization.", 403, correlationId);
   }
   if (!authorization.allowed) return error("quality_data_forbidden", "You are not authorized to ingest quality data for an organization.", 403, correlationId);
+  if (!isQualityDataPilotOrganizationAllowed(dependencies.pilot_gate, authentication.context.tenant.organization_id)) {
+    return error("quality_data_unavailable", "Quality-data ingestion is not available for this organization.", 404, correlationId);
+  }
 
-  const rateLimiter = dependencies.rate_limiter ?? defaultRateLimiter;
-  if (!rateLimiter.consume(authentication.userId, action, now.getTime())) return error("rate_limited", "Please wait before processing another workbook.", 429, correlationId);
-  const releaseSlot = rateLimiter.acquireParseSlot();
-  if (!releaseSlot) return error("processing_busy", "Workbook processing is busy. Please try again shortly.", 429, correlationId);
+  let rateLimit: QualityDataXlsxApiRateLimitResult;
+  try {
+    rateLimit = await dependencies.rate_limiter.consume(authentication.userId, action, now.getTime());
+  } catch {
+    rateLimit = "unavailable";
+  }
+  if (rateLimit === "unavailable") return error("service_unavailable", "Quality-data ingestion is not available.", 503, correlationId);
+  if (rateLimit === "limited") return error("rate_limited", "Please wait before processing another workbook.", 429, correlationId);
+  let parseSlot: QualityDataXlsxApiParseSlotResult = "unavailable";
+  try {
+    parseSlot = await dependencies.rate_limiter.acquireParseSlot(authentication.userId);
+  } catch {
+    parseSlot = "unavailable";
+  }
+  if (parseSlot === "unavailable") return error("service_unavailable", "Quality-data ingestion is not available.", 503, correlationId);
+  if (parseSlot === "busy") return error("processing_busy", "Workbook processing is busy. Please try again shortly.", 429, correlationId);
 
   try {
     const form = await parseMultipart(request);
@@ -319,7 +339,7 @@ export async function handleQualityDataXlsxPost(
     }
     return error("ingestion_failed", "The quality-data import could not be completed.", 500, correlationId);
   } finally {
-    releaseSlot();
+    try { await parseSlot.release(); } catch { /* The shared lease expires automatically. */ }
   }
 }
 
@@ -335,6 +355,9 @@ export async function handleQualityDataXlsxEligibilityGet(
   try {
     const authorization = await ingestionDependencies.authorizer.authorize(authentication.context, dependencies.now());
     if (!authorization.allowed) return error("quality_data_forbidden", "You are not authorized to ingest quality data for an organization.", 403);
+    if (!isQualityDataPilotOrganizationAllowed(dependencies.pilot_gate, authentication.context.tenant.organization_id)) {
+      return error("quality_data_unavailable", "Quality-data ingestion is not available for this organization.", 404);
+    }
     return json({ can_ingest: true });
   } catch {
     return error("quality_data_forbidden", "You are not authorized to ingest quality data for an organization.", 403);

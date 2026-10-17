@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 describe("quality-data ingestion UI boundary", () => {
   const client = readFileSync(resolve("app/quality-data/QualityDataIngestionClient.tsx"), "utf8");
   const page = readFileSync(resolve("app/quality-data/page.tsx"), "utf8");
+  const capaPage = readFileSync(resolve("app/capa/page.tsx"), "utf8");
+  const entryLink = readFileSync(resolve("app/capa/QualityDataIngestionEntryLink.tsx"), "utf8");
 
   it("requires authenticated, server-verified ingestion eligibility before enabling upload controls", () => {
     expect(page).toContain("supabase.auth.getUser()");
@@ -12,6 +14,10 @@ describe("quality-data ingestion UI boundary", () => {
     expect(client).toContain('fetch("/api/quality-data/xlsx", { method: "GET", cache: "no-store" })');
     expect(client).toContain('eligibility !== "allowed"');
     expect(client).toContain("Access is checked on the server for every request.");
+    expect(capaPage).toContain("<QualityDataIngestionEntryLink />");
+    expect(entryLink).toContain('fetch("/api/quality-data/xlsx"');
+    expect(entryLink).toContain("body.can_ingest === true");
+    expect(entryLink).toContain("if (!available) return null");
   });
 
   it("requires explicit worksheet, field key, type, and map-or-ignore decisions", () => {

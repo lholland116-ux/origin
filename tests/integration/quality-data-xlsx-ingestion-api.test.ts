@@ -6,6 +6,7 @@ import type { RequestTrace } from "../../lib/capa/domain/capa-types";
 import type { CapaRequestContext, SupabaseCapaSessionFacts } from "../../lib/security/supabase-capa-context";
 import type { QualityDataXlsxApiDependencies, QualityDataXlsxApiRateLimiter } from "../../lib/quality-data/quality-data-xlsx-api";
 import { handleQualityDataXlsxEligibilityGet, handleQualityDataXlsxPost, InMemoryQualityDataXlsxApiRateLimiter } from "../../lib/quality-data/quality-data-xlsx-api";
+import { parseQualityDataPilotGate } from "../../lib/quality-data/quality-data-pilot-gate";
 import { QUALITY_DATA_XLSX_MEDIA_TYPE } from "../../lib/quality-data/xlsx-quality-data-parser";
 import type { QualityDataXlsxIngestionDependencies } from "../../lib/quality-data/xlsx-quality-data-ingestion";
 
@@ -63,7 +64,7 @@ function formFor(bytes: Uint8Array, action: "inspect" | "preview" | "ingest", ex
   return form;
 }
 
-function harness(options: { authenticated?: boolean; authorized?: boolean; rateLimiter?: QualityDataXlsxApiRateLimiter } = {}) {
+function harness(options: { authenticated?: boolean; authorized?: boolean; rateLimiter?: QualityDataXlsxApiRateLimiter; pilotGate?: QualityDataXlsxApiDependencies["pilot_gate"] } = {}) {
   const repository = {
     persistIngestion: vi.fn().mockResolvedValue({
       status: "inserted",
@@ -115,7 +116,8 @@ function harness(options: { authenticated?: boolean; authorized?: boolean; rateL
       let value = 0;
       return () => `40000000-0000-4000-8000-${String(++value).padStart(12, "0")}`;
     })(),
-    rate_limiter: options.rateLimiter,
+    rate_limiter: options.rateLimiter ?? new InMemoryQualityDataXlsxApiRateLimiter(),
+    pilot_gate: options.pilotGate ?? parseQualityDataPilotGate("true", ORG),
   };
   return { dependencies, ingestionDependencies, repository, authorizer, storage };
 }
@@ -136,6 +138,45 @@ describe("authenticated quality-data XLSX API integration", () => {
     expect(await allowed.json()).toEqual({ can_ingest: true });
     const denied = harness({ authorized: false });
     expect((await handleQualityDataXlsxEligibilityGet(denied.dependencies)).status).toBe(403);
+  });
+
+  it("fails closed for the eligibility endpoint when the pilot gate is disabled or excludes the resolved organization", async () => {
+    for (const gate of [
+      parseQualityDataPilotGate(undefined, undefined),
+      parseQualityDataPilotGate("true", "30000000-0000-4000-8000-000000000099"),
+      parseQualityDataPilotGate("true", "malformed"),
+    ]) {
+      const test = harness({ pilotGate: gate });
+      const response = await handleQualityDataXlsxEligibilityGet(test.dependencies);
+      expect(response.status).toBe(404);
+      expect(JSON.stringify(await response.json())).not.toContain(ORG);
+    }
+  });
+
+  it("enforces the allowlist for inspect, preview, and ingest before reading an uploaded body", async () => {
+    for (const action of ["inspect", "preview", "ingest"] as const) {
+      const test = harness({ pilotGate: parseQualityDataPilotGate("true", "30000000-0000-4000-8000-000000000099") });
+      const form = formFor(await workbook(), action, { organization_id: "30000000-0000-4000-8000-000000000099" });
+      if (action === "ingest") {
+        form.append("dataset_key", "line-a");
+        form.append("dataset_name", "Line A");
+        form.append("source_key", "upload:1");
+      }
+      const submitted = request(action, form, action === "ingest" ? "gate-test-import" : undefined);
+      const response = await handleQualityDataXlsxPost(submitted, test.dependencies);
+      expect(response.status).toBe(404);
+      expect(submitted.bodyUsed).toBe(false);
+      expect(test.storage.storeOriginal).not.toHaveBeenCalled();
+      expect(test.repository.persistIngestion).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not let a client-supplied organization identifier bypass the server-resolved allowlist", async () => {
+    const test = harness();
+    const form = formFor(await workbook(), "preview", { organization_id: "30000000-0000-4000-8000-000000000099" });
+    const response = await handleQualityDataXlsxPost(request("preview", form), test.dependencies);
+    expect(response.status).toBe(400);
+    expect(test.authorizer.authorize).toHaveBeenCalled();
   });
 
   it("authenticates and authorizes before reading or storing an uploaded workbook", async () => {
@@ -253,13 +294,37 @@ describe("authenticated quality-data XLSX API integration", () => {
 
   it("does not buffer uploads after a rate-limit response", async () => {
     const test = harness({ rateLimiter: {
-      consume: () => false,
-      acquireParseSlot: vi.fn(() => () => undefined),
+      consume: () => "limited",
+      acquireParseSlot: vi.fn(() => "busy" as const),
     } });
     const response = await handleQualityDataXlsxPost(request("preview", formFor(await workbook(), "preview")), test.dependencies);
     expect(response.status).toBe(429);
     expect(test.storage.storeOriginal).not.toHaveBeenCalled();
     expect(test.repository.persistIngestion).not.toHaveBeenCalled();
+  });
+
+  it("fails closed without reading the upload when shared rate protection is unavailable or globally busy", async () => {
+    const test = harness({ rateLimiter: {
+      consume: () => "allowed",
+      acquireParseSlot: vi.fn(() => "busy" as const),
+    } });
+    const submitted = request("preview", formFor(await workbook(), "preview"));
+    const response = await handleQualityDataXlsxPost(submitted, test.dependencies);
+    expect(response.status).toBe(429);
+    expect(submitted.bodyUsed).toBe(false);
+    expect(test.storage.storeOriginal).not.toHaveBeenCalled();
+    expect(test.repository.persistIngestion).not.toHaveBeenCalled();
+
+    const unavailable = harness({ rateLimiter: {
+      consume: () => "allowed",
+      acquireParseSlot: vi.fn(() => "unavailable" as const),
+    } });
+    const blocked = request("preview", formFor(await workbook(), "preview"));
+    const unavailableResponse = await handleQualityDataXlsxPost(blocked, unavailable.dependencies);
+    expect(unavailableResponse.status).toBe(503);
+    expect(blocked.bodyUsed).toBe(false);
+    expect(unavailable.storage.storeOriginal).not.toHaveBeenCalled();
+    expect(unavailable.repository.persistIngestion).not.toHaveBeenCalled();
   });
 
   it("maps the same idempotency key to a safe already-registered response on retry", async () => {
@@ -294,8 +359,11 @@ describe("authenticated quality-data XLSX API integration", () => {
     const form = formFor(await workbook(), "ingest", { dataset_key: "line-a", dataset_name: "Line A", source_key: "upload:stable-1" });
     expect((await handleQualityDataXlsxPost(request("ingest", form), test.dependencies)).status).toBe(400);
     const limiter = new InMemoryQualityDataXlsxApiRateLimiter();
-    for (let index = 0; index < 5; index += 1) expect(limiter.consume(USER, "ingest", NOW.getTime())).toBe(true);
-    expect(limiter.consume(USER, "ingest", NOW.getTime())).toBe(false);
-    expect(limiter.acquireParseSlot()).toBeTypeOf("function");
+    for (let index = 0; index < 5; index += 1) expect(limiter.consume(USER, "ingest", NOW.getTime())).toBe("allowed");
+    expect(limiter.consume(USER, "ingest", NOW.getTime())).toBe("limited");
+    const slot = limiter.acquireParseSlot();
+    expect(slot).not.toBe("busy");
+    expect(slot).not.toBe("unavailable");
+    if (typeof slot !== "string") slot.release();
   });
 });

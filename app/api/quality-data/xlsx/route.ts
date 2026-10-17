@@ -1,5 +1,7 @@
 import { createCapaApiHandlerDependencies } from "@/app/api/capa/capa-next-route-dependencies";
 import { handleQualityDataXlsxEligibilityGet, handleQualityDataXlsxPost, type QualityDataXlsxApiDependencies } from "@/lib/quality-data/quality-data-xlsx-api";
+import { parseQualityDataPilotGate } from "@/lib/quality-data/quality-data-pilot-gate";
+import { SupabaseQualityDataXlsxApiRateLimiter } from "@/lib/quality-data/quality-data-xlsx-rate-limiter";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -16,6 +18,11 @@ function dependencies(): QualityDataXlsxApiDependencies {
     now: capa.now,
     generate_uuid: capa.generate_uuid,
     configured_app_url: process.env.NEXT_PUBLIC_APP_URL,
+    pilot_gate: parseQualityDataPilotGate(
+      process.env.QUALITY_DATA_INGESTION_PILOT_ENABLED,
+      process.env.QUALITY_DATA_INGESTION_PILOT_ORGANIZATION_IDS,
+    ),
+    rate_limiter: new SupabaseQualityDataXlsxApiRateLimiter(),
   };
 }
 
