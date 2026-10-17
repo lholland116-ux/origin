@@ -619,7 +619,17 @@ describeDatabase("shared quality-data PostgreSQL foundation (disposable local Po
       from pg_class as c
       join pg_namespace as n on n.oid = c.relnamespace
       where n.nspname = 'public'
-        and c.relname like 'quality_data_%'
+        and c.relname = any(array[
+          'quality_data_sources',
+          'quality_data_source_versions',
+          'quality_data_datasets',
+          'quality_data_dataset_versions',
+          'quality_data_dataset_version_sources',
+          'quality_data_ingestion_jobs',
+          'quality_data_inspection_records',
+          'quality_data_inspection_fields',
+          'quality_data_validation_outcomes'
+        ])
         and c.relkind = 'r'
       order by c.relname
     `;
