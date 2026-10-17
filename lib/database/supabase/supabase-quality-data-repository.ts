@@ -488,7 +488,7 @@ export class SupabaseQualityDataRepository implements QualityDataRepository {
         source.source_type, source_version.source_version_id,
         source_version.version_number, source_version.original_source_version,
         source_version.fingerprint_algorithm, source_version.source_sha256,
-        source_version.byte_length, source_version.media_type,
+        source_version.byte_length, source_version.media_type, source_version.storage_reference,
         source_version.parser_version, source_version.schema_version,
         source_version.uploaded_by_user_id, source_version.created_at
       from public.quality_data_dataset_version_sources as link

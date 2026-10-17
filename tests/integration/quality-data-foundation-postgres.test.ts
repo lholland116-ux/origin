@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import postgres from "postgres";
+import ExcelJS from "exceljs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SupabaseCapaAuthorizationPolicy } from "../../lib/capa/authorization/supabase-capa-authorization-policy";
@@ -8,6 +9,8 @@ import type { SupabaseCapaSessionFacts } from "../../lib/security/supabase-capa-
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../lib/quality-data/quality-data-authorization";
 import type { QualityDataIngestionCommand } from "../../lib/quality-data/quality-data-contract";
 import { ingestQualityData, readQualityDatasetVersion } from "../../lib/quality-data/quality-data-service";
+import { ingestQualityDataXlsx } from "../../lib/quality-data/xlsx-quality-data-ingestion";
+import { QUALITY_DATA_XLSX_MEDIA_TYPE } from "../../lib/quality-data/xlsx-quality-data-parser";
 import { SupabaseAuditRepository } from "../../lib/database/supabase/supabase-audit-repository";
 import { SupabaseQualityDataRepository } from "../../lib/database/supabase/supabase-quality-data-repository";
 import { SupabaseTransactionManager } from "../../lib/database/supabase/supabase-transactions";
@@ -197,6 +200,14 @@ describeDatabase("shared quality-data PostgreSQL foundation (disposable local Po
     `;
   }
 
+  async function xlsxFixture(): Promise<Uint8Array> {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Final Inspection");
+    sheet.addRow(["Lot", "Rejects", "Inspection Date"]);
+    sheet.addRow(["LOT-001", 2, "2026-10-15"]);
+    return new Uint8Array(await workbook.xlsx.writeBuffer());
+  }
+
   beforeAll(async () => {
     requireDisposableLoopbackDatabase(DATABASE_URL);
     sql = postgres(DATABASE_URL, { prepare: false, max: 4 });
@@ -287,6 +298,126 @@ describeDatabase("shared quality-data PostgreSQL foundation (disposable local Po
       where organization_id = ${organizationId}::uuid and action = 'QUALITY_DATA_INGESTED'
     `;
     expect(events[0]?.count).toBe(1);
+  });
+
+  it("ingests a synthetic XLSX through real authorization and PostgreSQL persistence with exact cell lineage", async () => {
+    const requestTrace = trace();
+    const bytes = await xlsxFixture();
+    const storage = {
+      storeOriginal: vi.fn(async (input: { organization_id: string; source_key: string; original_source_version: string; bytes: Uint8Array; sha256: string; media_type: string }) => ({
+        status: "stored" as const,
+        storage_reference: `quality-data/${input.organization_id}/${createHash("sha256").update(input.source_key).digest("hex")}/${createHash("sha256").update(input.original_source_version).digest("hex")}/original`,
+      })),
+    };
+    const dependencies = { ...service(), source_storage: storage };
+    const input = {
+      idempotency_key: requestTrace.idempotency_key,
+      source: { source_key: `xlsx-${randomUUID()}`, source_name: "Synthetic inspection.xlsx", original_source_version: "revision-1", bytes },
+      dataset: { dataset_key: `xlsx-${randomUUID()}`, dataset_name: "Synthetic inspection dataset", schema_version: "inspection-v1.0.0" },
+      mapping: {
+        worksheet_name: "Final Inspection", header_row: 1,
+        columns: [
+          { header: "Lot", field_key: "lot_number", value_type: "text", required: true },
+          { header: "Rejects", field_key: "reject_count", value_type: "number", required: true, normalized_unit: "count" },
+          { header: "Inspection Date", field_key: "inspection_date", value_type: "date", required: true },
+        ],
+        ignored_headers: [],
+      },
+    };
+    const result = await ingestQualityDataXlsx(dependencies, await context(adminId), requestTrace, input);
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(storage.storeOriginal).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: organizationId,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      media_type: QUALITY_DATA_XLSX_MEDIA_TYPE,
+    }));
+    const snapshot = await readQualityDatasetVersion(service(), await context(adminId), result.receipt.dataset_version_id);
+    expect(snapshot.status).toBe("found");
+    if (snapshot.status !== "found") return;
+    expect(snapshot.snapshot.records).toHaveLength(1);
+    const record = snapshot.snapshot.records[0] as { source_worksheet: string; source_row_number: number; fields: Array<{ field_key: string; original_value: unknown; normalized_value: unknown; source_cell_reference: string }> };
+    expect(record).toMatchObject({ source_worksheet: "Final Inspection", source_row_number: 2 });
+    expect(record.fields).toEqual([
+      expect.objectContaining({ field_key: "lot_number", original_value: "LOT-001", normalized_value: "LOT-001", source_cell_reference: "A2" }),
+      expect.objectContaining({ field_key: "reject_count", original_value: 2, normalized_value: 2, source_cell_reference: "B2" }),
+      expect.objectContaining({ field_key: "inspection_date", original_value: "2026-10-15", normalized_value: "2026-10-15", source_cell_reference: "C2" }),
+    ]);
+    expect(snapshot.snapshot.source_versions[0]).toMatchObject({
+      source_sha256: createHash("sha256").update(bytes).digest("hex"),
+      media_type: QUALITY_DATA_XLSX_MEDIA_TYPE,
+      storage_reference: expect.stringMatching(/^quality-data\/.+\/[0-9a-f]{64}\/[0-9a-f]{64}\/original$/),
+      parser_version: "quality-data-xlsx-1.0.0",
+    });
+    const replay = await ingestQualityDataXlsx(dependencies, await context(adminId), requestTrace, input);
+    expect(replay.status).toBe("already_registered");
+    expect(storage.storeOriginal).toHaveBeenCalledTimes(2);
+  });
+
+  it("denies XLSX source storage access to a non-admin before any Storage or database persistence", async () => {
+    const requestTrace = trace();
+    const storage = { storeOriginal: vi.fn() };
+    const dependencies = { ...service(), source_storage: storage };
+    const input = {
+      idempotency_key: requestTrace.idempotency_key,
+      source: { source_key: `unauthorized-${randomUUID()}`, source_name: "Synthetic.xlsx", original_source_version: "revision-1", bytes: await xlsxFixture() },
+      dataset: { dataset_key: `unauthorized-${randomUUID()}`, dataset_name: "Synthetic", schema_version: "inspection-v1.0.0" },
+      mapping: {
+        worksheet_name: "Final Inspection", header_row: 1,
+        columns: [
+          { header: "Lot", field_key: "lot_number", value_type: "text", required: true },
+          { header: "Rejects", field_key: "reject_count", value_type: "number", required: true },
+          { header: "Inspection Date", field_key: "inspection_date", value_type: "date", required: true },
+        ],
+        ignored_headers: [],
+      },
+    };
+    const result = await ingestQualityDataXlsx(dependencies, await context(contributorId), requestTrace, input);
+    expect(result).toMatchObject({ status: "denied" });
+    expect(storage.storeOriginal).not.toHaveBeenCalled();
+    const count = await sql<{ count: number }[]>`
+      select count(*)::int as count from public.quality_data_ingestion_jobs
+      where organization_id = ${organizationId}::uuid and idempotency_key = ${requestTrace.idempotency_key!}
+    `;
+    expect(count[0]?.count).toBe(0);
+  });
+
+  it("keeps quality source Storage private and blocks direct authenticated object visibility", async () => {
+    const bucket = await sql<{ public: boolean; file_size_limit: number; allowed_mime_types: string[] }[]>`
+      select public, file_size_limit::integer as file_size_limit, allowed_mime_types from storage.buckets where id = 'quality-data-sources'
+    `;
+    expect(bucket).toEqual([{
+      public: false,
+      file_size_limit: 10 * 1024 * 1024,
+      allowed_mime_types: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    }]);
+    const policy = await sql<{ permissive: string; roles: string[]; qual: string; with_check: string }[]>`
+      select permissive, roles, qual, with_check
+      from pg_policies
+      where schemaname = 'storage' and tablename = 'objects'
+        and policyname = 'quality_data_source_objects_server_only'
+    `;
+    expect(policy).toHaveLength(1);
+    expect(policy[0]).toMatchObject({ permissive: "RESTRICTIVE", roles: expect.arrayContaining(["public"]) });
+    expect(policy[0]?.qual).toContain("bucket_id <> 'quality-data-sources'");
+    expect(policy[0]?.with_check).toContain("bucket_id <> 'quality-data-sources'");
+
+    const objectName = `synthetic-policy-check-${randomUUID()}`;
+    await sql`insert into storage.objects (bucket_id, name, metadata)
+      values ('quality-data-sources', ${objectName}, '{}'::jsonb)`;
+    try {
+      const visible = await sql.begin(async (transaction) => {
+        await transaction`set local role authenticated`;
+        await transaction`select set_config('request.jwt.claim.sub', ${adminId}, true)`;
+        return transaction<{ count: number }[]>`
+          select count(*)::int as count from storage.objects
+          where bucket_id = 'quality-data-sources' and name = ${objectName}
+        `;
+      });
+      expect(visible[0]?.count).toBe(0);
+    } finally {
+      await sql`delete from storage.objects where bucket_id = 'quality-data-sources' and name = ${objectName}`;
+    }
   });
 
   it("deduplicates exact idempotent requests and rejects key reuse with altered content", async () => {
