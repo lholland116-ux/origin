@@ -64,6 +64,7 @@ const OPERATION_PERMISSION = {
   create_case: "capa.case.create",
   ingest_quality_data_source: "quality_data.source.ingest",
   read_quality_data_source: "quality_data.source.read",
+  approve_quality_data_version: "quality_data.version.approve",
   view_case: "capa.case.view",
   edit_case: "capa.case.edit",
   submit_intake: "capa.case.submit",
@@ -147,6 +148,8 @@ const OPERATION_PURPOSE = {
     "QUALITY_DATA_SOURCE_INGESTION",
   read_quality_data_source:
     "QUALITY_DATA_SOURCE_READ",
+  approve_quality_data_version:
+    "QUALITY_DATA_VERSION_ANALYTICAL_APPROVAL",
   view_case:
     "CAPA_CASE_ACCESS",
   edit_case:

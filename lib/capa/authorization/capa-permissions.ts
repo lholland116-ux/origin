@@ -38,6 +38,7 @@ export type CapaAuthorizationOperation =
   | "create_case"
   | "ingest_quality_data_source"
   | "read_quality_data_source"
+  | "approve_quality_data_version"
   | "view_case"
   | "edit_case"
   | "submit_intake"
@@ -88,6 +89,7 @@ export const HUMAN_ONLY_CAPA_OPERATIONS =
     "submit_intake",
     "ingest_quality_data_source",
     "read_quality_data_source",
+    "approve_quality_data_version",
     "submit_action_plan",
     "review_knowledge_citation",
     "request_ai_intake_advisory",

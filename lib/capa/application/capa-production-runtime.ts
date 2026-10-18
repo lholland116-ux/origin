@@ -202,6 +202,7 @@ import {
   SupabaseAuditRepository,
 } from "../../database/supabase/supabase-audit-repository";
 import { SupabaseQualityDataRepository } from "../../database/supabase/supabase-quality-data-repository";
+import { SupabaseQualityDataStage3ARepository } from "../../database/supabase/supabase-quality-data-stage3a-repository";
 import { SupabaseQualityDataSourceStorage } from "../../database/supabase/supabase-quality-data-source-storage";
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../quality-data/quality-data-authorization";
 import { createAdminClient } from "../../supabase/admin";
@@ -1445,6 +1446,20 @@ export function createCapaProductionRuntime(
             },
           },
         }),
+      };
+    },
+
+    create_quality_data_stage3a_dependencies() {
+      return {
+        repository: new SupabaseQualityDataStage3ARepository(sql),
+        audit_repository: auditRepository,
+        transaction_manager: transactionManager,
+        authorizer: qualityDataAuthorizer,
+        ids: {
+          audit_event_id: () => generateUuid() as AuditEventId,
+          uuid: generateUuid,
+        },
+        clock: { now },
       };
     },
 

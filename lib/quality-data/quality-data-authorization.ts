@@ -13,6 +13,9 @@ export const QUALITY_DATA_INGEST_PURPOSE = "QUALITY_DATA_SOURCE_INGESTION" as Co
 export const QUALITY_DATA_READ_PERMISSION = "quality_data.source.read";
 export const QUALITY_DATA_READ_OPERATION = "read_quality_data_source" as const;
 export const QUALITY_DATA_READ_PURPOSE = "QUALITY_DATA_SOURCE_READ" as ControlledCode;
+export const QUALITY_DATA_VERSION_APPROVE_PERMISSION = "quality_data.version.approve";
+export const QUALITY_DATA_VERSION_APPROVE_OPERATION = "approve_quality_data_version" as const;
+export const QUALITY_DATA_VERSION_APPROVE_PURPOSE = "QUALITY_DATA_VERSION_ANALYTICAL_APPROVAL" as ControlledCode;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type QualityDataAuthorizationFailure =
@@ -48,12 +51,19 @@ export interface QualityDataReadAuthorizer {
   ): Promise<QualityDataAuthorizationResult>;
 }
 
+export interface QualityDataVersionApprovalAuthorizer {
+  authorizeApproval(
+    context: CapaRequestContext,
+    trustedNow: Date,
+  ): Promise<QualityDataAuthorizationResult>;
+}
+
 /**
  * Uses the normal CAPA membership and database-backed role policy, while
  * requiring the exact CAPA_ORG_ADMIN role for the quality ingestion action.
  */
 export class PolicyBackedQualityDataIngestionAuthorizer
-  implements QualityDataIngestionAuthorizer, QualityDataReadAuthorizer {
+  implements QualityDataIngestionAuthorizer, QualityDataReadAuthorizer, QualityDataVersionApprovalAuthorizer {
   constructor(
     private readonly policy: CapaAuthorizationPolicy,
   ) {}
@@ -82,10 +92,22 @@ export class PolicyBackedQualityDataIngestionAuthorizer
     );
   }
 
+  async authorizeApproval(
+    context: CapaRequestContext,
+    trustedNow: Date,
+  ): Promise<QualityDataAuthorizationResult> {
+    return this.authorizeOperation(
+      context,
+      trustedNow,
+      QUALITY_DATA_VERSION_APPROVE_OPERATION,
+      QUALITY_DATA_VERSION_APPROVE_PURPOSE,
+    );
+  }
+
   private async authorizeOperation(
     context: CapaRequestContext,
     trustedNow: Date,
-    operation: typeof QUALITY_DATA_INGEST_OPERATION | typeof QUALITY_DATA_READ_OPERATION,
+    operation: typeof QUALITY_DATA_INGEST_OPERATION | typeof QUALITY_DATA_READ_OPERATION | typeof QUALITY_DATA_VERSION_APPROVE_OPERATION,
     purpose: ControlledCode,
   ): Promise<QualityDataAuthorizationResult> {
     if (!isHumanPrincipal(context.authentication)) {

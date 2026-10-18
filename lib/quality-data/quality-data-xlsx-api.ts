@@ -16,7 +16,7 @@ const BODY_READ_TIMEOUT_MS = 20_000;
 const RATE_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_RATE_ENTRIES = 4_096;
 
-export type QualityDataXlsxApiAction = "inspect" | "preview" | "ingest";
+export type QualityDataXlsxApiAction = "inspect" | "preview" | "ingest" | "analysis" | "approval";
 export type QualityDataXlsxApiRateLimitResult = "allowed" | "limited" | "unavailable";
 export type QualityDataXlsxApiParseSlotResult =
   | { readonly release: () => void | Promise<void> }
@@ -38,7 +38,7 @@ export class InMemoryQualityDataXlsxApiRateLimiter implements QualityDataXlsxApi
       if (nowMs - value.startedAt >= RATE_WINDOW_MS) this.entries.delete(key);
     }
     const key = `${userId}:${action}`;
-    const limits: Record<QualityDataXlsxApiAction, number> = { inspect: 12, preview: 12, ingest: 5 };
+    const limits: Record<QualityDataXlsxApiAction, number> = { inspect: 12, preview: 12, ingest: 5, analysis: 12, approval: 12 };
     const current = this.entries.get(key);
     if (current && current.count >= limits[action]) return "limited";
     if (!current && this.entries.size >= MAX_RATE_ENTRIES) {

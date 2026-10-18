@@ -95,6 +95,47 @@ describe("quality-data authorization", () => {
     }));
   });
 
+  it("requires the separate analytical-approval operation and permission", async () => {
+    const evaluate = vi.fn().mockResolvedValue({ decision: "allow" });
+    const authorizer = new PolicyBackedQualityDataIngestionAuthorizer({ evaluate } as never);
+    await expect(authorizer.authorizeApproval(context(), NOW)).resolves.toEqual({
+      allowed: true,
+      organization_id: ORG,
+      membership_id: MEMBERSHIP,
+      uploader_user_id: USER,
+    });
+    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "approve_quality_data_version",
+      purpose: "QUALITY_DATA_VERSION_ANALYTICAL_APPROVAL",
+    }));
+    expect(evaluate).not.toHaveBeenCalledWith(expect.objectContaining({
+      operation: "read_quality_data_source",
+    }));
+  });
+
+  it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR", "CAPA_REVIEWER", "CAPA_AUDITOR"])(
+    "denies analytical approval to %s even when other quality permissions might exist",
+    async (role) => {
+      const evaluate = vi.fn();
+      const authorizer = new PolicyBackedQualityDataIngestionAuthorizer({ evaluate } as never);
+      await expect(authorizer.authorizeApproval(context(role), NOW)).resolves.toEqual({
+        allowed: false,
+        reason_code: "ACTIVE_ORG_ADMIN_REQUIRED",
+      });
+      expect(evaluate).not.toHaveBeenCalled();
+    },
+  );
+
+  it("denies approval when the distinct database permission is absent", async () => {
+    const authorizer = new PolicyBackedQualityDataIngestionAuthorizer({
+      evaluate: vi.fn().mockResolvedValue({ decision: "deny" }),
+    } as never);
+    await expect(authorizer.authorizeApproval(context(), NOW)).resolves.toEqual({
+      allowed: false,
+      reason_code: "QUALITY_DATA_PERMISSION_DENIED",
+    });
+  });
+
   it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR", "CAPA_REVIEWER", "CAPA_AUDITOR"])(
     "denies quality-data reads for %s regardless of its other permissions",
     async (role) => {
