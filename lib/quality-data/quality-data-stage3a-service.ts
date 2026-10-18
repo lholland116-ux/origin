@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import type { AuditEvent, AuditEventId, ControlledCode, RequestTrace } from "../capa/domain/capa-types";
 import type { AuditRepository } from "../database/repositories/audit-repository";
-import type { QualityDataReadScope } from "../database/repositories/quality-data-repository";
 import type { QualityDataApprovalSummary, QualityDataStage3ARepository } from "../database/repositories/quality-data-stage3a-repository";
 import type { TransactionManager } from "../database/transactions";
 import type { CapaRequestContext } from "../security/supabase-capa-context";
 import { isHumanPrincipal, isSessionActive } from "../security/auth-context";
-import type { QualityDataReadAuthorizer, QualityDataVersionApprovalAuthorizer } from "./quality-data-authorization";
+import type { QualityDataAuthorizationResult, QualityDataReadAuthorizer, QualityDataVersionApprovalAuthorizer } from "./quality-data-authorization";
 import { QUALITY_DATA_APPROVAL_SCHEMA_VERSION, qualityDataVersionApprovalCommandSchema, type QualityDataVersionApprovalCommand, type QualityDataVersionApprovalState } from "./quality-data-approval-contract";
 import {
   QUALITY_ANALYSIS_CALCULATION_VERSION,
@@ -23,6 +22,8 @@ import {
   type QualityAnalysisResult,
   type QualityAnalysisSourceReference,
 } from "./quality-analysis-contract";
+import { calculateQualitySignals } from "./quality-signal-calculator";
+import { qualitySignalDetectionRequestSchema, qualitySignalDetectionResultSchema, type QualitySignalDetectionRequest, type QualitySignalDetectionResult } from "./quality-signal-contract";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HEX_SHA256 = /^[0-9a-f]{64}$/;
@@ -56,6 +57,14 @@ export type QualityAnalysisServiceResult =
   | { readonly status: "not_found_or_not_authorized" }
   | { readonly status: "not_approved"; readonly decision: "none" | "rejected" | "revoked" }
   | { readonly status: "calculation_error"; readonly reason_code: "DATASET_SNAPSHOT_INVALID" | "NUMERIC_OVERFLOW" };
+
+export type QualitySignalDetectionServiceResult =
+  | { readonly status: "complete" | "partial" | "insufficient_data"; readonly result: QualitySignalDetectionResult }
+  | { readonly status: "invalid_request"; readonly reason_code: "INVALID_SIGNAL_REQUEST" | "RESULT_LIMIT_EXCEEDED" | "TIME_WINDOW_LIMIT_EXCEEDED" }
+  | { readonly status: "denied" }
+  | { readonly status: "not_found_or_not_authorized" }
+  | { readonly status: "not_approved"; readonly decision: "none" | "rejected" | "revoked" }
+  | { readonly status: "calculation_error"; readonly reason_code: "DATASET_SNAPSHOT_INVALID" | "DUPLICATE_SOURCE_RECORD" };
 
 export class QualityDataStage3AServiceError extends Error {
   constructor(readonly reason_code: "PERSISTENCE_FAILED" | "AUDIT_FAILED") {
@@ -287,6 +296,44 @@ function safeSnapshot(snapshot: Awaited<ReturnType<QualityDataStage3ARepository[
   };
 }
 
+type AuthorizedQualityDataRead = Extract<QualityDataAuthorizationResult, { allowed: true }>;
+type ApprovedQualityDataSnapshotResult =
+  | { readonly status: "approved"; readonly snapshot: SafeQualityDataSnapshot }
+  | { readonly status: "not_found_or_not_authorized" }
+  | { readonly status: "not_approved"; readonly decision: "none" | "rejected" | "revoked" }
+  | { readonly status: "invalid_snapshot" };
+
+async function authorizeQualityDataRead(
+  dependencies: QualityDataStage3AServiceDependencies,
+  context: CapaRequestContext,
+  now: Date,
+): Promise<QualityDataAuthorizationResult> {
+  if (!Number.isFinite(now.getTime()) || !isHumanPrincipal(context.authentication) || !isSessionActive(context.authentication, now)
+    || context.owner_user_id !== context.authentication.principal.user_id || !UUID_PATTERN.test(context.tenant.organization_id)
+    || !UUID_PATTERN.test(context.authentication.principal.user_id)) {
+    return { allowed: false, reason_code: "CALLER_IDENTITY_MISMATCH" };
+  }
+  return dependencies.authorizer.authorizeRead(context, now);
+}
+
+async function findAuthorizedApprovedSnapshot(
+  dependencies: QualityDataStage3AServiceDependencies,
+  authorization: AuthorizedQualityDataRead,
+  datasetVersionId: string,
+  now: Date,
+): Promise<ApprovedQualityDataSnapshotResult> {
+  const approved = await dependencies.repository.findApprovedDatasetVersion({
+    organization_id: authorization.organization_id,
+    user_id: authorization.uploader_user_id,
+    membership_id: authorization.membership_id,
+    now: now.toISOString(),
+  }, datasetVersionId);
+  if (approved === null) return { status: "not_found_or_not_authorized" };
+  if (approved.status === "not_approved") return { status: "not_approved", decision: approved.decision };
+  const snapshot = safeSnapshot(approved);
+  return snapshot === null ? { status: "invalid_snapshot" } : { status: "approved", snapshot };
+}
+
 function fieldReference(
   datasetId: string,
   versionId: string,
@@ -433,25 +480,16 @@ export async function analyzeQualityDatasetVersion(
   input: unknown,
 ): Promise<QualityAnalysisServiceResult> {
   const now = dependencies.clock.now();
-  if (!Number.isFinite(now.getTime()) || !isHumanPrincipal(context.authentication) || !isSessionActive(context.authentication, now)
-    || context.owner_user_id !== context.authentication.principal.user_id || !UUID_PATTERN.test(context.tenant.organization_id)
-    || !UUID_PATTERN.test(context.authentication.principal.user_id)) return { status: "denied" };
-  const authorization = await dependencies.authorizer.authorizeRead(context, now);
+  const authorization = await authorizeQualityDataRead(dependencies, context, now);
   if (!authorization.allowed) return { status: "denied" };
   const parsed = qualityAnalysisRequestSchema.safeParse(input);
   if (!parsed.success) return { status: "invalid_request", reason_code: "INVALID_ANALYSIS_REQUEST" };
   const request: QualityAnalysisRequest = parsed.data;
-  const scope: QualityDataReadScope = {
-    organization_id: authorization.organization_id,
-    user_id: authorization.uploader_user_id,
-    membership_id: authorization.membership_id,
-    now: now.toISOString(),
-  };
-  const approved = await dependencies.repository.findApprovedDatasetVersion(scope, request.dataset_version_id);
-  if (approved === null) return { status: "not_found_or_not_authorized" };
-  if (approved.status === "not_approved") return { status: "not_approved", decision: approved.decision };
-  const safe = safeSnapshot(approved);
-  if (safe === null) return { status: "calculation_error", reason_code: "DATASET_SNAPSHOT_INVALID" };
+  const approved = await findAuthorizedApprovedSnapshot(dependencies, authorization, request.dataset_version_id, now);
+  if (approved.status === "not_found_or_not_authorized") return approved;
+  if (approved.status === "not_approved") return approved;
+  if (approved.status === "invalid_snapshot") return { status: "calculation_error", reason_code: "DATASET_SNAPSHOT_INVALID" };
+  const safe = approved.snapshot;
 
   const metrics = request.metrics.map((metric) => calculateMetric(
     metric,
@@ -504,4 +542,34 @@ export async function analyzeQualityDatasetVersion(
     return { status: "calculation_error", reason_code: "DATASET_SNAPSHOT_INVALID" };
   }
   return { status: result.status, result };
+}
+
+/**
+ * Calculates explicitly configured, deterministic signals from the same
+ * server-authorized and currently approved immutable snapshot used by Stage 3A.
+ * It does not persist a decision, call AI, or mutate CAPA/workflow state.
+ */
+export async function detectQualityDatasetSignals(
+  dependencies: QualityDataStage3AServiceDependencies,
+  context: CapaRequestContext,
+  input: unknown,
+): Promise<QualitySignalDetectionServiceResult> {
+  const now = dependencies.clock.now();
+  const authorization = await authorizeQualityDataRead(dependencies, context, now);
+  if (!authorization.allowed) return { status: "denied" };
+  const parsed = qualitySignalDetectionRequestSchema.safeParse(input);
+  if (!parsed.success) return { status: "invalid_request", reason_code: "INVALID_SIGNAL_REQUEST" };
+  const request: QualitySignalDetectionRequest = parsed.data;
+  const approved = await findAuthorizedApprovedSnapshot(dependencies, authorization, request.dataset_version_id, now);
+  if (approved.status === "not_found_or_not_authorized") return approved;
+  if (approved.status === "not_approved") return approved;
+  if (approved.status === "invalid_snapshot") return { status: "calculation_error", reason_code: "DATASET_SNAPSHOT_INVALID" };
+  const safe = approved.snapshot;
+  const calculated = calculateQualitySignals(request, safe);
+  if (calculated.status === "invalid_snapshot") return { status: "calculation_error", reason_code: calculated.reason_code };
+  if (calculated.status === "limit_exceeded") return { status: "invalid_request", reason_code: calculated.reason_code };
+  if (!qualitySignalDetectionResultSchema.safeParse(calculated.result).success) {
+    return { status: "calculation_error", reason_code: "DATASET_SNAPSHOT_INVALID" };
+  }
+  return { status: calculated.result.status, result: calculated.result };
 }

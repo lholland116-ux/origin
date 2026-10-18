@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CapaRequestContext, SupabaseCapaSessionFacts } from "../../lib/security/supabase-capa-context";
 import { parseQualityDataPilotGate } from "../../lib/quality-data/quality-data-pilot-gate";
-import { handleQualityDataAnalysisPost, handleQualityDataVersionApprovalGet, handleQualityDataVersionApprovalPost, type QualityDataStage3AApiDependencies } from "../../lib/quality-data/quality-data-stage3a-api";
+import { handleQualityDataAnalysisPost, handleQualityDataSignalDetectionPost, handleQualityDataVersionApprovalGet, handleQualityDataVersionApprovalPost, type QualityDataStage3AApiDependencies } from "../../lib/quality-data/quality-data-stage3a-api";
 import type { QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
 import type { RequestTrace } from "../../lib/capa/domain/capa-types";
 import type { TransactionContext, TransactionManager } from "../../lib/database/transactions";
@@ -98,6 +98,41 @@ describe("Stage 3A quality-data API controls", () => {
     const response = await handleQualityDataAnalysisPost(request("/api/quality-data/analysis", {}), deps);
     expect(response.status).toBe(429);
     expect(deps.rate_limiter.consume).toHaveBeenCalledWith(USER, "analysis", NOW.getTime());
+  });
+
+  it("applies the existing pilot gate, read authorization, and shared analysis rate limit to signal detection", async () => {
+    const body = {
+      schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION,
+      signals: [{ signal_id: "repeats", kind: "recurring_category", semantic_role: "defect_code", field_key: "defect_code", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } }],
+    };
+    const disabled = dependencies({ enabled: false });
+    expect((await handleQualityDataSignalDetectionPost(request("/api/quality-data/signals", body), disabled)).status).toBe(404);
+    expect(disabled.get_service_dependencies).not.toHaveBeenCalled();
+
+    const crossSite = dependencies();
+    const forgedOrigin = request("/api/quality-data/signals", body, { origin: "https://attacker.test", "sec-fetch-site": "cross-site" });
+    expect((await handleQualityDataSignalDetectionPost(forgedOrigin, crossSite)).status).toBe(403);
+    expect(crossSite.get_service_dependencies).not.toHaveBeenCalled();
+
+    const deniedService = service();
+    vi.mocked(deniedService.authorizer.authorizeRead).mockResolvedValue({ allowed: false, reason_code: "QUALITY_DATA_PERMISSION_DENIED" });
+    const denied = dependencies({ service: deniedService });
+    expect((await handleQualityDataSignalDetectionPost(request("/api/quality-data/signals", body), denied)).status).toBe(403);
+    expect(deniedService.repository.findApprovedDatasetVersion).not.toHaveBeenCalled();
+
+    const limited = dependencies({ rate: "limited" });
+    expect((await handleQualityDataSignalDetectionPost(request("/api/quality-data/signals", body), limited)).status).toBe(429);
+    expect(limited.rate_limiter.consume).toHaveBeenCalledWith(USER, "analysis", NOW.getTime());
+  });
+
+  it("fails closed on rejected or revoked versions through the signal API", async () => {
+    const backing = service();
+    const response = await handleQualityDataSignalDetectionPost(request("/api/quality-data/signals", {
+      schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION,
+      signals: [{ signal_id: "repeats", kind: "recurring_category", semantic_role: "defect_code", field_key: "defect_code", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } }],
+    }), dependencies({ service: backing }));
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("dataset_not_approved");
   });
 
   it("requires idempotent explicit approval and maps transition conflict safely", async () => {

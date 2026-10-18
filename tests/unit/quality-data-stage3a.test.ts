@@ -6,7 +6,7 @@ import type { QualityDataApprovalAppendInput, QualityDataApprovalAppendResult, Q
 import type { QualityDataReadScope } from "../../lib/database/repositories/quality-data-repository";
 import type { RequestTrace } from "../../lib/capa/domain/capa-types";
 import type { TransactionContext, TransactionManager } from "../../lib/database/transactions";
-import { analyzeQualityDatasetVersion, getQualityDataDatasetVersionApproval, transitionQualityDataDatasetVersionApproval, type QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
+import { analyzeQualityDatasetVersion, detectQualityDatasetSignals, getQualityDataDatasetVersionApproval, transitionQualityDataDatasetVersionApproval, type QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
 
 const NOW = new Date("2026-10-18T12:00:00.000Z");
 const USER = "11000000-0000-4000-8000-000000000001";
@@ -67,6 +67,42 @@ function snapshot(): QualityDataDatasetSnapshot {
     ],
     validation_outcomes: [],
   };
+}
+
+function signalSnapshot(rows: readonly { date: string | null; defects: number | null; quantity: number | null; mode: string | null; omit?: readonly string[] }[] = [
+  { date: "2026-01-03", defects: 2, quantity: 100, mode: "seal_leak" },
+  { date: "2026-01-10", defects: 1, quantity: 100, mode: "seal_leak" },
+  { date: "2026-01-17", defects: 1, quantity: 100, mode: "crack" },
+  { date: "2026-02-02", defects: 5, quantity: 100, mode: "seal_leak" },
+  { date: "2026-02-09", defects: 4, quantity: 100, mode: "dent" },
+  { date: "2026-02-16", defects: 3, quantity: 100, mode: "dent" },
+]) {
+  const data = snapshot();
+  return {
+    ...data,
+    records: rows.map((row, index) => {
+      const ordinal = index + 1;
+      const rowNumber = ordinal + 1;
+      const makeField = (suffix: string, field_key: string, value_type: string, original_value: unknown, normalized_value: unknown, normalized_unit: string | null, column: string) => ({
+        field_id: `11000000-0000-4000-8000-${String(ordinal * 10 + Number(suffix)).padStart(12, "0")}`,
+        field_key, field_ordinal: Number(suffix), value_type, original_value, normalized_value, normalized_unit,
+        source_worksheet: "Inspection", source_row_number: rowNumber, source_cell_reference: `${column}${rowNumber}`,
+      });
+      const fields = [
+        makeField("1", "defect_count", row.defects === null ? "blank" : "number", row.defects, row.defects, "count", "B"),
+        makeField("2", "production_quantity", row.quantity === null ? "blank" : "number", row.quantity, row.quantity, "unit", "C"),
+        makeField("3", "observation_date", row.date === null ? "blank" : "date", row.date, row.date, null, "D"),
+        makeField("4", "failure_mode", row.mode === null ? "blank" : "text", row.mode, row.mode, null, "E"),
+      ].filter((field) => !row.omit?.includes(field.field_key));
+      return {
+        record_id: `21000000-0000-4000-8000-${String(ordinal).padStart(12, "0")}`,
+        record_ordinal: ordinal,
+        source_worksheet: "Inspection",
+        source_row_number: rowNumber,
+        fields,
+      };
+    }),
+  } as QualityDataDatasetSnapshot;
 }
 
 function dependencies(options: { readonly approvalResult?: unknown; readonly approved?: boolean; readonly readAllowed?: boolean; readonly approveAllowed?: boolean } = {}) {
@@ -251,5 +287,178 @@ describe("Layer 2 Stage 3A quality-data governance and deterministic analysis", 
     });
     expect(mixedResult.status).toBe("partial");
     if (mixedResult.status === "partial") expect(mixedResult.result.metrics[0]).toMatchObject({ status: "unit_mismatch", value: null, reason_code: "MIXED_UNITS" });
+  });
+
+  it("detects explicit recurring failure modes and threshold rates with exact approved-version cell provenance", async () => {
+    const fixture = dependencies();
+    vi.mocked(fixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: signalSnapshot(),
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved for analysis" },
+    });
+    const result = await detectQualityDatasetSignals(fixture.deps, context(), {
+      schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION,
+      signals: [
+        { signal_id: "recurring-seal", kind: "recurring_category", semantic_role: "failure_mode", field_key: "failure_mode", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } },
+        { signal_id: "high-rate", kind: "defect_rate_threshold", defect_count_field_key: "defect_count", production_quantity_field_key: "production_quantity", observation_date_field_key: "observation_date", production_quantity_unit: "unit", rate_per: 100, threshold: 3, minimum_records_per_window: 3, time_window: { kind: "calendar_month" } },
+      ],
+    });
+    expect(result.status).toBe("complete");
+    if (result.status !== "complete") return;
+    expect(result.result).toMatchObject({
+      schema_version: "quality-signal-result-1.0.0", authorization_scope: "analytical_use_only",
+      source_verification: "not_asserted", causal_explanation: "not_assessed", regulatory_conclusion: "not_assessed",
+      dataset: { dataset_version_id: VERSION, approval_event_id: APPROVAL_EVENT, approval_transition_number: 1 },
+    });
+    expect(result.result.signals[0]).toMatchObject({
+      kind: "recurring_category", status: "detected", sample_record_count: 6,
+      observed_patterns: expect.arrayContaining([expect.objectContaining({ value: "seal_leak", occurrence_count: 3, evidence: expect.arrayContaining([expect.objectContaining({ source_row_number: 2, cells: [expect.objectContaining({ field_key: "failure_mode", source_cell_reference: "E2" })] })]) })]),
+    });
+    expect(result.result.signals[1]).toMatchObject({
+      kind: "defect_rate_threshold", status: "detected",
+      rate_definition: { formula: "sum(defect_count) / sum(production_quantity) * rate_per", threshold: 3, production_quantity_unit: "unit" },
+      buckets: expect.arrayContaining([expect.objectContaining({ period: "2026-01", rate: expect.closeTo(4 / 3), triggered: false, calculation_inputs: expect.arrayContaining([expect.objectContaining({ source_row_number: 2, cells: expect.arrayContaining([expect.objectContaining({ field_key: "defect_count", source_cell_reference: "B2" })]) })]) }), expect.objectContaining({ period: "2026-02", rate: 4, triggered: true })]),
+    });
+  });
+
+  it("detects only configured adjacent monthly rate trends and reports sparse windows", async () => {
+    const fixture = dependencies();
+    vi.mocked(fixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: signalSnapshot(),
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    const result = await detectQualityDatasetSignals(fixture.deps, context(), {
+      schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION,
+      signals: [{ signal_id: "monthly-uptrend", kind: "defect_rate_trend", defect_count_field_key: "defect_count", production_quantity_field_key: "production_quantity", observation_date_field_key: "observation_date", production_quantity_unit: "unit", rate_per: 100, direction: "increase", minimum_absolute_change: 2, minimum_records_per_window: 3, time_window: { kind: "calendar_month" } }],
+    });
+    expect(result.status).toBe("complete");
+    if (result.status !== "complete") return;
+    expect(result.result.signals[0]).toMatchObject({
+      kind: "defect_rate_trend", status: "detected",
+      comparisons: [{ from_period: "2026-01", to_period: "2026-02", status: "evaluated", change: expect.closeTo(2.666666666666667), absolute_change: expect.closeTo(2.666666666666667), triggered: true, calculation_inputs: expect.arrayContaining([expect.objectContaining({ cells: expect.arrayContaining([expect.objectContaining({ field_key: "observation_date" })]) })]) }],
+    });
+
+    const sparse = dependencies();
+    vi.mocked(sparse.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: signalSnapshot([
+        { date: "2026-01-03", defects: 2, quantity: 100, mode: "A" },
+        { date: "2026-01-10", defects: 1, quantity: 100, mode: "A" },
+        { date: "2026-01-17", defects: 1, quantity: 100, mode: "A" },
+        { date: "2026-02-02", defects: 5, quantity: 100, mode: "A" },
+        { date: "2026-02-09", defects: 4, quantity: 100, mode: "A" },
+        { date: "2026-02-16", defects: 3, quantity: 100, mode: "A" },
+        { date: "2026-03-02", defects: 2, quantity: 100, mode: "A" },
+      ]),
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    const sparseResult = await detectQualityDatasetSignals(sparse.deps, context(), {
+      schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION,
+      signals: [{ signal_id: "sparse-trend", kind: "defect_rate_trend", defect_count_field_key: "defect_count", production_quantity_field_key: "production_quantity", observation_date_field_key: "observation_date", production_quantity_unit: "unit", rate_per: 100, direction: "either", minimum_absolute_change: 1, minimum_records_per_window: 3, time_window: { kind: "calendar_month" } }],
+    });
+    expect(sparseResult.status).toBe("partial");
+    if (sparseResult.status === "partial") expect(sparseResult.result.signals[0]).toMatchObject({ status: "partial", comparisons: expect.arrayContaining([expect.objectContaining({ status: "insufficient_data", reason_code: "INSUFFICIENT_SAMPLE" })]) });
+  });
+
+  it("explicitly excludes invalid dates, missing values, invalid counts, zero denominators, and small samples", async () => {
+    const fixture = dependencies();
+    const data = signalSnapshot([
+      { date: "2026-01-01", defects: 1, quantity: 10, mode: "A" },
+      { date: "2026-01-02", defects: 0, quantity: 0, mode: "A" },
+      { date: "2026-02-30", defects: 2, quantity: 10, mode: "B" },
+      { date: "2026-01-04", defects: -1, quantity: 10, mode: "B" },
+      { date: null, defects: null, quantity: 10, mode: null },
+    ]);
+    vi.mocked(fixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: data,
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    const result = await detectQualityDatasetSignals(fixture.deps, context(), {
+      schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION,
+      signals: [{ signal_id: "sparse-rate", kind: "defect_rate_threshold", defect_count_field_key: "defect_count", production_quantity_field_key: "production_quantity", observation_date_field_key: "observation_date", production_quantity_unit: "unit", rate_per: 100, threshold: 2, minimum_records_per_window: 3, time_window: { kind: "calendar_month" } }],
+    });
+    expect(result.status).toBe("insufficient_data");
+    if (result.status !== "insufficient_data") return;
+    expect(result.result.signals[0]).toMatchObject({
+      status: "insufficient_data", reason_code: "NO_VALID_WINDOWS",
+      exclusions: { invalid_date: 1, invalid_number: 1, zero_denominator: 1, missing_value: 1 },
+      excluded_inputs: expect.arrayContaining([expect.objectContaining({ reason: "invalid_date" }), expect.objectContaining({ reason: "zero_denominator" }), expect.objectContaining({ reason: "missing_value" })]),
+    });
+  });
+
+  it("rejects unsupported units and duplicate source-row identities without producing signals", async () => {
+    const fixture = dependencies();
+    const wrongUnit = signalSnapshot();
+    const firstRecord = wrongUnit.records[0] as { fields: Array<Record<string, unknown>> };
+    firstRecord.fields.find((field) => field.field_key === "production_quantity")!.normalized_unit = "case";
+    vi.mocked(fixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: wrongUnit,
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    const request = { schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION, signals: [{ signal_id: "unit-check", kind: "defect_rate_threshold", defect_count_field_key: "defect_count", production_quantity_field_key: "production_quantity", observation_date_field_key: "observation_date", production_quantity_unit: "unit", rate_per: 100, threshold: 2, minimum_records_per_window: 3, time_window: { kind: "calendar_month" } }] };
+    const unsupported = await detectQualityDatasetSignals(fixture.deps, context(), request);
+    expect(unsupported.status).toBe("insufficient_data");
+    if (unsupported.status === "insufficient_data") expect(unsupported.result.signals[0]).toMatchObject({ status: "unsupported_schema", reason_code: "UNIT_MISMATCH" });
+
+    const typeMismatch = signalSnapshot();
+    for (const record of typeMismatch.records as Array<{ fields: Array<Record<string, unknown>> }>) {
+      const quantity = record.fields.find((field) => field.field_key === "production_quantity")!;
+      quantity.value_type = "text";
+      quantity.original_value = String(quantity.original_value);
+      quantity.normalized_value = String(quantity.normalized_value);
+    }
+    const typeFixture = dependencies();
+    vi.mocked(typeFixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: typeMismatch,
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    const mismatch = await detectQualityDatasetSignals(typeFixture.deps, context(), request);
+    expect(mismatch.status).toBe("insufficient_data");
+    if (mismatch.status === "insufficient_data") expect(mismatch.result.signals[0]).toMatchObject({ status: "unsupported_schema", reason_code: "FIELD_TYPE_MISMATCH" });
+
+    const missingField = signalSnapshot(Array.from({ length: 6 }, (_, index) => ({ date: `2026-${index < 3 ? "01" : "02"}-${String(index + 1).padStart(2, "0")}`, defects: index, quantity: 100, mode: "A", omit: ["defect_count"] })));
+    const missingFixture = dependencies();
+    vi.mocked(missingFixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: missingField,
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    const missing = await detectQualityDatasetSignals(missingFixture.deps, context(), request);
+    expect(missing.status).toBe("insufficient_data");
+    if (missing.status === "insufficient_data") expect(missing.result.signals[0]).toMatchObject({ status: "unsupported_schema", reason_code: "FIELD_NOT_PRESENT" });
+
+    const longSpan = signalSnapshot([
+      { date: "2010-01-01", defects: 1, quantity: 100, mode: "A" },
+      { date: "2020-02-01", defects: 1, quantity: 100, mode: "A" },
+    ]);
+    const spanFixture = dependencies();
+    vi.mocked(spanFixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: longSpan,
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    const span = await detectQualityDatasetSignals(spanFixture.deps, context(), request);
+    expect(span.status).toBe("insufficient_data");
+    if (span.status === "insufficient_data") expect(span.result.signals[0]).toMatchObject({ status: "unsupported_configuration", reason_code: "TIME_WINDOW_LIMIT_EXCEEDED" });
+
+    const duplicate = signalSnapshot();
+    const records = duplicate.records as Array<Record<string, unknown>>;
+    records[1] = { ...records[1], record_id: records[0]!.record_id };
+    const other = dependencies();
+    vi.mocked(other.repository.findApprovedDatasetVersion).mockResolvedValueOnce({
+      status: "approved", snapshot: duplicate,
+      approval: { organization_id: ORG, dataset_id: DATASET, dataset_version_id: VERSION, decision: "approved", approval_event_id: APPROVAL_EVENT, transition_number: 1, reviewer_user_id: USER, reviewer_membership_id: MEMBERSHIP, occurred_at: NOW.toISOString(), rationale: "Approved" },
+    });
+    await expect(detectQualityDatasetSignals(other.deps, context(), request)).resolves.toEqual({ status: "calculation_error", reason_code: "DUPLICATE_SOURCE_RECORD" });
+  });
+
+  it("fails closed for absent, rejected, revoked, cross-tenant, and unauthorized approved snapshots", async () => {
+    for (const decision of ["none", "rejected", "revoked"] as const) {
+      const fixture = dependencies({ approved: false });
+      vi.mocked(fixture.repository.findApprovedDatasetVersion).mockResolvedValueOnce({ status: "not_approved", decision });
+      await expect(detectQualityDatasetSignals(fixture.deps, context(), { schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION, signals: [{ signal_id: "r", kind: "recurring_category", semantic_role: "defect_code", field_key: "failure_mode", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } }] })).resolves.toEqual({ status: "not_approved", decision });
+    }
+    const crossTenant = dependencies();
+    vi.mocked(crossTenant.repository.findApprovedDatasetVersion).mockResolvedValueOnce(null);
+    await expect(detectQualityDatasetSignals(crossTenant.deps, context(), { schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION, signals: [{ signal_id: "r", kind: "recurring_category", semantic_role: "defect_code", field_key: "failure_mode", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } }] })).resolves.toEqual({ status: "not_found_or_not_authorized" });
+    const denied = dependencies({ readAllowed: false });
+    await expect(detectQualityDatasetSignals(denied.deps, context(), { schema_version: "quality-signal-request-1.0.0", dataset_version_id: VERSION, signals: [{ signal_id: "r", kind: "recurring_category", semantic_role: "defect_code", field_key: "failure_mode", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } }] })).resolves.toEqual({ status: "denied" });
+    expect(denied.repository.findApprovedDatasetVersion).not.toHaveBeenCalled();
   });
 });

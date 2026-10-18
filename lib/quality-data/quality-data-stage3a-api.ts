@@ -4,7 +4,7 @@ import type { QualityDataXlsxApiRateLimiter } from "./quality-data-xlsx-api";
 import type { QualityDataPilotGate } from "./quality-data-pilot-gate";
 import { isQualityDataPilotOrganizationAllowed } from "./quality-data-pilot-gate";
 import type { QualityDataStage3AServiceDependencies } from "./quality-data-stage3a-service";
-import { analyzeQualityDatasetVersion, getQualityDataDatasetVersionApproval, QualityDataStage3AServiceError, transitionQualityDataDatasetVersionApproval } from "./quality-data-stage3a-service";
+import { analyzeQualityDatasetVersion, detectQualityDatasetSignals, getQualityDataDatasetVersionApproval, QualityDataStage3AServiceError, transitionQualityDataDatasetVersionApproval } from "./quality-data-stage3a-service";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_JSON_BYTES = 32 * 1024;
@@ -210,6 +210,42 @@ export async function handleQualityDataAnalysisPost(
     if (result.status === "not_approved") return error("dataset_not_approved", "This dataset version is not approved for analytical use.", 409, correlationId);
     if (result.status === "invalid_request") return error(result.reason_code === "RESULT_LIMIT_EXCEEDED" ? "result_too_large" : "invalid_request", "The analysis request could not be completed.", result.reason_code === "RESULT_LIMIT_EXCEEDED" ? 413 : 400, correlationId);
     if (result.status === "calculation_error") return error("analysis_failed", "The approved dataset could not be analyzed safely.", 422, correlationId);
+    return json({ status: result.status, result: result.result });
+  } catch {
+    return error("analysis_failed", "The approved dataset could not be analyzed safely.", 500, correlationId);
+  }
+}
+
+export async function handleQualityDataSignalDetectionPost(
+  request: Request,
+  dependencies: QualityDataStage3AApiDependencies,
+): Promise<Response> {
+  const requestTrace = trace(request, dependencies.generate_uuid);
+  const correlationId = requestTrace.correlation_id;
+  if (!sameOrigin(request, dependencies.configured_app_url)) return error("origin_denied", "The request origin is not allowed.", 403, correlationId);
+  const auth = await authenticated(dependencies);
+  if (auth instanceof Response) return auth;
+  const service = await allowedDependencies(dependencies, auth.user_id, auth.context, "analysis", correlationId);
+  if (service instanceof Response) return service;
+  const body = await boundedJson(request);
+  if (body === "too_large") return error("request_too_large", "The signal request is too large.", 413, correlationId);
+  if (body === "timeout") return error("request_timeout", "The signal request took too long.", 408, correlationId);
+  if (body === "invalid") return error("invalid_request", "The signal request is invalid.", 400, correlationId);
+  try {
+    const result = await detectQualityDatasetSignals(service, auth.context, body);
+    if (result.status === "denied") return error("quality_data_forbidden", "You are not authorized to analyze this dataset version.", 403, correlationId);
+    if (result.status === "not_found_or_not_authorized") return error("not_found", "The dataset version was not found.", 404, correlationId);
+    if (result.status === "not_approved") return error("dataset_not_approved", "This dataset version is not approved for analytical use.", 409, correlationId);
+    if (result.status === "invalid_request") {
+      const tooLarge = result.reason_code === "RESULT_LIMIT_EXCEEDED";
+      const boundedWindow = result.reason_code === "TIME_WINDOW_LIMIT_EXCEEDED";
+      return error(tooLarge ? "result_too_large" : boundedWindow ? "analysis_limit_exceeded" : "invalid_request",
+        "The signal request could not be completed.", tooLarge ? 413 : boundedWindow ? 422 : 400, correlationId);
+    }
+    if (result.status === "calculation_error") {
+      const duplicateSource = result.reason_code === "DUPLICATE_SOURCE_RECORD";
+      return error(duplicateSource ? "duplicate_source_records" : "analysis_failed", "The approved dataset could not be analyzed safely.", 422, correlationId);
+    }
     return json({ status: result.status, result: result.result });
   } catch {
     return error("analysis_failed", "The approved dataset could not be analyzed safely.", 500, correlationId);

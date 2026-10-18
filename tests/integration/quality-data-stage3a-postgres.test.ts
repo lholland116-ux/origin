@@ -7,7 +7,7 @@ import { SupabaseQualityDataRepository } from "../../lib/database/supabase/supab
 import { SupabaseQualityDataStage3ARepository } from "../../lib/database/supabase/supabase-quality-data-stage3a-repository";
 import { SupabaseTransactionManager } from "../../lib/database/supabase/supabase-transactions";
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../lib/quality-data/quality-data-authorization";
-import { analyzeQualityDatasetVersion, getQualityDataDatasetVersionApproval, transitionQualityDataDatasetVersionApproval, type QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
+import { analyzeQualityDatasetVersion, detectQualityDatasetSignals, getQualityDataDatasetVersionApproval, transitionQualityDataDatasetVersionApproval, type QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
 import { ingestQualityData } from "../../lib/quality-data/quality-data-service";
 import { SupabaseCapaDurableContextResolver } from "../../lib/security/supabase-capa-durable-context";
 import type { SupabaseCapaSessionFacts } from "../../lib/security/supabase-capa-context";
@@ -81,7 +81,7 @@ describeDatabase("Stage 3A PostgreSQL approval and analytical retrieval (disposa
     return resolver.resolve(facts(userId), NOW);
   }
 
-  async function createVersion(): Promise<string> {
+  async function createVersion(withSignalFields = false): Promise<string> {
     const request = trace();
     const bytes = new TextEncoder().encode("synthetic manufacturing inspection rows");
     const sourceId = randomUUID();
@@ -96,7 +96,44 @@ describeDatabase("Stage 3A PostgreSQL approval and analytical retrieval (disposa
         parser_version: "stage3a-fixture-1.0.0", schema_version: "inspection-1.0.0",
       },
       dataset: { dataset_key: "ds-" + randomUUID(), dataset_name: "Synthetic dataset", schema_version: "inspection-1.0.0" },
-      records: [
+      records: withSignalFields ? [
+        { source_worksheet: "Inspection", source_row_number: 2, fields: [
+          { field_key: "defect_count", value_type: "number", original_value: 2, normalized_value: 2, normalized_unit: "count", source_cell_reference: "B2" },
+          { field_key: "production_quantity", value_type: "number", original_value: 100, normalized_value: 100, normalized_unit: "unit", source_cell_reference: "C2" },
+          { field_key: "observation_date", value_type: "date", original_value: "2026-01-03", normalized_value: "2026-01-03", source_cell_reference: "D2" },
+          { field_key: "failure_mode", value_type: "text", original_value: "seal_leak", normalized_value: "seal_leak", source_cell_reference: "E2" },
+        ] },
+        { source_worksheet: "Inspection", source_row_number: 3, fields: [
+          { field_key: "defect_count", value_type: "number", original_value: 1, normalized_value: 1, normalized_unit: "count", source_cell_reference: "B3" },
+          { field_key: "production_quantity", value_type: "number", original_value: 100, normalized_value: 100, normalized_unit: "unit", source_cell_reference: "C3" },
+          { field_key: "observation_date", value_type: "date", original_value: "2026-01-10", normalized_value: "2026-01-10", source_cell_reference: "D3" },
+          { field_key: "failure_mode", value_type: "text", original_value: "seal_leak", normalized_value: "seal_leak", source_cell_reference: "E3" },
+        ] },
+        { source_worksheet: "Inspection", source_row_number: 4, fields: [
+          { field_key: "defect_count", value_type: "number", original_value: 1, normalized_value: 1, normalized_unit: "count", source_cell_reference: "B4" },
+          { field_key: "production_quantity", value_type: "number", original_value: 100, normalized_value: 100, normalized_unit: "unit", source_cell_reference: "C4" },
+          { field_key: "observation_date", value_type: "date", original_value: "2026-01-17", normalized_value: "2026-01-17", source_cell_reference: "D4" },
+          { field_key: "failure_mode", value_type: "text", original_value: "crack", normalized_value: "crack", source_cell_reference: "E4" },
+        ] },
+        { source_worksheet: "Inspection", source_row_number: 5, fields: [
+          { field_key: "defect_count", value_type: "number", original_value: 5, normalized_value: 5, normalized_unit: "count", source_cell_reference: "B5" },
+          { field_key: "production_quantity", value_type: "number", original_value: 100, normalized_value: 100, normalized_unit: "unit", source_cell_reference: "C5" },
+          { field_key: "observation_date", value_type: "date", original_value: "2026-02-02", normalized_value: "2026-02-02", source_cell_reference: "D5" },
+          { field_key: "failure_mode", value_type: "text", original_value: "seal_leak", normalized_value: "seal_leak", source_cell_reference: "E5" },
+        ] },
+        { source_worksheet: "Inspection", source_row_number: 6, fields: [
+          { field_key: "defect_count", value_type: "number", original_value: 4, normalized_value: 4, normalized_unit: "count", source_cell_reference: "B6" },
+          { field_key: "production_quantity", value_type: "number", original_value: 100, normalized_value: 100, normalized_unit: "unit", source_cell_reference: "C6" },
+          { field_key: "observation_date", value_type: "date", original_value: "2026-02-09", normalized_value: "2026-02-09", source_cell_reference: "D6" },
+          { field_key: "failure_mode", value_type: "text", original_value: "dent", normalized_value: "dent", source_cell_reference: "E6" },
+        ] },
+        { source_worksheet: "Inspection", source_row_number: 7, fields: [
+          { field_key: "defect_count", value_type: "number", original_value: 3, normalized_value: 3, normalized_unit: "count", source_cell_reference: "B7" },
+          { field_key: "production_quantity", value_type: "number", original_value: 100, normalized_value: 100, normalized_unit: "unit", source_cell_reference: "C7" },
+          { field_key: "observation_date", value_type: "date", original_value: "2026-02-16", normalized_value: "2026-02-16", source_cell_reference: "D7" },
+          { field_key: "failure_mode", value_type: "text", original_value: "dent", normalized_value: "dent", source_cell_reference: "E7" },
+        ] },
+      ] : [
         { source_worksheet: "Inspection", source_row_number: 2, fields: [
           { field_key: "reject_count", value_type: "number", original_value: 2, normalized_value: 2, normalized_unit: "count", source_cell_reference: "B2" },
         ] },
@@ -196,6 +233,30 @@ describeDatabase("Stage 3A PostgreSQL approval and analytical retrieval (disposa
       where organization_id = ${org}::uuid and dataset_version_id = ${revoked}::uuid order by transition_number
     `;
     expect(events).toEqual([{ decision: "approved", transition_number: 1 }, { decision: "revoked", transition_number: 2 }]);
+  });
+
+  it("detects rate trends and recurring patterns from the real approved PostgreSQL snapshot and fails closed after revocation", async () => {
+    const versionId = await createVersion(true);
+    expect((await change(versionId, "approved", 0)).status).toBe("applied");
+    const request = {
+      schema_version: "quality-signal-request-1.0.0", dataset_version_id: versionId,
+      signals: [
+        { signal_id: "recurring-seal", kind: "recurring_category", semantic_role: "failure_mode", field_key: "failure_mode", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } },
+        { signal_id: "monthly-trend", kind: "defect_rate_trend", defect_count_field_key: "defect_count", production_quantity_field_key: "production_quantity", observation_date_field_key: "observation_date", production_quantity_unit: "unit", rate_per: 100, direction: "increase", minimum_absolute_change: 1, minimum_records_per_window: 3, time_window: { kind: "calendar_month" } },
+      ],
+    };
+    const result = await detectQualityDatasetSignals(service, await context(admin), request);
+    expect(result.status).toBe("complete");
+    if (result.status !== "complete") return;
+    expect(result.result.signals[0]).toMatchObject({ status: "detected", observed_patterns: expect.arrayContaining([expect.objectContaining({ value: "seal_leak", occurrence_count: 3 })]) });
+    expect(result.result.signals[1]).toMatchObject({
+      status: "detected", rate_definition: { formula: "sum(defect_count) / sum(production_quantity) * rate_per" },
+      comparisons: [expect.objectContaining({ from_period: "2026-01", to_period: "2026-02", triggered: true, calculation_inputs: expect.arrayContaining([expect.objectContaining({ cells: expect.arrayContaining([expect.objectContaining({ source_cell_reference: "B2" })]) })]) })],
+    });
+    await expect(detectQualityDatasetSignals(service, await context(owner), request)).resolves.toEqual({ status: "denied" });
+    await expect(detectQualityDatasetSignals(service, await context(otherAdmin), request)).resolves.toEqual({ status: "not_found_or_not_authorized" });
+    expect((await change(versionId, "revoked", 1)).status).toBe("applied");
+    await expect(detectQualityDatasetSignals(service, await context(admin), request)).resolves.toEqual({ status: "not_approved", decision: "revoked" });
   });
 
   it("returns the exact current approval history only to a separately authorized approver", async () => {
