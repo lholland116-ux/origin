@@ -1455,6 +1455,7 @@ export function createCapaProductionRuntime(
         audit_repository: auditRepository,
         transaction_manager: transactionManager,
         authorizer: qualityDataAuthorizer,
+        external_ai_transfer_authorizer: qualityDataAuthorizer,
         ids: {
           audit_event_id: () => generateUuid() as AuditEventId,
           uuid: generateUuid,

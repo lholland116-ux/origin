@@ -6,8 +6,11 @@ import type {
   QualityDataApprovalAppendResult,
   QualityDataApprovedSnapshotResult,
   QualityDataStage3ARepository,
+  QualityDataExternalAiOptInAppendInput,
+  QualityDataExternalAiOptInAppendResult,
 } from "../repositories/quality-data-stage3a-repository";
 import type { QualityDataVersionApprovalState } from "../../quality-data/quality-data-approval-contract";
+import type { QualityDataExternalAiOptInState } from "../../quality-data/quality-data-ai-contract";
 import type { TransactionContext } from "../transactions";
 import { requireSupabaseTransaction } from "./supabase-transactions";
 
@@ -34,6 +37,21 @@ function approvalState(row: Row): QualityDataVersionApprovalState {
     transition_number: integer(row.transition_number),
     reviewer_user_id: text(row.reviewer_user_id),
     reviewer_membership_id: text(row.reviewer_membership_id),
+    occurred_at: new Date(row.occurred_at as string | Date).toISOString(),
+    rationale: text(row.rationale),
+  };
+}
+
+function externalAiOptInState(row: Row): QualityDataExternalAiOptInState {
+  const decision = text(row.decision);
+  if (decision !== "enabled" && decision !== "disabled") throw new Error("QUALITY_DATA_EXTERNAL_AI_STATE_INVALID");
+  return {
+    organization_id: text(row.organization_id),
+    decision,
+    event_id: text(row.event_id),
+    transition_number: integer(row.transition_number),
+    actor_user_id: text(row.actor_user_id),
+    actor_membership_id: text(row.actor_membership_id),
     occurred_at: new Date(row.occurred_at as string | Date).toISOString(),
     rationale: text(row.rationale),
   };
@@ -385,5 +403,97 @@ export class SupabaseQualityDataStage3ARepository implements QualityDataStage3AR
       transition_number: event?.transition_number ?? 0,
       current_event: event,
     };
+  }
+
+  async appendExternalAiOptInEvent(
+    transaction: TransactionContext,
+    input: QualityDataExternalAiOptInAppendInput,
+  ): Promise<QualityDataExternalAiOptInAppendResult> {
+    const sql = requireSupabaseTransaction(transaction);
+    await sql`select pg_catalog.pg_advisory_xact_lock(
+      pg_catalog.hashtext(${input.organization_id}),
+      pg_catalog.hashtext('quality-data:external-ai-opt-in')
+    )`;
+    const authority = await sql<Row[]>`
+      select membership.membership_id
+      from public.capa_organization_memberships as membership
+      join public.capa_organizations as organization
+        on organization.organization_id = membership.organization_id
+      join public.capa_role_assignments as assignment
+        on assignment.organization_id = membership.organization_id
+        and assignment.membership_id = membership.membership_id
+        and assignment.user_id = membership.user_id
+      join public.capa_roles as role on role.role_id = assignment.role_id
+      where membership.organization_id = ${input.organization_id}::uuid
+        and membership.membership_id = ${input.actor_membership_id}::uuid
+        and membership.user_id = ${input.actor_user_id}::uuid
+        and membership.status = 'active'
+        and membership.effective_at <= ${input.now}::timestamptz
+        and (membership.expires_at is null or membership.expires_at > ${input.now}::timestamptz)
+        and organization.status = 'active'
+        and organization.effective_at <= ${input.now}::timestamptz
+        and (organization.superseded_at is null or organization.superseded_at > ${input.now}::timestamptz)
+        and assignment.role_id = 'CAPA_ORG_ADMIN'
+        and assignment.scope_code = 'ORGANIZATION'
+        and assignment.scope_resource_type is null
+        and assignment.scope_resource_id is null
+        and assignment.status = 'active'
+        and assignment.effective_at <= ${input.now}::timestamptz
+        and (assignment.expires_at is null or assignment.expires_at > ${input.now}::timestamptz)
+        and role.status = 'active'
+        and role.human_authority
+        and 'quality_data.external_ai.manage' = any(role.permissions)
+      for share of membership, organization, assignment, role
+      limit 1
+    `;
+    if (authority.length !== 1) return { status: "unauthorized" };
+    const existingRows = await sql<Row[]>`
+      select * from public.quality_data_external_ai_opt_in_events
+      where organization_id = ${input.organization_id}::uuid
+        and idempotency_key = ${input.request_trace.idempotency_key}
+      limit 1
+    `;
+    const existing = existingRows[0];
+    if (existing) {
+      if (existing.request_fingerprint !== input.request_fingerprint) return { status: "conflict", reason_code: "IDEMPOTENCY_KEY_REUSED" };
+      return { status: "already_recorded", state: externalAiOptInState(existing) };
+    }
+    const previousRows = await sql<Row[]>`
+      select event_id, transition_number from public.quality_data_external_ai_opt_in_events
+      where organization_id = ${input.organization_id}::uuid
+      order by transition_number desc limit 1
+    `;
+    const previous = previousRows[0];
+    const previousTransition = previous === undefined ? 0 : integer(previous.transition_number);
+    if (input.command.expected_transition_number !== previousTransition) return { status: "conflict", reason_code: "STALE_TRANSITION" };
+    if ((previous === undefined && input.command.decision === "disabled")
+      || (previous !== undefined && String(previous.decision) === input.command.decision)) {
+      return { status: "conflict", reason_code: "STALE_TRANSITION" };
+    }
+    const rows = await sql<Row[]>`
+      insert into public.quality_data_external_ai_opt_in_events (
+        event_id, organization_id, transition_number, decision,
+        actor_user_id, actor_membership_id, occurred_at, rationale,
+        previous_event_id, request_id, correlation_id, idempotency_key, request_fingerprint
+      ) values (
+        ${input.event_id}::uuid, ${input.organization_id}::uuid, ${previousTransition + 1},
+        ${input.command.decision}, ${input.actor_user_id}::uuid, ${input.actor_membership_id}::uuid,
+        ${input.now}::timestamptz, ${input.command.rationale},
+        ${previous === undefined ? null : String(previous.event_id)}::uuid,
+        ${input.request_trace.request_id}::uuid, ${input.request_trace.correlation_id}::uuid,
+        ${input.request_trace.idempotency_key}, ${input.request_fingerprint}
+      ) returning *
+    `;
+    if (!rows[0]) throw new Error("QUALITY_DATA_EXTERNAL_AI_OPT_IN_INSERT_FAILED");
+    return { status: "applied", state: externalAiOptInState(rows[0]) };
+  }
+
+  async findExternalAiOptInState(organizationId: string): Promise<QualityDataExternalAiOptInState | null> {
+    const rows = await this.sql<Row[]>`
+      select * from public.quality_data_external_ai_opt_in_events
+      where organization_id = ${organizationId}::uuid
+      order by transition_number desc limit 1
+    `;
+    return rows[0] ? externalAiOptInState(rows[0]) : null;
   }
 }

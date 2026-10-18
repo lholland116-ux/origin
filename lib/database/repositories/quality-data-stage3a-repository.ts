@@ -2,6 +2,7 @@ import type { RequestTrace } from "../../capa/domain/capa-types";
 import type { QualityDataDatasetSnapshot, QualityDataReadScope } from "./quality-data-repository";
 import type { TransactionContext } from "../transactions";
 import type { QualityDataVersionApprovalCommand, QualityDataVersionApprovalState } from "../../quality-data/quality-data-approval-contract";
+import type { QualityDataExternalAiOptInCommand, QualityDataExternalAiOptInState } from "../../quality-data/quality-data-ai-contract";
 
 export interface QualityDataApprovalAppendInput {
   readonly organization_id: string;
@@ -32,6 +33,22 @@ export interface QualityDataApprovalSummary {
   readonly current_event: QualityDataVersionApprovalState | null;
 }
 
+export interface QualityDataExternalAiOptInAppendInput {
+  readonly organization_id: string;
+  readonly actor_user_id: string;
+  readonly actor_membership_id: string;
+  readonly request_trace: RequestTrace & { readonly idempotency_key: string };
+  readonly command: QualityDataExternalAiOptInCommand;
+  readonly event_id: string;
+  readonly request_fingerprint: string;
+  readonly now: string;
+}
+
+export type QualityDataExternalAiOptInAppendResult =
+  | { readonly status: "applied" | "already_recorded"; readonly state: QualityDataExternalAiOptInState }
+  | { readonly status: "unauthorized" }
+  | { readonly status: "conflict"; readonly reason_code: "IDEMPOTENCY_KEY_REUSED" | "STALE_TRANSITION" };
+
 export interface QualityDataStage3ARepository {
   appendVersionApproval(
     transaction: TransactionContext,
@@ -47,4 +64,13 @@ export interface QualityDataStage3ARepository {
     scope: QualityDataReadScope,
     datasetVersionId: string,
   ): Promise<QualityDataApprovalSummary | null>;
+
+  /** Optional until the external-AI opt-in migration is applied; callers fail closed when absent. */
+  appendExternalAiOptInEvent?(
+    transaction: TransactionContext,
+    input: QualityDataExternalAiOptInAppendInput,
+  ): Promise<QualityDataExternalAiOptInAppendResult>;
+
+  /** Returns only the latest organization opt-in event; no event means deny. */
+  findExternalAiOptInState?(organizationId: string): Promise<QualityDataExternalAiOptInState | null>;
 }

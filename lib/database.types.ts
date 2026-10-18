@@ -138,6 +138,51 @@ export type Database = {
         }
         Relationships: []
       }
+      quality_data_ai_interpretation_telemetry: {
+        Row: {
+          correlation_id: string
+          estimated_cost_nano_usd: number | null
+          input_tokens: number | null
+          latency_ms: number
+          model: string
+          occurred_at: string
+          outcome: string
+          output_tokens: number | null
+          pricing_version: string | null
+          request_id: string
+          telemetry_id: number
+          total_tokens: number | null
+        }
+        Insert: {
+          correlation_id: string
+          estimated_cost_nano_usd?: number | null
+          input_tokens?: number | null
+          latency_ms: number
+          model: string
+          occurred_at?: string
+          outcome: string
+          output_tokens?: number | null
+          pricing_version?: string | null
+          request_id: string
+          telemetry_id?: never
+          total_tokens?: number | null
+        }
+        Update: {
+          correlation_id?: string
+          estimated_cost_nano_usd?: number | null
+          input_tokens?: number | null
+          latency_ms?: number
+          model?: string
+          occurred_at?: string
+          outcome?: string
+          output_tokens?: number | null
+          pricing_version?: string | null
+          request_id?: string
+          telemetry_id?: never
+          total_tokens?: number | null
+        }
+        Relationships: []
+      }
       auth_events: {
         Row: {
           created_at: string

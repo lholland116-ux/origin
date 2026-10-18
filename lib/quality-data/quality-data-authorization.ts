@@ -16,6 +16,9 @@ export const QUALITY_DATA_READ_PURPOSE = "QUALITY_DATA_SOURCE_READ" as Controlle
 export const QUALITY_DATA_VERSION_APPROVE_PERMISSION = "quality_data.version.approve";
 export const QUALITY_DATA_VERSION_APPROVE_OPERATION = "approve_quality_data_version" as const;
 export const QUALITY_DATA_VERSION_APPROVE_PURPOSE = "QUALITY_DATA_VERSION_ANALYTICAL_APPROVAL" as ControlledCode;
+export const QUALITY_DATA_EXTERNAL_AI_MANAGE_PERMISSION = "quality_data.external_ai.manage";
+export const QUALITY_DATA_EXTERNAL_AI_MANAGE_OPERATION = "manage_quality_data_external_ai_transfer" as const;
+export const QUALITY_DATA_EXTERNAL_AI_MANAGE_PURPOSE = "QUALITY_DATA_EXTERNAL_AI_TRANSFER_AUTHORIZATION" as ControlledCode;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type QualityDataAuthorizationFailure =
@@ -58,12 +61,16 @@ export interface QualityDataVersionApprovalAuthorizer {
   ): Promise<QualityDataAuthorizationResult>;
 }
 
+export interface QualityDataExternalAiTransferAuthorizer {
+  authorizeExternalAiTransfer(context: CapaRequestContext, trustedNow: Date): Promise<QualityDataAuthorizationResult>;
+}
+
 /**
  * Uses the normal CAPA membership and database-backed role policy, while
  * requiring the exact CAPA_ORG_ADMIN role for the quality ingestion action.
  */
 export class PolicyBackedQualityDataIngestionAuthorizer
-  implements QualityDataIngestionAuthorizer, QualityDataReadAuthorizer, QualityDataVersionApprovalAuthorizer {
+  implements QualityDataIngestionAuthorizer, QualityDataReadAuthorizer, QualityDataVersionApprovalAuthorizer, QualityDataExternalAiTransferAuthorizer {
   constructor(
     private readonly policy: CapaAuthorizationPolicy,
   ) {}
@@ -104,10 +111,22 @@ export class PolicyBackedQualityDataIngestionAuthorizer
     );
   }
 
+  async authorizeExternalAiTransfer(
+    context: CapaRequestContext,
+    trustedNow: Date,
+  ): Promise<QualityDataAuthorizationResult> {
+    return this.authorizeOperation(
+      context,
+      trustedNow,
+      QUALITY_DATA_EXTERNAL_AI_MANAGE_OPERATION,
+      QUALITY_DATA_EXTERNAL_AI_MANAGE_PURPOSE,
+    );
+  }
+
   private async authorizeOperation(
     context: CapaRequestContext,
     trustedNow: Date,
-    operation: typeof QUALITY_DATA_INGEST_OPERATION | typeof QUALITY_DATA_READ_OPERATION | typeof QUALITY_DATA_VERSION_APPROVE_OPERATION,
+    operation: typeof QUALITY_DATA_INGEST_OPERATION | typeof QUALITY_DATA_READ_OPERATION | typeof QUALITY_DATA_VERSION_APPROVE_OPERATION | typeof QUALITY_DATA_EXTERNAL_AI_MANAGE_OPERATION,
     purpose: ControlledCode,
   ): Promise<QualityDataAuthorizationResult> {
     if (!isHumanPrincipal(context.authentication)) {

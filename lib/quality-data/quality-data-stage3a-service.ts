@@ -5,7 +5,7 @@ import type { QualityDataApprovalSummary, QualityDataStage3ARepository } from ".
 import type { TransactionManager } from "../database/transactions";
 import type { CapaRequestContext } from "../security/supabase-capa-context";
 import { isHumanPrincipal, isSessionActive } from "../security/auth-context";
-import type { QualityDataAuthorizationResult, QualityDataReadAuthorizer, QualityDataVersionApprovalAuthorizer } from "./quality-data-authorization";
+import type { QualityDataAuthorizationResult, QualityDataExternalAiTransferAuthorizer, QualityDataReadAuthorizer, QualityDataVersionApprovalAuthorizer } from "./quality-data-authorization";
 import { QUALITY_DATA_APPROVAL_SCHEMA_VERSION, qualityDataVersionApprovalCommandSchema, type QualityDataVersionApprovalCommand, type QualityDataVersionApprovalState } from "./quality-data-approval-contract";
 import {
   QUALITY_ANALYSIS_CALCULATION_VERSION,
@@ -33,6 +33,7 @@ export interface QualityDataStage3AServiceDependencies {
   readonly audit_repository: AuditRepository;
   readonly transaction_manager: TransactionManager;
   readonly authorizer: QualityDataReadAuthorizer & QualityDataVersionApprovalAuthorizer;
+  readonly external_ai_transfer_authorizer?: QualityDataExternalAiTransferAuthorizer;
   readonly ids: { readonly audit_event_id: () => AuditEventId; readonly uuid: () => string };
   readonly clock: { readonly now: () => Date };
 }

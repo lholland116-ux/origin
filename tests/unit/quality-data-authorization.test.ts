@@ -113,6 +113,42 @@ describe("quality-data authorization", () => {
     }));
   });
 
+  it("requires the distinct external-provider transfer permission for an active administrator", async () => {
+    const evaluate = vi.fn().mockResolvedValue({ decision: "allow" });
+    const authorizer = new PolicyBackedQualityDataIngestionAuthorizer({ evaluate } as never);
+    await expect(authorizer.authorizeExternalAiTransfer(context(), NOW)).resolves.toEqual({
+      allowed: true,
+      organization_id: ORG,
+      membership_id: MEMBERSHIP,
+      uploader_user_id: USER,
+    });
+    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "manage_quality_data_external_ai_transfer",
+      purpose: "QUALITY_DATA_EXTERNAL_AI_TRANSFER_AUTHORIZATION",
+    }));
+
+    const denied = new PolicyBackedQualityDataIngestionAuthorizer({
+      evaluate: vi.fn().mockResolvedValue({ decision: "deny" }),
+    } as never);
+    await expect(denied.authorizeExternalAiTransfer(context(), NOW)).resolves.toEqual({
+      allowed: false,
+      reason_code: "QUALITY_DATA_PERMISSION_DENIED",
+    });
+  });
+
+  it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR", "CAPA_REVIEWER", "CAPA_AUDITOR"])(
+    "denies external-provider transfer authorization to %s",
+    async (role) => {
+      const evaluate = vi.fn();
+      const authorizer = new PolicyBackedQualityDataIngestionAuthorizer({ evaluate } as never);
+      await expect(authorizer.authorizeExternalAiTransfer(context(role), NOW)).resolves.toEqual({
+        allowed: false,
+        reason_code: "ACTIVE_ORG_ADMIN_REQUIRED",
+      });
+      expect(evaluate).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR", "CAPA_REVIEWER", "CAPA_AUDITOR"])(
     "denies analytical approval to %s even when other quality permissions might exist",
     async (role) => {

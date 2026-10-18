@@ -19,13 +19,14 @@ set -Eeuo pipefail
 #   QUALITY_DATA_PG_EXPECTED_TESTS=17 \
 #   scripts/qualification/quality-data-postgres.sh
 
-readonly EXPECTED_HEAD="a54b411836cc7343de881cd632bdd2b62ffcf597"
+readonly EXPECTED_HEAD="17b4a7b204a166418f93c60b57eafb075f653795"
 readonly IMAGE="public.ecr.aws/supabase/postgres:17.11.0.002"
 readonly HOST_PORT="57381"
 readonly DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:57381/postgres"
 readonly CLI_DATABASE_URL="${DATABASE_URL}?sslmode=disable"
 readonly DEFAULT_TEST_FILES="tests/integration/quality-data-stage3a-postgres.test.ts"
 readonly DEFAULT_EXPECTED_TESTS="11"
+readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261018110000_quality_data_external_ai_interpretation.sql")
 
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
@@ -42,8 +43,10 @@ if ! git diff --quiet "$EXPECTED_HEAD" -- supabase/migrations; then
   echo "STOP: tracked migration files differ from the baseline." >&2
   exit 1
 fi
-if [[ -n "$(git ls-files --others --exclude-standard -- supabase/migrations)" ]]; then
-  echo "STOP: untracked files exist under supabase/migrations." >&2
+actual_untracked_migrations="$(git ls-files --others --exclude-standard -- supabase/migrations | sed 's#^supabase/migrations/##' | sort)"
+expected_untracked_migrations="$(printf '%s\n' "${ALLOWED_UNTRACKED_MIGRATIONS[@]}" | sort)"
+if [[ "$actual_untracked_migrations" != "$expected_untracked_migrations" ]]; then
+  echo "STOP: untracked migration files differ from this Stage 3C fixture allowlist." >&2
   exit 1
 fi
 
@@ -53,6 +56,7 @@ readonly MIGRATIONS=(
   "20261017100000_create_quality_data_source_bucket.sql"
   "20261017110000_add_quality_data_xlsx_api_rate_limit.sql"
   "20261018100000_quality_data_analytical_approval.sql"
+  "20261018110000_quality_data_external_ai_interpretation.sql"
 )
 for migration in "${MIGRATIONS[@]}"; do
   if [[ ! -f "$repo/supabase/migrations/$migration" ]]; then
@@ -87,7 +91,15 @@ if [[ ! -x "$repo/node_modules/.bin/supabase" || ! -x "$repo/node_modules/.bin/v
   echo "STOP: repository-local Supabase CLI or Vitest is unavailable." >&2
   exit 1
 fi
-supabase_version="$("$repo/node_modules/.bin/supabase" --version)"
+version_home="$(mktemp -d "${TMPDIR:-/tmp}/lvt-quality-cli-version.XXXXXX")"
+chmod 700 "$version_home"
+mkdir -m 700 -p "$version_home/.config"
+if ! supabase_version="$(HOME="$version_home" XDG_CONFIG_HOME="$version_home/.config" SUPABASE_TELEMETRY_DISABLED=1 "$repo/node_modules/.bin/supabase" --version)"; then
+  rm -rf -- "$version_home"
+  echo "STOP: repository-local Supabase CLI version check failed." >&2
+  exit 1
+fi
+rm -rf -- "$version_home"
 if [[ "$supabase_version" != "2.115.0" ]]; then
   echo "STOP: expected repository-pinned Supabase CLI 2.115.0; found $supabase_version." >&2
   exit 1
@@ -339,7 +351,7 @@ if ! diff -u "$expected_versions" "$applied_versions"; then
   echo "STOP: selected migration files and disposable migration ledger differ." >&2
   exit 1
 fi
-echo "Migration ledger verified: exactly the five dependency-scoped migrations were applied."
+echo "Migration ledger verified: exactly the six dependency-scoped migrations were applied."
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
 DO $postflight$
