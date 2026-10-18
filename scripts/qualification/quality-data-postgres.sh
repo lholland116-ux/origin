@@ -14,14 +14,14 @@ set -Eeuo pipefail
 # Integrated Layer 2 V1 default:
 #   scripts/qualification/quality-data-postgres.sh
 
-readonly EXPECTED_HEAD="7a75302621fb3fcf47971457afcadfc927878d0d"
+readonly EXPECTED_HEAD="e154361a3bde0b2f1c586038f2c9640926312314"
 readonly IMAGE="public.ecr.aws/supabase/postgres:17.11.0.002"
 readonly HOST_PORT="57381"
 readonly DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:57381/postgres"
 readonly CLI_DATABASE_URL="${DATABASE_URL}?sslmode=disable"
 readonly DEFAULT_TEST_FILES="tests/integration/quality-data-foundation-postgres.test.ts tests/integration/quality-data-stage2c-postgres.test.ts tests/integration/quality-data-stage3a-postgres.test.ts tests/integration/quality-data-stage3c-postgres.test.ts tests/integration/quality-data-stage3d-postgres.test.ts tests/integration/quality-data-xlsx-rate-limit-postgres.test.ts"
 readonly DEFAULT_EXPECTED_TESTS="42"
-readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261018160608_quality_data_intelligence_review.sql")
+readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261018170000_quality_data_ai_telemetry_least_privilege.sql")
 
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
@@ -53,6 +53,7 @@ readonly MIGRATIONS=(
   "20261018100000_quality_data_analytical_approval.sql"
   "20261018110000_quality_data_external_ai_interpretation.sql"
   "20261018160608_quality_data_intelligence_review.sql"
+  "20261018170000_quality_data_ai_telemetry_least_privilege.sql"
 )
 for migration in "${MIGRATIONS[@]}"; do
   if [[ ! -f "$repo/supabase/migrations/$migration" ]]; then
@@ -326,6 +327,58 @@ fi
 echo "Verified: postgres has CREATE on schema storage in the disposable container only."
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres < "$storage_fixture"
+
+# Reproduce the production baseline defaults from
+# 20260812154330_lvtchat_remote_baseline.sql in this disposable database only.
+# This ensures later object-specific REVOKE statements are actually qualified.
+docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT, USAGE ON SEQUENCES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON ROUTINES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT, USAGE ON SEQUENCES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON ROUTINES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT, USAGE ON SEQUENCES TO service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON ROUTINES TO service_role;
+
+CREATE TABLE public.__quality_data_default_grants_probe (
+  probe_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY
+);
+DO $baseline_check$
+DECLARE
+  v_table oid := 'public.__quality_data_default_grants_probe'::regclass;
+  v_sequence oid := pg_catalog.pg_get_serial_sequence(
+    'public.__quality_data_default_grants_probe', 'probe_id'
+  )::regclass;
+BEGIN
+  IF NOT (
+    pg_catalog.has_table_privilege('anon', v_table, 'DELETE')
+    AND pg_catalog.has_table_privilege('anon', v_table, 'INSERT')
+    AND pg_catalog.has_table_privilege('anon', v_table, 'SELECT')
+    AND pg_catalog.has_table_privilege('anon', v_table, 'UPDATE')
+    AND pg_catalog.has_table_privilege('authenticated', v_table, 'DELETE')
+    AND pg_catalog.has_table_privilege('authenticated', v_table, 'INSERT')
+    AND pg_catalog.has_table_privilege('authenticated', v_table, 'SELECT')
+    AND pg_catalog.has_table_privilege('authenticated', v_table, 'UPDATE')
+    AND pg_catalog.has_table_privilege('service_role', v_table, 'DELETE')
+    AND pg_catalog.has_table_privilege('service_role', v_table, 'INSERT')
+    AND pg_catalog.has_table_privilege('service_role', v_table, 'SELECT')
+    AND pg_catalog.has_table_privilege('service_role', v_table, 'UPDATE')
+    AND pg_catalog.has_sequence_privilege('anon', v_sequence, 'SELECT')
+    AND pg_catalog.has_sequence_privilege('anon', v_sequence, 'USAGE')
+    AND pg_catalog.has_sequence_privilege('authenticated', v_sequence, 'SELECT')
+    AND pg_catalog.has_sequence_privilege('authenticated', v_sequence, 'USAGE')
+    AND pg_catalog.has_sequence_privilege('service_role', v_sequence, 'SELECT')
+    AND pg_catalog.has_sequence_privilege('service_role', v_sequence, 'USAGE')
+  ) THEN
+    RAISE EXCEPTION 'DISPOSABLE_BASELINE_DEFAULT_GRANTS_NOT_REPRODUCED';
+  END IF;
+END
+$baseline_check$;
+DROP TABLE public.__quality_data_default_grants_probe;
+SQL
+echo "Disposable baseline verified: production public-schema table, sequence, and routine default grants reproduced before migrations."
 
 # PGSSLMODE is scoped to this Supabase CLI process. The URL remains loopback-only.
 if ! (

@@ -163,13 +163,119 @@ describeDatabase("Stage 3C external-AI opt-in and shared budget controls (dispos
     await expect(consume(rateUsers[1]!, "unbounded")).rejects.toThrow();
   });
 
-  it("stores provider telemetry metadata without granting application-role access", async () => {
-    const [row] = await sql<{ rls: boolean; forced: boolean; client_select: boolean; client_insert: boolean }[]>`
-      select c.relrowsecurity as rls, c.relforcerowsecurity as forced,
-        pg_catalog.has_table_privilege('authenticated', c.oid, 'select') as client_select,
-        pg_catalog.has_table_privilege('authenticated', c.oid, 'insert') as client_insert
-      from pg_catalog.pg_class c where c.oid = 'public.quality_data_ai_interpretation_telemetry'::regclass`;
-    expect(row).toEqual({ rls: true, forced: true, client_select: false, client_insert: false });
+  it("restricts telemetry table and identity-sequence privileges while allowing service-role inserts", async () => {
+    const [row] = await sql<{
+      rls: boolean; forced: boolean; policy_count: number;
+      table_public_direct: string[]; table_anon_direct: string[]; table_authenticated_direct: string[];
+      table_service_direct: string[]; table_service_grant_option: boolean;
+      anon_table_effective_none: boolean; authenticated_table_effective_none: boolean;
+      service_table_select: boolean; service_table_insert: boolean; service_table_other_none: boolean;
+      sequence_public_direct: string[]; sequence_anon_direct: string[]; sequence_authenticated_direct: string[];
+      sequence_service_direct: string[]; sequence_service_grant_option: boolean;
+      anon_sequence_effective_none: boolean; authenticated_sequence_effective_none: boolean;
+      service_sequence_select: boolean; service_sequence_usage: boolean; service_sequence_update_none: boolean;
+    }[]>`
+      with table_target as (
+        select c.oid, c.relowner, c.relacl, c.relrowsecurity, c.relforcerowsecurity
+        from pg_catalog.pg_class as c
+        where c.oid = 'public.quality_data_ai_interpretation_telemetry'::regclass
+      ), table_acl as (
+        select exploded.grantee, grantee_role.rolname as grantee_name,
+          exploded.privilege_type, exploded.is_grantable, table_target.oid
+        from table_target
+        cross join lateral pg_catalog.aclexplode(
+          coalesce(table_target.relacl, pg_catalog.acldefault('r', table_target.relowner))
+        ) as exploded
+        left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = exploded.grantee
+        where exploded.grantee = 0 or exploded.grantee <> table_target.relowner
+      ), sequence_target as (
+        select c.oid, c.relowner, c.relacl
+        from pg_catalog.pg_class as c
+        where c.oid = pg_catalog.pg_get_serial_sequence(
+          'public.quality_data_ai_interpretation_telemetry', 'telemetry_id'
+        )::regclass
+      ), sequence_acl as (
+        select exploded.grantee, grantee_role.rolname as grantee_name,
+          exploded.privilege_type, exploded.is_grantable, sequence_target.oid
+        from sequence_target
+        cross join lateral pg_catalog.aclexplode(
+          coalesce(sequence_target.relacl, pg_catalog.acldefault('S', sequence_target.relowner))
+        ) as exploded
+        left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = exploded.grantee
+        where exploded.grantee = 0 or exploded.grantee <> sequence_target.relowner
+      )
+      select table_target.relrowsecurity as rls, table_target.relforcerowsecurity as forced,
+        (select count(*)::int from pg_catalog.pg_policy where polrelid = table_target.oid) as policy_count,
+        coalesce((select array_agg(privilege_type order by privilege_type) from table_acl where grantee = 0), array[]::text[]) as table_public_direct,
+        coalesce((select array_agg(privilege_type order by privilege_type) from table_acl where grantee_name = 'anon'), array[]::text[]) as table_anon_direct,
+        coalesce((select array_agg(privilege_type order by privilege_type) from table_acl where grantee_name = 'authenticated'), array[]::text[]) as table_authenticated_direct,
+        coalesce((select array_agg(privilege_type order by privilege_type) from table_acl where grantee_name = 'service_role'), array[]::text[]) as table_service_direct,
+        coalesce((select bool_or(is_grantable) from table_acl where grantee_name = 'service_role'), false) as table_service_grant_option,
+        not (pg_catalog.has_table_privilege('anon', table_target.oid, 'select')
+          or pg_catalog.has_table_privilege('anon', table_target.oid, 'insert')
+          or pg_catalog.has_table_privilege('anon', table_target.oid, 'update')
+          or pg_catalog.has_table_privilege('anon', table_target.oid, 'delete')
+          or pg_catalog.has_table_privilege('anon', table_target.oid, 'truncate')
+          or pg_catalog.has_table_privilege('anon', table_target.oid, 'references')
+          or pg_catalog.has_table_privilege('anon', table_target.oid, 'trigger')) as anon_table_effective_none,
+        not (pg_catalog.has_table_privilege('authenticated', table_target.oid, 'select')
+          or pg_catalog.has_table_privilege('authenticated', table_target.oid, 'insert')
+          or pg_catalog.has_table_privilege('authenticated', table_target.oid, 'update')
+          or pg_catalog.has_table_privilege('authenticated', table_target.oid, 'delete')
+          or pg_catalog.has_table_privilege('authenticated', table_target.oid, 'truncate')
+          or pg_catalog.has_table_privilege('authenticated', table_target.oid, 'references')
+          or pg_catalog.has_table_privilege('authenticated', table_target.oid, 'trigger')) as authenticated_table_effective_none,
+        pg_catalog.has_table_privilege('service_role', table_target.oid, 'select') as service_table_select,
+        pg_catalog.has_table_privilege('service_role', table_target.oid, 'insert') as service_table_insert,
+        not (pg_catalog.has_table_privilege('service_role', table_target.oid, 'update')
+          or pg_catalog.has_table_privilege('service_role', table_target.oid, 'delete')
+          or pg_catalog.has_table_privilege('service_role', table_target.oid, 'truncate')
+          or pg_catalog.has_table_privilege('service_role', table_target.oid, 'references')
+          or pg_catalog.has_table_privilege('service_role', table_target.oid, 'trigger')) as service_table_other_none,
+        coalesce((select array_agg(privilege_type order by privilege_type) from sequence_acl where grantee = 0), array[]::text[]) as sequence_public_direct,
+        coalesce((select array_agg(privilege_type order by privilege_type) from sequence_acl where grantee_name = 'anon'), array[]::text[]) as sequence_anon_direct,
+        coalesce((select array_agg(privilege_type order by privilege_type) from sequence_acl where grantee_name = 'authenticated'), array[]::text[]) as sequence_authenticated_direct,
+        coalesce((select array_agg(privilege_type order by privilege_type) from sequence_acl where grantee_name = 'service_role'), array[]::text[]) as sequence_service_direct,
+        coalesce((select bool_or(is_grantable) from sequence_acl where grantee_name = 'service_role'), false) as sequence_service_grant_option,
+        not (pg_catalog.has_sequence_privilege('anon', sequence_target.oid, 'select')
+          or pg_catalog.has_sequence_privilege('anon', sequence_target.oid, 'usage')
+          or pg_catalog.has_sequence_privilege('anon', sequence_target.oid, 'update')) as anon_sequence_effective_none,
+        not (pg_catalog.has_sequence_privilege('authenticated', sequence_target.oid, 'select')
+          or pg_catalog.has_sequence_privilege('authenticated', sequence_target.oid, 'usage')
+          or pg_catalog.has_sequence_privilege('authenticated', sequence_target.oid, 'update')) as authenticated_sequence_effective_none,
+        pg_catalog.has_sequence_privilege('service_role', sequence_target.oid, 'select') as service_sequence_select,
+        pg_catalog.has_sequence_privilege('service_role', sequence_target.oid, 'usage') as service_sequence_usage,
+        not pg_catalog.has_sequence_privilege('service_role', sequence_target.oid, 'update') as service_sequence_update_none
+      from table_target cross join sequence_target`;
+
+    expect(row).toEqual({
+      rls: true, forced: true, policy_count: 0,
+      table_public_direct: [], table_anon_direct: [], table_authenticated_direct: [],
+      table_service_direct: ["INSERT", "SELECT"], table_service_grant_option: false,
+      anon_table_effective_none: true, authenticated_table_effective_none: true,
+      service_table_select: true, service_table_insert: true, service_table_other_none: true,
+      sequence_public_direct: [], sequence_anon_direct: [], sequence_authenticated_direct: [],
+      sequence_service_direct: ["SELECT", "USAGE"], sequence_service_grant_option: false,
+      anon_sequence_effective_none: true, authenticated_sequence_effective_none: true,
+      service_sequence_select: true, service_sequence_usage: true, service_sequence_update_none: true,
+    });
+
+    const requestId = randomUUID();
+    try {
+      const inserted = await sql.begin(async (tx) => {
+        await tx`set local role service_role`;
+        return tx<{ telemetry_id: string }[]>`
+          insert into public.quality_data_ai_interpretation_telemetry (
+            request_id, correlation_id, model, outcome, latency_ms
+          ) values (
+            ${requestId}::uuid, ${randomUUID()}::uuid, 'gpt-6-luna', 'success', 1
+          ) returning telemetry_id`;
+      });
+      expect(inserted).toHaveLength(1);
+      expect(inserted[0]?.telemetry_id).toMatch(/^[0-9]+$/);
+    } finally {
+      await sql`delete from public.quality_data_ai_interpretation_telemetry where request_id = ${requestId}::uuid`;
+    }
   });
 
   it("restricts the shared request-limit RPC to the trusted service role", async () => {
