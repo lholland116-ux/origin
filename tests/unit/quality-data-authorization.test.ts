@@ -136,6 +136,39 @@ describe("quality-data authorization", () => {
     });
   });
 
+  it("requires the distinct human intelligence-review permission for an active organization administrator", async () => {
+    const evaluate = vi.fn().mockResolvedValue({ decision: "allow" });
+    const authorizer = new PolicyBackedQualityDataIngestionAuthorizer({ evaluate } as never);
+    await expect(authorizer.authorizeIntelligenceReview(context(), NOW)).resolves.toEqual({
+      allowed: true,
+      organization_id: ORG,
+      membership_id: MEMBERSHIP,
+      uploader_user_id: USER,
+    });
+    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "review_quality_data_intelligence",
+      purpose: "QUALITY_DATA_INTELLIGENCE_HUMAN_REVIEW",
+    }));
+    const denied = new PolicyBackedQualityDataIngestionAuthorizer({ evaluate: vi.fn().mockResolvedValue({ decision: "deny" }) } as never);
+    await expect(denied.authorizeIntelligenceReview(context(), NOW)).resolves.toEqual({
+      allowed: false,
+      reason_code: "QUALITY_DATA_PERMISSION_DENIED",
+    });
+  });
+
+  it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR", "CAPA_REVIEWER", "CAPA_AUDITOR"])(
+    "denies intelligence review to %s even if it has read access",
+    async (role) => {
+      const evaluate = vi.fn();
+      const authorizer = new PolicyBackedQualityDataIngestionAuthorizer({ evaluate } as never);
+      await expect(authorizer.authorizeIntelligenceReview(context(role), NOW)).resolves.toEqual({
+        allowed: false,
+        reason_code: "ACTIVE_ORG_ADMIN_REQUIRED",
+      });
+      expect(evaluate).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["CAPA_OWNER", "CAPA_CONTRIBUTOR", "CAPA_REVIEWER", "CAPA_AUDITOR"])(
     "denies external-provider transfer authorization to %s",
     async (role) => {

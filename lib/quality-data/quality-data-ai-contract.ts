@@ -134,3 +134,32 @@ export interface QualityDataAiAnalysisResult {
   readonly authorization_scope: "analytical_use_only";
   readonly evidence_citations: readonly QualityEvidenceCitation[];
 }
+
+const qualityEvidenceCitationSchema = z.object({
+  handle: opaqueHandle,
+  record_id: z.string().uuid(),
+  record_ordinal: z.number().int().positive().max(10_000),
+  source_worksheet: z.string().min(1).max(128),
+  source_row_number: z.number().int().positive().max(1_000_000),
+  source_cells: z.array(z.string().min(1).max(32)).max(8),
+  source_id: z.string().uuid(),
+  source_version_id: z.string().uuid(),
+  source_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+}).strict();
+
+/** Strict persistence boundary for the complete, server-validated Stage 3C result. */
+export const qualityDataAiAnalysisResultSchema = z.object({
+  schema_version: z.literal(QUALITY_DATA_AI_ANALYSIS_RESULT_VERSION),
+  packet_version: z.literal(QUALITY_DATA_EVIDENCE_PACKET_VERSION),
+  status: z.literal("complete"),
+  verified_calculations: qualityEvidencePacketSchema.shape.calculations,
+  observed_signals: qualityEvidencePacketSchema.shape.signals,
+  time_windows: qualityEvidencePacketSchema.shape.time_windows,
+  assumptions: qualityEvidencePacketSchema.shape.assumptions,
+  data_quality_limitations: z.array(z.string().min(1).max(64)).max(40),
+  interpretation: qualityDataAiModelOutputSchema,
+  interpretation_status: z.literal("unverified_advisory_hypotheses"),
+  source_verification: z.literal("not_asserted"),
+  authorization_scope: z.literal("analytical_use_only"),
+  evidence_citations: z.array(qualityEvidenceCitationSchema).min(1).max(128),
+}).strict();

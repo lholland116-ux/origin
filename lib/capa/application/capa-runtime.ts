@@ -122,6 +122,7 @@ import type { ReconcileCapaInvestigationActiveWorkspaceAdoptionsResult } from ".
 import type { RequestTrace, CapaCaseId } from "../domain/capa-types";
 import type { QualityDataXlsxIngestionDependencies } from "../../quality-data/xlsx-quality-data-ingestion";
 import type { QualityDataStage3AServiceDependencies } from "../../quality-data/quality-data-stage3a-service";
+import type { QualityDataStage3DBaseDependencies } from "../../quality-data/quality-data-stage3d-service";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -142,6 +143,9 @@ export interface CapaRuntime {
 
   /** Server-only approval and analytical retrieval composition; absent runtimes fail closed. */
   readonly create_quality_data_stage3a_dependencies?: () => QualityDataStage3AServiceDependencies;
+
+  /** Server-only persistence and authorization composition for Layer 2 human review. */
+  readonly create_quality_data_stage3d_dependencies?: () => QualityDataStage3DBaseDependencies;
 
   readonly participant_eligibility_repository: CapaParticipantEligibilityRepository;
   /**

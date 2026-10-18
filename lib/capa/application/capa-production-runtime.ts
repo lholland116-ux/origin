@@ -203,6 +203,7 @@ import {
 } from "../../database/supabase/supabase-audit-repository";
 import { SupabaseQualityDataRepository } from "../../database/supabase/supabase-quality-data-repository";
 import { SupabaseQualityDataStage3ARepository } from "../../database/supabase/supabase-quality-data-stage3a-repository";
+import { SupabaseQualityDataStage3DRepository } from "../../database/supabase/supabase-quality-data-stage3d-repository";
 import { SupabaseQualityDataSourceStorage } from "../../database/supabase/supabase-quality-data-source-storage";
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../quality-data/quality-data-authorization";
 import { createAdminClient } from "../../supabase/admin";
@@ -1456,6 +1457,32 @@ export function createCapaProductionRuntime(
         transaction_manager: transactionManager,
         authorizer: qualityDataAuthorizer,
         external_ai_transfer_authorizer: qualityDataAuthorizer,
+        ids: {
+          audit_event_id: () => generateUuid() as AuditEventId,
+          uuid: generateUuid,
+        },
+        clock: { now },
+      };
+    },
+
+    create_quality_data_stage3d_dependencies() {
+      return {
+        quality_data: {
+          repository: new SupabaseQualityDataStage3ARepository(sql),
+          audit_repository: auditRepository,
+          transaction_manager: transactionManager,
+          authorizer: qualityDataAuthorizer,
+          external_ai_transfer_authorizer: qualityDataAuthorizer,
+          ids: {
+            audit_event_id: () => generateUuid() as AuditEventId,
+            uuid: generateUuid,
+          },
+          clock: { now },
+        },
+        repository: new SupabaseQualityDataStage3DRepository(sql),
+        audit_repository: auditRepository,
+        transaction_manager: transactionManager,
+        authorizer: qualityDataAuthorizer,
         ids: {
           audit_event_id: () => generateUuid() as AuditEventId,
           uuid: generateUuid,

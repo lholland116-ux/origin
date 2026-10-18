@@ -8,6 +8,7 @@ import type { QualityDataPilotGate } from "./quality-data-pilot-gate";
 import { isQualityDataPilotOrganizationAllowed } from "./quality-data-pilot-gate";
 import { getQualityDataExternalAiOptIn, transitionQualityDataExternalAiOptIn } from "./quality-data-external-ai-opt-in-service";
 import { interpretQualityDataAnalysis } from "./quality-data-ai-service";
+import { createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DBaseDependencies, type QualityDataStage3DServiceDependencies } from "./quality-data-stage3d-service";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_BODY_BYTES = 32 * 1024;
@@ -18,6 +19,7 @@ export interface QualityDataAiApiDependencies {
   readonly resolve_context: SupabaseCapaContextResolver;
   readonly get_ai_dependencies: () => QualityDataAiInterpretationDependencies | null;
   readonly get_control_dependencies: () => import("./quality-data-stage3a-service").QualityDataStage3AServiceDependencies | null;
+  readonly get_stage3d_dependencies?: () => QualityDataStage3DBaseDependencies | null;
   readonly now: () => Date;
   readonly generate_uuid: () => string;
   readonly configured_app_url?: string;
@@ -172,4 +174,110 @@ export async function handleQualityDataAiInterpretationPost(request: Request, de
     case "rate_limit_required": return error("rate_limited", "Please wait before requesting another interpretation.", 429, trace.correlation_id);
     default: return error("service_unavailable", "Quality-data AI analysis is unavailable.", 503, trace.correlation_id);
   }
+}
+
+function stage3dService(dependencies: QualityDataAiApiDependencies, includeAi: boolean): QualityDataStage3DServiceDependencies | null {
+  const base = dependencies.get_stage3d_dependencies?.();
+  if (!base) return null;
+  const ai = includeAi ? dependencies.get_ai_dependencies() : null;
+  if (includeAi && !ai) return null;
+  return {
+    ...base,
+    ...(ai ? { model_client: ai.model_client, generate_handle: ai.generate_handle, record_telemetry: ai.record_telemetry } : {
+      // Report reads and human review never dispatch a provider.
+      model_client: { generate: async () => { throw new Error("PROVIDER_NOT_AVAILABLE_FOR_REVIEW"); } },
+      generate_handle: () => dependencies.generate_uuid(),
+      record_telemetry: async () => undefined,
+    }),
+  };
+}
+
+function intelligenceGate(context: CapaRequestContext, dependencies: QualityDataAiApiDependencies, correlation: string): Response | null {
+  const pilot = pilotAllowed(context, dependencies, correlation);
+  if (pilot) return pilot;
+  if (!isQualityDataAiOrganizationAllowed(dependencies.ai_gate, context.tenant.organization_id)) return error("quality_data_ai_unavailable", "Quality-data intelligence is not enabled for this organization.", 404, correlation);
+  return null;
+}
+
+export async function handleQualityDataIntelligencePost(request: Request, dependencies: QualityDataAiApiDependencies): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  const correlation = trace.correlation_id;
+  if (!sameOrigin(request, dependencies.configured_app_url)) return error("origin_denied", "The request origin is not allowed.", 403, correlation);
+  const authenticated = await auth(dependencies);
+  if (authenticated instanceof Response) return authenticated;
+  const blocked = intelligenceGate(authenticated.context, dependencies, correlation);
+  if (blocked) return blocked;
+  if (!trace.idempotency_key) return error("invalid_request", "An idempotency key is required.", 400, correlation);
+  const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "ai_interpretation", dependencies.now().getTime())).catch(() => "unavailable" as const);
+  if (limit === "unavailable") return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, correlation);
+  if (limit === "limited") return error("rate_limited", "Please wait before requesting another intelligence report.", 429, correlation);
+  const body = await readJson(request);
+  if (body === "too_large") return error("request_too_large", "The intelligence request is too large.", 413, correlation);
+  if (body === "timeout") return error("request_timeout", "The intelligence request took too long.", 408, correlation);
+  if (body === "invalid") return error("invalid_request", "The intelligence request is invalid.", 400, correlation);
+  let service: QualityDataStage3DServiceDependencies | null;
+  try { service = stage3dService(dependencies, true); } catch { return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, correlation); }
+  if (!service) return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, correlation);
+  const result = await createQualityDataIntelligenceReport(service, authenticated.context, trace, body);
+  switch (result.status) {
+    case "complete": return json({ status: result.status, report_id: result.report.report_id, report: result.report, replayed: result.replayed }, result.replayed ? 200 : 201);
+    case "processing": return json({ status: "processing", report_id: result.report_id }, 202);
+    case "failed": return json({ status: "failed", report_id: result.report_id, failure_code: result.failure_code }, 502);
+    case "denied": return error("quality_data_forbidden", "You are not authorized for quality-data intelligence.", 403, correlation);
+    case "not_approved": return error("dataset_not_approved", "The dataset version is not currently approved for analytical use.", 409, correlation);
+    case "not_found_or_not_authorized": return error("not_found", "The approved dataset version was not found.", 404, correlation);
+    case "invalid_request": return error("invalid_request", "The intelligence request is invalid.", 400, correlation);
+    case "conflict": return error("idempotency_conflict", "The idempotency key was already used for a different request.", 409, correlation);
+    default: return error("intelligence_unavailable", "The intelligence report could not be completed safely.", 503, correlation);
+  }
+}
+
+export async function handleQualityDataIntelligenceGet(request: Request, reportId: string, dependencies: QualityDataAiApiDependencies): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  if (!UUID.test(reportId)) return error("invalid_request", "The report identifier is invalid.", 400, trace.correlation_id);
+  if (!sameOrigin(request, dependencies.configured_app_url, true)) return error("origin_denied", "The request origin is not allowed.", 403, trace.correlation_id);
+  const authenticated = await auth(dependencies);
+  if (authenticated instanceof Response) return authenticated;
+  const blocked = intelligenceGate(authenticated.context, dependencies, trace.correlation_id);
+  if (blocked) return blocked;
+  const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "analysis", dependencies.now().getTime())).catch(() => "unavailable" as const);
+  if (limit === "unavailable") return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, trace.correlation_id);
+  if (limit === "limited") return error("rate_limited", "Please wait before reading another intelligence report.", 429, trace.correlation_id);
+  let service: QualityDataStage3DServiceDependencies | null;
+  try { service = stage3dService(dependencies, false); } catch { return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, trace.correlation_id); }
+  if (!service) return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, trace.correlation_id);
+  const result = await getQualityDataIntelligenceReport(service, authenticated.context, reportId);
+  if (result.status === "found") return json(result);
+  if (result.status === "denied") return error("quality_data_forbidden", "You are not authorized to read this intelligence report.", 403, trace.correlation_id);
+  if (result.status === "not_approved") return error("dataset_not_approved", "The dataset version is not currently approved for analytical use.", 409, trace.correlation_id);
+  if (result.status === "unavailable") return error("service_unavailable", "The intelligence report is temporarily unavailable.", 503, trace.correlation_id);
+  return error(result.status === "invalid_request" ? "invalid_request" : "not_found", "The intelligence report was not found.", result.status === "invalid_request" ? 400 : 404, trace.correlation_id);
+}
+
+export async function handleQualityDataIntelligenceReviewPost(request: Request, reportId: string, dependencies: QualityDataAiApiDependencies): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  if (!UUID.test(reportId)) return error("invalid_request", "The report identifier is invalid.", 400, trace.correlation_id);
+  if (!sameOrigin(request, dependencies.configured_app_url)) return error("origin_denied", "The request origin is not allowed.", 403, trace.correlation_id);
+  const authenticated = await auth(dependencies);
+  if (authenticated instanceof Response) return authenticated;
+  const blocked = intelligenceGate(authenticated.context, dependencies, trace.correlation_id);
+  if (blocked) return blocked;
+  const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "approval", dependencies.now().getTime())).catch(() => "unavailable" as const);
+  if (limit === "unavailable") return error("service_unavailable", "Human review is unavailable.", 503, trace.correlation_id);
+  if (limit === "limited") return error("rate_limited", "Please wait before recording another review.", 429, trace.correlation_id);
+  const body = await readJson(request);
+  if (body === "too_large") return error("request_too_large", "The review request is too large.", 413, trace.correlation_id);
+  if (body === "timeout") return error("request_timeout", "The review request took too long.", 408, trace.correlation_id);
+  if (body === "invalid" || typeof body !== "object" || body === null || Array.isArray(body) || (body as Record<string, unknown>).report_id !== reportId) return error("invalid_request", "The review request is invalid.", 400, trace.correlation_id);
+  let service: QualityDataStage3DServiceDependencies | null;
+  try { service = stage3dService(dependencies, false); } catch { return error("service_unavailable", "Human review is unavailable.", 503, trace.correlation_id); }
+  if (!service) return error("service_unavailable", "Human review is unavailable.", 503, trace.correlation_id);
+  const result = await reviewQualityDataIntelligenceFinding(service, authenticated.context, trace, body);
+  if (result.status === "applied" || result.status === "already_recorded") return json({ status: result.status, review: result.event }, result.status === "applied" ? 201 : 200);
+  if (result.status === "denied") return error("quality_data_review_forbidden", "You are not authorized to review this intelligence finding.", 403, trace.correlation_id);
+  if (result.status === "not_approved") return error("dataset_not_approved", "The dataset version is not currently approved for analytical use.", 409, trace.correlation_id);
+  if (result.status === "conflict") return error("review_conflict", "The review changed. Refresh its history before continuing.", 409, trace.correlation_id);
+  if (result.status === "invalid_request") return error("invalid_request", "The review request is invalid.", 400, trace.correlation_id);
+  if (result.status === "not_found_or_not_authorized") return error("not_found", "The intelligence finding was not found.", 404, trace.correlation_id);
+  return error("review_unavailable", "The intelligence review could not be recorded.", 500, trace.correlation_id);
 }

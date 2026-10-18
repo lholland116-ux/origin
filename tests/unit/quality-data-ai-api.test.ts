@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleQualityDataAiInterpretationPost, handleQualityDataExternalAiOptInPost, type QualityDataAiApiDependencies } from "../../lib/quality-data/quality-data-ai-api";
+import { handleQualityDataAiInterpretationPost, handleQualityDataExternalAiOptInPost, handleQualityDataIntelligencePost, handleQualityDataIntelligenceReviewPost, type QualityDataAiApiDependencies } from "../../lib/quality-data/quality-data-ai-api";
 import type { CapaRequestContext } from "../../lib/security/supabase-capa-context";
 import { parseQualityDataAiGate } from "../../lib/quality-data/quality-data-ai-gate";
 import { parseQualityDataPilotGate } from "../../lib/quality-data/quality-data-pilot-gate";
@@ -59,5 +59,45 @@ describe("Stage 3C HTTP boundary", () => {
     const response = await handleQualityDataExternalAiOptInPost(post("/api/quality-data/external-ai-opt-in", body), missingService);
     expect(response.status).toBe(503);
     expect(missingService.rate_limiter.consume).not.toHaveBeenCalled();
+  });
+});
+
+describe("Stage 3D authenticated intelligence API boundary", () => {
+  const runId = "61000000-0000-4000-8000-000000000001";
+  const reviewBody = JSON.stringify({
+    schema_version: "quality-data-intelligence-review-1.0.0", report_id: runId, finding_key: "possible_cause:0",
+    expected_transition_number: 0, decision: "follow_up_requested", rationale: "Review the synthetic finding.",
+  });
+
+  it("keeps report creation unreachable when either pilot gate is disabled and requires a request idempotency key", async () => {
+    const disabled = dependencies({ quality_data_pilot_gate: undefined, get_stage3d_dependencies: vi.fn(() => null) });
+    expect((await handleQualityDataIntelligencePost(post("/api/quality-data/intelligence", "{}"), disabled)).status).toBe(404);
+    expect(disabled.get_stage3d_dependencies).not.toHaveBeenCalled();
+
+    const noKey = dependencies({ get_stage3d_dependencies: vi.fn(() => null) });
+    expect((await handleQualityDataIntelligencePost(post("/api/quality-data/intelligence", "{}"), noKey)).status).toBe(400);
+    expect(noKey.get_stage3d_dependencies).not.toHaveBeenCalled();
+  });
+
+  it("requires the distinct human reviewer authorization and does not construct a model client", async () => {
+    const base = {
+      quality_data: { authorizer: { authorizeRead: vi.fn(async () => ({ allowed: true, organization_id: ORG, membership_id: MEMBERSHIP, uploader_user_id: USER })),
+        authorizeIntelligenceReview: vi.fn(async () => ({ allowed: false, reason_code: "QUALITY_DATA_PERMISSION_DENIED" })) },
+        clock: { now: () => new Date(NOW) }, repository: { findApprovedDatasetVersion: vi.fn() } },
+      repository: { findReport: vi.fn() }, audit_repository: {}, transaction_manager: {}, authorizer: {
+        authorizeRead: vi.fn(async () => ({ allowed: true, organization_id: ORG, membership_id: MEMBERSHIP, uploader_user_id: USER })),
+        authorizeIntelligenceReview: vi.fn(async () => ({ allowed: false, reason_code: "QUALITY_DATA_PERMISSION_DENIED" })),
+      }, ids: {}, clock: { now: () => new Date(NOW) },
+    };
+    const getStage3d = vi.fn(() => base as never);
+    const getAi = vi.fn(() => null);
+    const deps = dependencies({ get_stage3d_dependencies: getStage3d, get_ai_dependencies: getAi });
+    const request = new Request(`https://app.example/api/quality-data/intelligence/${runId}/review`, {
+      method: "POST", headers: { origin: "https://app.example", "content-type": "application/json", "idempotency-key": "review-once" }, body: reviewBody,
+    });
+    const response = await handleQualityDataIntelligenceReviewPost(request, runId, deps);
+    expect(response.status).toBe(403);
+    expect(getAi).not.toHaveBeenCalled();
+    expect(base.repository.findReport).not.toHaveBeenCalled();
   });
 });

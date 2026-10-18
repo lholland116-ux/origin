@@ -599,10 +599,10 @@ describeDatabase("shared quality-data PostgreSQL foundation (disposable local Po
       where schemaname = 'public' and tablename like 'quality_data_%'
       order by tablename
     `;
-    // The Stage 3A append-only approval-history table adds a tenth
-    // quality-data policy alongside the nine immutable Layer 1 tables.
-    expect(policies).toHaveLength(10);
-    expect(policies.every((policy) => policy.using_expression.includes("quality_data_can_read"))).toBe(true);
+    // Stage 3D adds report and review-history policies to the existing
+    // Layer 1, analytical-approval, and external-AI control policies.
+    expect(policies).toHaveLength(12);
+    expect(policies.every((policy) => /quality_data(?:_intelligence)?_can_read/.test(policy.using_expression))).toBe(true);
 
     const tablePrivileges = await sql<{
       table_name: string;

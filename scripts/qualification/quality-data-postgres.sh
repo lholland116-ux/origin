@@ -11,22 +11,17 @@ set -Eeuo pipefail
 # the standard Postgres roles and auth.uid(); the Storage catalog tables and
 # two prerequisite private buckets are minimal synthetic fixture objects.
 #
-# Stage 3B default:
-#   scripts/qualification/quality-data-postgres.sh
-#
-# Future quality-data stages may reuse the fixture by setting, for example:
-#   QUALITY_DATA_PG_TEST_FILES="tests/integration/a.test.ts tests/integration/b.test.ts" \
-#   QUALITY_DATA_PG_EXPECTED_TESTS=17 \
+# Integrated Layer 2 V1 default:
 #   scripts/qualification/quality-data-postgres.sh
 
-readonly EXPECTED_HEAD="17b4a7b204a166418f93c60b57eafb075f653795"
+readonly EXPECTED_HEAD="7a75302621fb3fcf47971457afcadfc927878d0d"
 readonly IMAGE="public.ecr.aws/supabase/postgres:17.11.0.002"
 readonly HOST_PORT="57381"
 readonly DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:57381/postgres"
 readonly CLI_DATABASE_URL="${DATABASE_URL}?sslmode=disable"
-readonly DEFAULT_TEST_FILES="tests/integration/quality-data-stage3a-postgres.test.ts"
-readonly DEFAULT_EXPECTED_TESTS="11"
-readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261018110000_quality_data_external_ai_interpretation.sql")
+readonly DEFAULT_TEST_FILES="tests/integration/quality-data-foundation-postgres.test.ts tests/integration/quality-data-stage2c-postgres.test.ts tests/integration/quality-data-stage3a-postgres.test.ts tests/integration/quality-data-stage3c-postgres.test.ts tests/integration/quality-data-stage3d-postgres.test.ts tests/integration/quality-data-xlsx-rate-limit-postgres.test.ts"
+readonly DEFAULT_EXPECTED_TESTS="42"
+readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261018160608_quality_data_intelligence_review.sql")
 
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
@@ -36,7 +31,7 @@ if [[ "$(git branch --show-current)" != "main" ]]; then
   exit 1
 fi
 if [[ "$(git rev-parse HEAD)" != "$EXPECTED_HEAD" ]]; then
-  echo "STOP: HEAD does not match the qualified Stage 3B baseline." >&2
+  echo "STOP: HEAD does not match the qualified Stage 3C baseline." >&2
   exit 1
 fi
 if ! git diff --quiet "$EXPECTED_HEAD" -- supabase/migrations; then
@@ -46,7 +41,7 @@ fi
 actual_untracked_migrations="$(git ls-files --others --exclude-standard -- supabase/migrations | sed 's#^supabase/migrations/##' | sort)"
 expected_untracked_migrations="$(printf '%s\n' "${ALLOWED_UNTRACKED_MIGRATIONS[@]}" | sort)"
 if [[ "$actual_untracked_migrations" != "$expected_untracked_migrations" ]]; then
-  echo "STOP: untracked migration files differ from this Stage 3C fixture allowlist." >&2
+  echo "STOP: untracked migration files differ from this Stage 3D fixture allowlist." >&2
   exit 1
 fi
 
@@ -57,6 +52,7 @@ readonly MIGRATIONS=(
   "20261017110000_add_quality_data_xlsx_api_rate_limit.sql"
   "20261018100000_quality_data_analytical_approval.sql"
   "20261018110000_quality_data_external_ai_interpretation.sql"
+  "20261018160608_quality_data_intelligence_review.sql"
 )
 for migration in "${MIGRATIONS[@]}"; do
   if [[ ! -f "$repo/supabase/migrations/$migration" ]]; then
@@ -200,7 +196,8 @@ CREATE TABLE IF NOT EXISTS storage.buckets (
 
 CREATE TABLE IF NOT EXISTS storage.objects (
   bucket_id text NOT NULL,
-  name text NOT NULL
+  name text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
@@ -351,7 +348,7 @@ if ! diff -u "$expected_versions" "$applied_versions"; then
   echo "STOP: selected migration files and disposable migration ledger differ." >&2
   exit 1
 fi
-echo "Migration ledger verified: exactly the six dependency-scoped migrations were applied."
+echo "Migration ledger verified: exactly ${#MIGRATIONS[@]} dependency-scoped migrations were applied."
 
 docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
 DO $postflight$
@@ -389,7 +386,7 @@ echo "Storage migration postflight: private bucket, RLS, and restrictive server-
 log_file="$workdir/vitest.log"
 QUALITY_DATA_DATABASE_INTEGRATION_TESTS=true \
 QUALITY_DATA_TEST_DATABASE_URL="$DATABASE_URL" \
-  "$repo/node_modules/.bin/vitest" run "${test_files[@]}" --reporter=verbose \
+  "$repo/node_modules/.bin/vitest" run "${test_files[@]}" --no-file-parallelism --reporter=verbose \
   2>&1 | tee "$log_file"
 
 if ! grep -Eq "^[[:space:]]*Tests[[:space:]]+$expected_tests passed[[:space:]]+\\($expected_tests\\)[[:space:]]*$" "$log_file"; then

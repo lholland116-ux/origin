@@ -66,6 +66,7 @@ const OPERATION_PERMISSION = {
   read_quality_data_source: "quality_data.source.read",
   approve_quality_data_version: "quality_data.version.approve",
   manage_quality_data_external_ai_transfer: "quality_data.external_ai.manage",
+  review_quality_data_intelligence: "quality_data.intelligence.review",
   view_case: "capa.case.view",
   edit_case: "capa.case.edit",
   submit_intake: "capa.case.submit",
@@ -153,6 +154,8 @@ const OPERATION_PURPOSE = {
     "QUALITY_DATA_VERSION_ANALYTICAL_APPROVAL",
   manage_quality_data_external_ai_transfer:
     "QUALITY_DATA_EXTERNAL_AI_TRANSFER_AUTHORIZATION",
+  review_quality_data_intelligence:
+    "QUALITY_DATA_INTELLIGENCE_HUMAN_REVIEW",
   view_case:
     "CAPA_CASE_ACCESS",
   edit_case:
