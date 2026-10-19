@@ -204,6 +204,8 @@ import {
 import { SupabaseQualityDataRepository } from "../../database/supabase/supabase-quality-data-repository";
 import { SupabaseQualityDataStage3ARepository } from "../../database/supabase/supabase-quality-data-stage3a-repository";
 import { SupabaseQualityDataStage3DRepository } from "../../database/supabase/supabase-quality-data-stage3d-repository";
+import { SupabaseQualityDataCapaHandoffRepository } from "../../database/supabase/supabase-quality-data-capa-handoff-repository";
+import type { QualityDataCapaHandoffDependencies } from "../../quality-data/quality-data-capa-handoff-service";
 import { SupabaseQualityDataSourceStorage } from "../../database/supabase/supabase-quality-data-source-storage";
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../quality-data/quality-data-authorization";
 import { createAdminClient } from "../../supabase/admin";
@@ -1483,6 +1485,32 @@ export function createCapaProductionRuntime(
         audit_repository: auditRepository,
         transaction_manager: transactionManager,
         authorizer: qualityDataAuthorizer,
+        ids: {
+          audit_event_id: () => generateUuid() as AuditEventId,
+          uuid: generateUuid,
+        },
+        clock: { now },
+      };
+    },
+
+    create_quality_data_capa_handoff_dependencies(): QualityDataCapaHandoffDependencies {
+      return {
+        quality_data: {
+          repository: new SupabaseQualityDataStage3ARepository(sql),
+          audit_repository: auditRepository,
+          transaction_manager: transactionManager,
+          authorizer: qualityDataAuthorizer,
+          external_ai_transfer_authorizer: qualityDataAuthorizer,
+          ids: {
+            audit_event_id: () => generateUuid() as AuditEventId,
+            uuid: generateUuid,
+          },
+          clock: { now },
+        },
+        stage3d_repository: new SupabaseQualityDataStage3DRepository(sql),
+        handoff_repository: new SupabaseQualityDataCapaHandoffRepository(),
+        authorizer: qualityDataAuthorizer,
+        capa_creation_dependencies: dependencies,
         ids: {
           audit_event_id: () => generateUuid() as AuditEventId,
           uuid: generateUuid,

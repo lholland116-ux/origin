@@ -3,15 +3,25 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SupabaseCapaAuthorizationPolicy } from "../../lib/capa/authorization/supabase-capa-authorization-policy";
 import { SupabaseAuditRepository } from "../../lib/database/supabase/supabase-audit-repository";
+import { SupabaseCapaCreationIdempotencyRepository } from "../../lib/database/supabase/supabase-capa-creation-idempotency-repository";
+import { SupabaseCapaCaseNumberAllocator } from "../../lib/database/supabase/supabase-capa-case-number-allocator";
+import { SupabaseCapaRepository } from "../../lib/database/supabase/supabase-capa-repository";
 import { SupabaseQualityDataRepository } from "../../lib/database/supabase/supabase-quality-data-repository";
 import { SupabaseQualityDataStage3ARepository } from "../../lib/database/supabase/supabase-quality-data-stage3a-repository";
 import { SupabaseQualityDataStage3DRepository } from "../../lib/database/supabase/supabase-quality-data-stage3d-repository";
+import { SupabaseQualityDataCapaHandoffRepository } from "../../lib/database/supabase/supabase-quality-data-capa-handoff-repository";
 import { SupabaseTransactionManager } from "../../lib/database/supabase/supabase-transactions";
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../lib/quality-data/quality-data-authorization";
 import { createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DServiceDependencies } from "../../lib/quality-data/quality-data-stage3d-service";
 import { transitionQualityDataExternalAiOptIn } from "../../lib/quality-data/quality-data-external-ai-opt-in-service";
 import { ingestQualityData } from "../../lib/quality-data/quality-data-service";
 import { transitionQualityDataDatasetVersionApproval, type QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
+import { createCapaDraftFromQualityIntelligence } from "../../lib/quality-data/quality-data-capa-handoff-service";
+import { qualityDataCapaHandoffCommandSchema } from "../../lib/quality-data/quality-data-capa-handoff-contract";
+import { resolveQualityDataIntelligenceFinding } from "../../lib/quality-data/quality-data-intelligence-finding";
+import type { CreateCapaDependencies } from "../../lib/capa/application/create-capa";
+import type { TransactionWork } from "../../lib/database/transactions";
+import type { AuditRepository } from "../../lib/database/repositories/audit-repository";
 import type { QualityEvidencePacket } from "../../lib/quality-data/quality-data-ai-contract";
 import { SupabaseCapaDurableContextResolver } from "../../lib/security/supabase-capa-durable-context";
 import type { SupabaseCapaSessionFacts } from "../../lib/security/supabase-capa-context";
@@ -42,6 +52,7 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
   let authorizer: PolicyBackedQualityDataIngestionAuthorizer;
   let stage3a: QualityDataStage3AServiceDependencies;
   let service: QualityDataStage3DServiceDependencies;
+  let capaAuthorizationPolicy: SupabaseCapaAuthorizationPolicy;
   let versionId: string;
   let reportId: string;
   let modelCalls: (packet: QualityEvidencePacket) => Promise<{ readonly output_text: string; readonly usage: { readonly input_tokens: number; readonly output_tokens: number; readonly total_tokens: number } }>;
@@ -66,6 +77,14 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       created_by_actor_type, created_by_actor_id, updated_by_actor_type, updated_by_actor_id
     ) values (${membership}::uuid, ${org}::uuid, ${user}::uuid, 'active', ${NOW.toISOString()}::timestamptz,
       ${NOW.toISOString()}::timestamptz, ${NOW.toISOString()}::timestamptz, 'system', 'stage3d-test', 'system', 'stage3d-test')`;
+    await sql`insert into public.capa_role_assignments (
+      organization_id, membership_id, user_id, role_id, scope_code, status, effective_at, created_at, updated_at,
+      granted_by_actor_type, granted_by_actor_id, grant_reason
+    ) values (${org}::uuid, ${membership}::uuid, ${user}::uuid, ${role}, 'ORGANIZATION', 'active',
+      ${NOW.toISOString()}::timestamptz, ${NOW.toISOString()}::timestamptz, ${NOW.toISOString()}::timestamptz,
+      'system', 'stage3d-test', 'Synthetic Stage 3D qualification')`;
+  }
+  async function assignRole(org: string, user: string, membership: string, role: string): Promise<void> {
     await sql`insert into public.capa_role_assignments (
       organization_id, membership_id, user_id, role_id, scope_code, status, effective_at, created_at, updated_at,
       granted_by_actor_type, granted_by_actor_id, grant_reason
@@ -135,9 +154,10 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
     await insertMember(organizationId, ownerId, ownerMembershipId, "CAPA_OWNER");
     await insertMember(secondOrganizationId, otherAdminId, otherAdminMembershipId, "CAPA_ORG_ADMIN");
     resolver = new SupabaseCapaDurableContextResolver(sql);
-    authorizer = new PolicyBackedQualityDataIngestionAuthorizer(new SupabaseCapaAuthorizationPolicy(sql, {
+    capaAuthorizationPolicy = new SupabaseCapaAuthorizationPolicy(sql, {
       step_up_maximum_age_ms: 300_000, required_step_up_assurance: "MULTI_FACTOR" as never,
-    }));
+    });
+    authorizer = new PolicyBackedQualityDataIngestionAuthorizer(capaAuthorizationPolicy);
     stage3a = {
       repository: new SupabaseQualityDataStage3ARepository(sql), audit_repository: new SupabaseAuditRepository(sql),
       transaction_manager: new SupabaseTransactionManager(sql), authorizer, external_ai_transfer_authorizer: authorizer,
@@ -177,7 +197,9 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       source_verification: "not_asserted", verified_calculations: [expect.objectContaining({ reference: "M1", value: 7 / 3 })],
       observed_signals: [expect.objectContaining({ reference: "S1", status: "DETECTED" })],
     } });
-    expect(first.report.result?.evidence_citations[0]).toMatchObject({ source_worksheet: "Inspection", source_cells: ["B2", "C2"] });
+    const citedHandle = first.report.result?.interpretation.possible_causes[0]?.evidence_refs[0];
+    expect(first.report.result?.evidence_citations.find((citation) => citation.handle === citedHandle))
+      .toMatchObject({ source_worksheet: "Inspection", source_cells: ["B2", "C2"] });
     expect(first.report.result?.interpretation.possible_causes[0]?.evidence_refs).toHaveLength(1);
     expect(modelCalls).toHaveBeenCalledTimes(1);
 
@@ -192,6 +214,172 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       return tx`select report_id from public.quality_data_intelligence_reports where report_id = ${reportId}::uuid`;
     });
     expect(authenticatedReport).toHaveLength(1);
+  });
+
+  it("creates one traceable S00 CAPA draft only after an authorized human handoff decision", async () => {
+    // The handoff reviewer must independently hold the Stage 3D quality-data
+    // review/read role and the existing CAPA_OWNER create authority.
+    await assignRole(organizationId, adminId, adminMembershipId, "CAPA_OWNER");
+    const transactionDiagnostics: string[] = [];
+    const baseTransactionManager = new SupabaseTransactionManager(sql);
+    const diagnosticTransactionManager = {
+      async runInTransaction<Result>(requestTrace: RequestTrace, work: TransactionWork<Result>): Promise<Result> {
+        try {
+          return await baseTransactionManager.runInTransaction(requestTrace, work);
+        } catch (error) {
+          const detail = error as { readonly name?: unknown; readonly code?: unknown; readonly constraint_name?: unknown; readonly column_name?: unknown; readonly table_name?: unknown };
+          const safeParts = [detail.name, detail.code, detail.constraint_name, detail.column_name, detail.table_name]
+            .filter((part): part is string => typeof part === "string" && /^[A-Za-z0-9_]+$/.test(part));
+          if (error instanceof TypeError && /^[A-Za-z0-9_ .()'-]+$/.test(error.message)) safeParts.push(error.message);
+          if (error instanceof Error && /^QUALITY_DATA_[A-Z0-9_]+$/.test(error.message)) safeParts.push(error.message);
+          transactionDiagnostics.push(safeParts.join(":"));
+          throw error;
+        }
+      },
+    };
+    const createDependencies: CreateCapaDependencies = {
+      transaction_manager: diagnosticTransactionManager,
+      capa_repository: new SupabaseCapaRepository(sql),
+      audit_repository: new SupabaseAuditRepository(sql),
+      creation_idempotency_repository: new SupabaseCapaCreationIdempotencyRepository(),
+      case_number_allocator: new SupabaseCapaCaseNumberAllocator(),
+      authorization_policy: capaAuthorizationPolicy,
+      id_generator: {
+        generateCapaCaseId: () => randomUUID() as never,
+        generateCaseVersionId: () => randomUUID() as never,
+        generateSectionVersionId: () => randomUUID() as never,
+        generateAuditEventId: () => randomUUID() as never,
+      },
+      clock: { now: () => new Date(NOW) },
+      configuration: {
+        workflow_version: "capa-workflow-1.0.0", intake_schema_version: "capa-intake-1.0.0",
+        audit_schema_version: "capa-audit-1.0.0", intake_section_type: "CAPA.INTAKE" as never,
+        default_confidentiality: "CUSTOMER_CONFIDENTIAL" as never, authorization_purpose: "CAPA_CASE_CREATION" as never,
+      },
+    };
+    const handoffDependencies = {
+      quality_data: stage3a, stage3d_repository: new SupabaseQualityDataStage3DRepository(sql),
+      handoff_repository: new SupabaseQualityDataCapaHandoffRepository(), authorizer,
+      capa_creation_dependencies: createDependencies,
+      ids: { audit_event_id: () => randomUUID() as never, uuid: randomUUID },
+      clock: { now: () => new Date(NOW) },
+    };
+    const requestTrace = trace("stage3d-capa-handoff-integration");
+    const command = {
+      schema_version: "quality-data-capa-handoff-1.0.0", finding_key: "metric:M1",
+      expected_result_fingerprint: "" as string, decision: "create_capa_draft", rationale: "Human review requests a draft for investigation.",
+    };
+    const storedReport = await new SupabaseQualityDataStage3DRepository(sql).findReport(organizationId, reportId);
+    if (!storedReport?.result_fingerprint) throw new Error("Synthetic Stage 3D report was not persisted.");
+    command.expected_result_fingerprint = storedReport.result_fingerprint;
+    const adminContext = await context(adminId);
+    const adminPrincipal = adminContext.authentication.principal;
+    if (adminPrincipal.principal_type !== "human") throw new Error("Synthetic handoff fixture did not resolve a human principal.");
+    expect(adminPrincipal.user_id).toBe(adminId);
+    expect(adminContext.owner_user_id).toBe(adminId);
+    expect(adminContext.tenant.organization_id).toBe(organizationId);
+    expect(qualityDataCapaHandoffCommandSchema.safeParse(command).success).toBe(true);
+    expect(resolveQualityDataIntelligenceFinding(storedReport.result!, command.finding_key)).not.toBeNull();
+
+    const requests = await Promise.all([
+      createCapaDraftFromQualityIntelligence(handoffDependencies, adminContext, requestTrace, reportId, command),
+      createCapaDraftFromQualityIntelligence(handoffDependencies, adminContext, trace("stage3d-capa-handoff-race"), reportId, command),
+    ]);
+    const responseStatuses = requests.map((entry) => entry.status).sort();
+    expect(responseStatuses, `Concurrent handoff response statuses: ${responseStatuses.join(", ")}; transaction diagnostics: ${transactionDiagnostics.join(" | ")}`)
+      .toEqual(["conflict", "created"]);
+    expect(requests.filter((entry) => entry.status === "created")).toHaveLength(1);
+    expect(requests.filter((entry) => entry.status === "conflict")).toHaveLength(1);
+    const created = requests.find((entry) => entry.status === "created");
+    const handoffId = created?.handoff_id;
+    const capaCaseId = created?.capa_case_id;
+    if (!handoffId || !capaCaseId) return;
+
+    const provenance = await sql<{ handoff_status: string; decision: string; finding_classification: string; capa_case_status: string; reviewer_user_id: string; source_verification: string; interpretation_status: string; dataset_schema_version: string; analysis_request_schema_version: string; analysis_result_schema_version: string; evidence_packet_version: string; evidence_count: number }[]>`
+      select handoff.handoff_status, handoff.decision, handoff.finding_classification, handoff.capa_case_status,
+        handoff.reviewer_user_id, handoff.source_verification, handoff.interpretation_status,
+        handoff.dataset_schema_version, handoff.analysis_request_schema_version, handoff.analysis_result_schema_version,
+        handoff.evidence_packet_version,
+        jsonb_array_length(handoff.evidence_references)::int as evidence_count
+      from public.quality_data_intelligence_capa_handoffs as handoff
+      where handoff.organization_id = ${organizationId}::uuid and handoff.handoff_id = ${handoffId}::uuid`;
+    expect(provenance[0]).toEqual({ handoff_status: "linked", decision: "create_capa_draft", finding_classification: "deterministic_calculation",
+      capa_case_status: "S00", reviewer_user_id: adminId, source_verification: "not_asserted",
+      interpretation_status: "unverified_advisory_hypotheses", dataset_schema_version: "inspection-v1.0.0",
+      analysis_request_schema_version: "quality-data-ai-analysis-request-1.0.0",
+      analysis_result_schema_version: "quality-data-ai-analysis-result-1.0.0",
+      evidence_packet_version: "quality-evidence-packet-1.0.0", evidence_count: 3 });
+    const linkedCase = await sql<{ status: string; closed_at: Date | null; record_version: number }[]>`
+      select status, closed_at, record_version::int as record_version from public.capa_cases where organization_id = ${organizationId}::uuid and capa_case_id = ${capaCaseId}::uuid`;
+    expect(linkedCase[0]).toEqual({ status: "S00", closed_at: null, record_version: 1 });
+    const draftVersions = await sql<{ version_count: number; only_initial_state: boolean }[]>`
+      select count(*)::int as version_count, bool_and(status = 'S00' and version_number = 1) as only_initial_state
+      from public.capa_case_versions where organization_id = ${organizationId}::uuid and capa_case_id = ${capaCaseId}::uuid`;
+    expect(draftVersions[0]).toEqual({ version_count: 1, only_initial_state: true });
+    const auditCount = await sql<{ count: number }[]>`
+      select count(*)::int as count from public.capa_audit_events
+      where organization_id = ${organizationId}::uuid and aggregate_id = ${capaCaseId}::text
+        and event_type in ('EVT-CASE-CREATED', 'QUALITY_DATA_INTELLIGENCE_CAPA_DRAFT_CREATED')`;
+    expect(auditCount[0]?.count).toBe(2);
+
+    const replay = await createCapaDraftFromQualityIntelligence(handoffDependencies, await context(adminId), requestTrace, reportId, command);
+    expect(replay).toMatchObject({ status: "already_created", handoff_id: handoffId, capa_case_id: capaCaseId });
+    const ownerAttempt = await createCapaDraftFromQualityIntelligence(handoffDependencies, await context(ownerId), trace(), reportId, command);
+    expect(ownerAttempt.status).toBe("denied");
+    const crossTenantAttempt = await createCapaDraftFromQualityIntelligence(handoffDependencies, await context(otherAdminId), trace(), reportId, command);
+    expect(crossTenantAttempt.status).toBe("not_found_or_not_authorized");
+    const caseCount = await sql<{ count: number }[]>`select count(*)::int as count from public.capa_cases where organization_id = ${organizationId}::uuid`;
+    expect(caseCount[0]?.count).toBe(1);
+
+    const beforeAuditFailure = await sql<{ handoffs: number; cases: number; case_audits: number; allocation: number }[]>`
+      select
+        (select count(*)::int from public.quality_data_intelligence_capa_handoffs where organization_id = ${organizationId}::uuid) as handoffs,
+        (select count(*)::int from public.capa_cases where organization_id = ${organizationId}::uuid) as cases,
+        (select count(*)::int from public.capa_audit_events where organization_id = ${organizationId}::uuid
+          and aggregate_id in (select capa_case_id::text from public.capa_cases where organization_id = ${organizationId}::uuid)) as case_audits,
+        (select last_allocated_number::int from public.capa_case_number_counters where organization_id = ${organizationId}::uuid) as allocation`;
+    const auditDelegate = new SupabaseAuditRepository(sql);
+    const failingHandoffAudit: AuditRepository = {
+      appendEvent: async (...args: Parameters<typeof auditDelegate.appendEvent>) => {
+        if (args[1].event_type === "QUALITY_DATA_INTELLIGENCE_CAPA_DRAFT_CREATED")
+          throw new Error("Synthetic handoff audit failure");
+        return auditDelegate.appendEvent(...args);
+      },
+      findEventById: (...args) => auditDelegate.findEventById(...args),
+      listEventsForAggregate: (...args) => auditDelegate.listEventsForAggregate(...args),
+    };
+    const failedAuditHandoff = await createCapaDraftFromQualityIntelligence({
+      ...handoffDependencies,
+      capa_creation_dependencies: { ...createDependencies, audit_repository: failingHandoffAudit },
+    }, adminContext, trace("stage3d-capa-handoff-audit-failure"), reportId, {
+      ...command, finding_key: "possible_cause:0",
+    });
+    expect(failedAuditHandoff.status).toBe("persistence_failed");
+    const afterAuditFailure = await sql<{ handoffs: number; cases: number; case_audits: number; allocation: number }[]>`
+      select
+        (select count(*)::int from public.quality_data_intelligence_capa_handoffs where organization_id = ${organizationId}::uuid) as handoffs,
+        (select count(*)::int from public.capa_cases where organization_id = ${organizationId}::uuid) as cases,
+        (select count(*)::int from public.capa_audit_events where organization_id = ${organizationId}::uuid
+          and aggregate_id in (select capa_case_id::text from public.capa_cases where organization_id = ${organizationId}::uuid)) as case_audits,
+        (select last_allocated_number::int from public.capa_case_number_counters where organization_id = ${organizationId}::uuid) as allocation`;
+    expect(afterAuditFailure).toEqual(beforeAuditFailure);
+
+    const access = await sql<{ rls: boolean; forced: boolean; anon_select: boolean; authenticated_select: boolean; service_select: boolean; service_insert: boolean; service_update: boolean; service_delete: boolean }[]>`
+      select relation.relrowsecurity as rls, relation.relforcerowsecurity as forced,
+        has_table_privilege('anon', relation.oid, 'SELECT') as anon_select,
+        has_table_privilege('authenticated', relation.oid, 'SELECT') as authenticated_select,
+        has_table_privilege('service_role', relation.oid, 'SELECT') as service_select,
+        has_table_privilege('service_role', relation.oid, 'INSERT') as service_insert,
+        has_table_privilege('service_role', relation.oid, 'UPDATE') as service_update,
+        has_table_privilege('service_role', relation.oid, 'DELETE') as service_delete
+      from pg_catalog.pg_class as relation
+      where relation.oid = 'public.quality_data_intelligence_capa_handoffs'::regclass`;
+    expect(access[0]).toEqual({ rls: true, forced: true, anon_select: false, authenticated_select: false,
+      service_select: true, service_insert: true, service_update: true, service_delete: false });
+    await expect(sql.begin(async (tx) => {
+      await tx`set local role authenticated`;
+      await tx`select handoff_id from public.quality_data_intelligence_capa_handoffs where handoff_id = ${handoffId}::uuid`;
+    })).rejects.toThrow();
   });
 
   it("records version-bound triage decisions with immutable audit history and serializes concurrent reviewers", async () => {

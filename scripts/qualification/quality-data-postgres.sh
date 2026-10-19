@@ -4,24 +4,24 @@ set -Eeuo pipefail
 # Disposable PostgreSQL qualification for the Layer 2 quality-data services.
 #
 # The fixture deliberately avoids replaying the repository's unrelated
-# historical migration chain. It applies the real CAPA foundation migration
-# (which provides the role, membership, audit, auth.uid()-based RLS helpers,
-# policies, and grants exercised by the tests), followed by the real quality
-# data migrations in dependency order. Supabase's cached PG image supplies
+# historical migration chain. It applies the real CAPA foundation and the
+# two CAPA creation prerequisites (case-number allocation and creation
+# idempotency), followed by the real quality-data migrations in dependency
+# order. Supabase's cached PG image supplies
 # the standard Postgres roles and auth.uid(); the Storage catalog tables and
 # two prerequisite private buckets are minimal synthetic fixture objects.
 #
 # Integrated Layer 2 V1 default:
 #   scripts/qualification/quality-data-postgres.sh
 
-readonly EXPECTED_HEAD="e154361a3bde0b2f1c586038f2c9640926312314"
+readonly EXPECTED_HEAD="d5b9faaeba4b16f98318dfefc9950f62dcc5e8da"
 readonly IMAGE="public.ecr.aws/supabase/postgres:17.11.0.002"
 readonly HOST_PORT="57381"
 readonly DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:57381/postgres"
 readonly CLI_DATABASE_URL="${DATABASE_URL}?sslmode=disable"
 readonly DEFAULT_TEST_FILES="tests/integration/quality-data-foundation-postgres.test.ts tests/integration/quality-data-stage2c-postgres.test.ts tests/integration/quality-data-stage3a-postgres.test.ts tests/integration/quality-data-stage3c-postgres.test.ts tests/integration/quality-data-stage3d-postgres.test.ts tests/integration/quality-data-xlsx-rate-limit-postgres.test.ts"
-readonly DEFAULT_EXPECTED_TESTS="42"
-readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261018170000_quality_data_ai_telemetry_least_privilege.sql")
+readonly DEFAULT_EXPECTED_TESTS="43"
+readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261019100000_quality_intelligence_capa_handoff.sql")
 
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
@@ -47,6 +47,8 @@ fi
 
 readonly MIGRATIONS=(
   "20260812160000_create_capa_foundation.sql"
+  "20260817190000_create_capa_case_number_allocator.sql"
+  "20260821130000_create_capa_creation_idempotency.sql"
   "20261016110000_create_quality_data_foundation.sql"
   "20261017100000_create_quality_data_source_bucket.sql"
   "20261017110000_add_quality_data_xlsx_api_rate_limit.sql"
@@ -54,6 +56,7 @@ readonly MIGRATIONS=(
   "20261018110000_quality_data_external_ai_interpretation.sql"
   "20261018160608_quality_data_intelligence_review.sql"
   "20261018170000_quality_data_ai_telemetry_least_privilege.sql"
+  "20261019100000_quality_intelligence_capa_handoff.sql"
 )
 for migration in "${MIGRATIONS[@]}"; do
   if [[ ! -f "$repo/supabase/migrations/$migration" ]]; then

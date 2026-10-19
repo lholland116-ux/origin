@@ -123,6 +123,7 @@ import type { RequestTrace, CapaCaseId } from "../domain/capa-types";
 import type { QualityDataXlsxIngestionDependencies } from "../../quality-data/xlsx-quality-data-ingestion";
 import type { QualityDataStage3AServiceDependencies } from "../../quality-data/quality-data-stage3a-service";
 import type { QualityDataStage3DBaseDependencies } from "../../quality-data/quality-data-stage3d-service";
+import type { QualityDataCapaHandoffDependencies } from "../../quality-data/quality-data-capa-handoff-service";
 
 /**
  * Provider-neutral CAPA application runtime.
@@ -146,6 +147,9 @@ export interface CapaRuntime {
 
   /** Server-only persistence and authorization composition for Layer 2 human review. */
   readonly create_quality_data_stage3d_dependencies?: () => QualityDataStage3DBaseDependencies;
+
+  /** Server-only transaction composition for explicit intelligence-to-CAPA draft handoffs. */
+  readonly create_quality_data_capa_handoff_dependencies?: () => QualityDataCapaHandoffDependencies;
 
   readonly participant_eligibility_repository: CapaParticipantEligibilityRepository;
   /**

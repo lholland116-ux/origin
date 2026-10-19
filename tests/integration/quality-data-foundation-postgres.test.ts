@@ -593,16 +593,67 @@ describeDatabase("shared quality-data PostgreSQL foundation (disposable local Po
     await expect(readQualityDatasetVersion(service(), forgedOrganizationContext, result.receipt.dataset_version_id))
       .resolves.toEqual({ status: "not_found_or_not_authorized" });
 
-    const policies = await sql<{ table_name: string; using_expression: string }[]>`
-      select tablename as table_name, qual as using_expression
+    const policies = await sql<{
+      table_name: string;
+      policy_name: string;
+      permissive: string;
+      command: string;
+      roles: string[];
+      using_expression: string | null;
+      check_expression: string | null;
+    }[]>`
+      select tablename as table_name, policyname as policy_name,
+        permissive, cmd as command, roles, qual as using_expression,
+        with_check as check_expression
       from pg_policies
       where schemaname = 'public' and tablename like 'quality_data_%'
-      order by tablename
+      order by policyname
     `;
-    // Stage 3D adds report and review-history policies to the existing
-    // Layer 1, analytical-approval, and external-AI control policies.
-    expect(policies).toHaveLength(12);
-    expect(policies.every((policy) => /quality_data(?:_intelligence)?_can_read/.test(policy.using_expression))).toBe(true);
+    const layerOneReadPolicyNames = [
+      "quality_data_sources_quality_data_admin_read",
+      "quality_data_source_versions_quality_data_admin_read",
+      "quality_data_datasets_quality_data_admin_read",
+      "quality_data_dataset_versions_quality_data_admin_read",
+      "quality_data_dataset_version_sources_quality_data_admin_read",
+      "quality_data_ingestion_jobs_quality_data_admin_read",
+      "quality_data_inspection_records_quality_data_admin_read",
+      "quality_data_inspection_fields_quality_data_admin_read",
+      "quality_data_validation_outcomes_quality_data_admin_read",
+    ];
+    const governedReadPolicyNames = [
+      ...layerOneReadPolicyNames,
+      "quality_data_approval_events_admin_read",
+      "quality_data_intelligence_reports_admin_read",
+      "quality_data_intelligence_reviews_admin_read",
+    ];
+    const handoffPolicyName = "quality_data_intelligence_capa_handoffs_service";
+    // The handoff migration adds one narrowly scoped service policy alongside
+    // the 12 authenticated, admin-authorized read policies.
+    expect(policies).toHaveLength(13);
+    expect(policies.map((policy) => policy.policy_name)).toEqual(
+      [...governedReadPolicyNames, handoffPolicyName].sort(),
+    );
+    const governedReadPolicies = policies.filter((policy) => policy.policy_name !== handoffPolicyName);
+    expect(governedReadPolicies).toHaveLength(12);
+    expect(governedReadPolicies.every((policy) =>
+      policy.permissive === "PERMISSIVE"
+      && policy.command === "SELECT"
+      && policy.roles.length === 1
+      && policy.roles[0] === "authenticated"
+      && policy.check_expression === null
+      && typeof policy.using_expression === "string"
+      && /quality_data(?:_intelligence)?_can_read/.test(policy.using_expression)
+    )).toBe(true);
+    const handoffPolicy = policies.find((policy) => policy.policy_name === handoffPolicyName);
+    expect(handoffPolicy).toEqual({
+      table_name: "quality_data_intelligence_capa_handoffs",
+      policy_name: handoffPolicyName,
+      permissive: "PERMISSIVE",
+      command: "ALL",
+      roles: ["service_role"],
+      using_expression: "true",
+      check_expression: "true",
+    });
 
     const tablePrivileges = await sql<{
       table_name: string;

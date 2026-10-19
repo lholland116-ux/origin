@@ -166,7 +166,14 @@ export async function interpretQualityDataAnalysis(
       time_windows: packet.time_windows, assumptions: packet.assumptions,
       data_quality_limitations: packet.data_quality_limitations, interpretation: validated.output,
       interpretation_status: "unverified_advisory_hypotheses", source_verification: "not_asserted",
-      authorization_scope: "analytical_use_only", evidence_citations: validated.citations,
+      authorization_scope: "analytical_use_only",
+      // Keep the full server-built handle map with the persisted calculation
+      // results. The model's own citations remain limited to validated refs
+      // in `interpretation`; deterministic findings may depend on more source
+      // rows than the model chose to cite.
+      evidence_citations: [...built.citations.values()].sort((left, right) =>
+        left.handle < right.handle ? -1 : left.handle > right.handle ? 1 : 0,
+      ),
     },
   };
 }

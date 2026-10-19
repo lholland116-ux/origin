@@ -9,6 +9,7 @@ import { isQualityDataPilotOrganizationAllowed } from "./quality-data-pilot-gate
 import { getQualityDataExternalAiOptIn, transitionQualityDataExternalAiOptIn } from "./quality-data-external-ai-opt-in-service";
 import { interpretQualityDataAnalysis } from "./quality-data-ai-service";
 import { createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DBaseDependencies, type QualityDataStage3DServiceDependencies } from "./quality-data-stage3d-service";
+import { createCapaDraftFromQualityIntelligence, type QualityDataCapaHandoffDependencies } from "./quality-data-capa-handoff-service";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_BODY_BYTES = 32 * 1024;
@@ -20,6 +21,7 @@ export interface QualityDataAiApiDependencies {
   readonly get_ai_dependencies: () => QualityDataAiInterpretationDependencies | null;
   readonly get_control_dependencies: () => import("./quality-data-stage3a-service").QualityDataStage3AServiceDependencies | null;
   readonly get_stage3d_dependencies?: () => QualityDataStage3DBaseDependencies | null;
+  readonly get_capa_handoff_dependencies?: () => QualityDataCapaHandoffDependencies | null;
   readonly now: () => Date;
   readonly generate_uuid: () => string;
   readonly configured_app_url?: string;
@@ -280,4 +282,45 @@ export async function handleQualityDataIntelligenceReviewPost(request: Request, 
   if (result.status === "invalid_request") return error("invalid_request", "The review request is invalid.", 400, trace.correlation_id);
   if (result.status === "not_found_or_not_authorized") return error("not_found", "The intelligence finding was not found.", 404, trace.correlation_id);
   return error("review_unavailable", "The intelligence review could not be recorded.", 500, trace.correlation_id);
+}
+
+/** Creates only the initial CAPA draft after a distinct, server-verified human handoff decision. */
+export async function handleQualityDataCapaDraftHandoffPost(request: Request, reportId: string, dependencies: QualityDataAiApiDependencies): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  const correlation = trace.correlation_id;
+  if (!UUID.test(reportId)) return error("invalid_request", "The report identifier is invalid.", 400, correlation);
+  if (!sameOrigin(request, dependencies.configured_app_url)) return error("origin_denied", "The request origin is not allowed.", 403, correlation);
+  const authenticated = await auth(dependencies);
+  if (authenticated instanceof Response) return authenticated;
+  const blocked = pilotAllowed(authenticated.context, dependencies, correlation);
+  if (blocked) return blocked;
+  if (!trace.idempotency_key) return error("invalid_request", "An idempotency key is required.", 400, correlation);
+  const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "approval", dependencies.now().getTime())).catch(() => "unavailable" as const);
+  if (limit === "unavailable") return error("service_unavailable", "The CAPA handoff is unavailable.", 503, correlation);
+  if (limit === "limited") return error("rate_limited", "Please wait before requesting another CAPA handoff.", 429, correlation);
+  const body = await readJson(request);
+  if (body === "too_large") return error("request_too_large", "The handoff request is too large.", 413, correlation);
+  if (body === "timeout") return error("request_timeout", "The handoff request took too long.", 408, correlation);
+  if (body === "invalid") return error("invalid_request", "The handoff request is invalid.", 400, correlation);
+  let service: QualityDataCapaHandoffDependencies | null;
+  try { service = dependencies.get_capa_handoff_dependencies?.() ?? null; } catch { return error("service_unavailable", "The CAPA handoff is unavailable.", 503, correlation); }
+  if (!service) return error("service_unavailable", "The CAPA handoff is unavailable.", 503, correlation);
+  const result = await createCapaDraftFromQualityIntelligence(service, authenticated.context, trace, reportId, body);
+  if (result.status === "created" || result.status === "already_created") {
+    return json({
+      status: result.status,
+      handoff_id: result.handoff_id,
+      capa_case: { capa_case_id: result.capa_case_id, status: result.capa_case_status },
+      finding_classification: result.finding_classification,
+      source_verification: "not_asserted",
+      workflow_advanced: false,
+    }, result.status === "created" ? 201 : 200);
+  }
+  if (result.status === "invalid_request") return error("invalid_request", "The handoff request is invalid.", 400, correlation);
+  if (result.status === "denied") return error("quality_data_capa_handoff_forbidden", "You are not authorized to create a CAPA draft from this finding.", 403, correlation);
+  if (result.status === "not_found_or_not_authorized") return error("not_found", "The intelligence finding was not found.", 404, correlation);
+  if (result.status === "not_approved") return error("dataset_not_approved", "The dataset version is not currently approved for analytical use.", 409, correlation);
+  if (result.status === "stale_evidence" || result.status === "conflict") return error("handoff_conflict", "The finding changed or already has a CAPA handoff. Refresh the report before continuing.", 409, correlation);
+  if (result.status === "step_up_required") return error("capa_step_up_required", "Additional authentication is required.", 403, correlation);
+  return error("handoff_unavailable", "The CAPA draft could not be created safely.", 503, correlation);
 }

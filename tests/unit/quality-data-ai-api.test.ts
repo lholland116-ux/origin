@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleQualityDataAiInterpretationPost, handleQualityDataExternalAiOptInPost, handleQualityDataIntelligencePost, handleQualityDataIntelligenceReviewPost, type QualityDataAiApiDependencies } from "../../lib/quality-data/quality-data-ai-api";
+import { handleQualityDataAiInterpretationPost, handleQualityDataExternalAiOptInPost, handleQualityDataIntelligencePost, handleQualityDataIntelligenceReviewPost, handleQualityDataCapaDraftHandoffPost, type QualityDataAiApiDependencies } from "../../lib/quality-data/quality-data-ai-api";
 import type { CapaRequestContext } from "../../lib/security/supabase-capa-context";
 import { parseQualityDataAiGate } from "../../lib/quality-data/quality-data-ai-gate";
 import { parseQualityDataPilotGate } from "../../lib/quality-data/quality-data-pilot-gate";
@@ -77,6 +77,27 @@ describe("Stage 3D authenticated intelligence API boundary", () => {
     const noKey = dependencies({ get_stage3d_dependencies: vi.fn(() => null) });
     expect((await handleQualityDataIntelligencePost(post("/api/quality-data/intelligence", "{}"), noKey)).status).toBe(400);
     expect(noKey.get_stage3d_dependencies).not.toHaveBeenCalled();
+  });
+
+  it("keeps CAPA handoff behind the disabled-by-default quality-data pilot and does not construct an AI provider", async () => {
+    const reportId = runId;
+    const unavailable = vi.fn(() => null);
+    const ai = vi.fn(() => null);
+    const disabled = dependencies({ quality_data_pilot_gate: undefined, get_capa_handoff_dependencies: unavailable, get_ai_dependencies: ai });
+    const req = new Request("https://app.example/api/quality-data/intelligence/" + reportId + "/capa-draft", {
+      method: "POST", headers: { origin: "https://app.example", "content-type": "application/json", "idempotency-key": "handoff-once" }, body: "{}",
+    });
+    expect((await handleQualityDataCapaDraftHandoffPost(req, reportId, disabled)).status).toBe(404);
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(ai).not.toHaveBeenCalled();
+
+    const enabledButUnavailable = dependencies({ get_capa_handoff_dependencies: unavailable, get_ai_dependencies: ai });
+    const activeReq = new Request("https://app.example/api/quality-data/intelligence/" + reportId + "/capa-draft", {
+      method: "POST", headers: { origin: "https://app.example", "content-type": "application/json", "idempotency-key": "handoff-once" }, body: "{}",
+    });
+    expect((await handleQualityDataCapaDraftHandoffPost(activeReq, reportId, enabledButUnavailable)).status).toBe(503);
+    expect(unavailable).toHaveBeenCalledOnce();
+    expect(ai).not.toHaveBeenCalled();
   });
 
   it("requires the distinct human reviewer authorization and does not construct a model client", async () => {

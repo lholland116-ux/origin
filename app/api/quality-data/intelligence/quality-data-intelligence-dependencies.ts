@@ -20,6 +20,9 @@ export function qualityDataIntelligenceDependencies(): QualityDataAiApiDependenc
     get_stage3d_dependencies() {
       return capa.get_runtime().create_quality_data_stage3d_dependencies?.() ?? null;
     },
+    get_capa_handoff_dependencies() {
+      return capa.get_runtime().create_quality_data_capa_handoff_dependencies?.() ?? null;
+    },
     get_ai_dependencies() {
       if (aiGate.status !== "enabled") return null;
       const apiKey = process.env.OPENAI_API_KEY;

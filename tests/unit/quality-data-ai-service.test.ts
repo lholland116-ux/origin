@@ -9,6 +9,7 @@ vi.mock("../../lib/quality-data/quality-data-stage3a-service", async (importOrig
 }));
 
 import { interpretQualityDataAnalysis } from "../../lib/quality-data/quality-data-ai-service";
+import { resolveQualityDataIntelligenceFinding } from "../../lib/quality-data/quality-data-intelligence-finding";
 import type { QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
 import type { CapaRequestContext } from "../../lib/security/supabase-capa-context";
 
@@ -22,6 +23,7 @@ const SOURCE = "11000000-0000-4000-8000-000000000006";
 const SOURCE_VERSION = "11000000-0000-4000-8000-000000000007";
 const RECORD = "21000000-0000-4000-8000-000000000001";
 const HANDLE = "31000000-0000-4000-8000-000000000001";
+const SECOND_HANDLE = "31000000-0000-4000-8000-000000000002";
 const SHA = "a".repeat(64);
 const requestTrace = { request_id: "11000000-0000-4000-8000-000000000031" as never, correlation_id: "11000000-0000-4000-8000-000000000032" as never };
 
@@ -63,7 +65,7 @@ const detection = {
     observed_patterns: [{ value: "LOT-12345-seal", occurrence_count: 1, evidence: [{ record_id: RECORD, record_ordinal: 1, source_worksheet: "Sensitive Sheet", source_row_number: 2, cells: [{ field_key: "failure_mode", value_type: "text", original_value: "LOT-12345-seal", normalized_value: "LOT-12345-seal", normalized_unit: null, source_cell_reference: "C2" }] }] }], time_window: "all_records_in_dataset_version" }],
 };
 
-function dependencies(options: { readonly readAllowed?: boolean; readonly transferAllowed?: boolean; readonly optIn?: "enabled" | "disabled" } = {}) {
+function dependencies(options: { readonly readAllowed?: boolean; readonly transferAllowed?: boolean; readonly optIn?: "enabled" | "disabled"; readonly generateHandle?: () => string } = {}) {
   const recordTelemetry = vi.fn(async (record: unknown) => { void record; });
   const generate = vi.fn(async (packet: { calculations: { evidence_handles: string[] }[] }) => ({
     output_text: JSON.stringify({ possible_causes: [{ text: "A process condition may contribute.", evidence_refs: [packet.calculations[0]!.evidence_handles[0]] }], uncertainty: [], human_investigation_steps: [], advisory_only: true, causal_proof: false, capa_decision: false }),
@@ -79,7 +81,7 @@ function dependencies(options: { readonly readAllowed?: boolean; readonly transf
     external_ai_transfer_authorizer: { authorizeExternalAiTransfer: vi.fn(async () => options.transferAllowed === false ? { allowed: false as const, reason_code: "QUALITY_DATA_PERMISSION_DENIED" as const } : { allowed: true as const, organization_id: ORG, membership_id: MEMBERSHIP, uploader_user_id: USER }) },
     ids: { audit_event_id: () => VERSION as never, uuid: () => VERSION }, clock: { now: () => new Date(NOW) },
   };
-  const deps = { quality_data, model_client: { generate }, generate_handle: () => HANDLE, record_telemetry: recordTelemetry };
+  const deps = { quality_data, model_client: { generate }, generate_handle: options.generateHandle ?? (() => HANDLE), record_telemetry: recordTelemetry };
   return { deps, generate, recordTelemetry };
 }
 
@@ -100,6 +102,41 @@ describe("Stage 3C evidence-grounded AI interpretation", () => {
     const telemetry = JSON.stringify(deps.recordTelemetry.mock.calls[0]?.[0]);
     expect(telemetry).not.toContain("LOT-12345");
     expect(telemetry).not.toContain("Sensitive");
+  });
+
+  it("retains the complete local provenance map for deterministic findings without sending it to the model", async () => {
+    const secondRecord = "21000000-0000-4000-8000-000000000002";
+    analyze.mockResolvedValueOnce({ status: "complete", result: {
+      ...analysis,
+      record_count: 2,
+      metrics: [{
+        ...analysis.metrics[0]!,
+        denominator_record_count: 2,
+        numerator_record_count: 2,
+        calculation_inputs: [
+          ...analysis.metrics[0]!.calculation_inputs,
+          { ...analysis.metrics[0]!.calculation_inputs[0]!, record_id: secondRecord, record_ordinal: 2, source_row_number: 3, source_cell_reference: "B3" },
+        ],
+      }],
+    } });
+    const generatedHandles = [HANDLE, SECOND_HANDLE];
+    const deps = dependencies({ generateHandle: () => generatedHandles.shift() ?? SECOND_HANDLE });
+    const interpreted = await interpretQualityDataAnalysis(deps.deps, context(), requestTrace, request);
+    expect(interpreted.status).toBe("complete");
+    if (interpreted.status !== "complete") return;
+
+    const calculation = interpreted.result.verified_calculations[0]!;
+    expect(calculation.evidence_handles).toHaveLength(2);
+    expect(interpreted.result.evidence_citations.map((citation) => citation.handle).sort())
+      .toEqual([...calculation.evidence_handles].sort());
+    expect(interpreted.result.evidence_citations.map((citation) => citation.record_id).sort())
+      .toEqual([RECORD, secondRecord].sort());
+    expect(interpreted.result.interpretation.possible_causes[0]?.evidence_refs).toHaveLength(1);
+    expect(resolveQualityDataIntelligenceFinding(interpreted.result, "metric:M1")).not.toBeNull();
+
+    const providerPacket = JSON.stringify(vi.mocked(deps.generate).mock.calls[0]?.[0]);
+    for (const forbidden of [ORG, SOURCE, SOURCE_VERSION, SHA, RECORD, secondRecord, "B2", "B3", "Sensitive Sheet"])
+      expect(providerPacket).not.toContain(forbidden);
   });
 
   it("fails closed on missing read authorization, transfer permission, opt-in, or analytical approval", async () => {
