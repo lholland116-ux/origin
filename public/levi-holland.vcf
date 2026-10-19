@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:Levi Holland
+N:Levi;Holland;;;
+ORG:LVTChat LLC
+TITLE:Founder, AI Engineer, and Scientist
+EMAIL;TYPE=work:lholland@lvtchat.com
+URL:https://lvtchat.com
+X-SOCIALPROFILE;TYPE=linkedin:https://www.linkedin.com/company/lvtchat
+END:VCARD

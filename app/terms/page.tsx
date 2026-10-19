@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import { BRAND } from "@/lib/branding";
+
+export const metadata: Metadata = {
+  title: "Terms of Service",
+  description: "Terms for using LVTChat's current AI services and account features.",
+  alternates: { canonical: "/terms" },
+};
 
 export default function TermsPage() {
   const address = BRAND.contact.address;

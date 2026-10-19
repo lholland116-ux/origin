@@ -6,9 +6,12 @@ const PLAY_STORE_URL =
   "https://play.google.com/store/apps/details?id=com.lvtchat.app";
 
 export const metadata: Metadata = {
-  title: `LVTChat Is Now Available on Google Play | ${BRAND.name}`,
+  title: "LVTChat Is Now Available on Google Play",
   description:
     "LVTChat has officially launched on Google Play, bringing practical AI support to Android users worldwide.",
+  alternates: {
+    canonical: `${BRAND.url}/blog/lvtchat-now-available-on-google-play`,
+  },
   openGraph: {
     title: "LVTChat Is Now Available on Google Play",
     description:

@@ -8,20 +8,21 @@ import OfficialDemo from "@/components/landing/OfficialDemo";
 import TrustedSection from "@/components/landing/TrustedSection";
 import UseCases from "@/components/landing/UseCases";
 import { BRAND } from "@/lib/branding";
+import Link from "next/link";
 
 export default function LandingPage() {
   return (
     <main
       id="top"
       aria-label={`${BRAND.name} landing page`}
-      className="relative min-h-screen overflow-hidden bg-[#020817] text-white"
+      className="relative min-h-screen overflow-hidden bg-slate-50 text-slate-950"
     >
       <BackgroundGlow />
 
-      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="relative mx-auto flex w-full max-w-[1440px] flex-col gap-8 px-4 py-5 sm:px-6 lg:px-8">
         <section
           aria-label={`${BRAND.name} introduction`}
-          className="overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(4,10,25,0.98),rgba(3,8,20,0.98))] shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_30px_80px_rgba(0,0,0,0.45)]"
+          className="overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.08)]"
         >
           <Header />
           <Hero />
@@ -33,6 +34,16 @@ export default function LandingPage() {
         <TrustedSection />
         <UseCases />
         <AgentRoadmap />
+        <section className="rounded-3xl border border-blue-100 bg-blue-50 p-6 sm:p-8">
+          <div className="mx-auto flex max-w-6xl flex-col gap-5 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-wide text-blue-800">For your workflow</p>
+              <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-950">Tell us what work you want to move forward.</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Share a workflow challenge and request early access or a conversation with the founder.</p>
+            </div>
+            <Link href="/request?interest=early_access&source=homepage" className="inline-flex min-h-12 shrink-0 items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">Request Early Access</Link>
+          </div>
+        </section>
         <CTASection />
         <Footer />
       </div>

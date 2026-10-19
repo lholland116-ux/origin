@@ -1,8 +1,13 @@
+import type { Metadata } from "next";
 import { BRAND } from "@/lib/branding";
 
-export default function PrivacyPage() {
-  const address = BRAND.contact.address;
+export const metadata: Metadata = {
+  title: "Privacy Policy",
+  description: "How LVTChat handles account information, product usage, and early-access or demo requests.",
+  alternates: { canonical: "/privacy" },
+};
 
+export default function PrivacyPage() {
   return (
     <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
       <div className="mx-auto max-w-3xl">
@@ -64,6 +69,16 @@ export default function PrivacyPage() {
           </div>
 
           <div>
+            <h2 className="text-lg font-semibold text-white">Early Access and Demo Requests</h2>
+            <p className="mt-2">
+              If you submit an early-access or demo request, we collect the name, business email, company, role, workflow or business problem, interest type, and optional current process or tools that you provide. We use those details to respond to and manage your request. Optional product-update consent is separate and is not required for a response. The form does not accept uploads; please do not submit confidential manufacturing, personal, or customer records.
+            </p>
+            <p className="mt-2">
+              Request records are stored in a private database table with no public read access and are available through authorized operator access. We record limited page-source and campaign attribution for internal request reporting. Campaign attribution may be carried in this browser session for up to 24 hours, then expires, and is cleared after a successful request. We do not send names, email addresses, company names, free-text request details, or UTM values to analytics. If analytics is configured, it receives only categorical form-view or submission events, interest type, and an approved source category.
+            </p>
+          </div>
+
+          <div>
             <h2 className="text-lg font-semibold text-white">Security</h2>
             <p className="mt-2">
               We implement reasonable technical and organizational safeguards.
@@ -81,19 +96,7 @@ export default function PrivacyPage() {
 
           <div>
             <h2 className="text-lg font-semibold text-white">Contact</h2>
-            <p className="mt-2">
-              {BRAND.legal.company}
-              <br />
-              {address.line1}
-              <br />
-              {address.line2}
-              <br />
-              {address.city}, {address.state} {address.postalCode}
-              <br />
-              {address.country}
-              <br />
-              {BRAND.contact.email}
-            </p>
+            <p className="mt-2">{BRAND.legal.company}<br />{BRAND.contact.email}</p>
           </div>
         </section>
       </div>

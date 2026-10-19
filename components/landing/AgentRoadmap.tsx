@@ -1,92 +1,38 @@
-import {
-  APPROVED_POSITIONING,
-  futurePlatformCapabilities,
-  purposeBuiltAgents,
-} from "@/lib/landing-content";
+import Link from "next/link";
 
-const governanceText =
-  "AI Agents may provide advisory analysis, drafting, organization, traceability, gap identification, and decision support. Qualified humans retain authority for controlled decisions, reviews, approvals, dispositions, and regulated records.";
+const DESIGN_GOALS = [
+  { title: "Make quality information easier to review", body: "Bring structured records, source context, and clear data limitations into one review-oriented workflow." },
+  { title: "Keep evidence traceable", body: "Keep findings connected to their source and distinguish observed data from interpretation." },
+  { title: "Keep people in control", body: "Use AI for assistance while qualified humans retain authority for decisions and controlled records." },
+] as const;
 
 export default function AgentRoadmap() {
   return (
-    <section
-      id="ai-agents"
-      aria-labelledby="ai-agents-heading"
-      className="mx-auto max-w-7xl px-6 py-20 sm:py-24"
-    >
-      <div className="max-w-4xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-300">
-          Purpose-Built AI Agents
-        </p>
-        <h2
-          id="ai-agents-heading"
-          className="mt-4 text-3xl font-bold tracking-tight text-white sm:text-5xl"
-        >
-          Specialized workflows for quality, engineering, and regulatory work.
-        </h2>
-        <p className="mt-5 text-lg leading-8 text-zinc-300">
-          {APPROVED_POSITIONING}
-        </p>
-        <p className="mt-4 max-w-3xl text-sm leading-7 text-zinc-400">
-          {governanceText}
-        </p>
-      </div>
-
-      <article className="mt-10 rounded-3xl border border-blue-400/30 bg-blue-500/[0.08] p-6 shadow-[0_0_50px_rgba(59,130,246,0.12)] sm:p-8">
+    <section id="workflow-automation" aria-labelledby="workflow-automation-heading" className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-10">
+      <div className="mx-auto max-w-6xl">
         <div className="flex flex-wrap items-center gap-3">
-          <h3 className="text-xl font-semibold text-white">
-            CAPA AI Agent - Workflow  In Development
-          </h3>
-          <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-semibold text-amber-100">
-            In Development
-          </span>
+          <p className="text-sm font-semibold uppercase tracking-[0.16em] text-blue-800">Workflow Automation · Early Access</p>
+          <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-900">In development</span>
         </div>
-        <p className="mt-4 max-w-4xl text-sm leading-7 text-zinc-300">
-          Controlled workflow capabilities are implemented through
-          Implementation Review, including intake, containment and risk,
-          investigation, root-cause review, action plans, implementation,
-          evidence, and implementation review. Effectiveness verification,
-          later approvals, and final closure remain in development.
+        <h2 id="workflow-automation-heading" className="mt-4 max-w-4xl text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
+          Purpose-built workflows for manufacturing quality—and beyond.
+        </h2>
+        <p className="mt-5 max-w-3xl text-base leading-7 text-slate-600">
+          LVTChat is building workflow automation to help quality teams organize information, surface signals, prepare reports, and support human review. These workflows are developing and are not represented as generally available or validated for regulated use.
         </p>
-      </article>
-
-      <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {purposeBuiltAgents.map((agent) => (
-          <article
-            key={agent.name}
-            className="rounded-3xl border border-white/10 bg-white/[0.04] p-6"
-          >
-            <h3 className="text-lg font-semibold leading-7 text-white">
-              {agent.name}
-            </h3>
-            <p className="mt-3 text-sm leading-6 text-zinc-400">
-              {agent.description}
-            </p>
-            <ul className="mt-5 space-y-2 text-sm text-zinc-300">
-              {agent.examples.map((example) => (
-                <li key={example} className="flex gap-2">
-                  <span aria-hidden="true" className="text-blue-300">
-                    -
-                  </span>
-                  <span>{example}</span>
-                </li>
-              ))}
-            </ul>
-          </article>
-        ))}
-      </div>
-
-      <div className="mt-10 rounded-3xl border border-white/10 bg-[#071022] p-6 sm:p-8">
-        <h3 className="text-xl font-semibold text-white">
-          Other Platform Capabilities - Coming Soon
-        </h3>
-        <ul className="mt-5 grid gap-3 text-sm text-zinc-300 sm:grid-cols-2">
-          {futurePlatformCapabilities.map((capability) => (
-            <li key={capability} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
-              {capability}
-            </li>
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          {DESIGN_GOALS.map((item) => (
+            <article key={item.title} className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <h3 className="font-semibold text-slate-950">{item.title}</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{item.body}</p>
+            </article>
           ))}
-        </ul>
+        </div>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <Link href="/workflow-automation" className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">Explore Workflow Automation</Link>
+          <Link href="/workflow-preview" className="inline-flex min-h-11 items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold text-blue-800 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">View Illustrative Preview</Link>
+          <Link href="/request?interest=early_access&source=homepage" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">Request Early Access</Link>
+        </div>
       </div>
     </section>
   );

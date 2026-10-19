@@ -1,8 +1,9 @@
 export type LandingNavItem =
   | "Product"
-  | "AI Agents"
+  | "Workflow Automation"
+  | "Workflow Preview"
   | "Pricing"
-  | "Help"
+  | "FAQ / Resources"
   | "About";
 
 export type FeatureItem = {
@@ -29,13 +30,14 @@ export type FooterColumn = {
 };
 
 export const APPROVED_POSITIONING =
-  "LVTChat combines practical general-purpose AI with purpose-built AI Agents for quality, engineering, and regulatory workflows.";
+  "AI Workflow Automation for Manufacturing Quality—and Beyond. LVTChat combines practical AI tools available today with purpose-built workflows in development.";
 
 export const navItems: LandingNavItem[] = [
   "Product",
-  "AI Agents",
+  "Workflow Automation",
+  "Workflow Preview",
   "Pricing",
-  "Help",
+  "FAQ / Resources",
   "About",
 ];
 
@@ -259,15 +261,15 @@ export const futurePlatformCapabilities = [
 export const footerColumns: FooterColumn[] = [
   {
     title: "Product",
-    links: ["Features", "AI Agents", "Pricing"],
+    links: ["Available today", "Workflow Automation", "Workflow Preview", "Pricing"],
   },
   {
     title: "Company",
-    links: ["About", "Blog"],
+    links: ["About", "Blog", "Request Demo"],
   },
   {
     title: "Resources",
-    links: ["Help Center", "Contact"],
+    links: ["FAQ / Resources", "Request Early Access", "Contact"],
   },
 ];
 

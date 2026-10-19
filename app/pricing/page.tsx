@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 
 const LOGIN_REDIRECT = "/login?redirectTo=/pricing";
 const FEATURES_FREE = [
@@ -41,29 +43,6 @@ const FEATURES_PRO = [
   "Voice Input",
   "Read Aloud",
   "Android access",
-] as const;
-
-const PRICING_NAV_ITEMS = [
-  {
-    label: "Home",
-    href: BRAND.routes.home,
-  },
-  {
-    label: "Chat",
-    href: BRAND.routes.app,
-  },
-  {
-    label: "Pricing",
-    href: BRAND.routes.pricing,
-  },
-  {
-    label: "Account",
-    href: "/account",
-  },
-  {
-    label: "Sign in",
-    href: BRAND.routes.login,
-  },
 ] as const;
 
 type CheckoutResponse = {
@@ -183,155 +162,7 @@ function FeatureItem({ feature }: { feature: string }) {
 }
 
 function PricingHeader() {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  function closeMobileMenu(): void {
-    setMobileMenuOpen(false);
-  }
-
-  useEffect(() => {
-    if (!mobileMenuOpen) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") {
-        closeMobileMenu();
-        menuButtonRef.current?.focus();
-      }
-    }
-
-    function handlePointerDown(event: MouseEvent): void {
-      const target = event.target;
-
-      if (
-        target instanceof Node &&
-        !menuRef.current?.contains(target) &&
-        !menuButtonRef.current?.contains(target)
-      ) {
-        closeMobileMenu();
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("mousedown", handlePointerDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("mousedown", handlePointerDown);
-    };
-  }, [mobileMenuOpen]);
-
-  return (
-    <header className="relative z-50 border-b border-white/10 bg-[#020817]/90 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-4 sm:px-6">
-        <Link
-          href={BRAND.routes.home}
-          aria-label={`${BRAND.name} home`}
-          onClick={closeMobileMenu}
-          className="flex shrink-0 items-center gap-2 rounded-xl font-semibold focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
-        >
-          <span
-            aria-hidden="true"
-            className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-sm"
-          >
-            💬
-          </span>
-
-          <span>{BRAND.name}</span>
-        </Link>
-
-        <nav
-          aria-label="Pricing page navigation"
-          className="hidden items-center gap-1 text-sm font-medium md:flex lg:gap-2"
-        >
-          <Link
-            href={BRAND.routes.app}
-            className="rounded-xl px-3 py-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 lg:px-4"
-          >
-            Chat
-          </Link>
-
-          <Link
-            href={BRAND.routes.pricing}
-            aria-current="page"
-            className="rounded-xl bg-white/10 px-3 py-2 text-white lg:px-4"
-          >
-            Pricing
-          </Link>
-
-          <Link
-            href="/account"
-            className="rounded-xl px-3 py-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 lg:px-4"
-          >
-            Account
-          </Link>
-
-          <Link
-            href={BRAND.routes.login}
-            className="ml-1 rounded-xl border border-white/15 px-3 py-2 text-zinc-100 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 lg:ml-2 lg:px-4"
-          >
-            Sign in
-          </Link>
-        </nav>
-
-        <button
-          ref={menuButtonRef}
-          type="button"
-          aria-label={
-            mobileMenuOpen
-              ? "Close pricing navigation menu"
-              : "Open pricing navigation menu"
-          }
-          aria-expanded={mobileMenuOpen}
-          aria-controls="pricing-mobile-navigation"
-          onClick={() => setMobileMenuOpen((current) => !current)}
-          className="inline-flex h-10 items-center justify-center rounded-xl border border-white/15 bg-white/[0.05] px-3 text-sm font-semibold text-white transition hover:bg-white/[0.1] focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817] md:hidden"
-        >
-          <span aria-hidden="true" className="mr-2 text-base">
-            {mobileMenuOpen ? "✕" : "☰"}
-          </span>
-
-          {mobileMenuOpen ? "Close" : "Menu"}
-        </button>
-      </div>
-
-      {mobileMenuOpen ? (
-        <div
-          ref={menuRef}
-          id="pricing-mobile-navigation"
-          className="absolute left-5 right-5 top-[calc(100%+0.25rem)] rounded-2xl border border-white/10 bg-[#071022]/[0.98] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)] backdrop-blur md:hidden"
-        >
-          <nav aria-label="Pricing mobile navigation">
-            <ul className="space-y-1">
-              {PRICING_NAV_ITEMS.map((item) => {
-                const isCurrentPage = item.href === BRAND.routes.pricing;
-
-                return (
-                  <li key={item.label}>
-                    <Link
-                      href={item.href}
-                      aria-current={isCurrentPage ? "page" : undefined}
-                      onClick={closeMobileMenu}
-                      className={
-                        isCurrentPage
-                          ? "flex w-full rounded-xl bg-white/[0.08] px-4 py-3 text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-white/40"
-                          : "flex w-full rounded-xl px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40"
-                      }
-                    >
-                      {item.label}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
-        </div>
-      ) : null}
-    </header>
-  );
+  return <Header />;
 }
 
 export default function PricingPage() {
@@ -484,6 +315,13 @@ export default function PricingPage() {
           No credit card required for the free plan • Cancel Pro anytime
         </p>
       </section>
+      <section className="mx-4 mb-10 rounded-3xl border border-blue-300/20 bg-slate-900 px-6 py-10 text-center sm:mx-6 lg:mx-auto lg:max-w-5xl">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-200">Separate from current subscriptions</p>
+        <h2 className="mt-3 text-2xl font-bold text-white sm:text-3xl">Workflow Automation — Early Access</h2>
+        <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 text-slate-300">Pricing tailored to your workflows, integrations, and business requirements. Workflow Automation is in development and is not included in Free or Pro subscriptions.</p>
+        <Link href="/request?interest=demo&source=pricing" className="mt-6 inline-flex min-h-12 items-center justify-center rounded-xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-slate-900">Request Demo</Link>
+      </section>
+      <div className="mx-auto max-w-[1440px] px-4 pb-5 sm:px-6 lg:px-8"><Footer /></div>
     </main>
   );
 }

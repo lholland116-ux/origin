@@ -115,6 +115,8 @@ export const BRAND = {
 
   contact: {
     email: "support@lvtchat.com",
+    founderEmail: "lholland@lvtchat.com",
+    linkedinUrl: "https://www.linkedin.com/company/lvtchat",
     address: {
       line1: "1101 Hillcrest Pkwy",
       line2: "Ste L PMB 1041",
@@ -142,10 +144,14 @@ export const BRAND = {
 
   // Default search-engine metadata
   seo: {
-    title: "LVTChat – Practical AI you can actually use",
+    title: "AI Workflow Automation for Manufacturing Quality | LVTChat",
     description:
-      "Clear answers. Better decisions. LVTChat is an AI assistant for work, research, business, and everyday tasks, available on the web and Google Play.",
+      "LVTChat is building human-reviewed AI workflows for manufacturing quality and business, alongside practical general-purpose AI tools available today.",
     keywords: [
+      "AI workflow automation",
+      "manufacturing quality",
+      "quality workflow",
+      "CAPA workflow",
       "AI assistant",
       "Android AI app",
       "AI chatbot",

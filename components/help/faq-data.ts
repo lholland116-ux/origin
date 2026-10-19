@@ -10,7 +10,9 @@ export type FaqCategory =
   | "Voice"
   | "Plans and Limits"
   | "Mobile"
-  | "AI Agents";
+  | "AI Agents"
+  | "Workflow Automation"
+  | "Privacy";
 
 export type FaqItem = {
   question: string;
@@ -145,5 +147,68 @@ export const FAQ_ITEMS: FaqItem[] = [
     answer:
       "AI may provide advisory analysis, drafting, organization, traceability, gap identification, and decision support. Qualified humans retain authority for controlled decisions, reviews, approvals, dispositions, and regulated records.",
     keywords: ["governance", "human review", "approval", "regulated"],
+  },
+  {
+    category: "Workflow Automation",
+    question: "What is available today, and what is still in development?",
+    answer:
+      "LVTChat general AI conversations, Web Search, supported document and image tools, Voice Input, Read Aloud, and Android access are available today under current plan limits. Purpose-built manufacturing-quality and other workflow automation is in development and is not represented as generally available or validated production automation.",
+    keywords: ["available", "workflow", "development", "automation"],
+  },
+  {
+    category: "Workflow Automation",
+    question: "What does Workflow Automation aim to support?",
+    answer:
+      "LVTChat is building workflows intended to help teams analyze information, identify problems, organize evidence, prepare reports, and move work forward with human oversight. Suitability depends on each organization's process, data, and controls.",
+    keywords: ["manufacturing", "quality", "evidence", "reports"],
+  },
+  {
+    category: "Workflow Automation",
+    question: "What is the illustrative CAPA workflow preview?",
+    answer:
+      "The six-stage Quality Signal → Intelligence Report → Human Review → CAPA Draft → Investigation → Action Planning preview uses fictional data only. It does not connect to production CAPA records, workflow execution, customer accounts, or uploaded customer files. Customer-facing execution is in development.",
+    keywords: ["preview", "capa", "illustrative", "fictional"],
+  },
+  {
+    category: "Workflow Automation",
+    question: "Do AI findings make CAPA decisions or verify evidence?",
+    answer:
+      "No. AI interpretations are advisory and do not prove cause, verify evidence, determine disposition, approve or close a CAPA, or certify regulatory compliance. Qualified humans retain decision authority and follow their organization's controlled process.",
+    keywords: ["human", "oversight", "decision", "approval", "evidence"],
+  },
+  {
+    category: "Workflow Automation",
+    question: "Can I request early access or a demo?",
+    answer:
+      "Yes. You can submit a request describing your workflow or business problem. A request is not a commitment, a guarantee of availability, or a promise of a particular integration or delivery date.",
+    keywords: ["early access", "demo", "request", "contact"],
+  },
+  {
+    category: "Workflow Automation",
+    question: "Are specific integrations available?",
+    answer:
+      "Integration availability has not been promised. Tell us what systems and process you would like to discuss in the request form; requirements and feasibility would need to be reviewed individually.",
+    keywords: ["integrations", "systems", "availability"],
+  },
+  {
+    category: "Workflow Automation",
+    question: "How is Workflow Automation priced?",
+    answer:
+      "Workflow Automation is in development. If it becomes available, pricing will be tailored to workflow, integration, and business requirements. It is separate from current Free and Pro subscriptions. Contact LVTChat to request a discussion; no proposed workflow price is being offered here.",
+    keywords: ["pricing", "free", "pro", "subscription"],
+  },
+  {
+    category: "Privacy",
+    question: "What information does the early-access form collect?",
+    answer:
+      "The form collects your name, business email, company, role, workflow or business problem, interest type, and optional current process or tools. Optional product-update consent is recorded separately. Do not submit confidential manufacturing, personal, or customer records through the public form. See the Privacy Policy for details.",
+    keywords: ["form", "privacy", "lead", "information"],
+  },
+  {
+    category: "Privacy",
+    question: "Will my request details be sent to analytics?",
+    answer:
+      "The form does not send names, email addresses, company names, free-text descriptions, or UTM values to analytics. When analytics is configured, it receives only categorical form-view and submission events, interest type, and an approved page-source category.",
+    keywords: ["analytics", "personal information", "tracking"],
   },
 ];

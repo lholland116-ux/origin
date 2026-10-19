@@ -6,21 +6,21 @@ export default function UseCases() {
     <section
       id="use-cases"
       aria-labelledby="use-cases-heading"
-      className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,12,28,0.95),rgba(5,10,22,0.98))] px-5 py-10 shadow-[0_25px_70px_rgba(0,0,0,0.4)] md:px-8 lg:px-10"
+      className="rounded-[30px] border border-slate-200 bg-white px-5 py-10 shadow-sm md:px-8 lg:px-10"
     >
       <div className="text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/40">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-800">
           Real work and specialized workflows
         </p>
 
         <h2
           id="use-cases-heading"
-          className="mt-4 text-3xl font-semibold tracking-tight text-white md:text-4xl"
+          className="mt-4 text-3xl font-bold tracking-tight text-slate-950 md:text-4xl"
         >
           Practical help for everyday work, quality, engineering, and regulatory workflows.
         </h2>
 
-        <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
+        <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-slate-600 sm:text-base">
           {BRAND.name} is useful today for general-purpose work and is expanding into purpose-built quality, engineering, and regulatory workflows.
         </p>
       </div>
@@ -29,20 +29,20 @@ export default function UseCases() {
         {useCases.map((item) => (
           <article
             key={item.title}
-            className="rounded-[26px] border border-white/10 bg-[linear-gradient(180deg,rgba(11,18,36,0.95),rgba(7,13,28,0.95))] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+            className="rounded-[26px] border border-slate-200 bg-slate-50 p-6"
           >
             <div
-              className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-400/20 bg-blue-500/10 text-xl text-blue-300"
+              className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-200 bg-blue-50 text-xl text-blue-800"
               aria-hidden="true"
             >
               {item.icon}
             </div>
 
-            <h3 className="mt-5 text-lg font-semibold text-white">
+            <h3 className="mt-5 text-lg font-semibold text-slate-950">
               {item.title}
             </h3>
 
-            <p className="mt-3 text-sm leading-7 text-white/60">
+            <p className="mt-3 text-sm leading-7 text-slate-600">
               {item.description}
             </p>
           </article>

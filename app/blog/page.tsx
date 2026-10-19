@@ -3,9 +3,10 @@ import Link from "next/link";
 import { BRAND } from "@/lib/branding";
 
 export const metadata: Metadata = {
-  title: `Blog | ${BRAND.name}`,
+  title: "Blog",
   description:
     "News, product updates, practical AI guidance, demonstrations, and insights from LVTChat.",
+  alternates: { canonical: "/blog" },
 };
 
 const posts = [
