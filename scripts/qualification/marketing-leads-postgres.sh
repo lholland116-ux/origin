@@ -2,13 +2,14 @@
 set -Eeuo pipefail
 umask 077
 
-# Applies only the marketing lead migration to a new, disposable local
+# Applies the marketing lead migrations to a new, disposable local
 # Supabase PostgreSQL container, then runs its database-backed tests.
 readonly IMAGE="public.ecr.aws/supabase/postgres:17.11.0.002"
 readonly HOST_PORT="57381"
-readonly MIGRATION="supabase/migrations/20261019120000_create_private_marketing_lead_capture.sql"
+readonly MIGRATION_BASE="supabase/migrations/20261019120000_create_private_marketing_lead_capture.sql"
+readonly MIGRATION_TURNSTILE="supabase/migrations/20261019130000_marketing_turnstile_and_global_limits.sql"
 readonly TEST_FILE="tests/integration/marketing-leads-postgres.test.ts"
-readonly EXPECTED_TESTS="5"
+readonly EXPECTED_TESTS="6"
 
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
@@ -17,8 +18,8 @@ if [[ ! -x "$repo/node_modules/.bin/vitest" ]]; then
   echo "STOP: repository-local Vitest is unavailable." >&2
   exit 1
 fi
-if [[ ! -f "$MIGRATION" || ! -f "$TEST_FILE" ]]; then
-  echo "STOP: marketing migration or database test file is missing." >&2
+if [[ ! -f "$MIGRATION_BASE" || ! -f "$MIGRATION_TURNSTILE" || ! -f "$TEST_FILE" ]]; then
+  echo "STOP: both marketing migrations or the database test file are missing." >&2
   exit 1
 fi
 if [[ "$(grep -Ec '^[[:space:]]*it\(' "$TEST_FILE" || true)" -ne "$EXPECTED_TESTS" ]]; then
@@ -153,20 +154,22 @@ if [[ "$role_count" != "5" ]]; then
   exit 1
 fi
 preflight="$(docker exec "$container" psql -X -A -t -v ON_ERROR_STOP=1 -U postgres -d postgres \
-  -c "SELECT (to_regnamespace('public') IS NOT NULL AND to_regclass('public.marketing_leads') IS NULL AND to_regclass('public.marketing_lead_rate_limits') IS NULL AND to_regprocedure('public.submit_marketing_lead(uuid,uuid,text,text,text,text,text,text,text,text,text,text,boolean,text,text,text,text)') IS NULL)::text;")"
+  -c "SELECT (to_regnamespace('public') IS NOT NULL AND to_regclass('public.marketing_leads') IS NULL AND to_regclass('public.marketing_lead_rate_limits') IS NULL AND to_regclass('public.marketing_lead_global_rate_limits') IS NULL AND to_regprocedure('public.submit_marketing_lead(uuid,uuid,text,text,text,text,text,text,text,text,text,text,boolean,text,text,text,text)') IS NULL AND to_regprocedure('public.submit_marketing_lead(uuid,uuid,text,text,text,text,text,text,text,text,text,boolean,text,text,text,text)') IS NULL)::text;")"
 if [[ "$preflight" != "true" ]]; then
-  echo "STOP: target is not a fresh empty database for this one migration." >&2
+  echo "STOP: target is not a fresh empty database for the marketing migration sequence." >&2
   exit 1
 fi
 echo "PostgreSQL ready; Supabase roles present; target has no pre-existing marketing objects."
 
-migration_sha_before="$(sha256sum "$MIGRATION" | awk '{print $1}')"
-docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres < "$MIGRATION"
-migration_sha_after="$(sha256sum "$MIGRATION" | awk '{print $1}')"
-if [[ "$migration_sha_before" != "$migration_sha_after" ]]; then
-  echo "STOP: tracked migration content changed during qualification." >&2
-  exit 1
-fi
+for migration in "$MIGRATION_BASE" "$MIGRATION_TURNSTILE"; do
+  migration_sha_before="$(sha256sum "$migration" | awk '{print $1}')"
+  docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres < "$migration"
+  migration_sha_after="$(sha256sum "$migration" | awk '{print $1}')"
+  if [[ "$migration_sha_before" != "$migration_sha_after" ]]; then
+    echo "STOP: tracked migration content changed during qualification." >&2
+    exit 1
+  fi
+done
 
 export MARKETING_LEADS_DATABASE_INTEGRATION_TESTS=true
 export MARKETING_LEADS_TEST_DATABASE_URL="$database_url"

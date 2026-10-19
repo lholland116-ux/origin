@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Script from "next/script";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { MarketingLeadInterest, MarketingLeadSource } from "@/lib/marketing/lead-analytics";
@@ -9,12 +10,26 @@ import { trackMarketingLeadEvent } from "@/lib/marketing/lead-analytics";
 type LeadFormProps = {
   readonly initialInterest: MarketingLeadInterest;
   readonly source: MarketingLeadSource;
+  readonly turnstileSiteKey?: string;
   readonly utmSource?: string;
   readonly utmMedium?: string;
   readonly utmCampaign?: string;
 };
 
 type SubmitResult = { readonly status?: string; readonly error?: string };
+type TurnstileApi = {
+  render: (container: HTMLElement, options: Readonly<{
+    sitekey: string;
+    action: string;
+    callback: (token: string) => void;
+    "expired-callback": () => void;
+    "error-callback": () => void;
+  }>) => string;
+  reset: (widgetId?: string) => void;
+  remove: (widgetId: string) => void;
+};
+declare global { interface Window { turnstile?: TurnstileApi } }
+
 type StoredAttribution = {
   readonly utm_source?: unknown;
   readonly utm_medium?: unknown;
@@ -27,14 +42,39 @@ function safeUtm(value: string | undefined): string | undefined {
   return value;
 }
 
-export default function LeadForm({ initialInterest, source, utmSource, utmMedium, utmCampaign }: LeadFormProps) {
+export default function LeadForm({ initialInterest, source, turnstileSiteKey, utmSource, utmMedium, utmCampaign }: LeadFormProps) {
   const formRef = useRef<HTMLFormElement>(null);
+  const turnstileContainerRef = useRef<HTMLDivElement>(null);
+  const turnstileWidgetId = useRef<string | null>(null);
   const idempotencyKey = useRef<string | null>(null);
+  const idempotencyPayload = useRef<string | null>(null);
   const [interest, setInterest] = useState<MarketingLeadInterest>(initialInterest);
   const [attribution, setAttribution] = useState({ utmSource, utmMedium, utmCampaign });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileScriptReady, setTurnstileScriptReady] = useState(false);
+  const [turnstileScriptFailed, setTurnstileScriptFailed] = useState(false);
+
+  useEffect(() => {
+    if (!turnstileSiteKey || !turnstileScriptReady || !turnstileContainerRef.current || !window.turnstile || turnstileWidgetId.current) return;
+    const api = window.turnstile;
+    turnstileWidgetId.current = api.render(turnstileContainerRef.current, {
+      sitekey: turnstileSiteKey,
+      action: "marketing_lead_submit",
+      callback: (token) => setTurnstileToken(token),
+      "expired-callback": () => setTurnstileToken(null),
+      "error-callback": () => {
+        setTurnstileToken(null);
+        setTurnstileScriptFailed(true);
+      },
+    });
+    return () => {
+      if (turnstileWidgetId.current) api.remove(turnstileWidgetId.current);
+      turnstileWidgetId.current = null;
+    };
+  }, [turnstileScriptReady, turnstileSiteKey]);
 
   useEffect(() => {
     try {
@@ -57,14 +97,16 @@ export default function LeadForm({ initialInterest, source, utmSource, utmMedium
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (submitting || submitted) return;
+    if (!turnstileToken) {
+      setError("Complete the verification check before sending your request.");
+      return;
+    }
     const form = formRef.current;
     if (!form) return;
     setSubmitting(true);
     setError(null);
-    idempotencyKey.current ??= crypto.randomUUID();
     const data = new FormData(form);
-    const payload = {
-      idempotency_key: idempotencyKey.current,
+    const retryablePayload = {
       name: String(data.get("name") ?? ""),
       business_email: String(data.get("business_email") ?? ""),
       company: String(data.get("company") ?? ""),
@@ -79,6 +121,16 @@ export default function LeadForm({ initialInterest, source, utmSource, utmMedium
       utm_campaign: safeUtm(attribution.utmCampaign),
       website: String(data.get("website") ?? ""),
     };
+    const payloadSignature = JSON.stringify(retryablePayload);
+    if (idempotencyPayload.current !== payloadSignature) {
+      idempotencyPayload.current = payloadSignature;
+      idempotencyKey.current = crypto.randomUUID();
+    }
+    const payload = {
+      ...retryablePayload,
+      idempotency_key: idempotencyKey.current as string,
+      turnstile_token: turnstileToken,
+    };
     try {
       const response = await fetch("/api/marketing/leads", {
         method: "POST",
@@ -92,8 +144,10 @@ export default function LeadForm({ initialInterest, source, utmSource, utmMedium
         setError(response.status === 429
           ? "Please wait before sending another request."
           : response.status === 409
-            ? "This submission could not be confirmed. Please reload the form and try again."
-            : "We could not send your request right now. Please try again.");
+            ? "This submission could not be confirmed. Review your details and try again."
+            : result.error === "verification_failed"
+              ? "The verification expired or could not be confirmed. Complete the check again and retry."
+              : "We could not send your request right now. Complete the verification again and retry.");
         return;
       }
       setSubmitted(true);
@@ -103,6 +157,8 @@ export default function LeadForm({ initialInterest, source, utmSource, utmMedium
       setError("We could not confirm your request. You can safely try again; duplicate submissions are handled.");
     } finally {
       setSubmitting(false);
+      setTurnstileToken(null);
+      if (turnstileWidgetId.current && window.turnstile) window.turnstile.reset(turnstileWidgetId.current);
     }
   }
 
@@ -118,6 +174,23 @@ export default function LeadForm({ initialInterest, source, utmSource, utmMedium
 
   return (
     <form ref={formRef} onSubmit={onSubmit} className="space-y-5">
+      {turnstileSiteKey ? (
+        <>
+          <Script
+            id="cloudflare-turnstile"
+            src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+            strategy="afterInteractive"
+            onReady={() => setTurnstileScriptReady(true)}
+            onError={() => setTurnstileScriptFailed(true)}
+          />
+          <div>
+            <div ref={turnstileContainerRef} aria-label="Bot verification" />
+            {turnstileScriptFailed ? <p role="alert" className="mt-2 text-sm text-red-800">Verification is unavailable. Please try again later.</p> : null}
+          </div>
+        </>
+      ) : (
+        <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Verification is not configured, so requests cannot be sent right now.</p>
+      )}
       <div className="grid gap-5 sm:grid-cols-2">
         <label className={labelClass}>Name<input name="name" autoComplete="name" required maxLength={120} className={fieldClass} /></label>
         <label className={labelClass}>Business email<input name="business_email" type="email" autoComplete="email" required maxLength={254} className={fieldClass} /></label>
@@ -143,9 +216,9 @@ export default function LeadForm({ initialInterest, source, utmSource, utmMedium
         <input name="marketing_consent" type="checkbox" className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600" />
         <span>I would like to receive occasional product updates. Optional; this is not required for a response to my request.</span>
       </label>
-      <p className="text-xs leading-5 text-slate-500">LVTChat uses these details to respond to your request and operate this contact process. See the <Link href="/privacy" className="font-semibold text-blue-800 underline">Privacy Policy</Link>. Marketing consent is stored separately.</p>
+      <p className="text-xs leading-5 text-slate-500">LVTChat uses these details to respond to your request and operate this contact process. Cloudflare Turnstile checks this submission for automated abuse; form fields are sent to LVTChat, not to Turnstile Siteverify. See the <Link href="/privacy" className="font-semibold text-blue-800 underline">Privacy Policy</Link>. Marketing consent is stored separately.</p>
       {error ? <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
-      <button type="submit" disabled={submitting} aria-busy={submitting} className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-60">
+      <button type="submit" disabled={submitting || !turnstileSiteKey || !turnstileToken || turnstileScriptFailed} aria-busy={submitting} className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-60">
         {submitting ? "Sending request…" : interest === "demo" ? "Request Demo" : "Request Early Access"}
       </button>
       <p className="sr-only" aria-live="polite">{submitting ? "Submitting your request" : ""}</p>

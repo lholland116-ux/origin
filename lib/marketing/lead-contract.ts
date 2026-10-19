@@ -25,6 +25,7 @@ const utmValue = z
 
 export const marketingLeadRequestSchema = z.object({
   idempotency_key: z.string().uuid(),
+  turnstile_token: z.string().min(1).max(2048).refine((token) => token.trim() === token),
   name: z.string().trim().min(1).max(120),
   business_email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
   company: z.string().trim().min(1).max(160),

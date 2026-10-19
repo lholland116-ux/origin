@@ -1,7 +1,7 @@
-import { isIP } from "node:net";
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { captureMarketingLead } from "@/lib/marketing/lead-capture-service";
+import { getMarketingTurnstileConfig, verifyMarketingTurnstileToken } from "@/lib/marketing/turnstile";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,22 +69,24 @@ async function readBoundedJson(request: NextRequest): Promise<unknown | null> {
 }
 
 export async function POST(request: NextRequest) {
-  const ip = request.headers.get("x-real-ip")?.trim();
-  if (!ip || isIP(ip) === 0) return reply(503, { error: "submission_unavailable" });
-
   const body = await readBoundedJson(request);
   if (body === null) return reply(400, { error: "invalid_request" });
 
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceRoleKey || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  const turnstileConfig = getMarketingTurnstileConfig();
+  if (!serviceRoleKey || !process.env.NEXT_PUBLIC_SUPABASE_URL || !turnstileConfig) {
     return reply(503, { error: "submission_unavailable" });
   }
 
-  const result = await captureMarketingLead(body, ip, serviceRoleKey, async (args) => {
-    const { data, error } = await createAdminClient().rpc("submit_marketing_lead", args);
-    if (error) throw new Error("submission_unavailable");
-    return data;
-  });
+  const result = await captureMarketingLead(
+    body,
+    serviceRoleKey,
+    (token) => verifyMarketingTurnstileToken(token, turnstileConfig), async (args) => {
+      const { data, error } = await createAdminClient().rpc("submit_marketing_lead", args);
+      if (error) throw new Error("submission_unavailable");
+      return data;
+    },
+  );
 
   switch (result.status) {
     case "created": return reply(201, { status: "received" });
@@ -92,6 +94,7 @@ export async function POST(request: NextRequest) {
     case "spam": return reply(202, { status: "received" });
     case "rate_limited": return reply(429, { error: "rate_limited" });
     case "conflict": return reply(409, { error: "submission_conflict" });
+    case "verification_failed": return reply(400, { error: "verification_failed" });
     case "invalid": return reply(400, { error: "invalid_request" });
     case "unavailable": return reply(503, { error: "submission_unavailable" });
   }

@@ -47,6 +47,7 @@ export default async function RequestPage({ searchParams }: { readonly searchPar
               <LeadForm
                 initialInterest={interest}
                 source={source}
+                turnstileSiteKey={process.env.NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY}
                 utmSource={first(params.utm_source)}
                 utmMedium={first(params.utm_medium)}
                 utmCampaign={first(params.utm_campaign)}

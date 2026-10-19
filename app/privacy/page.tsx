@@ -76,6 +76,12 @@ export default function PrivacyPage() {
             <p className="mt-2">
               Request records are stored in a private database table with no public read access and are available through authorized operator access. We record limited page-source and campaign attribution for internal request reporting. Campaign attribution may be carried in this browser session for up to 24 hours, then expires, and is cleared after a successful request. We do not send names, email addresses, company names, free-text request details, or UTM values to analytics. If analytics is configured, it receives only categorical form-view or submission events, interest type, and an approved source category.
             </p>
+            <p className="mt-2">
+              We use Cloudflare Turnstile to reduce automated form submissions. The Turnstile widget communicates with Cloudflare and may process technical and browser-interaction information for verification under the <a href="https://www.cloudflare.com/privacypolicy/" className="underline">Cloudflare Privacy Policy</a>. LVTChat sends the verification token to Cloudflare&apos;s Siteverify service; it does not send your form fields or a client IP address in that server-side verification request.
+            </p>
+            <p className="mt-2">
+              We plan to review lead requests monthly and delete them by 12 months after submission unless a documented ongoing request or legal obligation requires limited additional retention. You may request access, correction, or deletion sooner using the contact details below. Deletion from active records does not immediately remove copies held in encrypted backups; those copies expire under the applicable backup-retention schedule.
+            </p>
           </div>
 
           <div>
