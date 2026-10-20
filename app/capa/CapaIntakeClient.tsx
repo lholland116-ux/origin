@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import type {
   CapaScopeContent,
@@ -162,15 +163,6 @@ type CreatedCapaSummary =
 interface ApiIssue {
   readonly path: string;
   readonly message: string;
-}
-
-interface ApiErrorBody {
-  readonly error?: {
-    readonly code?: string;
-    readonly message?: string;
-    readonly correlation_id?: string;
-    readonly issues?: readonly ApiIssue[];
-  };
 }
 
 interface CreateCapaResponse {
@@ -968,6 +960,7 @@ export default function CapaIntakeClient({
   currentUserId,
   userEmail,
 }: CapaIntakeClientProps) {
+  const router = useRouter();
   const [step, setStep] =
     useState<WorkflowStep>("edit");
 
@@ -1020,6 +1013,26 @@ export default function CapaIntakeClient({
 
   const [openCaseError, setOpenCaseError] =
     useState<string | null>(null);
+
+  const [supportingEvidenceCaseId, setSupportingEvidenceCaseId] = useState<string | null>(null);
+  const [supportingEvidenceError, setSupportingEvidenceError] = useState<string | null>(null);
+  const [supportingEvidenceErrorFor, setSupportingEvidenceErrorFor] = useState<string | null>(null);
+
+  async function openQualitySupportingEvidence(caseId: string) {
+    if (supportingEvidenceCaseId !== null) return;
+    setSupportingEvidenceCaseId(caseId);
+    setSupportingEvidenceError(null);
+    setSupportingEvidenceErrorFor(caseId);
+    try {
+      const response = await fetch(`/api/quality-data/capa-evidence/${encodeURIComponent(caseId)}`, { cache: "no-store" });
+      const body = await response.json().catch(() => null) as { evidence?: { report_id?: string }; error?: { message?: string } } | null;
+      const reportId = body?.evidence?.report_id;
+      if (!response.ok || typeof reportId !== "string") throw new Error(body?.error?.message ?? "No currently approved supporting evidence is available.");
+      router.push(`/quality-data/intelligence/${encodeURIComponent(reportId)}`);
+    } catch (error) {
+      setSupportingEvidenceError(error instanceof Error ? error.message : "Supporting evidence is unavailable.");
+    } finally { setSupportingEvidenceCaseId(null); }
+  }
 
   const [workflowSubmission, setWorkflowSubmission] =
     useState<WorkflowSubmissionTarget | null>(null);
@@ -3605,6 +3618,14 @@ export default function CapaIntakeClient({
                     <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
                       <button
                         type="button"
+                        disabled={supportingEvidenceCaseId !== null}
+                        onClick={() => void openQualitySupportingEvidence(capaCase.capaCaseId)}
+                        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20 focus:outline-none focus:ring-2 focus:ring-emerald-400 disabled:cursor-wait disabled:opacity-50"
+                      >
+                        {supportingEvidenceCaseId === capaCase.capaCaseId ? "Checking evidence…" : "View Supporting Evidence"}
+                      </button>
+                      <button
+                        type="button"
                         disabled={
                           openingCaseId !== null
                         }
@@ -3642,6 +3663,7 @@ export default function CapaIntakeClient({
                         </button>
                       ) : null}
                     </div>
+                    {supportingEvidenceError && supportingEvidenceErrorFor === capaCase.capaCaseId ? <p className="text-xs text-amber-200" role="status">{supportingEvidenceError}</p> : null}
                   </div>
                 </article>
               ),

@@ -48,6 +48,7 @@ function handoffAudit(input: {
   readonly report_id: string; readonly dataset_id: string; readonly dataset_version_id: string;
   readonly approval_event_id: string; readonly finding_key: string; readonly finding_classification: string;
   readonly finding_fingerprint: string; readonly evidence_reference_count: number; readonly capa_case_id: string;
+  readonly result_schema_version: string; readonly interpretation_status: string;
   readonly capa_creation_audit_event_id: string; readonly reviewer_user_id: string; readonly request_trace: RequestTrace;
   readonly now: Date;
 }): AuditEvent {
@@ -64,14 +65,14 @@ function handoffAudit(input: {
     target: { object_type: "QUALITY_DATA_INTELLIGENCE_FINDING" as ControlledCode,
       object_id: input.report_id + ":" + input.finding_key, object_version_id: input.dataset_version_id },
     outcome: "succeeded",
-    configuration_versions: { quality_data_intelligence: "quality-data-intelligence-report-1.0.0", quality_data_handoff: "quality-data-capa-handoff-1.0.0" },
+    configuration_versions: { quality_data_intelligence: input.result_schema_version, quality_data_handoff: "quality-data-capa-handoff-1.0.0" },
     metadata: {
       handoff_id: input.handoff_id, report_id: input.report_id, dataset_id: input.dataset_id,
       dataset_version_id: input.dataset_version_id, approval_event_id: input.approval_event_id,
       finding_key: input.finding_key, finding_classification: input.finding_classification,
       finding_fingerprint: input.finding_fingerprint, evidence_reference_count: input.evidence_reference_count,
       reviewer_user_id: input.reviewer_user_id, human_decision: "create_capa_draft",
-      source_verification: "not_asserted", ai_interpretation: "unverified_advisory_hypotheses",
+      source_verification: "not_asserted", ai_interpretation: input.interpretation_status,
       capa_case_id: input.capa_case_id, capa_creation_audit_event_id: input.capa_creation_audit_event_id,
       capa_case_approved: false, capa_workflow_advanced: false,
     },
@@ -160,6 +161,7 @@ export async function createCapaDraftFromQualityIntelligence(
             approval_event_id: report.approval_event_id, finding_key: command.finding_key,
             finding_classification: target.classification, finding_fingerprint: target.fingerprint,
             evidence_reference_count: target.citations.length, capa_case_id: draft.capa_case.capa_case_id,
+            result_schema_version: report.result!.schema_version, interpretation_status: report.result!.interpretation_status,
             capa_creation_audit_event_id: draft.audit_event_id, reviewer_user_id: reviewer.uploader_user_id,
             request_trace: capaTrace, now: dependencies.clock.now(),
           }));

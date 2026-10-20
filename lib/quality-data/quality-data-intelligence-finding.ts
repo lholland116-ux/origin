@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { QualityDataAiAnalysisResult, QualityEvidenceCitation } from "./quality-data-ai-contract";
+import type { QualityEvidenceCitation } from "./quality-data-ai-contract";
+import type { QualityDataIntelligenceResult } from "./quality-data-intelligence-contract";
 import type { QualityDataCapaFindingClassification } from "./quality-data-capa-handoff-contract";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -12,7 +13,7 @@ export interface ResolvedQualityDataIntelligenceFinding {
 }
 
 export function resolveQualityDataIntelligenceFinding(
-  result: QualityDataAiAnalysisResult,
+  result: QualityDataIntelligenceResult,
   key: string,
 ): ResolvedQualityDataIntelligenceFinding | null {
   const separator = key.indexOf(":");
@@ -27,7 +28,7 @@ export function resolveQualityDataIntelligenceFinding(
   } else if (kind === "metric") {
     value = result.verified_calculations.find((entry) => entry.reference === reference) ?? null;
     classification = "deterministic_calculation";
-  } else {
+  } else if (result.interpretation_status === "unverified_advisory_hypotheses" && result.interpretation !== null) {
     const index = Number(reference);
     if (!Number.isInteger(index) || index < 0) return null;
     if (kind === "possible_cause") {
@@ -40,7 +41,7 @@ export function resolveQualityDataIntelligenceFinding(
       value = result.interpretation.human_investigation_steps[index] ?? null;
       classification = "advisory_investigation_step";
     } else return null;
-  }
+  } else return null;
   if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value)) return null;
 
   const record = value as Record<string, unknown>;

@@ -1,8 +1,7 @@
 import type postgres from "postgres";
-import { qualityDataAiAnalysisResultSchema } from "../../quality-data/quality-data-ai-contract";
-import { QUALITY_DATA_INTELLIGENCE_REPORT_VERSION } from "../../quality-data/quality-data-intelligence-contract";
+import { QUALITY_DATA_INTELLIGENCE_REPORT_VERSION, qualityDataIntelligenceResultSchema } from "../../quality-data/quality-data-intelligence-contract";
 import { resolveQualityDataIntelligenceFinding } from "../../quality-data/quality-data-intelligence-finding";
-import type { QualityDataCapaHandoffReserveInput, QualityDataCapaHandoffReserveResult, QualityDataCapaHandoffLinkInput, QualityDataCapaHandoffRepository, QualityDataCapaHandoffStoredRecord } from "../repositories/quality-data-capa-handoff-repository";
+import type { QualityDataCapaHandoffReserveInput, QualityDataCapaHandoffReserveResult, QualityDataCapaHandoffLinkInput, QualityDataCapaHandoffRepository, QualityDataCapaHandoffStoredRecord, QualityDataCapaEvidenceLink } from "../repositories/quality-data-capa-handoff-repository";
 import type { TransactionContext } from "../transactions";
 import { requireSupabaseTransaction } from "./supabase-transactions";
 
@@ -69,6 +68,8 @@ async function handoffAuthority(sql: postgres.TransactionSql, input: QualityData
 }
 
 export class SupabaseQualityDataCapaHandoffRepository implements QualityDataCapaHandoffRepository {
+  constructor(private readonly database: postgres.Sql) {}
+
   async reserveDecision(transaction: TransactionContext, input: QualityDataCapaHandoffReserveInput): Promise<QualityDataCapaHandoffReserveResult> {
     const sql = requireSupabaseTransaction(transaction);
     if (input.decision !== "create_capa_draft" || !await handoffAuthority(sql, input)) return { status: "unauthorized" };
@@ -104,7 +105,7 @@ export class SupabaseQualityDataCapaHandoffRepository implements QualityDataCapa
     const report = reports[0];
     if (!report || report.status !== "complete" || report.result_payload === null) return { status: "not_found" };
     if (report.result_fingerprint !== input.expected_result_fingerprint) return { status: "stale_evidence" };
-    const result = qualityDataAiAnalysisResultSchema.parse(json(report.result_payload));
+    const result = qualityDataIntelligenceResultSchema.parse(json(report.result_payload));
     const resolved = resolveQualityDataIntelligenceFinding(result, input.finding_key);
     if (!resolved || resolved.fingerprint !== input.expected_finding_fingerprint) return { status: "stale_evidence" };
 
@@ -167,5 +168,28 @@ export class SupabaseQualityDataCapaHandoffRepository implements QualityDataCapa
       returning handoff_id
     `;
     if (rows.length !== 1) throw new Error("QUALITY_DATA_CAPA_HANDOFF_LINK_FAILED");
+  }
+
+  async findLinkedForCase(organizationId: string, caseId: string): Promise<QualityDataCapaEvidenceLink | null> {
+    const rows = await this.database<Row[]>`
+      select handoff_id, organization_id, report_id, dataset_id, dataset_version_id,
+        approval_event_id, finding_key, finding_classification, finding_fingerprint, result_fingerprint,
+        capa_case_id, capa_case_status
+      from public.quality_data_intelligence_capa_handoffs
+      where organization_id = ${organizationId}::uuid and capa_case_id = ${caseId}::uuid
+        and handoff_status = 'linked' and capa_case_status = 'S00'
+      limit 2
+    `;
+    if (rows.length !== 1) return null;
+    const row = rows[0]!;
+    const classification = text(row.finding_classification);
+    if (!["deterministic_signal", "deterministic_calculation", "advisory_hypothesis", "advisory_uncertainty", "advisory_investigation_step"].includes(classification)) return null;
+    return {
+      handoff_id: text(row.handoff_id), organization_id: text(row.organization_id), report_id: text(row.report_id),
+      dataset_id: text(row.dataset_id), dataset_version_id: text(row.dataset_version_id), approval_event_id: text(row.approval_event_id),
+      finding_key: text(row.finding_key), finding_classification: classification as QualityDataCapaEvidenceLink["finding_classification"],
+      finding_fingerprint: text(row.finding_fingerprint), result_fingerprint: text(row.result_fingerprint),
+      capa_case_id: text(row.capa_case_id), capa_case_status: text(row.capa_case_status),
+    };
   }
 }

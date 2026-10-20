@@ -33,6 +33,7 @@ export function buildQualityEvidencePacket(
   analysis: QualityAnalysisResult,
   detection: QualitySignalDetectionResult,
   createHandle: () => string = randomUUID,
+  interpretationMode: "external_ai" | "not_requested" = "external_ai",
 ): { readonly packet: QualityEvidencePacket; readonly citations: ReadonlyMap<string, QualityEvidenceCitation> } | null {
   if (analysis.dataset.dataset_version_id !== detection.dataset.dataset_version_id
     || analysis.dataset.organization_id !== detection.dataset.organization_id
@@ -95,7 +96,10 @@ export function buildQualityEvidencePacket(
   }));
 
   const limitations = new Set<string>();
-  const assumptions = new Set<string>(["STAGE3A_APPROVED_IMMUTABLE_VERSION", "STAGE3B_DETERMINISTIC_CALCULATIONS", "CATEGORY_VALUES_REPLACED_BY_ALIASES", "MODEL_OUTPUT_IS_UNVERIFIED_ADVISORY"]);
+  const assumptions = new Set<string>([
+    "STAGE3A_APPROVED_IMMUTABLE_VERSION", "STAGE3B_DETERMINISTIC_CALCULATIONS", "CATEGORY_VALUES_REPLACED_BY_ALIASES",
+    interpretationMode === "external_ai" ? "MODEL_OUTPUT_IS_UNVERIFIED_ADVISORY" : "EXTERNAL_AI_NOT_REQUESTED",
+  ]);
   const packetSignals: QualityEvidencePacket["signals"] = detection.signals.map((signal: QualitySignalResult, index) => {
     const reference = `S${index + 1}`;
     const allSignalRecords: QualitySignalEvidenceRecord[] = [];

@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleQualityDataAiInterpretationPost, handleQualityDataExternalAiOptInPost, handleQualityDataIntelligencePost, handleQualityDataIntelligenceReviewPost, handleQualityDataCapaDraftHandoffPost, type QualityDataAiApiDependencies } from "../../lib/quality-data/quality-data-ai-api";
+import { handleQualityDataAiInterpretationPost, handleQualityDataExternalAiOptInPost, handleQualityDataIntelligencePost, handleQualityDataIntelligenceReviewPost, handleQualityDataCapaDraftHandoffPost, handleQualityDataCapaSupportingEvidenceGet, handleQualityDataDeterministicIntelligencePost, type QualityDataAiApiDependencies } from "../../lib/quality-data/quality-data-ai-api";
 import type { CapaRequestContext } from "../../lib/security/supabase-capa-context";
 import { parseQualityDataAiGate } from "../../lib/quality-data/quality-data-ai-gate";
 import { parseQualityDataPilotGate } from "../../lib/quality-data/quality-data-pilot-gate";
+
+const deterministicReport = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/quality-data/quality-data-stage3d-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/quality-data/quality-data-stage3d-service")>()),
+  createQualityDataDeterministicReport: deterministicReport,
+}));
 
 const USER = "11000000-0000-4000-8000-000000000001";
 const ORG = "11000000-0000-4000-8000-000000000002";
@@ -79,6 +85,23 @@ describe("Stage 3D authenticated intelligence API boundary", () => {
     expect(noKey.get_stage3d_dependencies).not.toHaveBeenCalled();
   });
 
+  it("allows deterministic report mode with the external-AI gate disabled and never requests AI dependencies", async () => {
+    deterministicReport.mockResolvedValueOnce({ status: "complete", replayed: false, report: { report_id: runId } });
+    const getAi = vi.fn(() => null);
+    const service = {} as NonNullable<ReturnType<NonNullable<QualityDataAiApiDependencies["get_stage3d_dependencies"]>>>;
+    const deps = dependencies({ ai_gate: undefined, get_stage3d_dependencies: vi.fn(() => service), get_ai_dependencies: getAi });
+    const request = new Request("https://app.example/api/quality-data/intelligence/deterministic", {
+      method: "POST", headers: { origin: "https://app.example", "content-type": "application/json", "idempotency-key": "deterministic-demo-once" },
+      body: JSON.stringify({ schema_version: "quality-data-deterministic-analysis-request-1.0.0", mode: "deterministic_only",
+        dataset_version_id: runId, metrics: [{ metric_id: "rejects", kind: "numeric_summary", field_key: "reject_count" }], signals: [{ signal_id: "trend", kind: "recurring_category", semantic_role: "failure_mode",
+          field_key: "failure_mode", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } }] }),
+    });
+    const response = await handleQualityDataDeterministicIntelligencePost(request, deps);
+    expect(response.status).toBe(201);
+    expect(getAi).not.toHaveBeenCalled();
+    expect(deterministicReport).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps CAPA handoff behind the disabled-by-default quality-data pilot and does not construct an AI provider", async () => {
     const reportId = runId;
     const unavailable = vi.fn(() => null);
@@ -98,6 +121,19 @@ describe("Stage 3D authenticated intelligence API boundary", () => {
     expect((await handleQualityDataCapaDraftHandoffPost(activeReq, reportId, enabledButUnavailable)).status).toBe(503);
     expect(unavailable).toHaveBeenCalledOnce();
     expect(ai).not.toHaveBeenCalled();
+  });
+
+  it("keeps reverse supporting-evidence navigation behind the pilot gate", async () => {
+    const handoffDependencies = vi.fn(() => null);
+    const aiDependencies = vi.fn(() => null);
+    const deps = dependencies({ quality_data_pilot_gate: undefined, get_capa_handoff_dependencies: handoffDependencies, get_ai_dependencies: aiDependencies });
+    const request = new Request(`https://app.example/api/quality-data/capa-evidence/${runId}`, {
+      method: "GET", headers: { origin: "https://app.example" },
+    });
+    const response = await handleQualityDataCapaSupportingEvidenceGet(request, runId, deps);
+    expect(response.status).toBe(404);
+    expect(handoffDependencies).not.toHaveBeenCalled();
+    expect(aiDependencies).not.toHaveBeenCalled();
   });
 
   it("requires the distinct human reviewer authorization and does not construct a model client", async () => {

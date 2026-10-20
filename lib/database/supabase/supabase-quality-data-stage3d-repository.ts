@@ -1,7 +1,6 @@
 import type postgres from "postgres";
-import type { QualityDataAiAnalysisResult } from "../../quality-data/quality-data-ai-contract";
-import { qualityDataAiAnalysisResultSchema } from "../../quality-data/quality-data-ai-contract";
-import type { QualityDataIntelligenceReport, QualityDataIntelligenceReviewEvent } from "../../quality-data/quality-data-intelligence-contract";
+import type { QualityDataIntelligenceResult, QualityDataIntelligenceReport, QualityDataIntelligenceReviewEvent } from "../../quality-data/quality-data-intelligence-contract";
+import { qualityDataIntelligenceReportRequestSchema, qualityDataIntelligenceResultSchema } from "../../quality-data/quality-data-intelligence-contract";
 import type { QualityDataIntelligenceReportReservation, QualityDataIntelligenceReservationResult, QualityDataIntelligenceReviewAppendInput, QualityDataIntelligenceReviewAppendResult, QualityDataIntelligenceReviewHistory, QualityDataStage3DRepository } from "../repositories/quality-data-stage3d-repository";
 import type { TransactionContext } from "../transactions";
 import { requireSupabaseTransaction } from "./supabase-transactions";
@@ -32,13 +31,13 @@ function iso(value: unknown): string {
 function report(row: Row): QualityDataIntelligenceReport {
   const status = text(row.status);
   if (status !== "processing" && status !== "complete" && status !== "failed") throw new Error("QUALITY_DATA_INTELLIGENCE_DATABASE_STATUS_INVALID");
-  const resultValue = row.result_payload === null ? null : qualityDataAiAnalysisResultSchema.parse(json(row.result_payload)) as QualityDataAiAnalysisResult;
+  const resultValue = row.result_payload === null ? null : qualityDataIntelligenceResultSchema.parse(json(row.result_payload)) as QualityDataIntelligenceResult;
   if ((status === "complete") !== (resultValue !== null)) throw new Error("QUALITY_DATA_INTELLIGENCE_DATABASE_RESULT_INVALID");
   return {
     report_id: text(row.report_id), organization_id: text(row.organization_id), dataset_id: text(row.dataset_id),
     dataset_version_id: text(row.dataset_version_id), approval_event_id: text(row.approval_event_id),
     requested_by_user_id: text(row.requested_by_user_id), requested_by_membership_id: text(row.requested_by_membership_id),
-    request_payload: json(row.request_payload) as QualityDataIntelligenceReport["request_payload"],
+    request_payload: qualityDataIntelligenceReportRequestSchema.parse(json(row.request_payload)),
     request_fingerprint: text(row.request_fingerprint), status, result: resultValue,
     result_fingerprint: optionalText(row.result_fingerprint), failure_code: optionalText(row.failure_code),
     request_id: text(row.request_id), correlation_id: text(row.correlation_id), created_at: iso(row.created_at),
@@ -158,7 +157,39 @@ export class SupabaseQualityDataStage3DRepository implements QualityDataStage3DR
 
   async completeReport(transaction: TransactionContext, organizationId: string, reportId: string, resultValue: unknown, resultFingerprint: string, finalizedAt: string): Promise<QualityDataIntelligenceReport> {
     const sql = requireSupabaseTransaction(transaction);
-    const parsed = qualityDataAiAnalysisResultSchema.parse(resultValue);
+    const parsed = qualityDataIntelligenceResultSchema.parse(resultValue);
+    if (parsed.interpretation_status === "not_requested") {
+      const pending = await sql<Row[]>`
+        select dataset_id, dataset_version_id, approval_event_id
+        from public.quality_data_intelligence_reports
+        where organization_id = ${organizationId}::uuid and report_id = ${reportId}::uuid and status = 'processing'
+        for update
+      `;
+      const reportRow = pending[0];
+      if (!reportRow) throw new Error("QUALITY_DATA_INTELLIGENCE_REPORT_FINALIZATION_FAILED");
+      // Approval transitions lock this same immutable version row FOR UPDATE.
+      // Taking a share lock here serializes completion against revocation.
+      const versions = await sql<Row[]>`
+        select version.dataset_version_id
+        from public.quality_data_dataset_versions as version
+        where version.organization_id = ${organizationId}::uuid
+          and version.dataset_id = ${String(reportRow.dataset_id)}::uuid
+          and version.dataset_version_id = ${String(reportRow.dataset_version_id)}::uuid
+        for share
+      `;
+      const latest = await sql<Row[]>`
+        select approval_event_id, decision
+        from public.quality_data_dataset_version_approval_events
+        where organization_id = ${organizationId}::uuid
+          and dataset_id = ${String(reportRow.dataset_id)}::uuid
+          and dataset_version_id = ${String(reportRow.dataset_version_id)}::uuid
+        order by transition_number desc limit 1
+      `;
+      if (versions.length !== 1 || latest[0]?.decision !== "approved"
+        || latest[0]?.approval_event_id !== reportRow.approval_event_id) {
+        throw new Error("QUALITY_DATA_INTELLIGENCE_APPROVAL_REVOKED");
+      }
+    }
     const rows = await sql<Row[]>`
       update public.quality_data_intelligence_reports
       set status = 'complete', result_payload = ${sql.json(parsed)}, result_fingerprint = ${resultFingerprint}, finalized_at = ${finalizedAt}::timestamptz

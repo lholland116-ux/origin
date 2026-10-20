@@ -1,12 +1,14 @@
 "use client";
 
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import QualityDataAnalysisWorkspace from "./QualityDataAnalysisWorkspace";
 
 type Worksheet = { name: string; visible: boolean; row_count: number; column_count: number };
 type Header = { column_reference: string; value: string };
-type ColumnMapping = { header: string; field_key: string; value_type: "" | "text" | "number" | "date" | "boolean"; required: boolean; ignored: boolean };
+type ColumnMapping = { header: string; field_key: string; value_type: "" | "text" | "number" | "date" | "boolean"; normalized_unit: string; required: boolean; ignored: boolean };
 type Diagnostic = { code: string; worksheet?: string; row_number?: number; cell_reference?: string; field_key?: string };
 type ApiError = { error?: { message?: string; code?: string } };
+type ImportedDataset = { dataset_id: string; dataset_version_id: string; source_version_id: string; record_count: number; source_sha256: string };
 
 function createClientId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -36,6 +38,7 @@ export default function QualityDataIngestionClient() {
   const [preview, setPreview] = useState<{ valid: boolean; recordCount?: number; fieldCount?: number } | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [status, setStatus] = useState("");
+  const [imported, setImported] = useState<ImportedDataset | null>(null);
   const inFlight = useRef(false);
 
   useEffect(() => {
@@ -120,7 +123,7 @@ export default function QualityDataIngestionClient() {
       }
       const returnedHeaders = Array.isArray(body.headers) ? body.headers as Header[] : [];
       setHeaders(returnedHeaders);
-      setMappings(returnedHeaders.map((item) => ({ header: item.value, field_key: "", value_type: "", required: false, ignored: false })));
+      setMappings(returnedHeaders.map((item) => ({ header: item.value, field_key: "", value_type: "", normalized_unit: "", required: false, ignored: false })));
       setStatus(returnedHeaders.length ? "Headers loaded. Map or explicitly ignore every column." : "No usable headers were found.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Workbook inspection failed.");
@@ -134,7 +137,7 @@ export default function QualityDataIngestionClient() {
     return {
       worksheet_name: worksheet,
       header_row: Number(headerRow),
-      columns: mappings.filter((item) => !item.ignored && item.field_key.trim()).map(({ header, field_key, value_type, required }) => ({ header, field_key: field_key.trim(), value_type, required })),
+      columns: mappings.filter((item) => !item.ignored && item.field_key.trim()).map(({ header, field_key, value_type, required, normalized_unit }) => ({ header, field_key: field_key.trim(), value_type, required, ...(normalized_unit.trim() ? { normalized_unit: normalized_unit.trim() } : {}) })),
       ignored_headers: mappings.filter((item) => item.ignored).map((item) => item.header),
     };
   }
@@ -192,6 +195,14 @@ export default function QualityDataIngestionClient() {
       }
       const receipt = parseJson(body.receipt);
       const source = parseJson(body.source);
+      const datasetId = String(receipt.dataset_id ?? "");
+      const datasetVersionId = String(receipt.dataset_version_id ?? "");
+      const sourceVersionId = String(receipt.source_version_id ?? "");
+      const sourceSha256 = String(source.sha256 ?? "");
+      if (datasetId && datasetVersionId && sourceVersionId) setImported({
+        dataset_id: datasetId, dataset_version_id: datasetVersionId, source_version_id: sourceVersionId,
+        record_count: Number(receipt.record_count ?? 0), source_sha256: sourceSha256,
+      });
       setStatus(`${body.status === "already_registered" ? "This import was already registered" : "Import accepted"} for ${String(source.source_name ?? file.name)}. ${String(receipt.record_count ?? 0)} records; review state: ${String(body.review_state ?? "review_required")}; source SHA-256: ${String(source.sha256 ?? "unavailable")}.`);
       setPreview(null);
     } catch (error) {
@@ -229,6 +240,7 @@ export default function QualityDataIngestionClient() {
     <section className="mx-auto w-full max-w-5xl rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:p-8">
       <h1 className="text-2xl font-semibold">Import quality data</h1>
       <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Upload a manufacturing .xlsx workbook, explicitly map its columns, review validation, then submit. Values are recorded deterministically and remain marked for human review.</p>
+      <p className="mt-3 rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-950">Demonstration data only: <a className="font-semibold underline" href="/demo/synthetic-manufacturing-quality.xlsx" download>Download the fictional three-month inspection workbook</a>. Each row is a separate, non-overlapping 250-unit cohort; monthly rates use summed defects divided by summed inspected quantities.</p>
 
       {eligibility === "checking" && <p className="mt-4 text-sm" role="status">Checking organization ingestion access…</p>}
       {eligibility === "denied" && <p className="mt-4 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:bg-rose-950 dark:text-rose-100" role="alert">{status || "You are not authorized to ingest quality data."}</p>}
@@ -260,7 +272,7 @@ export default function QualityDataIngestionClient() {
             {mappings.map((item, index) => <div key={`${item.header}-${index}`} className="grid gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700 sm:grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)_8rem_auto_auto] sm:items-end">
               <div className="min-w-0"><span className="block text-xs text-slate-500">{headers[index]?.column_reference}</span><span className="block break-words font-medium">{item.header}</span></div>
               <label className="text-sm">Canonical field key<input className="mt-1 w-full rounded border border-slate-300 p-2 dark:border-slate-600 dark:bg-slate-800" value={item.field_key} disabled={item.ignored} maxLength={128} onChange={(event) => updateMapping(index, { field_key: event.target.value })} /></label>
-              <label className="text-sm">Value type<select className="mt-1 w-full rounded border border-slate-300 p-2 dark:border-slate-600 dark:bg-slate-800" value={item.value_type} disabled={item.ignored} onChange={(event) => updateMapping(index, { value_type: event.target.value as ColumnMapping["value_type"] })}><option value="">Select type</option><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="boolean">Boolean</option></select></label>
+              <div className="space-y-2"><label className="block text-sm">Value type<select className="mt-1 w-full rounded border border-slate-300 p-2 dark:border-slate-600 dark:bg-slate-800" value={item.value_type} disabled={item.ignored} onChange={(event) => updateMapping(index, { value_type: event.target.value as ColumnMapping["value_type"] })}><option value="">Select type</option><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="boolean">Boolean</option></select></label>{item.value_type === "number" && <label className="block text-sm">Normalized unit (required for rate analysis)<input className="mt-1 w-full rounded border border-slate-300 p-2 dark:border-slate-600 dark:bg-slate-800" value={item.normalized_unit} disabled={item.ignored} maxLength={32} onChange={(event) => updateMapping(index, { normalized_unit: event.target.value })} placeholder="e.g. count or units" /></label>}</div>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.required} disabled={item.ignored} onChange={(event) => updateMapping(index, { required: event.target.checked })} />Required</label>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.ignored} onChange={(event) => updateMapping(index, { ignored: event.target.checked, field_key: "" })} />Ignore</label>
             </div>)}
@@ -283,7 +295,14 @@ export default function QualityDataIngestionClient() {
       {diagnostics.length > 0 && <div className="mt-5 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-100"><h2 className="font-semibold">Validation diagnostics</h2><ul className="mt-2 list-inside list-disc">{diagnostics.map((item, index) => <li key={`${item.code}-${index}`}>{item.code}{item.worksheet ? ` — ${item.worksheet}` : ""}{item.row_number ? ` row ${item.row_number}` : ""}{item.cell_reference ? ` cell ${item.cell_reference}` : ""}{item.field_key ? ` field ${item.field_key}` : ""}</li>)}</ul></div>}
       <p className="mt-4 min-h-6 break-all text-sm" role="status" aria-live="polite">{status}</p>
       {busy && <p className="text-sm" aria-live="polite">Processing workbook…</p>}
-      <p className="mt-6 border-t border-slate-200 pt-4 text-xs text-slate-500 dark:border-slate-700">Access is checked on the server for every request. Original workbooks are stored in private organization-scoped storage. No AI interpretation or evidence verification is performed.</p>
+      {imported && <QualityDataAnalysisWorkspace dataset={imported} suggestedFields={{
+        date: mappings.find((item) => item.value_type === "date")?.field_key || "inspection_date",
+        category: mappings.find((item) => item.value_type === "text")?.field_key || "failure_mode",
+        count: mappings.find((item) => item.value_type === "number" && item.normalized_unit.trim().toLowerCase() === "count")?.field_key || "defect_count",
+        quantity: mappings.find((item) => item.value_type === "number" && item.normalized_unit.trim().toLowerCase() !== "count")?.field_key || "inspected_quantity",
+        quantityUnit: mappings.find((item) => item.value_type === "number" && item.normalized_unit.trim().toLowerCase() !== "count")?.normalized_unit || "units",
+      }} />}
+      <p className="mt-6 border-t border-slate-200 pt-4 text-xs text-slate-500 dark:border-slate-700">Access is checked on the server for every request. Original workbooks are stored in private organization-scoped storage. Deterministic analysis does not call AI; analysis and review do not verify source evidence.</p>
     </section>
   );
 }

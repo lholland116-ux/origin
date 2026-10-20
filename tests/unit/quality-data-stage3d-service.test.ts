@@ -1,13 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const interpret = vi.hoisted(() => vi.fn());
+const calculate = vi.hoisted(() => vi.fn());
+const detect = vi.hoisted(() => vi.fn());
+const buildPacket = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/quality-data/quality-data-ai-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/quality-data/quality-data-ai-service")>()),
   interpretQualityDataAnalysis: interpret,
 }));
+vi.mock("../../lib/quality-data/quality-data-stage3a-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/quality-data/quality-data-stage3a-service")>()),
+  analyzeQualityDatasetVersion: calculate,
+  detectQualityDatasetSignals: detect,
+}));
+vi.mock("../../lib/quality-data/quality-data-evidence-packet", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/quality-data/quality-data-evidence-packet")>()),
+  buildQualityEvidencePacket: buildPacket,
+}));
 
 import type { RequestTrace } from "../../lib/capa/domain/capa-types";
-import { createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DServiceDependencies } from "../../lib/quality-data/quality-data-stage3d-service";
+import { createQualityDataDeterministicReport, createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DServiceDependencies } from "../../lib/quality-data/quality-data-stage3d-service";
 import type { CapaRequestContext } from "../../lib/security/supabase-capa-context";
 
 const USER = "51000000-0000-4000-8000-000000000001";
@@ -105,7 +117,49 @@ function dependencies(options: { readonly readAllowed?: boolean; readonly review
 }
 
 describe("Stage 3D intelligence review service", () => {
-  beforeEach(() => { interpret.mockReset().mockResolvedValue({ status: "complete", result }); });
+  beforeEach(() => {
+    interpret.mockReset().mockResolvedValue({ status: "complete", result });
+    calculate.mockReset(); detect.mockReset(); buildPacket.mockReset();
+  });
+
+  it("persists a versioned deterministic-only report with cell provenance and zero provider calls", async () => {
+    const deps = dependencies();
+    const handle = "51000000-0000-4000-8000-000000000021";
+    const citation = { handle, record_id: "51000000-0000-4000-8000-000000000012", record_ordinal: 3,
+      source_worksheet: "Synthetic Inspections", source_row_number: 4, source_cells: ["B4", "C4"],
+      source_id: "51000000-0000-4000-8000-000000000013", source_version_id: "51000000-0000-4000-8000-000000000014", source_sha256: "a".repeat(64) };
+    calculate.mockResolvedValue({ status: "complete", result: {} });
+    detect.mockResolvedValue({ status: "complete", result: {} });
+    buildPacket.mockReturnValue({ packet: { schema_version: "quality-evidence-packet-1.0.0", packet_id: "51000000-0000-4000-8000-000000000022",
+      calculation_versions: ["quality-analysis-1.0.0", "quality-signal-calculation-1.0.0"], time_windows: ["ALL_APPROVED_RECORDS"],
+      assumptions: ["EXTERNAL_AI_NOT_REQUESTED"], data_quality_limitations: [],
+      calculations: [{ reference: "M1", kind: "NUMERIC_SUMMARY", status: "COMPLETE", sample_size: 3, numerator_count: 3,
+        denominator_count: 3, excluded_counts: { missing_field: 0, missing_value: 0, non_numeric: 0 }, unit: "COUNT", value: 4,
+        minimum: 1, maximum: 2, evidence_handles: [handle] }], signals: [] }, citations: new Map([[handle, citation]]) });
+    const deterministicRequest = { schema_version: "quality-data-deterministic-analysis-request-1.0.0", mode: "deterministic_only",
+      dataset_version_id: VERSION, metrics: [{ metric_id: "defects", kind: "numeric_summary", field_key: "defect_count" }],
+      signals: [{ signal_id: "failure-mode", kind: "recurring_category", semantic_role: "failure_mode", field_key: "failure_mode",
+        minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } }] };
+    const created = await createQualityDataDeterministicReport(deps.deps, context(), trace("deterministic-one"), deterministicRequest);
+    expect(created).toMatchObject({ status: "complete", replayed: false, report: { result: {
+      schema_version: "quality-data-deterministic-analysis-result-1.0.0", mode: "deterministic_only",
+      interpretation_status: "not_requested", interpretation: null,
+      evidence_citations: [{ source_row_number: 4, source_cells: ["B4", "C4"], source_sha256: "a".repeat(64) }],
+    } } });
+    expect(calculate).toHaveBeenCalledTimes(1);
+    expect(detect).toHaveBeenCalledTimes(1);
+    expect(deps.repository.completeReport).toHaveBeenCalledTimes(1);
+    expect(deps.appendAudit).toHaveBeenCalledTimes(1);
+    expect(interpret).not.toHaveBeenCalled();
+    expect(deps.deps.model_client.generate).not.toHaveBeenCalled();
+
+    deps.repository.completeReport.mockRejectedValueOnce(new Error("QUALITY_DATA_INTELLIGENCE_APPROVAL_REVOKED"));
+    const revokedDuringCalculation = await createQualityDataDeterministicReport(deps.deps, context(), trace("deterministic-revoked-before-commit"), deterministicRequest);
+    expect(revokedDuringCalculation.status).toBe("not_approved");
+    expect(deps.repository.failReport).toHaveBeenCalledWith(expect.anything(), ORG, REPORT, "NOT_APPROVED", expect.any(String));
+    expect(deps.appendAudit).toHaveBeenCalledTimes(1);
+    expect(interpret).not.toHaveBeenCalled();
+  });
 
   it("reserves and persists an integrated report; an idempotent replay returns it without a second model dispatch", async () => {
     const deps = dependencies();

@@ -8,8 +8,9 @@ import type { QualityDataPilotGate } from "./quality-data-pilot-gate";
 import { isQualityDataPilotOrganizationAllowed } from "./quality-data-pilot-gate";
 import { getQualityDataExternalAiOptIn, transitionQualityDataExternalAiOptIn } from "./quality-data-external-ai-opt-in-service";
 import { interpretQualityDataAnalysis } from "./quality-data-ai-service";
-import { createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DBaseDependencies, type QualityDataStage3DServiceDependencies } from "./quality-data-stage3d-service";
+import { createQualityDataDeterministicReport, createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DBaseDependencies, type QualityDataStage3DServiceDependencies } from "./quality-data-stage3d-service";
 import { createCapaDraftFromQualityIntelligence, type QualityDataCapaHandoffDependencies } from "./quality-data-capa-handoff-service";
+import { getQualityDataCapaSupportingEvidence } from "./quality-data-capa-evidence-service";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_BODY_BYTES = 32 * 1024;
@@ -194,11 +195,42 @@ function stage3dService(dependencies: QualityDataAiApiDependencies, includeAi: b
   };
 }
 
-function intelligenceGate(context: CapaRequestContext, dependencies: QualityDataAiApiDependencies, correlation: string): Response | null {
-  const pilot = pilotAllowed(context, dependencies, correlation);
-  if (pilot) return pilot;
-  if (!isQualityDataAiOrganizationAllowed(dependencies.ai_gate, context.tenant.organization_id)) return error("quality_data_ai_unavailable", "Quality-data intelligence is not enabled for this organization.", 404, correlation);
-  return null;
+function intelligencePilotGate(context: CapaRequestContext, dependencies: QualityDataAiApiDependencies, correlation: string): Response | null {
+  return pilotAllowed(context, dependencies, correlation);
+}
+
+/** Deterministic-only report creation is available under the quality-data pilot gate and does not obtain AI dependencies. */
+export async function handleQualityDataDeterministicIntelligencePost(request: Request, dependencies: QualityDataAiApiDependencies): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  const correlation = trace.correlation_id;
+  if (!sameOrigin(request, dependencies.configured_app_url)) return error("origin_denied", "The request origin is not allowed.", 403, correlation);
+  const authenticated = await auth(dependencies);
+  if (authenticated instanceof Response) return authenticated;
+  const blocked = intelligencePilotGate(authenticated.context, dependencies, correlation);
+  if (blocked) return blocked;
+  if (!trace.idempotency_key) return error("invalid_request", "An idempotency key is required.", 400, correlation);
+  const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "analysis", dependencies.now().getTime())).catch(() => "unavailable" as const);
+  if (limit === "unavailable") return error("service_unavailable", "Deterministic analysis is unavailable.", 503, correlation);
+  if (limit === "limited") return error("rate_limited", "Please wait before creating another deterministic report.", 429, correlation);
+  const body = await readJson(request);
+  if (body === "too_large") return error("request_too_large", "The analysis request is too large.", 413, correlation);
+  if (body === "timeout") return error("request_timeout", "The analysis request took too long.", 408, correlation);
+  if (body === "invalid") return error("invalid_request", "The analysis request is invalid.", 400, correlation);
+  let service: QualityDataStage3DBaseDependencies | null;
+  try { service = dependencies.get_stage3d_dependencies?.() ?? null; } catch { return error("service_unavailable", "Deterministic analysis is unavailable.", 503, correlation); }
+  if (!service) return error("service_unavailable", "Deterministic analysis is unavailable.", 503, correlation);
+  const result = await createQualityDataDeterministicReport(service, authenticated.context, trace, body);
+  switch (result.status) {
+    case "complete": return json({ status: result.status, report_id: result.report.report_id, report: result.report, replayed: result.replayed }, result.replayed ? 200 : 201);
+    case "processing": return json({ status: "processing", report_id: result.report_id }, 202);
+    case "failed": return json({ status: "failed", report_id: result.report_id, failure_code: result.failure_code }, 422);
+    case "denied": return error("quality_data_forbidden", "You are not authorized for deterministic quality analysis.", 403, correlation);
+    case "not_approved": return error("dataset_not_approved", "The dataset version is not currently approved for analytical use.", 409, correlation);
+    case "not_found_or_not_authorized": return error("not_found", "The approved dataset version was not found.", 404, correlation);
+    case "invalid_request": return error("invalid_request", "The deterministic analysis request is invalid.", 400, correlation);
+    case "conflict": return error("idempotency_conflict", "The idempotency key was already used for a different request.", 409, correlation);
+    default: return error("analysis_unavailable", "The deterministic report could not be completed safely.", 503, correlation);
+  }
 }
 
 export async function handleQualityDataIntelligencePost(request: Request, dependencies: QualityDataAiApiDependencies): Promise<Response> {
@@ -207,8 +239,9 @@ export async function handleQualityDataIntelligencePost(request: Request, depend
   if (!sameOrigin(request, dependencies.configured_app_url)) return error("origin_denied", "The request origin is not allowed.", 403, correlation);
   const authenticated = await auth(dependencies);
   if (authenticated instanceof Response) return authenticated;
-  const blocked = intelligenceGate(authenticated.context, dependencies, correlation);
+  const blocked = intelligencePilotGate(authenticated.context, dependencies, correlation);
   if (blocked) return blocked;
+  if (!isQualityDataAiOrganizationAllowed(dependencies.ai_gate, authenticated.context.tenant.organization_id)) return error("quality_data_ai_unavailable", "External AI analysis is not enabled for this organization.", 404, correlation);
   if (!trace.idempotency_key) return error("invalid_request", "An idempotency key is required.", 400, correlation);
   const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "ai_interpretation", dependencies.now().getTime())).catch(() => "unavailable" as const);
   if (limit === "unavailable") return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, correlation);
@@ -240,7 +273,7 @@ export async function handleQualityDataIntelligenceGet(request: Request, reportI
   if (!sameOrigin(request, dependencies.configured_app_url, true)) return error("origin_denied", "The request origin is not allowed.", 403, trace.correlation_id);
   const authenticated = await auth(dependencies);
   if (authenticated instanceof Response) return authenticated;
-  const blocked = intelligenceGate(authenticated.context, dependencies, trace.correlation_id);
+  const blocked = intelligencePilotGate(authenticated.context, dependencies, trace.correlation_id);
   if (blocked) return blocked;
   const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "analysis", dependencies.now().getTime())).catch(() => "unavailable" as const);
   if (limit === "unavailable") return error("service_unavailable", "Quality-data intelligence is unavailable.", 503, trace.correlation_id);
@@ -262,7 +295,7 @@ export async function handleQualityDataIntelligenceReviewPost(request: Request, 
   if (!sameOrigin(request, dependencies.configured_app_url)) return error("origin_denied", "The request origin is not allowed.", 403, trace.correlation_id);
   const authenticated = await auth(dependencies);
   if (authenticated instanceof Response) return authenticated;
-  const blocked = intelligenceGate(authenticated.context, dependencies, trace.correlation_id);
+  const blocked = intelligencePilotGate(authenticated.context, dependencies, trace.correlation_id);
   if (blocked) return blocked;
   const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "approval", dependencies.now().getTime())).catch(() => "unavailable" as const);
   if (limit === "unavailable") return error("service_unavailable", "Human review is unavailable.", 503, trace.correlation_id);
@@ -323,4 +356,28 @@ export async function handleQualityDataCapaDraftHandoffPost(request: Request, re
   if (result.status === "stale_evidence" || result.status === "conflict") return error("handoff_conflict", "The finding changed or already has a CAPA handoff. Refresh the report before continuing.", 409, correlation);
   if (result.status === "step_up_required") return error("capa_step_up_required", "Additional authentication is required.", 403, correlation);
   return error("handoff_unavailable", "The CAPA draft could not be created safely.", 503, correlation);
+}
+
+/** A source-read-authorized reverse lookup; revoked evidence is never linked from a CAPA case. */
+export async function handleQualityDataCapaSupportingEvidenceGet(request: Request, caseId: string, dependencies: QualityDataAiApiDependencies): Promise<Response> {
+  const trace = requestTrace(request, dependencies.generate_uuid);
+  if (!UUID.test(caseId)) return error("invalid_request", "The CAPA identifier is invalid.", 400, trace.correlation_id);
+  if (!sameOrigin(request, dependencies.configured_app_url, true)) return error("origin_denied", "The request origin is not allowed.", 403, trace.correlation_id);
+  const authenticated = await auth(dependencies);
+  if (authenticated instanceof Response) return authenticated;
+  const blocked = pilotAllowed(authenticated.context, dependencies, trace.correlation_id);
+  if (blocked) return blocked;
+  const limit = await Promise.resolve(dependencies.rate_limiter.consume(authenticated.user_id, "analysis", dependencies.now().getTime())).catch(() => "unavailable" as const);
+  if (limit === "unavailable") return error("service_unavailable", "Supporting evidence is unavailable.", 503, trace.correlation_id);
+  if (limit === "limited") return error("rate_limited", "Please wait before looking up supporting evidence again.", 429, trace.correlation_id);
+  let service: QualityDataCapaHandoffDependencies | null;
+  try { service = dependencies.get_capa_handoff_dependencies?.() ?? null; } catch { return error("service_unavailable", "Supporting evidence is unavailable.", 503, trace.correlation_id); }
+  if (!service) return error("service_unavailable", "Supporting evidence is unavailable.", 503, trace.correlation_id);
+  const result = await getQualityDataCapaSupportingEvidence(service, authenticated.context, caseId);
+  if (result.status === "found") return json({ status: "found", evidence: result }, 200);
+  if (result.status === "denied") return error("quality_data_forbidden", "You are not authorized to read this supporting evidence.", 403, trace.correlation_id);
+  if (result.status === "not_approved") return error("dataset_not_approved", "Supporting evidence is unavailable because its dataset version is no longer approved.", 409, trace.correlation_id);
+  if (result.status === "invalid_request") return error("invalid_request", "The CAPA identifier is invalid.", 400, trace.correlation_id);
+  if (result.status === "unavailable") return error("service_unavailable", "Supporting evidence is temporarily unavailable.", 503, trace.correlation_id);
+  return error("not_found", "Supporting evidence was not found.", 404, trace.correlation_id);
 }

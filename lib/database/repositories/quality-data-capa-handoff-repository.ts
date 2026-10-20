@@ -52,7 +52,23 @@ export interface QualityDataCapaHandoffLinkInput {
   readonly handoff_audit_event_id: string;
 }
 
+export interface QualityDataCapaEvidenceLink {
+  readonly handoff_id: string;
+  readonly organization_id: string;
+  readonly report_id: string;
+  readonly dataset_id: string;
+  readonly dataset_version_id: string;
+  readonly approval_event_id: string;
+  readonly finding_key: string;
+  readonly finding_classification: QualityDataCapaFindingClassification;
+  readonly finding_fingerprint: string;
+  readonly result_fingerprint: string;
+  readonly capa_case_id: string;
+  readonly capa_case_status: string;
+}
+
 export interface QualityDataCapaHandoffRepository {
   reserveDecision(transaction: TransactionContext, input: QualityDataCapaHandoffReserveInput): Promise<QualityDataCapaHandoffReserveResult>;
   linkCreatedDraft(transaction: TransactionContext, input: QualityDataCapaHandoffLinkInput): Promise<void>;
+  findLinkedForCase(organizationId: string, caseId: string): Promise<QualityDataCapaEvidenceLink | null>;
 }

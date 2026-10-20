@@ -12,12 +12,13 @@ import { SupabaseQualityDataStage3DRepository } from "../../lib/database/supabas
 import { SupabaseQualityDataCapaHandoffRepository } from "../../lib/database/supabase/supabase-quality-data-capa-handoff-repository";
 import { SupabaseTransactionManager } from "../../lib/database/supabase/supabase-transactions";
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../lib/quality-data/quality-data-authorization";
-import { createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DServiceDependencies } from "../../lib/quality-data/quality-data-stage3d-service";
+import { createQualityDataDeterministicReport, createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DServiceDependencies } from "../../lib/quality-data/quality-data-stage3d-service";
 import { transitionQualityDataExternalAiOptIn } from "../../lib/quality-data/quality-data-external-ai-opt-in-service";
 import { ingestQualityData } from "../../lib/quality-data/quality-data-service";
 import { transitionQualityDataDatasetVersionApproval, type QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
 import { createCapaDraftFromQualityIntelligence } from "../../lib/quality-data/quality-data-capa-handoff-service";
 import { qualityDataCapaHandoffCommandSchema } from "../../lib/quality-data/quality-data-capa-handoff-contract";
+import { getQualityDataCapaSupportingEvidence } from "../../lib/quality-data/quality-data-capa-evidence-service";
 import { resolveQualityDataIntelligenceFinding } from "../../lib/quality-data/quality-data-intelligence-finding";
 import type { CreateCapaDependencies } from "../../lib/capa/application/create-capa";
 import type { TransactionWork } from "../../lib/database/transactions";
@@ -55,6 +56,9 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
   let capaAuthorizationPolicy: SupabaseCapaAuthorizationPolicy;
   let versionId: string;
   let reportId: string;
+  let deterministicReportId = "";
+  let deterministicCapaCaseId = "";
+  let modelCallCount = 0;
   let modelCalls: (packet: QualityEvidencePacket) => Promise<{ readonly output_text: string; readonly usage: { readonly input_tokens: number; readonly output_tokens: number; readonly total_tokens: number } }>;
   const reportTrace = trace("stage3d-report-idempotency");
   const reportRequest = {
@@ -82,7 +86,7 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       granted_by_actor_type, granted_by_actor_id, grant_reason
     ) values (${org}::uuid, ${membership}::uuid, ${user}::uuid, ${role}, 'ORGANIZATION', 'active',
       ${NOW.toISOString()}::timestamptz, ${NOW.toISOString()}::timestamptz, ${NOW.toISOString()}::timestamptz,
-      'system', 'stage3d-test', 'Synthetic Stage 3D qualification')`;
+      'system', 'stage3d-test', 'Synthetic Stage 3D qualification') on conflict do nothing`;
   }
   async function assignRole(org: string, user: string, membership: string, role: string): Promise<void> {
     await sql`insert into public.capa_role_assignments (
@@ -108,26 +112,34 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       },
       dataset: { dataset_key: `stage3d-${randomUUID()}`, dataset_name: "Synthetic inspection set", schema_version: "inspection-v1.0.0" },
       records: [
-        { source_worksheet: "Inspection", source_row_number: 2, fields: [
-          { field_key: "reject_count", value_type: "number", original_value: 2, normalized_value: 2, normalized_unit: "count", source_cell_reference: "B2" },
-          { field_key: "failure_mode", value_type: "text", original_value: "seal_gap", normalized_value: "seal_gap", source_cell_reference: "C2" },
-        ] },
-        { source_worksheet: "Inspection", source_row_number: 3, fields: [
-          { field_key: "reject_count", value_type: "number", original_value: 4, normalized_value: 4, normalized_unit: "count", source_cell_reference: "B3" },
-          { field_key: "failure_mode", value_type: "text", original_value: "seal_gap", normalized_value: "seal_gap", source_cell_reference: "C3" },
-        ] },
-        { source_worksheet: "Inspection", source_row_number: 4, fields: [
-          { field_key: "reject_count", value_type: "number", original_value: 1, normalized_value: 1, normalized_unit: "count", source_cell_reference: "B4" },
-          { field_key: "failure_mode", value_type: "text", original_value: "seal_gap", normalized_value: "seal_gap", source_cell_reference: "C4" },
-        ] },
-      ],
+        ["2025-01-06", "Seal leak", 1], ["2025-01-13", "Surface mark", 1], ["2025-01-20", null, 0], ["2025-01-27", null, 0],
+        ["2025-02-03", "Seal leak", 2], ["2025-02-10", "Surface mark", 1], ["2025-02-17", "Packaging flaw", 1], ["2025-02-24", null, 0],
+        ["2025-03-03", "Seal leak", 4], ["2025-03-10", "Surface mark", 2], ["2025-03-17", "Packaging flaw", 1], ["2025-03-24", "Handling mark", 1],
+      ].map(([date, mode, count], index) => ({
+        source_worksheet: "Synthetic Inspections", source_row_number: index + 2,
+        fields: [
+          { field_key: "reject_count", value_type: "number" as const, original_value: count, normalized_value: count, normalized_unit: "count", source_cell_reference: `C${index + 2}` },
+          {
+            field_key: "failure_mode",
+            ...(mode === null
+              ? { value_type: "blank" as const, original_value: null, normalized_value: null }
+              : { value_type: "text" as const, original_value: mode, normalized_value: mode }),
+            source_cell_reference: `B${index + 2}`,
+          },
+          { field_key: "inspection_date", value_type: "date" as const, original_value: date, normalized_value: date, source_cell_reference: `A${index + 2}` },
+          { field_key: "inspected_quantity", value_type: "number" as const, original_value: 250, normalized_value: 250, normalized_unit: "units", source_cell_reference: `D${index + 2}` },
+        ],
+      })),
     };
     const ingested = await ingestQualityData({
       repository: new SupabaseQualityDataRepository(sql), audit_repository: new SupabaseAuditRepository(sql),
       transaction_manager: new SupabaseTransactionManager(sql), authorizer,
       ids: { event_id: () => randomUUID() as never, uuid: randomUUID }, clock: { now: () => new Date(NOW) },
     }, await context(adminId), request, command);
-    if (ingested.status !== "accepted") throw new Error("Synthetic Stage 3D dataset setup failed.");
+    if (ingested.status !== "accepted") {
+      const reasonCode = "reason_code" in ingested ? ` (${ingested.reason_code})` : "";
+      throw new Error(`Synthetic Stage 3D dataset setup failed: ${ingested.status}${reasonCode}.`);
+    }
     const approved = await transitionQualityDataDatasetVersionApproval(stage3a, await context(adminId), trace(), {
       schema_version: "quality-data-analytical-approval-1.0.0", dataset_version_id: ingested.receipt.dataset_version_id,
       decision: "approved", expected_transition_number: 0, rationale: "Synthetic approved for analytical use",
@@ -164,6 +176,7 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       ids: { audit_event_id: () => randomUUID() as never, uuid: randomUUID }, clock: { now: () => new Date(NOW) },
     };
     modelCalls = vi.fn(async (packet: QualityEvidencePacket) => {
+      modelCallCount += 1;
       const handle = packet.calculations[0]?.evidence_handles[0];
       if (!handle) throw new Error("Synthetic provider packet lacked an evidence handle.");
       return {
@@ -194,13 +207,16 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
     reportId = first.report.report_id;
     expect(first.report).toMatchObject({ status: "complete", dataset_version_id: versionId, result: {
       authorization_scope: "analytical_use_only", interpretation_status: "unverified_advisory_hypotheses",
-      source_verification: "not_asserted", verified_calculations: [expect.objectContaining({ reference: "M1", value: 7 / 3 })],
+      source_verification: "not_asserted", verified_calculations: [expect.objectContaining({ reference: "M1", value: 7 / 6 })],
       observed_signals: [expect.objectContaining({ reference: "S1", status: "DETECTED" })],
     } });
-    const citedHandle = first.report.result?.interpretation.possible_causes[0]?.evidence_refs[0];
-    expect(first.report.result?.evidence_citations.find((citation) => citation.handle === citedHandle))
-      .toMatchObject({ source_worksheet: "Inspection", source_cells: ["B2", "C2"] });
-    expect(first.report.result?.interpretation.possible_causes[0]?.evidence_refs).toHaveLength(1);
+    if (first.report.result?.interpretation_status !== "unverified_advisory_hypotheses" || !first.report.result.interpretation) throw new Error("Expected a persisted AI advisory result.");
+    const citedHandle = first.report.result.interpretation.possible_causes[0]?.evidence_refs[0];
+    const citedCitation = first.report.result?.evidence_citations.find((citation) => citation.handle === citedHandle);
+    expect(citedCitation).toMatchObject({ source_worksheet: "Synthetic Inspections" });
+    expect(citedCitation?.source_cells).toHaveLength(2);
+    expect(citedCitation?.source_cells.slice().sort()).toEqual(["B2", "C2"]);
+    expect(first.report.result.interpretation.possible_causes[0]?.evidence_refs).toHaveLength(1);
     expect(modelCalls).toHaveBeenCalledTimes(1);
 
     const replay = await createQualityDataIntelligenceReport(service, await context(adminId), reportTrace, reportRequest);
@@ -214,6 +230,50 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       return tx`select report_id from public.quality_data_intelligence_reports where report_id = ${reportId}::uuid`;
     });
     expect(authenticatedReport).toHaveLength(1);
+  });
+
+  it("persists a deterministic-only report from approved rows and records separate human triage without calling AI", async () => {
+    const callsBefore = modelCallCount;
+    const request = {
+      schema_version: "quality-data-deterministic-analysis-request-1.0.0",
+      mode: "deterministic_only",
+      dataset_version_id: versionId,
+      metrics: [{ metric_id: "reject-total", kind: "numeric_summary", field_key: "reject_count" }],
+      signals: [
+        { signal_id: "recurring-defect", kind: "recurring_category", semantic_role: "failure_mode", field_key: "failure_mode", minimum_occurrences: 2, minimum_sample_size: 3, time_window: { kind: "all_records_in_dataset_version" } },
+        { signal_id: "monthly-rate-trend", kind: "defect_rate_trend", defect_count_field_key: "reject_count", production_quantity_field_key: "inspected_quantity", observation_date_field_key: "inspection_date", production_quantity_unit: "units", rate_per: 1_000, direction: "increase", minimum_absolute_change: 0.5, minimum_records_per_window: 3, time_window: { kind: "calendar_month" } },
+      ],
+    };
+    const traceValue = trace("stage3d-deterministic-report");
+    const created = await createQualityDataDeterministicReport(service, await context(adminId), traceValue, request);
+    expect(created.status).toBe("complete");
+    if (created.status !== "complete") return;
+    deterministicReportId = created.report.report_id;
+    expect(created.report).toMatchObject({ status: "complete", request_payload: { mode: "deterministic_only" }, result: {
+      schema_version: "quality-data-deterministic-analysis-result-1.0.0", mode: "deterministic_only",
+      interpretation: null, interpretation_status: "not_requested", source_verification: "not_asserted",
+      verified_calculations: [expect.objectContaining({ reference: "M1", value: 7 / 6 })],
+      observed_signals: [expect.objectContaining({ reference: "S1", kind: "RECURRING_CATEGORY", status: "DETECTED" }),
+        expect.objectContaining({ reference: "S2", kind: "DEFECT_RATE_TREND", status: "DETECTED", monthly_buckets: [
+          expect.objectContaining({ period: "2025-01", rate: 2 }), expect.objectContaining({ period: "2025-02", rate: 4 }), expect.objectContaining({ period: "2025-03", rate: 8 }),
+        ] })],
+    } });
+    expect(created.report.result?.evidence_citations).toHaveLength(12);
+    expect(modelCallCount).toBe(callsBefore);
+    const stored = await new SupabaseQualityDataStage3DRepository(sql).findReport(organizationId, deterministicReportId);
+    expect(stored?.result_fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    const audit = await sql<{ count: number; interpretation_status: string }[]>`
+      select count(*)::int as count, max(metadata->>'interpretation_status') as interpretation_status
+      from public.capa_audit_events where organization_id = ${organizationId}::uuid
+        and aggregate_id = ${deterministicReportId} and event_type = 'QUALITY_DATA_INTELLIGENCE_REPORT_CREATED'`;
+    expect(audit[0]).toEqual({ count: 1, interpretation_status: "not_requested" });
+
+    const review = await reviewQualityDataIntelligenceFinding(service, await context(adminId), trace("stage3d-deterministic-review"), {
+      schema_version: "quality-data-intelligence-review-1.0.0", report_id: deterministicReportId,
+      finding_key: "signal:S2", expected_transition_number: 0, decision: "follow_up_requested",
+      rationale: "Review the synthetic month-over-month rate increase against the source inspection rows.",
+    });
+    expect(review).toMatchObject({ status: "applied", event: { finding_key: "signal:S2", decision: "follow_up_requested", dataset_version_id: versionId } });
   });
 
   it("creates one traceable S00 CAPA draft only after an authorized human handoff decision", async () => {
@@ -259,7 +319,7 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
     };
     const handoffDependencies = {
       quality_data: stage3a, stage3d_repository: new SupabaseQualityDataStage3DRepository(sql),
-      handoff_repository: new SupabaseQualityDataCapaHandoffRepository(), authorizer,
+      handoff_repository: new SupabaseQualityDataCapaHandoffRepository(sql), authorizer,
       capa_creation_dependencies: createDependencies,
       ids: { audit_event_id: () => randomUUID() as never, uuid: randomUUID },
       clock: { now: () => new Date(NOW) },
@@ -308,7 +368,7 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
       interpretation_status: "unverified_advisory_hypotheses", dataset_schema_version: "inspection-v1.0.0",
       analysis_request_schema_version: "quality-data-ai-analysis-request-1.0.0",
       analysis_result_schema_version: "quality-data-ai-analysis-result-1.0.0",
-      evidence_packet_version: "quality-evidence-packet-1.0.0", evidence_count: 3 });
+      evidence_packet_version: "quality-evidence-packet-1.0.0", evidence_count: 12 });
     const linkedCase = await sql<{ status: string; closed_at: Date | null; record_version: number }[]>`
       select status, closed_at, record_version::int as record_version from public.capa_cases where organization_id = ${organizationId}::uuid and capa_case_id = ${capaCaseId}::uuid`;
     expect(linkedCase[0]).toEqual({ status: "S00", closed_at: null, record_version: 1 });
@@ -382,6 +442,50 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
     })).rejects.toThrow();
   });
 
+  it("creates a deterministic S00 handoff and resolves supporting evidence only while source approval is current", async () => {
+    if (!deterministicReportId) throw new Error("Deterministic report fixture was not created.");
+    const createDependencies: CreateCapaDependencies = {
+      transaction_manager: new SupabaseTransactionManager(sql),
+      capa_repository: new SupabaseCapaRepository(sql), audit_repository: new SupabaseAuditRepository(sql),
+      creation_idempotency_repository: new SupabaseCapaCreationIdempotencyRepository(),
+      case_number_allocator: new SupabaseCapaCaseNumberAllocator(), authorization_policy: capaAuthorizationPolicy,
+      id_generator: { generateCapaCaseId: () => randomUUID() as never, generateCaseVersionId: () => randomUUID() as never,
+        generateSectionVersionId: () => randomUUID() as never, generateAuditEventId: () => randomUUID() as never },
+      clock: { now: () => new Date(NOW) },
+      configuration: { workflow_version: "capa-workflow-1.0.0", intake_schema_version: "capa-intake-1.0.0", audit_schema_version: "capa-audit-1.0.0",
+        intake_section_type: "CAPA.INTAKE" as never, default_confidentiality: "CUSTOMER_CONFIDENTIAL" as never, authorization_purpose: "CAPA_CASE_CREATION" as never },
+    };
+    const handoffDependencies = { quality_data: stage3a, stage3d_repository: new SupabaseQualityDataStage3DRepository(sql),
+      handoff_repository: new SupabaseQualityDataCapaHandoffRepository(sql), authorizer,
+      capa_creation_dependencies: createDependencies, ids: { audit_event_id: () => randomUUID() as never, uuid: randomUUID },
+      clock: { now: () => new Date(NOW) } };
+    const stored = await new SupabaseQualityDataStage3DRepository(sql).findReport(organizationId, deterministicReportId);
+    if (!stored?.result_fingerprint || !stored.result) throw new Error("Deterministic report result was not durably persisted.");
+    const command = { schema_version: "quality-data-capa-handoff-1.0.0", finding_key: "signal:S2",
+      expected_result_fingerprint: stored.result_fingerprint, decision: "create_capa_draft", rationale: "A human reviewer requests an S00 draft to investigate the observed synthetic trend." };
+    const requestTrace = trace("stage3d-deterministic-capa-handoff");
+    const created = await createCapaDraftFromQualityIntelligence(handoffDependencies, await context(adminId), requestTrace, deterministicReportId, command);
+    expect(created).toMatchObject({ status: "created", capa_case_status: "S00", finding_classification: "deterministic_signal" });
+    if (created.status !== "created") return;
+    const caseId = created.capa_case_id;
+    const handoffId = created.handoff_id;
+    if (!caseId || !handoffId) throw new Error("Deterministic handoff did not return its durable identifiers.");
+    deterministicCapaCaseId = caseId;
+    const persisted = await sql<{ interpretation_status: string; analysis_request_schema_version: string; analysis_result_schema_version: string; decision: string; capa_case_status: string }[]>`
+      select interpretation_status, analysis_request_schema_version, analysis_result_schema_version, decision, capa_case_status
+      from public.quality_data_intelligence_capa_handoffs where organization_id = ${organizationId}::uuid and handoff_id = ${handoffId}::uuid`;
+    expect(persisted[0]).toEqual({ interpretation_status: "not_requested",
+      analysis_request_schema_version: "quality-data-deterministic-analysis-request-1.0.0",
+      analysis_result_schema_version: "quality-data-deterministic-analysis-result-1.0.0",
+      decision: "create_capa_draft", capa_case_status: "S00" });
+    const linked = await getQualityDataCapaSupportingEvidence(handoffDependencies, await context(adminId), caseId);
+    expect(linked).toMatchObject({ status: "found", report_id: deterministicReportId, finding_key: "signal:S2" });
+    const replay = await createCapaDraftFromQualityIntelligence(handoffDependencies, await context(adminId), requestTrace, deterministicReportId, command);
+    expect(replay).toMatchObject({ status: "already_created", capa_case_id: caseId });
+    const count = await sql<{ count: number }[]>`select count(*)::int as count from public.capa_cases where organization_id = ${organizationId}::uuid`;
+    expect(count[0]?.count).toBe(2);
+  });
+
   it("records version-bound triage decisions with immutable audit history and serializes concurrent reviewers", async () => {
     const command = {
       schema_version: "quality-data-intelligence-review-1.0.0", report_id: reportId,
@@ -448,6 +552,15 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
     });
     expect(revoked.status).toBe("applied");
     expect((await getQualityDataIntelligenceReport(service, await context(adminId), reportId)).status).toBe("not_approved");
+    if (deterministicCapaCaseId) {
+      const handoffDependencies = {
+        quality_data: stage3a, stage3d_repository: new SupabaseQualityDataStage3DRepository(sql),
+        handoff_repository: new SupabaseQualityDataCapaHandoffRepository(sql), authorizer,
+        capa_creation_dependencies: {} as CreateCapaDependencies, ids: { audit_event_id: () => randomUUID() as never, uuid: randomUUID },
+        clock: { now: () => new Date(NOW) },
+      };
+      expect(await getQualityDataCapaSupportingEvidence(handoffDependencies, await context(adminId), deterministicCapaCaseId)).toMatchObject({ status: "not_approved" });
+    }
     const afterRevocation = await reviewQualityDataIntelligenceFinding(service, await context(adminId), trace(), {
       schema_version: "quality-data-intelligence-review-1.0.0", report_id: reportId, finding_key: "possible_cause:0",
       expected_transition_number: 1, decision: "deferred", rationale: "Must not review a revoked dataset version",

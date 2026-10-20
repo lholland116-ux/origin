@@ -1,5 +1,5 @@
 import type { RequestTrace } from "../../capa/domain/capa-types";
-import type { QualityDataIntelligenceRequest, QualityDataIntelligenceReport, QualityDataIntelligenceReviewCommand, QualityDataIntelligenceReviewEvent } from "../../quality-data/quality-data-intelligence-contract";
+import type { QualityDataIntelligenceReport, QualityDataIntelligenceReportRequest, QualityDataIntelligenceReviewCommand, QualityDataIntelligenceReviewEvent } from "../../quality-data/quality-data-intelligence-contract";
 import type { TransactionContext } from "../transactions";
 
 export interface QualityDataIntelligenceReportReservation {
@@ -10,7 +10,7 @@ export interface QualityDataIntelligenceReportReservation {
   readonly approval_event_id: string;
   readonly requested_by_user_id: string;
   readonly requested_by_membership_id: string;
-  readonly request_payload: QualityDataIntelligenceRequest;
+  readonly request_payload: QualityDataIntelligenceReportRequest;
   readonly request_fingerprint: string;
   readonly idempotency_key: string;
   readonly request_trace: RequestTrace & { readonly idempotency_key: string };

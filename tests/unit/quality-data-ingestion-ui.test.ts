@@ -42,10 +42,11 @@ describe("quality-data ingestion UI boundary", () => {
     expect(client).toContain("disabled={busy || eligibility !== \"allowed\"}");
   });
 
-  it("does not let the browser select an organization or request an AI interpretation", () => {
+  it("does not let the browser select an organization or bypass deterministic server authorization", () => {
     expect(client).not.toContain("organization_id");
     expect(client).not.toContain("CAPA_DATABASE_URL");
     expect(client).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
-    expect(client).toContain("No AI interpretation or evidence verification is performed.");
+    expect(client).toContain("Deterministic analysis does not call AI");
+    expect(client).toContain("analysis and review do not verify source evidence");
   });
 });

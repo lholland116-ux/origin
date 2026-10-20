@@ -5,6 +5,7 @@ import {
   qualityDataAiAnalysisResultSchema,
   type QualityDataAiAnalysisResult,
 } from "./quality-data-ai-contract";
+import { qualityDataDeterministicAnalysisRequestSchema, qualityDataDeterministicAnalysisResultSchema, type QualityDataDeterministicAnalysisRequest, type QualityDataDeterministicAnalysisResult } from "./quality-data-deterministic-contract";
 
 export const QUALITY_DATA_INTELLIGENCE_REPORT_VERSION = "quality-data-intelligence-report-1.0.0" as const;
 export const QUALITY_DATA_INTELLIGENCE_REVIEW_VERSION = "quality-data-intelligence-review-1.0.0" as const;
@@ -40,10 +41,10 @@ export interface QualityDataIntelligenceReport {
   readonly approval_event_id: string;
   readonly requested_by_user_id: string;
   readonly requested_by_membership_id: string;
-  readonly request_payload: QualityDataIntelligenceRequest;
+  readonly request_payload: QualityDataIntelligenceRequest | QualityDataDeterministicAnalysisRequest;
   readonly request_fingerprint: string;
   readonly status: "processing" | "complete" | "failed";
-  readonly result: QualityDataAiAnalysisResult | null;
+  readonly result: QualityDataIntelligenceResult | null;
   readonly result_fingerprint: string | null;
   readonly failure_code: string | null;
   readonly request_id: string;
@@ -51,6 +52,18 @@ export interface QualityDataIntelligenceReport {
   readonly created_at: string;
   readonly finalized_at: string | null;
 }
+
+export const qualityDataIntelligenceResultSchema = z.union([
+  qualityDataAiAnalysisResultSchema,
+  qualityDataDeterministicAnalysisResultSchema,
+]);
+export type QualityDataIntelligenceResult = QualityDataAiAnalysisResult | QualityDataDeterministicAnalysisResult;
+
+export const qualityDataIntelligenceReportRequestSchema = z.union([
+  qualityDataIntelligenceRequestSchema,
+  qualityDataDeterministicAnalysisRequestSchema,
+]);
+export type QualityDataIntelligenceReportRequest = z.infer<typeof qualityDataIntelligenceReportRequestSchema>;
 
 export interface QualityDataIntelligenceReviewEvent {
   readonly event_id: string;

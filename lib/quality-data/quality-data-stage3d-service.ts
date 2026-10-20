@@ -9,8 +9,14 @@ import type { QualityDataIntelligenceReviewAuthorizer, QualityDataReadAuthorizer
 import type { QualityDataAiInterpretationDependencies, QualityDataAiInterpretationResult } from "./quality-data-ai-service";
 import { interpretQualityDataAnalysis } from "./quality-data-ai-service";
 import { qualityDataAiAnalysisResultSchema } from "./quality-data-ai-contract";
-import type { QualityDataAiAnalysisResult } from "./quality-data-ai-contract";
-import { qualityDataIntelligenceRequestSchema, qualityDataIntelligenceReviewCommandSchema, type QualityDataIntelligenceReport, type QualityDataIntelligenceReviewEvent } from "./quality-data-intelligence-contract";
+import { QUALITY_ANALYSIS_REQUEST_VERSION } from "./quality-analysis-contract";
+import { analyzeQualityDatasetVersion, detectQualityDatasetSignals } from "./quality-data-stage3a-service";
+import { QUALITY_SIGNAL_REQUEST_VERSION } from "./quality-signal-contract";
+import { buildQualityEvidencePacket } from "./quality-data-evidence-packet";
+import { QUALITY_DATA_DETERMINISTIC_RESULT_VERSION, qualityDataDeterministicAnalysisRequestSchema, qualityDataDeterministicAnalysisResultSchema } from "./quality-data-deterministic-contract";
+import { QUALITY_DATA_DETERMINISTIC_REQUEST_VERSION } from "./quality-data-deterministic-contract";
+import { qualityDataIntelligenceRequestSchema, qualityDataIntelligenceReviewCommandSchema, type QualityDataIntelligenceReport, type QualityDataIntelligenceReviewEvent, type QualityDataIntelligenceResult } from "./quality-data-intelligence-contract";
+import { qualityDataIntelligenceResultFingerprint } from "./quality-data-intelligence-fingerprint";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -117,7 +123,7 @@ function makeReportAudit(input: {
       approval_event_id: input.report.approval_event_id,
       request_fingerprint: input.report.request_fingerprint,
       result_fingerprint: input.report.result_fingerprint,
-      interpretation_status: "unverified_advisory_hypotheses",
+      interpretation_status: input.report.result?.interpretation_status ?? "unknown",
       source_verification: "not_asserted",
       analytical_use_only: true,
       capa_case_mutated: false,
@@ -161,7 +167,7 @@ function makeReviewAudit(input: {
   };
 }
 
-async function approvedReport(dependencies: QualityDataStage3DServiceDependencies, context: CapaRequestContext, report: QualityDataIntelligenceReport, now: Date): Promise<"approved" | "not_approved" | "unavailable"> {
+async function approvedReport(dependencies: QualityDataStage3DBaseDependencies, context: CapaRequestContext, report: QualityDataIntelligenceReport, now: Date): Promise<"approved" | "not_approved" | "unavailable"> {
   const read = await dependencies.quality_data.authorizer.authorizeRead(context, now).catch(() => ({ allowed: false as const, reason_code: "QUALITY_DATA_PERMISSION_DENIED" as const }));
   if (!read.allowed || read.organization_id !== report.organization_id) return "unavailable";
   const current = await dependencies.quality_data.repository.findApprovedDatasetVersion({
@@ -255,6 +261,113 @@ export async function createQualityDataIntelligenceReport(
   } catch { return { status: "analysis_failed" }; }
 }
 
+/** Creates an approved-version report using deterministic Stage 3A/3B only. No AI client, transfer opt-in, or provider path is reachable here. */
+export async function createQualityDataDeterministicReport(
+  dependencies: QualityDataStage3DBaseDependencies,
+  context: CapaRequestContext,
+  trace: RequestTrace,
+  input: unknown,
+): Promise<QualityDataIntelligenceOperationResult> {
+  const now = dependencies.clock.now();
+  if (!validContext(context, now) || !UUID.test(trace.request_id) || !UUID.test(trace.correlation_id)) return { status: "invalid_request" };
+  const key = requireIdempotency(trace);
+  const parsed = qualityDataDeterministicAnalysisRequestSchema.safeParse(input);
+  if (!parsed.success || !key || parsed.data.schema_version !== QUALITY_DATA_DETERMINISTIC_REQUEST_VERSION) return { status: "invalid_request" };
+  const read = await dependencies.quality_data.authorizer.authorizeRead(context, now).catch(() => ({ allowed: false as const, reason_code: "QUALITY_DATA_PERMISSION_DENIED" as const }));
+  if (!read.allowed || read.organization_id !== context.tenant.organization_id) return { status: "denied" };
+  const current = await dependencies.quality_data.repository.findApprovedDatasetVersion({
+    organization_id: read.organization_id, membership_id: read.membership_id, user_id: read.uploader_user_id, now: now.toISOString(),
+  }, parsed.data.dataset_version_id).catch(() => null);
+  if (!current) return { status: "not_found_or_not_authorized" };
+  if (current.status !== "approved") return { status: "not_approved" };
+
+  const requestFingerprint = fingerprint({ organization_id: read.organization_id, user_id: read.uploader_user_id, request: parsed.data });
+  let reservation;
+  try {
+    reservation = await dependencies.transaction_manager.runInTransaction(trace, (transaction) => dependencies.repository.reserveReport(transaction, {
+      report_id: dependencies.ids.uuid(), organization_id: read.organization_id, dataset_id: current.snapshot.dataset.dataset_id,
+      dataset_version_id: parsed.data.dataset_version_id, approval_event_id: current.approval.approval_event_id,
+      requested_by_user_id: read.uploader_user_id, requested_by_membership_id: read.membership_id,
+      request_payload: parsed.data, request_fingerprint: requestFingerprint, idempotency_key: key,
+      request_trace: { ...trace, idempotency_key: key }, now: now.toISOString(),
+    }));
+  } catch { return { status: "analysis_failed" }; }
+  if (reservation.status === "unauthorized") return { status: "denied" };
+  if (reservation.status === "conflict") return { status: "conflict" };
+  if (reservation.status === "in_progress") return { status: "processing", report_id: reservation.report_id };
+  if (reservation.status === "existing") {
+    const access = await approvedReport(dependencies, context, reservation.report, dependencies.clock.now());
+    if (access === "unavailable") return { status: "not_found_or_not_authorized" };
+    if (access === "not_approved") return { status: "not_approved" };
+    return reservation.report.status === "complete"
+      ? { status: "complete", report: reservation.report, replayed: true }
+      : { status: "failed", report_id: reservation.report.report_id, failure_code: reservation.report.failure_code ?? "UNAVAILABLE" };
+  }
+
+  const fail = async (failure: string) => {
+    try {
+      await dependencies.transaction_manager.runInTransaction(trace, (transaction) =>
+        dependencies.repository.failReport(transaction, read.organization_id, reservation.report.report_id, failure, dependencies.clock.now().toISOString()));
+    } catch { return { status: "analysis_failed" } as const; }
+    return failure === "NOT_APPROVED"
+      ? { status: "not_approved" } as const
+      : { status: "failed", report_id: reservation.report.report_id, failure_code: failure } as const;
+  };
+  const calculations = await analyzeQualityDatasetVersion(dependencies.quality_data, context, {
+    schema_version: QUALITY_ANALYSIS_REQUEST_VERSION,
+    dataset_version_id: parsed.data.dataset_version_id,
+    time_window: { kind: "all_records_in_dataset_version" },
+    metrics: parsed.data.metrics,
+  }).catch(() => null);
+  if (!calculations || calculations.status === "invalid_request" || calculations.status === "calculation_error") return fail("EVIDENCE_INVALID");
+  if (calculations.status === "denied") return fail("DENIED");
+  if (calculations.status === "not_found_or_not_authorized") return fail("NOT_FOUND");
+  if (calculations.status === "not_approved") return fail("NOT_APPROVED");
+  const detected = await detectQualityDatasetSignals(dependencies.quality_data, context, {
+    schema_version: QUALITY_SIGNAL_REQUEST_VERSION,
+    dataset_version_id: parsed.data.dataset_version_id,
+    signals: parsed.data.signals,
+  }).catch(() => null);
+  if (!detected || detected.status === "invalid_request" || detected.status === "calculation_error") return fail("EVIDENCE_INVALID");
+  if (detected.status === "denied") return fail("DENIED");
+  if (detected.status === "not_found_or_not_authorized") return fail("NOT_FOUND");
+  if (detected.status === "not_approved") return fail("NOT_APPROVED");
+  const built = buildQualityEvidencePacket(calculations.result, detected.result, dependencies.ids.uuid, "not_requested");
+  if (!built) return fail("EVIDENCE_INVALID");
+  const result = qualityDataDeterministicAnalysisResultSchema.safeParse({
+    schema_version: QUALITY_DATA_DETERMINISTIC_RESULT_VERSION,
+    mode: "deterministic_only",
+    packet_version: built.packet.schema_version,
+    status: "complete",
+    verified_calculations: built.packet.calculations,
+    observed_signals: built.packet.signals,
+    time_windows: built.packet.time_windows,
+    assumptions: built.packet.assumptions,
+    data_quality_limitations: built.packet.data_quality_limitations,
+    interpretation: null,
+    interpretation_status: "not_requested",
+    source_verification: "not_asserted",
+    authorization_scope: "analytical_use_only",
+    evidence_citations: [...built.citations.values()].sort((left, right) => left.handle.localeCompare(right.handle)),
+  });
+  if (!result.success) return fail("EVIDENCE_INVALID");
+  const resultFingerprint = qualityDataIntelligenceResultFingerprint(result.data);
+  try {
+    const report = await dependencies.transaction_manager.runInTransaction(trace, async (transaction) => {
+      const completed = await dependencies.repository.completeReport(transaction, read.organization_id, reservation.report.report_id, result.data, resultFingerprint, dependencies.clock.now().toISOString());
+      const audit = await dependencies.audit_repository.appendEvent(transaction, makeReportAudit({
+        event_id: dependencies.ids.audit_event_id(), report: completed, trace, user_id: read.uploader_user_id,
+      }));
+      if (audit.status === "conflict") throw new Error("QUALITY_DATA_INTELLIGENCE_AUDIT_CONFLICT");
+      return completed;
+    });
+    return { status: "complete", report, replayed: false };
+  } catch (error) {
+    if (error instanceof Error && error.message === "QUALITY_DATA_INTELLIGENCE_APPROVAL_REVOKED") return fail("NOT_APPROVED");
+    return { status: "analysis_failed" };
+  }
+}
+
 export async function getQualityDataIntelligenceReport(
   dependencies: QualityDataStage3DServiceDependencies,
   context: CapaRequestContext,
@@ -278,12 +391,13 @@ export async function getQualityDataIntelligenceReport(
   } catch { return { status: "unavailable" }; }
 }
 
-function finding(result: QualityDataAiAnalysisResult, key: string): unknown | null {
+function finding(result: QualityDataIntelligenceResult, key: string): unknown | null {
   const [kind, reference] = key.split(":");
   if (kind === "signal") return result.observed_signals.find((entry) => entry.reference === reference) ?? null;
   if (kind === "metric") return result.verified_calculations.find((entry) => entry.reference === reference) ?? null;
   const index = Number(reference);
   if (!Number.isInteger(index) || index < 0) return null;
+  if (result.interpretation_status !== "unverified_advisory_hypotheses" || result.interpretation === null) return null;
   if (kind === "possible_cause") return result.interpretation.possible_causes[index] ?? null;
   if (kind === "uncertainty") return result.interpretation.uncertainty[index] ?? null;
   if (kind === "investigation_step") return result.interpretation.human_investigation_steps[index] ?? null;

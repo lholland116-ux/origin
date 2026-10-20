@@ -1508,7 +1508,7 @@ export function createCapaProductionRuntime(
           clock: { now },
         },
         stage3d_repository: new SupabaseQualityDataStage3DRepository(sql),
-        handoff_repository: new SupabaseQualityDataCapaHandoffRepository(),
+        handoff_repository: new SupabaseQualityDataCapaHandoffRepository(sql),
         authorizer: qualityDataAuthorizer,
         capa_creation_dependencies: dependencies,
         ids: {

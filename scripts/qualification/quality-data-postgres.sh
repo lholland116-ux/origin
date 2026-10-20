@@ -14,14 +14,14 @@ set -Eeuo pipefail
 # Integrated Layer 2 V1 default:
 #   scripts/qualification/quality-data-postgres.sh
 
-readonly EXPECTED_HEAD="d5b9faaeba4b16f98318dfefc9950f62dcc5e8da"
+readonly EXPECTED_HEAD="f10e20d4ccb1e26fd71733b970ab7d80c6105a92"
 readonly IMAGE="public.ecr.aws/supabase/postgres:17.11.0.002"
 readonly HOST_PORT="57381"
 readonly DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:57381/postgres"
 readonly CLI_DATABASE_URL="${DATABASE_URL}?sslmode=disable"
 readonly DEFAULT_TEST_FILES="tests/integration/quality-data-foundation-postgres.test.ts tests/integration/quality-data-stage2c-postgres.test.ts tests/integration/quality-data-stage3a-postgres.test.ts tests/integration/quality-data-stage3c-postgres.test.ts tests/integration/quality-data-stage3d-postgres.test.ts tests/integration/quality-data-xlsx-rate-limit-postgres.test.ts"
-readonly DEFAULT_EXPECTED_TESTS="43"
-readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261019100000_quality_intelligence_capa_handoff.sql")
+readonly DEFAULT_EXPECTED_TESTS="45"
+readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261020100000_quality_data_deterministic_reports.sql")
 
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
@@ -57,6 +57,7 @@ readonly MIGRATIONS=(
   "20261018160608_quality_data_intelligence_review.sql"
   "20261018170000_quality_data_ai_telemetry_least_privilege.sql"
   "20261019100000_quality_intelligence_capa_handoff.sql"
+  "20261020100000_quality_data_deterministic_reports.sql"
 )
 for migration in "${MIGRATIONS[@]}"; do
   if [[ ! -f "$repo/supabase/migrations/$migration" ]]; then

@@ -155,6 +155,15 @@ function makeHarness(options: { readonly read?: boolean; readonly review?: boole
       if (!record || record.handoff_status !== "pending" || input.capa_case_status !== "S00") throw new Error("link failed");
       Object.assign(record, { handoff_status: "linked", capa_case_id: input.capa_case_id, capa_case_status: input.capa_case_status });
     },
+    async findLinkedForCase(org, caseId) {
+      const matches = [...state.handoffs.values()].filter((entry) => entry.organization_id === org && entry.capa_case_id === caseId && entry.handoff_status === "linked");
+      if (matches.length !== 1) return null;
+      const record = matches[0]!;
+      return { handoff_id: String(record.handoff_id), organization_id: String(record.organization_id), report_id: String(record.report_id),
+        dataset_id: DATASET, dataset_version_id: VERSION, approval_event_id: APPROVAL, finding_key: String(record.finding_key),
+        finding_classification: String(record.finding_classification) as never, finding_fingerprint: String(record.finding_fingerprint),
+        result_fingerprint: String(record.result_fingerprint), capa_case_id: caseId, capa_case_status: String(record.capa_case_status) };
+    },
   };
   const stage3d = { async findReport(org: string, id: string) { return org === ORG && id === REPORT ? report : null; } };
   const authorize = async (allowed: boolean) => allowed
