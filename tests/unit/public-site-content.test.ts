@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   APPROVED_POSITIONING,
   features,
+  footerColumns,
   navItems,
 } from "@/lib/landing-content";
 import { FAQ_ITEMS } from "@/components/help/faq-data";
@@ -23,6 +24,8 @@ const homepageFounderLeadSource = read("components/landing/HomepageFounderLead.t
 const workflowPreviewClientSource = read("app/workflow-preview/WorkflowPreview.tsx");
 const leadFormSource = read("app/request/LeadForm.tsx");
 const footerSource = read("components/landing/Footer.tsx");
+const privacySource = read("app/privacy/page.tsx");
+const termsSource = read("app/terms/page.tsx");
 
 describe("public product-site refresh", () => {
   it("keeps the approved positioning and current general-purpose capabilities visible", () => {
@@ -157,5 +160,41 @@ describe("public product-site refresh", () => {
     expect(leadFormSource).toContain('action: "marketing_lead_submit"');
     expect(leadFormSource).toContain('fetch("/api/marketing/leads"');
     expect(footerSource).toContain('variant === "dark"');
+  });
+
+  it("keeps legal pages in the public light design without changing legal terms", () => {
+    for (const [route, source] of [["privacy", privacySource], ["terms", termsSource]] as const) {
+      expect(source, route).toContain("<Header />");
+      expect(source, route).toContain('<Footer variant="dark" />');
+      expect(source, route).toContain("bg-slate-50 text-slate-950");
+      expect(source, route).toContain("text-slate-700");
+      expect(source, route).not.toContain("bg-[#020817]");
+      expect(source, route).not.toMatch(/\bdark:/);
+      expect(source, route).toContain("Effective date:");
+    }
+
+    expect(privacySource).toContain("Information We Collect");
+    expect(privacySource).toContain("Cloudflare&apos;s Siteverify service");
+    expect(privacySource).toContain("Data Retention");
+    expect(privacySource).toContain("You may request access, correction, or deletion");
+    expect(termsSource).toContain("Limitation of Liability");
+    expect(termsSource).toContain("BRAND.legal.jurisdiction");
+    expect(termsSource).toContain("address.line1");
+  });
+
+  it("shows the Terms-authoritative mailing address in the footer and keeps Contact in one place", () => {
+    expect(footerSource).toContain("Business Mailing Address");
+    expect(footerSource).toContain("const address = BRAND.contact.address");
+    for (const field of ["address.line1", "address.line2", "address.city", "address.state", "address.postalCode", "address.country"]) {
+      expect(footerSource).toContain(field);
+    }
+    expect(footerSource).not.toContain("1101 Hillcrest Pkwy");
+    expect(footerSource).toContain('<nav aria-label="Legal">');
+    expect(footerSource).toContain("mailto:${BRAND.contact.email}");
+    expect(footerColumns.find((column) => column.title === "Resources")?.links).toEqual([
+      "FAQ / Resources",
+      "Request Early Access",
+    ]);
+    expect(termsSource).toContain("BRAND.contact.address");
   });
 });

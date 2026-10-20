@@ -13,7 +13,6 @@ const FOOTER_ROUTES: Readonly<Record<string, string>> = {
   "Request Demo": "/request?interest=demo&source=footer",
   "Request Early Access": "/request?interest=early_access&source=footer",
   "FAQ / Resources": BRAND.routes.help,
-  Contact: `mailto:${BRAND.contact.email}`,
 };
 
 const SOCIAL_LINKS = [
@@ -32,6 +31,7 @@ function FooterLink({ label, href, dark }: { readonly label: string; readonly hr
 export default function Footer({ variant = "default" }: { readonly variant?: "default" | "dark" }) {
   const dark = variant === "dark";
   const showMobileMessage = BRAND.mobile.androidComingSoon || BRAND.mobile.iosComingSoon;
+  const address = BRAND.contact.address;
   const legalLinkClassName = `group rounded-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${dark ? "focus:ring-offset-slate-950" : "focus:ring-offset-white"}`;
   const legalLabelClassName = dark ? "text-slate-400 group-hover:text-white group-focus-visible:text-white" : "text-slate-500 group-hover:text-blue-800 group-focus-visible:text-blue-800";
   return (
@@ -43,6 +43,13 @@ export default function Footer({ variant = "default" }: { readonly variant?: "de
             <span className={`text-xl font-extrabold ${dark ? "text-white" : "text-slate-950"}`}>{BRAND.name}</span>
           </Link>
           <p className={`mt-3 max-w-xs text-sm leading-6 ${dark ? "text-slate-300" : "text-slate-600"}`}>Practical AI for Work, Research, and Business Automation.</p>
+          <address className={`mt-4 max-w-xs break-words text-xs not-italic leading-5 ${dark ? "text-slate-300" : "text-slate-600"}`}>
+            <span className={`font-semibold ${dark ? "text-white" : "text-slate-950"}`}>Business Mailing Address</span>
+            <br />{address.line1}
+            <br />{address.line2}
+            <br />{address.city}, {address.state} {address.postalCode}
+            <br />{address.country}
+          </address>
           {showMobileMessage && !dark ? <p className="mt-3 text-xs leading-5 text-slate-500">{BRAND.mobile.message}</p> : null}
           <nav className="mt-4" aria-label="LVTChat social media">
             <ul className="flex gap-2">

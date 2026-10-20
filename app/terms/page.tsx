@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 import { BRAND } from "@/lib/branding";
 
 export const metadata: Metadata = {
@@ -11,22 +13,23 @@ export default function TermsPage() {
   const address = BRAND.contact.address;
 
   return (
-    <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
-      <div className="mx-auto max-w-3xl">
-        <h1 className="text-4xl font-semibold">Terms of Service</h1>
+    <main className="min-h-screen bg-slate-50 text-slate-950">
+      <Header />
+      <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
+        <h1 className="text-4xl font-bold tracking-tight">Terms of Service</h1>
 
-        <p className="mt-4 text-sm text-white/60">
+        <p className="mt-4 text-sm text-slate-600">
           Effective date: {new Date().toLocaleDateString()}
         </p>
 
-        <section className="mt-8 space-y-6 text-white/75 text-sm leading-7">
+        <section className="mt-8 space-y-6 text-sm leading-7 text-slate-700 sm:text-base">
           <p>
             By using {BRAND.name}, you agree to these Terms of Service. If you
             do not agree, you should not use the service.
           </p>
 
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 className="text-lg font-semibold text-slate-950">
               Use of Service
             </h2>
             <p className="mt-2">
@@ -36,7 +39,7 @@ export default function TermsPage() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 className="text-lg font-semibold text-slate-950">
               AI-Generated Content
             </h2>
             <p className="mt-2">
@@ -46,7 +49,7 @@ export default function TermsPage() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 className="text-lg font-semibold text-slate-950">
               Account Responsibility
             </h2>
             <p className="mt-2">
@@ -56,7 +59,7 @@ export default function TermsPage() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 className="text-lg font-semibold text-slate-950">
               Limitation of Liability
             </h2>
             <p className="mt-2">
@@ -66,7 +69,7 @@ export default function TermsPage() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 className="text-lg font-semibold text-slate-950">
               Termination
             </h2>
             <p className="mt-2">
@@ -76,7 +79,7 @@ export default function TermsPage() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 className="text-lg font-semibold text-slate-950">
               Governing Law
             </h2>
             <p className="mt-2">
@@ -85,7 +88,7 @@ export default function TermsPage() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-white">Contact</h2>
+            <h2 className="text-lg font-semibold text-slate-950">Contact</h2>
             <p className="mt-2">
               {BRAND.legal.company}
               <br />
@@ -102,6 +105,7 @@ export default function TermsPage() {
           </div>
         </section>
       </div>
+      <div className="bg-slate-950 px-4 py-6 sm:px-8"><Footer variant="dark" /></div>
     </main>
   );
 }

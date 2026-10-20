@@ -269,7 +269,7 @@ export const footerColumns: FooterColumn[] = [
   },
   {
     title: "Resources",
-    links: ["FAQ / Resources", "Request Early Access", "Contact"],
+    links: ["FAQ / Resources", "Request Early Access"],
   },
 ];
 
