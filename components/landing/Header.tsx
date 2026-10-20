@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { BRAND } from "@/lib/branding";
 import { navItems } from "@/lib/landing-content";
 
@@ -14,7 +15,9 @@ const NAV_ROUTES: Readonly<Record<string, string>> = {
   About: BRAND.routes.about,
 };
 
-function NavLinks({ onNavigate }: { readonly onNavigate?: () => void }) {
+type HeaderVariant = "default" | "homepage";
+
+function NavLinks({ onNavigate, variant }: { readonly onNavigate?: () => void; readonly variant: HeaderVariant }) {
   return (
     <>
       {navItems.map((item) => (
@@ -22,16 +25,16 @@ function NavLinks({ onNavigate }: { readonly onNavigate?: () => void }) {
           key={item}
           href={NAV_ROUTES[item]}
           onClick={onNavigate}
-          className="rounded-md text-sm text-slate-600 transition hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          className="group rounded-md text-sm text-slate-600 transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
         >
-          {item}
+          <span className="text-slate-600 transition-colors group-hover:text-blue-800 group-focus-visible:text-blue-800">{variant === "homepage" && item === "Workflow Preview" ? "CAPA Preview" : item}</span>
         </Link>
       ))}
     </>
   );
 }
 
-export default function Header() {
+export default function Header({ variant = "default" }: { readonly variant?: HeaderVariant }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -62,32 +65,28 @@ export default function Header() {
   }, [mobileMenuOpen]);
 
   return (
-    <header className="relative z-20 flex items-center justify-between gap-4 border-b border-slate-200/80 bg-white/90 px-5 py-4 backdrop-blur md:px-7">
+    <header className="relative z-20 flex items-center justify-between gap-4 border-b border-slate-200/80 bg-white px-4 py-3 md:px-7">
       <Link
         href={BRAND.routes.home}
         aria-label={`${BRAND.name} home`}
         onClick={closeMobileMenu}
-        className="flex shrink-0 items-center gap-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+        className="flex shrink-0 items-center gap-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
       >
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-sm font-bold tracking-wide text-white shadow-sm">
-          {BRAND.shortName}
-        </span>
-        <span className="text-lg font-bold tracking-tight text-slate-950">{BRAND.name}</span>
+        <Image src="/logos/logo-icon.svg" alt="" width={34} height={34} className="h-8 w-8 object-contain" />
+        <span className="text-lg font-extrabold tracking-tight text-slate-950 sm:text-xl">{BRAND.name}</span>
       </Link>
 
       <nav aria-label="Primary navigation" className="hidden items-center gap-3 xl:flex 2xl:gap-4">
-        <NavLinks />
+        <NavLinks variant={variant} />
       </nav>
 
       <div className="hidden shrink-0 items-center gap-2 xl:flex">
-        <Link href="/request?interest=demo&source=homepage" className="rounded-lg px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500">
-          Request Demo
-        </Link>
+        {variant === "default" ? <Link href="/request?interest=demo&source=homepage" className="rounded-lg px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"><span className="text-blue-700">Request Demo</span></Link> : null}
         <Link href={BRAND.routes.login} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
           Sign In
         </Link>
         <Link href={BRAND.routes.login} className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
-          Try LVTChat Free
+          <span className="text-white">Try LVTChat Free</span>
         </Link>
       </div>
 
@@ -107,11 +106,11 @@ export default function Header() {
       {mobileMenuOpen ? (
         <div ref={mobileMenuRef} id="public-mobile-navigation" className="absolute inset-x-4 top-[calc(100%-1px)] z-50 rounded-b-2xl border border-slate-200 bg-white p-4 shadow-xl xl:hidden">
           <nav aria-label="Mobile navigation" className="grid gap-1">
-            <NavLinks onNavigate={closeMobileMenu} />
-            <div className="mt-3 grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-3">
-              <Link href="/request?interest=demo&source=homepage" onClick={closeMobileMenu} className="rounded-lg border border-blue-200 px-3 py-2.5 text-center text-sm font-semibold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Request Demo</Link>
+            <NavLinks onNavigate={closeMobileMenu} variant={variant} />
+            <div className={`mt-3 grid gap-2 border-t border-slate-200 pt-3 ${variant === "homepage" ? "grid-cols-2" : "sm:grid-cols-3"}`}>
+              {variant === "default" ? <Link href="/request?interest=demo&source=homepage" onClick={closeMobileMenu} className="rounded-lg border border-blue-200 px-3 py-2.5 text-center text-sm font-semibold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"><span className="text-blue-700">Request Demo</span></Link> : null}
               <Link href={BRAND.routes.login} onClick={closeMobileMenu} className="rounded-lg border border-slate-200 px-3 py-2.5 text-center text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Sign In</Link>
-              <Link href={BRAND.routes.login} onClick={closeMobileMenu} className="rounded-lg bg-blue-700 px-3 py-2.5 text-center text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-blue-500">Try LVTChat Free</Link>
+              <Link href={BRAND.routes.login} onClick={closeMobileMenu} className="rounded-lg bg-blue-700 px-3 py-2.5 text-center text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-blue-500"><span className="text-white">Try LVTChat Free</span></Link>
             </div>
           </nav>
         </div>

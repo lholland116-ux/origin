@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 
 const YOUTUBE_VIDEO_ID = "rUX_Vqlw63s";
 
@@ -64,29 +66,30 @@ export const metadata: Metadata = {
 
 export default function OfficialDemoArticlePage() {
   return (
-    <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
-      <article className="mx-auto max-w-3xl">
+    <main className="min-h-screen bg-slate-50 text-slate-950">
+      <Header />
+      <article className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
         <nav
           aria-label="Article navigation"
           className="flex flex-wrap gap-4"
         >
           <Link
             href={BRAND.routes.blog}
-            className="inline-flex rounded-md text-sm text-white/60 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            className="inline-flex rounded-md text-sm text-slate-600 transition hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2 focus:ring-offset-slate-50"
           >
             ← Back to Blog
           </Link>
 
           <Link
             href={BRAND.routes.home}
-            className="inline-flex rounded-md text-sm text-white/60 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            className="inline-flex rounded-md text-sm text-slate-600 transition hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2 focus:ring-offset-slate-50"
           >
             Home
           </Link>
         </nav>
 
-        <header className="mt-10 border-b border-white/10 pb-10">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+        <header className="mt-10 border-b border-slate-200 pb-10">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-800">
             Product Demo
           </p>
 
@@ -94,15 +97,15 @@ export default function OfficialDemoArticlePage() {
             Watch the Official LVTChat Demo
           </h1>
 
-          <p className="mt-5 text-lg leading-8 text-white/70">
+          <p className="mt-5 text-lg leading-8 text-slate-700">
             See how practical AI can help with research, web search, document
             analysis, business planning, and everyday tasks.
           </p>
 
-          <p className="mt-4 text-sm text-white/45">July 24, 2026</p>
+          <p className="mt-4 text-sm text-slate-600">July 24, 2026</p>
         </header>
 
-        <div className="mt-10 space-y-10 text-base leading-8 text-white/75">
+        <div className="mt-10 space-y-10 text-base leading-8 text-slate-700">
           <section>
             <p>
               The first official LVTChat demonstration video is now available.
@@ -124,7 +127,7 @@ export default function OfficialDemoArticlePage() {
           <section aria-labelledby="watch-demo-heading">
             <h2
               id="watch-demo-heading"
-              className="text-2xl font-semibold text-white"
+              className="text-2xl font-semibold text-slate-950"
             >
               Watch the Demonstration
             </h2>
@@ -135,7 +138,7 @@ export default function OfficialDemoArticlePage() {
               workflow.
             </p>
 
-            <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-[#050B17] p-2 shadow-[0_25px_90px_rgba(0,0,0,0.45)] sm:p-3">
+            <div className="mt-6 overflow-hidden rounded-[28px] border border-slate-200 bg-slate-900 p-2 shadow-sm sm:p-3">
               <div className="relative aspect-video overflow-hidden rounded-[20px] bg-black">
                 <iframe
                   src={YOUTUBE_EMBED_URL}
@@ -149,15 +152,15 @@ export default function OfficialDemoArticlePage() {
               </div>
             </div>
 
-            <p className="mt-5 text-sm text-white/60">
+            <p className="mt-5 text-sm text-slate-600">
               Prefer to watch directly on YouTube?{" "}
               <a
                 href={YOUTUBE_WATCH_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-sm font-semibold text-blue-300 underline decoration-blue-300/40 underline-offset-4 transition hover:text-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                className="rounded-sm font-semibold text-blue-800 underline decoration-blue-700/40 underline-offset-4 transition hover:text-blue-950 focus:outline-none focus:ring-2 focus:ring-blue-700"
               >
-                Open the official demonstration
+                <span className="text-blue-800">Open the official demonstration</span>
                 <span className="sr-only"> in a new tab</span>
               </a>
               .
@@ -167,7 +170,7 @@ export default function OfficialDemoArticlePage() {
           <section aria-labelledby="demo-features-heading">
             <h2
               id="demo-features-heading"
-              className="text-2xl font-semibold text-white"
+              className="text-2xl font-semibold text-slate-950"
             >
               What You&apos;ll See
             </h2>
@@ -176,13 +179,13 @@ export default function OfficialDemoArticlePage() {
               {DEMO_FEATURES.map((feature) => (
                 <div
                   key={feature.title}
-                  className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+                  className="rounded-2xl border border-slate-200 bg-slate-50 p-5"
                 >
-                  <h3 className="font-semibold text-white">
+                  <h3 className="font-semibold text-slate-950">
                     {feature.title}
                   </h3>
 
-                  <p className="mt-2 text-sm leading-7 text-white/65">
+                  <p className="mt-2 text-sm leading-7 text-slate-600">
                     {feature.description}
                   </p>
                 </div>
@@ -191,7 +194,7 @@ export default function OfficialDemoArticlePage() {
           </section>
 
           <section>
-            <h2 className="text-2xl font-semibold text-white">
+            <h2 className="text-2xl font-semibold text-slate-950">
               Built for Real-World Tasks
             </h2>
 
@@ -209,7 +212,7 @@ export default function OfficialDemoArticlePage() {
           </section>
 
           <section>
-            <h2 className="text-2xl font-semibold text-white">
+            <h2 className="text-2xl font-semibold text-slate-950">
               Available on the Web and Android
             </h2>
 
@@ -225,8 +228,8 @@ export default function OfficialDemoArticlePage() {
             </p>
           </section>
 
-          <section className="rounded-3xl border border-blue-400/20 bg-blue-500/10 p-7">
-            <h2 className="text-2xl font-semibold text-white">
+          <section className="rounded-3xl border border-blue-200 bg-blue-50 p-7">
+            <h2 className="text-2xl font-semibold text-slate-950">
               Experience LVTChat
             </h2>
 
@@ -238,18 +241,18 @@ export default function OfficialDemoArticlePage() {
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
                 href={BRAND.routes.login}
-                className="inline-flex items-center justify-center rounded-2xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                className="inline-flex min-h-12 items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
               >
-                Try LVTChat Free
+                <span className="text-white">Try LVTChat Free</span>
               </Link>
 
               <a
                 href={PLAY_STORE_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-800 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2 focus:ring-offset-slate-50"
               >
-                Get the Android App
+                <span className="text-slate-800">Get the Android App</span>
                 <span className="sr-only"> in a new tab</span>
               </a>
 
@@ -257,16 +260,16 @@ export default function OfficialDemoArticlePage() {
                 href={YOUTUBE_WATCH_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-800 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2 focus:ring-offset-slate-50"
               >
-                Watch on YouTube
+                <span className="text-slate-800">Watch on YouTube</span>
                 <span className="sr-only"> in a new tab</span>
               </a>
             </div>
           </section>
 
           <section>
-            <h2 className="text-2xl font-semibold text-white">
+            <h2 className="text-2xl font-semibold text-slate-950">
               More Demonstrations Are Coming
             </h2>
 
@@ -282,15 +285,16 @@ export default function OfficialDemoArticlePage() {
             </p>
           </section>
 
-          <footer className="border-t border-white/10 pt-8">
-            <p className="font-semibold text-white">Levi Holland</p>
+          <footer className="border-t border-slate-200 pt-8">
+            <p className="font-semibold text-slate-950">Levi Holland</p>
 
-            <p className="mt-1 text-white/60">
+            <p className="mt-1 text-slate-600">
               Founder &amp; AI Engineer, LVTChat LLC
             </p>
           </footer>
         </div>
       </article>
+      <div className="bg-slate-950 px-4 py-6 sm:px-8"><Footer variant="dark" /></div>
     </main>
   );
 }

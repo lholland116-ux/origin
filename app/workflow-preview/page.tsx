@@ -21,7 +21,7 @@ export default function WorkflowPreviewPage() {
           <div className="mt-9"><WorkflowPreview /></div>
         </div>
       </section>
-      <div className="mx-auto max-w-[1440px] px-4 pb-5 sm:px-6 lg:px-8"><Footer /></div>
+      <div className="bg-slate-950 px-4 py-6 sm:px-8"><Footer variant="dark" /></div>
     </main>
   );
 }

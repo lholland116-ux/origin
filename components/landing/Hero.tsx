@@ -1,65 +1,93 @@
+import Image from "next/image";
 import Link from "next/link";
+import { ArrowRight, Check, ShieldCheck } from "lucide-react";
 import { BRAND } from "@/lib/branding";
 
-const WORKFLOW_PREVIEW = ["Analyze information", "Identify signals", "Prepare reports", "Human review"] as const;
+const PLANNED_OUTCOMES = [
+  "Find patterns for review",
+  "Prepare evidence-linked reports",
+  "Support structured investigations",
+  "Keep people in control",
+] as const;
 
 export default function Hero() {
   return (
-    <section aria-labelledby="hero-heading" className="grid gap-12 px-5 pb-12 pt-12 md:px-8 md:pb-16 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:px-12 lg:pt-16">
-      <div className="max-w-3xl">
-        <p className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-blue-800">
-          AI workflow automation for manufacturing quality—and beyond
-        </p>
-        <h1 id="hero-heading" className="mt-6 text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl lg:text-[3.6rem] lg:leading-[1.08]">
-          Move complex work forward with practical AI and human oversight.
-        </h1>
-        <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-          {BRAND.name} is building intelligent workflows that help businesses analyze information, identify problems, generate reports, and move work forward—with qualified people retaining decision authority.
-        </p>
-        <p className="mt-4 text-sm font-semibold text-blue-800">Practical AI you can actually use.</p>
-        <div className="mt-8 flex flex-wrap gap-3">
-          <Link href="/request?interest=early_access&source=homepage" className="inline-flex min-h-12 items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">
-            Request Early Access
-          </Link>
-          <Link href="/workflow-preview" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-blue-200 bg-white px-5 py-3 text-sm font-semibold text-blue-800 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">
-            Explore Workflow Preview
-          </Link>
-          <Link href={BRAND.routes.login} className="inline-flex min-h-12 items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">
-            Try LVTChat Free
-          </Link>
-        </div>
-        <p className="mt-6 max-w-2xl text-sm leading-6 text-slate-500">
-          Workflow automation is in development and available by request for early discussion. Current LVTChat chat, document, image, and web-search tools are available separately.
-        </p>
-        <p className="mt-4 text-sm text-slate-500">
-          Founded by Levi Holland, drawing on 25+ years across regulated industries. <Link href="/about" className="font-semibold text-blue-800 underline underline-offset-4">Meet the founder</Link>
-        </p>
+    <section
+      aria-labelledby="hero-heading"
+      className="relative isolate overflow-hidden bg-slate-100"
+    >
+      <div className="absolute inset-0 z-0">
+        <Image
+          src="/images/marketing/manufacturing-quality-hero.png"
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="object-cover object-[62%_center]"
+        />
       </div>
+      <div className="absolute inset-0 z-[1] bg-gradient-to-r from-white/95 via-white/75 to-white/20 md:from-white/95 md:via-white/75 md:to-transparent" />
+      <div className="absolute inset-0 z-[1] bg-gradient-to-t from-white/20 via-transparent to-white/5 md:hidden" />
 
-      <div className="mx-auto w-full max-w-xl">
-        <div className="rounded-[28px] border border-slate-200 bg-slate-950 p-4 shadow-[0_30px_90px_rgba(15,23,42,0.2)] sm:p-6">
-          <div className="flex items-center justify-between border-b border-white/10 pb-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-300">Workflow concept</p>
-              <h2 className="mt-1 text-base font-semibold text-white">From information to reviewed next steps</h2>
-            </div>
-            <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-semibold text-amber-200">In development</span>
+      <div className="relative z-10 mx-auto grid min-h-[650px] max-w-[1440px] gap-8 px-5 py-10 sm:px-8 sm:py-12 md:min-h-[510px] md:grid-cols-[minmax(0,1fr)_300px] md:items-center md:px-10 lg:min-h-[500px] lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-12 lg:px-14">
+        <div className="max-w-[800px]">
+          <h1 id="hero-heading" className="text-[2.65rem] font-extrabold leading-[1.02] tracking-tight text-slate-950 sm:text-5xl lg:text-[3.4rem]">
+            <span className="block text-blue-700">AI Workflow Automation</span>
+            <span className="mt-1 block">for Manufacturing Quality—</span>
+            <span className="block">and Beyond.</span>
+          </h1>
+          <p className="mt-5 max-w-2xl text-base leading-7 text-slate-700 sm:text-lg sm:leading-8">
+            LVTChat is building intelligent workflows that help businesses analyze information, identify problems, generate reports, and move work forward with human oversight.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Link
+              href="/request?interest=early_access&source=homepage"
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-blue-700 px-5 py-3 text-sm font-bold text-white shadow-md shadow-blue-950/15 transition hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
+            >
+              <span className="text-white">Request Early Access</span> <ArrowRight aria-hidden="true" className="text-white" size={17} />
+            </Link>
+            <Link
+              href="/workflow-preview"
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-blue-300 bg-white/90 px-5 py-3 text-sm font-bold text-blue-800 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
+            >
+              <span className="text-blue-800">Explore Workflow Preview</span>
+            </Link>
           </div>
-          <ol className="mt-5 space-y-3">
-            {WORKFLOW_PREVIEW.map((step, index) => (
-              <li key={step} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-sm font-bold text-blue-200">{index + 1}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-white">{step}</p>
-                  <p className="mt-1 text-xs text-slate-400">Illustrative workflow stage</p>
-                </div>
-                {index < WORKFLOW_PREVIEW.length - 1 ? <span aria-hidden="true" className="text-blue-300">→</span> : <span className="rounded-full bg-emerald-400/10 px-2 py-1 text-xs font-medium text-emerald-200">Human-led</span>}
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+            <span className="font-semibold text-slate-900">Need AI help today?</span>
+            <Link
+              href={BRAND.routes.login}
+              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-blue-300 bg-white/90 px-4 py-2 font-semibold text-blue-800 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
+            >
+              <span className="text-blue-800">Try LVTChat Free</span> <ArrowRight aria-hidden="true" className="text-blue-800" size={15} />
+            </Link>
+          </div>
+          <p className="mt-4 max-w-2xl text-xs leading-5 text-slate-700">
+            Purpose-built Workflow Automation is in development. Current AI Assistant tools are available separately under Free and Pro plans.
+          </p>
+        </div>
+
+        <aside className="rounded-2xl border border-white/20 bg-slate-950/90 p-5 text-white shadow-2xl shadow-slate-950/25 backdrop-blur-sm sm:p-6">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-blue-200">Workflow concept</p>
+          <h2 className="mt-2 text-xl font-bold leading-tight sm:text-2xl">Turn quality data into reviewed next steps.</h2>
+          <ul className="mt-5 space-y-3">
+            {PLANNED_OUTCOMES.map((outcome) => (
+              <li key={outcome} className="flex items-start gap-2.5 text-sm leading-5 text-slate-100">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
+                  <Check aria-hidden="true" size={13} strokeWidth={3} />
+                </span>
+                {outcome}
               </li>
             ))}
-          </ol>
-          <p className="mt-4 text-xs leading-5 text-slate-400">Concept illustration only. No customer records or live CAPA operations are used in this preview.</p>
-          <Link href="/workflow-preview" className="mt-4 inline-flex text-sm font-semibold text-blue-200 underline underline-offset-4 focus:outline-none focus:ring-2 focus:ring-blue-300">View the six-stage preview</Link>
-        </div>
+          </ul>
+          <div className="mt-5 flex items-center gap-3 border-t border-white/15 pt-4">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 text-blue-100">
+              <ShieldCheck aria-hidden="true" size={22} />
+            </span>
+            <p className="text-xs leading-5 text-slate-200">Designed for traceable review, with qualified people retaining decision authority.</p>
+          </div>
+          <p className="mt-3 text-[11px] leading-4 text-slate-400">Illustrative direction only · customer-facing workflow execution is in development.</p>
+        </aside>
       </div>
     </section>
   );

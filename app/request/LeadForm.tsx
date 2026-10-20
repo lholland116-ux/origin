@@ -11,6 +11,7 @@ type LeadFormProps = {
   readonly initialInterest: MarketingLeadInterest;
   readonly source: MarketingLeadSource;
   readonly turnstileSiteKey?: string;
+  readonly compact?: boolean;
   readonly utmSource?: string;
   readonly utmMedium?: string;
   readonly utmCampaign?: string;
@@ -42,7 +43,7 @@ function safeUtm(value: string | undefined): string | undefined {
   return value;
 }
 
-export default function LeadForm({ initialInterest, source, turnstileSiteKey, utmSource, utmMedium, utmCampaign }: LeadFormProps) {
+export default function LeadForm({ initialInterest, source, turnstileSiteKey, utmSource, utmMedium, utmCampaign, compact = false }: LeadFormProps) {
   const formRef = useRef<HTMLFormElement>(null);
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
   const turnstileWidgetId = useRef<string | null>(null);
@@ -162,8 +163,8 @@ export default function LeadForm({ initialInterest, source, turnstileSiteKey, ut
     }
   }
 
-  const fieldClass = "mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-950 shadow-sm placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/20";
-  const labelClass = "block text-sm font-semibold text-slate-800";
+  const fieldClass = `mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 ${compact ? "py-2.5 text-xs" : "py-3 text-sm"} text-slate-950 shadow-sm placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/20`;
+  const labelClass = `block font-semibold text-slate-800 ${compact ? "text-xs" : "text-sm"}`;
 
   if (submitted) return (
     <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-emerald-950">
@@ -173,7 +174,7 @@ export default function LeadForm({ initialInterest, source, turnstileSiteKey, ut
   );
 
   return (
-    <form ref={formRef} onSubmit={onSubmit} className="space-y-5">
+    <form ref={formRef} onSubmit={onSubmit} className={compact ? "space-y-3" : "space-y-5"}>
       {turnstileSiteKey ? (
         <>
           <Script
@@ -191,32 +192,34 @@ export default function LeadForm({ initialInterest, source, turnstileSiteKey, ut
       ) : (
         <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">Verification is not configured, so requests cannot be sent right now.</p>
       )}
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className={`grid sm:grid-cols-2 ${compact ? "gap-3" : "gap-5"}`}>
         <label className={labelClass}>Name<input name="name" autoComplete="name" required maxLength={120} className={fieldClass} /></label>
         <label className={labelClass}>Business email<input name="business_email" type="email" autoComplete="email" required maxLength={254} className={fieldClass} /></label>
         <label className={labelClass}>Company<input name="company" autoComplete="organization" required maxLength={160} className={fieldClass} /></label>
         <label className={labelClass}>Role<input name="role" autoComplete="organization-title" required maxLength={160} className={fieldClass} /></label>
       </div>
-      <label className={labelClass}>Interest type
-        <select value={interest} onChange={(event) => setInterest(event.target.value as MarketingLeadInterest)} className={fieldClass}>
-          <option value="early_access">Request Early Access</option>
-          <option value="demo">Request a Demo</option>
-        </select>
-      </label>
-      <label className={labelClass}>What workflow or business problem would you like to discuss?
-        <textarea name="workflow_problem" required minLength={8} maxLength={2400} rows={5} className={fieldClass} placeholder="Share the task, handoff, or information challenge you want to improve." />
-      </label>
-      <label className={labelClass}>Current process or tools <span className="font-normal text-slate-500">(optional)</span>
-        <textarea name="current_process_tools" maxLength={1200} rows={3} className={fieldClass} placeholder="For example, spreadsheets, documents, or existing systems." />
-      </label>
+      <div className={compact ? "grid gap-3 sm:grid-cols-2" : "space-y-5"}>
+        <label className={labelClass}>Interest type
+          <select value={interest} onChange={(event) => setInterest(event.target.value as MarketingLeadInterest)} className={fieldClass}>
+            <option value="early_access">Request Early Access</option>
+            <option value="demo">Request a Demo</option>
+          </select>
+        </label>
+        <label className={labelClass}>What workflow or business problem would you like to discuss?
+          <textarea name="workflow_problem" required minLength={8} maxLength={2400} rows={compact ? 2 : 5} className={fieldClass} placeholder="Share the task, handoff, or information challenge you want to improve." />
+        </label>
+        <label className={labelClass}>Current process or tools <span className="font-normal text-slate-500">(optional)</span>
+          <textarea name="current_process_tools" maxLength={1200} rows={compact ? 1 : 3} className={fieldClass} placeholder="For example, spreadsheets, documents, or existing systems." />
+        </label>
+        <label className={`flex items-start gap-3 leading-5 text-slate-700 ${compact ? "pt-1 text-xs" : "text-sm leading-6"}`}>
+          <input name="marketing_consent" type="checkbox" className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-700 focus:ring-blue-600" />
+          <span>I would like to receive occasional product updates. Optional; this is not required for a response to my request.</span>
+        </label>
+      </div>
       <label className="absolute -left-[10000px] top-auto h-px w-px overflow-hidden" aria-hidden="true">
         Leave this field blank<input name="website" tabIndex={-1} autoComplete="off" />
       </label>
-      <label className="flex items-start gap-3 text-sm leading-6 text-slate-700">
-        <input name="marketing_consent" type="checkbox" className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600" />
-        <span>I would like to receive occasional product updates. Optional; this is not required for a response to my request.</span>
-      </label>
-      <p className="text-xs leading-5 text-slate-500">LVTChat uses these details to respond to your request and operate this contact process. Cloudflare Turnstile checks this submission for automated abuse; form fields are sent to LVTChat, not to Turnstile Siteverify. See the <Link href="/privacy" className="font-semibold text-blue-800 underline">Privacy Policy</Link>. Marketing consent is stored separately.</p>
+      <p className={`leading-5 text-slate-500 ${compact ? "text-[11px]" : "text-xs"}`}>LVTChat uses these details to respond to your request and operate this contact process. Cloudflare Turnstile checks this submission for automated abuse; form fields are sent to LVTChat, not to Turnstile Siteverify. See the <Link href="/privacy" className="font-semibold text-blue-800 underline"><span className="text-blue-800">Privacy Policy</span></Link>. Marketing consent is stored separately.</p>
       {error ? <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
       <button type="submit" disabled={submitting || !turnstileSiteKey || !turnstileToken || turnstileScriptFailed} aria-busy={submitting} className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-60">
         {submitting ? "Sending request…" : interest === "demo" ? "Request Demo" : "Request Early Access"}

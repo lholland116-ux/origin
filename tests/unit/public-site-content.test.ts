@@ -7,6 +7,7 @@ import {
 } from "@/lib/landing-content";
 import { FAQ_ITEMS } from "@/components/help/faq-data";
 import { BRAND } from "@/lib/branding";
+import { CAPA_WORKFLOW_PREVIEW_STAGES } from "@/lib/marketing/workflow-preview";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const heroSource = read("components/landing/Hero.tsx");
@@ -17,6 +18,11 @@ const pricingSource = read("app/pricing/page.tsx");
 const aboutSource = read("app/about/page.tsx");
 const faqSource = read("components/help/faq-data.ts");
 const headerSource = read("components/landing/Header.tsx");
+const landingSource = read("components/landing/LandingPage.tsx");
+const homepageFounderLeadSource = read("components/landing/HomepageFounderLead.tsx");
+const workflowPreviewClientSource = read("app/workflow-preview/WorkflowPreview.tsx");
+const leadFormSource = read("app/request/LeadForm.tsx");
+const footerSource = read("components/landing/Footer.tsx");
 
 describe("public product-site refresh", () => {
   it("keeps the approved positioning and current general-purpose capabilities visible", () => {
@@ -26,7 +32,9 @@ describe("public product-site refresh", () => {
     expect(workflowAutomationSource).toContain(
       "AI Workflow Automation for Manufacturing Quality—and Beyond."
     );
-    expect(heroSource).toMatch(/AI workflow automation for manufacturing quality—and beyond/i);
+    expect(heroSource).toContain("AI Workflow Automation");
+    expect(heroSource).toContain("for Manufacturing Quality—");
+    expect(heroSource).toContain("and Beyond.");
     expect(featureGridSource).toContain("General-purpose LVTChat - Available Now");
     expect(featureGridSource).toContain("Practical AI capabilities for work, research, and everyday tasks");
 
@@ -110,5 +118,44 @@ describe("public product-site refresh", () => {
       .toMatch(/CAPA AI Agent.*In Development/);
     expect(FAQ_ITEMS.some((item) => item.question === "What is available today, and what is still in development?"))
       .toBe(true);
+  });
+
+  it("assembles the homepage in the approved order and reuses secured preview and lead flows", () => {
+    const orderedHomepageSections = [
+      '<Header variant="homepage" />',
+      "<Hero />",
+      "<HomepageWorkflowStages />",
+      "id=\"capa-preview\"",
+      "<HomepageProductPanels />",
+      "<HomepageBenefits />",
+      "<HomepageFounderLead />",
+      '<Footer variant="dark" />',
+    ];
+    let priorIndex = -1;
+    for (const section of orderedHomepageSections) {
+      const currentIndex = landingSource.indexOf(section);
+      expect(currentIndex, `homepage includes ${section}`).toBeGreaterThan(priorIndex);
+      priorIndex = currentIndex;
+    }
+
+    expect(heroSource).toContain("/images/marketing/manufacturing-quality-hero.png");
+    expect(heroSource).toContain("/request?interest=early_access&source=homepage");
+    expect(heroSource).toContain("/workflow-preview");
+    expect(heroSource).toContain("BRAND.routes.login");
+    expect(headerSource).toContain('"CAPA Preview"');
+    expect(headerSource).toContain('"Workflow Preview": "/workflow-preview"');
+    expect(CAPA_WORKFLOW_PREVIEW_STAGES).toHaveLength(6);
+    expect(workflowPreviewClientSource).toContain("CAPA_WORKFLOW_PREVIEW_STAGES.map");
+    expect(workflowPreviewClientSource).toContain("aria-pressed={selected === index}");
+    expect(workflowPreviewClientSource).toContain("focus:ring-2");
+
+    expect(homepageFounderLeadSource).toContain("/images/founder/levi-holland-portrait.png");
+    expect(homepageFounderLeadSource).toContain("@/app/request/LeadForm");
+    expect(homepageFounderLeadSource).toContain('source="homepage"');
+    expect(homepageFounderLeadSource).toContain("NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY");
+    expect(homepageFounderLeadSource).toContain("compact");
+    expect(leadFormSource).toContain('action: "marketing_lead_submit"');
+    expect(leadFormSource).toContain('fetch("/api/marketing/leads"');
+    expect(footerSource).toContain('variant === "dark"');
   });
 });

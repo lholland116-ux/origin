@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 
 const PLAY_STORE_URL =
   "https://play.google.com/store/apps/details?id=com.lvtchat.app";
@@ -23,26 +25,27 @@ export const metadata: Metadata = {
 
 export default function LaunchArticlePage() {
   return (
-    <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
-      <article className="mx-auto max-w-3xl">
+    <main className="min-h-screen bg-slate-50 text-slate-950">
+      <Header />
+      <article className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
         <div className="flex flex-wrap gap-4">
           <Link
             href={BRAND.routes.blog}
-            className="inline-flex rounded-md text-sm text-white/60 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            className="inline-flex rounded-md text-sm text-slate-600 transition hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2 focus:ring-offset-slate-50"
           >
             ← Back to Blog
           </Link>
 
           <Link
             href={BRAND.routes.home}
-            className="inline-flex rounded-md text-sm text-white/60 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+            className="inline-flex rounded-md text-sm text-slate-600 transition hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2 focus:ring-offset-slate-50"
           >
             Home
           </Link>
         </div>
 
-        <header className="mt-10 border-b border-white/10 pb-10">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+        <header className="mt-10 border-b border-slate-200 pb-10">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-800">
             Launch Announcement
           </p>
 
@@ -50,20 +53,20 @@ export default function LaunchArticlePage() {
             LVTChat Is Now Available on Google Play
           </h1>
 
-          <p className="mt-5 text-lg leading-8 text-white/70">
+          <p className="mt-5 text-lg leading-8 text-slate-700">
             Practical AI you can actually use is now available for Android
             users worldwide.
           </p>
 
-          <p className="mt-4 text-sm text-white/45">July 13, 2026</p>
+          <p className="mt-4 text-sm text-slate-600">July 13, 2026</p>
         </header>
 
-        <div className="mt-10 space-y-10 text-base leading-8 text-white/75">
+        <div className="mt-10 space-y-10 text-base leading-8 text-slate-700">
           <section>
             <p>
               After months of planning, development, testing, and refinement,
               I&apos;m excited to announce that{" "}
-              <strong className="text-white">
+              <strong className="text-slate-950">
                 LVTChat is now officially available on Google Play.
               </strong>
             </p>
@@ -76,13 +79,13 @@ export default function LaunchArticlePage() {
           </section>
 
           <section>
-            <h2 className="text-2xl font-semibold text-white">
+            <h2 className="text-2xl font-semibold text-slate-950">
               What You Can Do with LVTChat
             </h2>
 
             <div className="mt-6 space-y-5">
               <div>
-                <h3 className="font-semibold text-white">
+                <h3 className="font-semibold text-slate-950">
                   AI-Powered Conversations
                 </h3>
                 <p className="mt-2">
@@ -93,7 +96,7 @@ export default function LaunchArticlePage() {
               </div>
 
               <div>
-                <h3 className="font-semibold text-white">Web Search</h3>
+                <h3 className="font-semibold text-slate-950">Web Search</h3>
                 <p className="mt-2">
                   Access current information from the web when you need answers
                   that go beyond the AI&apos;s built-in knowledge.
@@ -101,17 +104,19 @@ export default function LaunchArticlePage() {
               </div>
 
               <div>
-                <h3 className="font-semibold text-white">
-                  Document Upload and Analysis (Pro)
+                <h3 className="font-semibold text-slate-950">
+                  Document Upload and Analysis
                 </h3>
                 <p className="mt-2">
                   Upload supported documents and use LVTChat to summarize,
-                  explain, and analyze their contents.
+                  explain, and analyze their contents. Free supports one
+                  document up to 5 MB per Standard message; Pro supports up to
+                  three documents up to 10 MB each.
                 </p>
               </div>
 
               <div>
-                <h3 className="font-semibold text-white">Secure Sign-In</h3>
+                <h3 className="font-semibold text-slate-950">Secure Sign-In</h3>
                 <p className="mt-2">
                   Sign in with Google or email using secure cloud-based
                   authentication.
@@ -119,7 +124,7 @@ export default function LaunchArticlePage() {
               </div>
 
               <div>
-                <h3 className="font-semibold text-white">
+                <h3 className="font-semibold text-slate-950">
                   Conversation History
                 </h3>
                 <p className="mt-2">
@@ -131,7 +136,7 @@ export default function LaunchArticlePage() {
           </section>
 
           <section>
-            <h2 className="text-2xl font-semibold text-white">
+            <h2 className="text-2xl font-semibold text-slate-950">
               Built for Practical Use
             </h2>
 
@@ -149,7 +154,7 @@ export default function LaunchArticlePage() {
           </section>
 
           <section>
-            <h2 className="text-2xl font-semibold text-white">Thank You</h2>
+            <h2 className="text-2xl font-semibold text-slate-950">Thank You</h2>
 
             <p className="mt-4">
               This launch would not have been possible without the family,
@@ -164,7 +169,7 @@ export default function LaunchArticlePage() {
           </section>
 
           <section>
-            <h2 className="text-2xl font-semibold text-white">
+            <h2 className="text-2xl font-semibold text-slate-950">
               This Is Only the Beginning
             </h2>
 
@@ -175,8 +180,8 @@ export default function LaunchArticlePage() {
             </p>
           </section>
 
-          <section className="rounded-3xl border border-blue-400/20 bg-blue-500/10 p-7">
-            <h2 className="text-2xl font-semibold text-white">
+          <section className="rounded-3xl border border-blue-200 bg-blue-50 p-7">
+            <h2 className="text-2xl font-semibold text-slate-950">
               Download LVTChat Today
             </h2>
 
@@ -189,28 +194,29 @@ export default function LaunchArticlePage() {
                 href={PLAY_STORE_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center rounded-2xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                className="inline-flex min-h-12 items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
               >
-                Download on Google Play
+                <span className="text-white">Download on Google Play</span>
               </a>
 
               <Link
                 href={BRAND.routes.home}
-                className="inline-flex items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-800 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2 focus:ring-offset-slate-50"
               >
-                Visit LVTChat
+                <span className="text-slate-800">Visit LVTChat</span>
               </Link>
             </div>
           </section>
 
-          <footer className="border-t border-white/10 pt-8">
-            <p className="font-semibold text-white">Levi Holland</p>
-            <p className="mt-1 text-white/60">
+          <footer className="border-t border-slate-200 pt-8">
+            <p className="font-semibold text-slate-950">Levi Holland</p>
+            <p className="mt-1 text-slate-600">
               Founder &amp; AI Engineer, LVTChat LLC
             </p>
           </footer>
         </div>
       </article>
+      <div className="bg-slate-950 px-4 py-6 sm:px-8"><Footer variant="dark" /></div>
     </main>
   );
 }

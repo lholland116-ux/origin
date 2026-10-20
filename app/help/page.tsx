@@ -16,15 +16,6 @@ export default function HelpPage() {
     <main className="min-h-screen bg-slate-50 text-slate-950">
       <Header />
       <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
-        <div className="mb-6 flex items-center justify-between">
-          <Link
-            href="/chat"
-            className="inline-flex items-center gap-2 text-sm font-semibold text-blue-800 transition hover:text-blue-950"
-          >
-            Try LVTChat Free
-          </Link>
-        </div>
-
         <div className="mb-8">
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-blue-800">
             {BRAND.name}
@@ -40,7 +31,7 @@ export default function HelpPage() {
         <div className="mb-8 grid gap-3 sm:grid-cols-2">
           <Link
             href="/chat"
-            className="rounded-xl border border-slate-200 bg-white p-4 text-sm transition hover:bg-slate-50"
+            className="rounded-xl border border-slate-200 bg-white p-4 text-sm transition hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
           >
             <div className="font-medium">Start a new chat</div>
             <div className="mt-1 text-xs text-slate-500">
@@ -50,7 +41,7 @@ export default function HelpPage() {
 
           <Link
             href="/account"
-            className="rounded-xl border border-slate-200 bg-white p-4 text-sm transition hover:bg-slate-50"
+            className="rounded-xl border border-slate-200 bg-white p-4 text-sm transition hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
           >
             <div className="font-medium">Manage your account</div>
             <div className="mt-1 text-xs text-slate-500">
@@ -74,7 +65,7 @@ export default function HelpPage() {
           </p>
         </div>
       </div>
-      <div className="mx-auto max-w-[1440px] px-4 pb-5 sm:px-6 lg:px-8"><Footer /></div>
+      <div className="bg-slate-950 px-4 py-6 sm:px-8"><Footer variant="dark" /></div>
     </main>
   );
 }

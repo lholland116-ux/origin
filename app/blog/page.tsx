@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { BRAND } from "@/lib/branding";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 
 export const metadata: Metadata = {
   title: "Blog",
@@ -37,17 +39,11 @@ const upcomingTopics = [
 
 export default function BlogPage() {
   return (
-    <main className="min-h-screen bg-[#020817] px-6 py-16 text-white">
-      <div className="mx-auto max-w-4xl">
-        <Link
-          href={BRAND.routes.home}
-          className="inline-flex rounded-md text-sm text-white/60 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-2 focus:ring-offset-[#020817]"
-        >
-          ← Back to Home
-        </Link>
-
-        <header className="mt-10 text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-300">
+    <main className="min-h-screen bg-slate-50 text-slate-950">
+      <Header />
+      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
+        <header className="mx-auto max-w-4xl text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-800">
             Blog
           </p>
 
@@ -55,7 +51,7 @@ export default function BlogPage() {
             Insights from {BRAND.name}
           </h1>
 
-          <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-white/70 sm:text-lg">
+          <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-700 sm:text-lg">
             Product updates, demonstrations, practical AI guidance, and ideas
             for working smarter with artificial intelligence.
           </p>
@@ -66,44 +62,44 @@ export default function BlogPage() {
             Latest articles
           </h2>
 
-          <div className="grid gap-6">
+          <div className="grid gap-5 md:grid-cols-2">
             {posts.map((post) => (
               <article
                 key={post.href}
-                className="rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(8,14,28,0.95),rgba(5,10,22,0.98))] p-7 shadow-[0_20px_60px_rgba(0,0,0,0.35)]"
+                className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-blue-200 hover:shadow-md sm:p-7"
               >
-                <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-white/50">
-                  <span className="rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1 text-blue-200">
+                <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-600">
+                  <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-900">
                     {post.category}
                   </span>
 
                   <time>{post.date}</time>
                 </div>
 
-                <h2 className="mt-5 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                <h2 className="mt-5 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
                   {post.title}
                 </h2>
 
-                <p className="mt-4 max-w-3xl text-sm leading-7 text-white/65 sm:text-base">
+                <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-700 sm:text-base">
                   {post.description}
                 </p>
 
                 <Link
                   href={post.href}
                   aria-label={`Read: ${post.title}`}
-                  className="mt-6 inline-flex rounded-2xl border border-blue-400/30 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100 transition hover:bg-blue-500/20 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-[#020817]"
+                  className="mt-6 inline-flex min-h-11 items-center rounded-xl border border-blue-700 bg-white px-5 py-3 text-sm font-semibold text-blue-800 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
                 >
-                  Read article →
+                  <span className="text-blue-800">Read article →</span>
                 </Link>
               </article>
             ))}
           </div>
         </section>
 
-        <section className="mt-12 rounded-3xl border border-white/10 bg-white/[0.03] p-8">
-          <h2 className="text-2xl font-semibold text-white">Coming next</h2>
+        <section className="mt-12 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+          <h2 className="text-2xl font-semibold text-slate-950">Coming next</h2>
 
-          <p className="mt-3 max-w-2xl text-sm leading-7 text-white/65 sm:text-base">
+          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-700 sm:text-base">
             More practical articles and demonstrations are on the way to help
             you get better results from AI.
           </p>
@@ -112,14 +108,15 @@ export default function BlogPage() {
             {upcomingTopics.map((topic) => (
               <div
                 key={topic}
-                className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+                className="rounded-xl border border-slate-200 bg-slate-50 p-5"
               >
-                <p className="text-sm font-medium text-white">{topic}</p>
+                <p className="text-sm font-medium text-slate-800">{topic}</p>
               </div>
             ))}
           </div>
         </section>
       </div>
+      <div className="bg-slate-950 px-4 py-6 sm:px-8"><Footer variant="dark" /></div>
     </main>
   );
 }

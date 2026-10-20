@@ -57,24 +57,24 @@ export default function FaqAccordion({
 
   return (
     <section
-      className={`w-full rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 ${className}`}
+      className={`w-full rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ${className}`}
       aria-labelledby="faq-heading"
     >
       <div className="mb-4">
         <h2
           id="faq-heading"
-          className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+          className="text-xl font-semibold tracking-tight text-slate-950"
         >
           {title}
         </h2>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-slate-700">
           {subtitle}
         </p>
       </div>
 
       <div className="relative mb-4">
         <Search
-          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400"
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600"
           aria-hidden="true"
         />
         <input
@@ -82,14 +82,14 @@ export default function FaqAccordion({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search help topics..."
-          className="w-full rounded-xl border border-zinc-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-zinc-400 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-800"
+          className="w-full rounded-xl border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-950 placeholder:text-slate-600 outline-none transition focus:border-blue-700 focus:ring-2 focus:ring-blue-200"
           aria-label="Search help topics"
         />
       </div>
 
       <div className="space-y-2">
         {filteredItems.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+          <div className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-700">
             No help topics found. Try a different keyword.
           </div>
         ) : (
@@ -102,27 +102,27 @@ export default function FaqAccordion({
             return (
               <div
                 key={itemKey}
-                className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800"
+                className="overflow-hidden rounded-xl border border-slate-200"
               >
                 <button
                   type="button"
                   onClick={() => setOpenKey(isOpen ? null : itemKey)}
-                  className="flex w-full items-center justify-between gap-4 bg-zinc-50 px-4 py-3 text-left transition hover:bg-zinc-100 dark:bg-zinc-950 dark:hover:bg-zinc-900"
+                  className="flex w-full items-center justify-between gap-4 bg-slate-50 px-4 py-3 text-left transition hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-700"
                   aria-expanded={isOpen}
                   aria-controls={panelId}
                   id={triggerId}
                 >
                   <div className="min-w-0">
-                    <div className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-600">
                       {item.category}
                     </div>
-                    <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                    <span className="block text-sm font-medium text-slate-950">
                       {item.question}
                     </span>
                   </div>
 
                   <ChevronDown
-                    className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform ${
+                    className={`h-4 w-4 shrink-0 text-slate-600 transition-transform ${
                       isOpen ? "rotate-180" : ""
                     }`}
                     aria-hidden="true"
@@ -138,7 +138,7 @@ export default function FaqAccordion({
                   }`}
                 >
                   <div className="overflow-hidden">
-                    <div className="border-t border-zinc-200 bg-white px-4 py-3 text-sm leading-6 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+                    <div className="border-t border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700">
                       {item.answer}
                     </div>
                   </div>

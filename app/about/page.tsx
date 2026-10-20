@@ -34,10 +34,10 @@ export default function AboutPage() {
             {["25+ years in regulated industries", "Pharmaceutical and biotechnology", "Medical-device, engineering, validation, and regulatory work"].map((item) => <div key={item} className="rounded-2xl border border-slate-200 bg-white p-5 text-center text-sm font-semibold leading-6 text-slate-800 shadow-sm">{item}</div>)}
           </div>
           <div className="mt-10"><FounderContactCard /></div>
-          <p className="mt-7 text-sm text-slate-600">For customer support, contact <a className="font-semibold text-blue-800 underline underline-offset-4" href={`mailto:${BRAND.contact.email}`}>{BRAND.contact.email}</a>.</p>
+          <p className="mt-7 text-sm text-slate-600">For customer support, contact <a className="font-semibold text-blue-800 underline underline-offset-4" href={`mailto:${BRAND.contact.email}`}><span className="text-blue-800">{BRAND.contact.email}</span></a>.</p>
         </div>
       </section>
-      <div className="mx-auto max-w-[1440px] px-4 pb-5 sm:px-6 lg:px-8"><Footer /></div>
+      <div className="bg-slate-950 px-4 py-6 sm:px-8"><Footer variant="dark" /></div>
     </main>
   );
 }

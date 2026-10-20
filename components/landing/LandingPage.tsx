@@ -1,71 +1,52 @@
-import AgentRoadmap from "@/components/landing/AgentRoadmap";
-import CTASection from "@/components/landing/CTASection";
-import FeatureGrid from "@/components/landing/FeatureGrid";
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
+import { BRAND } from "@/lib/branding";
+import { WORKFLOW_PREVIEW_NOTICE } from "@/lib/marketing/workflow-preview";
 import Footer from "@/components/landing/Footer";
 import Header from "@/components/landing/Header";
 import Hero from "@/components/landing/Hero";
-import OfficialDemo from "@/components/landing/OfficialDemo";
-import TrustedSection from "@/components/landing/TrustedSection";
-import UseCases from "@/components/landing/UseCases";
-import { BRAND } from "@/lib/branding";
-import Link from "next/link";
+import HomepageBenefits from "@/components/landing/HomepageBenefits";
+import HomepageFounderLead from "@/components/landing/HomepageFounderLead";
+import HomepageProductPanels from "@/components/landing/HomepageProductPanels";
+import HomepageWorkflowStages from "@/components/landing/HomepageWorkflowStages";
+import WorkflowPreview from "@/app/workflow-preview/WorkflowPreview";
 
 export default function LandingPage() {
   return (
-    <main
-      id="top"
-      aria-label={`${BRAND.name} landing page`}
-      className="relative min-h-screen overflow-hidden bg-slate-50 text-slate-950"
-    >
-      <BackgroundGlow />
+    <main id="top" aria-label={`${BRAND.name} landing page`} className="min-h-screen overflow-hidden bg-white text-slate-950">
+      <Header variant="homepage" />
+      <Hero />
+      <HomepageWorkflowStages />
 
-      <div className="relative mx-auto flex w-full max-w-[1440px] flex-col gap-8 px-4 py-5 sm:px-6 lg:px-8">
-        <section
-          aria-label={`${BRAND.name} introduction`}
-          className="overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.08)]"
-        >
-          <Header />
-          <Hero />
-          <FeatureGrid />
-        </section>
-
-        <OfficialDemo />
-
-        <TrustedSection />
-        <UseCases />
-        <AgentRoadmap />
-        <section className="rounded-3xl border border-blue-100 bg-blue-50 p-6 sm:p-8">
-          <div className="mx-auto flex max-w-6xl flex-col gap-5 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-blue-800">For your workflow</p>
-              <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-950">Tell us what work you want to move forward.</h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Share a workflow challenge and request early access or a conversation with the founder.</p>
-            </div>
-            <Link href="/request?interest=early_access&source=homepage" className="inline-flex min-h-12 shrink-0 items-center justify-center rounded-xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2">Request Early Access</Link>
+      <section id="capa-preview" aria-labelledby="home-workflow-preview-heading" className="px-4 py-4 sm:px-8 sm:py-5">
+        <div className="mx-auto grid max-w-[1360px] items-center gap-6 rounded-2xl bg-slate-50 p-4 sm:p-6 lg:grid-cols-[0.9fr_1.1fr] lg:gap-8 lg:p-7">
+          <div className="px-1 py-2 sm:px-3">
+            <p className="inline-flex items-center rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-bold text-amber-900">
+              Illustrative Workflow Preview <span aria-hidden="true" className="ml-2">ⓘ</span>
+            </p>
+            <h2 id="home-workflow-preview-heading" className="mt-4 text-2xl font-extrabold tracking-tight text-slate-950 sm:text-3xl">
+              Interactive CAPA Workflow Preview
+            </h2>
+            <p className="mt-4 max-w-xl text-sm leading-6 text-slate-700 sm:text-base sm:leading-7">
+              Explore a sample six-stage workflow using fictional manufacturing data. See how information can be organized for analysis, reporting, human review, and controlled follow-up.
+            </p>
+            <p className="mt-3 max-w-xl text-xs leading-5 text-slate-600">{WORKFLOW_PREVIEW_NOTICE} Qualified humans retain decision authority.</p>
+            <Link href="/workflow-preview" className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2">
+              <span className="text-white">Explore the CAPA Workflow Preview</span> <ArrowRight aria-hidden="true" className="text-white" size={16} />
+            </Link>
           </div>
-        </section>
-        <CTASection />
-        <Footer />
+          <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+            <WorkflowPreview presentation="homepage" />
+          </div>
+        </div>
+      </section>
+
+      <HomepageProductPanels />
+      <HomepageBenefits />
+      <HomepageFounderLead />
+      <div className="bg-slate-950 px-4 py-4 sm:px-8">
+        <Footer variant="dark" />
       </div>
     </main>
-  );
-}
-
-function BackgroundGlow() {
-  return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0"
-    >
-      <div className="absolute left-[-10%] top-[5%] h-[420px] w-[420px] rounded-full bg-blue-600/20 blur-3xl" />
-
-      <div className="absolute right-[2%] top-[10%] h-[360px] w-[360px] rounded-full bg-violet-500/20 blur-3xl" />
-
-      <div className="absolute bottom-[10%] left-[15%] h-[320px] w-[520px] rounded-full bg-cyan-500/10 blur-3xl" />
-
-      <div className="absolute left-[3%] top-[28%] h-[260px] w-[260px] rounded-full bg-red-500/10 blur-3xl" />
-
-      <div className="absolute bottom-[20%] right-[8%] h-[300px] w-[300px] rounded-full bg-blue-500/10 blur-3xl" />
-    </div>
   );
 }
