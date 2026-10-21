@@ -2,11 +2,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
+import { parseQualityDataXlsx } from "../../lib/quality-data/xlsx-quality-data-parser";
 
 describe("synthetic manufacturing demonstration workbook", () => {
   it("contains fictional disjoint cohorts with an unfavorable three-month defect-rate trend", async () => {
+    const bytes = new Uint8Array(await readFile(resolve("public/demo/synthetic-manufacturing-quality.xlsx")));
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(Buffer.from(await readFile(resolve("public/demo/synthetic-manufacturing-quality.xlsx"))) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+    await workbook.xlsx.load(Buffer.from(bytes) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
     const sheet = workbook.getWorksheet("Synthetic Inspections");
     expect(sheet).toBeDefined();
     expect(sheet!.rowCount).toBe(13);
@@ -34,5 +36,34 @@ describe("synthetic manufacturing demonstration workbook", () => {
     expect(categories.get("Seal leak")).toBe(3);
     expect([...monthly.values()].reduce((sum, value) => sum + value.quantity, 0)).toBe(3_000);
     expect(workbook.description).toContain("disjoint 250-unit inspection cohort");
+
+    const parsed = await parseQualityDataXlsx(bytes, {
+      worksheet_name: "Synthetic Inspections",
+      header_row: 1,
+      columns: [
+        { header: "Inspection Date", field_key: "inspection_date", value_type: "date", required: true },
+        { header: "Failure Mode", field_key: "failure_mode", value_type: "text" },
+        { header: "Defect Count", field_key: "reject_count", value_type: "number", required: true, normalized_unit: "count" },
+        { header: "Inspected Quantity", field_key: "inspected_quantity", value_type: "number", required: true, normalized_unit: "units" },
+      ],
+      ignored_headers: [],
+    });
+    expect(parsed.status).toBe("parsed");
+    if (parsed.status !== "parsed") return;
+    expect(parsed).toMatchObject({ record_count: 12, field_count: 48 });
+    expect(parsed.records[0]).toMatchObject({
+      source_worksheet: "Synthetic Inspections",
+      source_row_number: 2,
+      fields: [
+        { field_key: "inspection_date", value_type: "date", normalized_value: "2025-01-06", source_cell_reference: "A2" },
+        { field_key: "failure_mode", value_type: "text", normalized_value: "Seal leak", source_cell_reference: "B2" },
+        { field_key: "reject_count", value_type: "number", normalized_value: 1, normalized_unit: "count", source_cell_reference: "C2" },
+        { field_key: "inspected_quantity", value_type: "number", normalized_value: 250, normalized_unit: "units", source_cell_reference: "D2" },
+      ],
+    });
+    expect(parsed.records[2]?.fields[1]).toMatchObject({
+      field_key: "failure_mode", value_type: "blank", original_value: null,
+      normalized_value: null, source_cell_reference: "B4",
+    });
   });
 });

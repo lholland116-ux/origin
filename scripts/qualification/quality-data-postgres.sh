@@ -14,14 +14,14 @@ set -Eeuo pipefail
 # Integrated Layer 2 V1 default:
 #   scripts/qualification/quality-data-postgres.sh
 
-readonly EXPECTED_HEAD="f10e20d4ccb1e26fd71733b970ab7d80c6105a92"
+readonly EXPECTED_HEAD="c04fc8b45957f9d37ac19fd826e7f896bf61ffc1"
 readonly IMAGE="public.ecr.aws/supabase/postgres:17.11.0.002"
 readonly HOST_PORT="57381"
 readonly DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:57381/postgres"
 readonly CLI_DATABASE_URL="${DATABASE_URL}?sslmode=disable"
 readonly DEFAULT_TEST_FILES="tests/integration/quality-data-foundation-postgres.test.ts tests/integration/quality-data-stage2c-postgres.test.ts tests/integration/quality-data-stage3a-postgres.test.ts tests/integration/quality-data-stage3c-postgres.test.ts tests/integration/quality-data-stage3d-postgres.test.ts tests/integration/quality-data-xlsx-rate-limit-postgres.test.ts"
 readonly DEFAULT_EXPECTED_TESTS="45"
-readonly ALLOWED_UNTRACKED_MIGRATIONS=("20261020100000_quality_data_deterministic_reports.sql")
+readonly ALLOWED_UNTRACKED_MIGRATIONS=()
 
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
@@ -31,7 +31,7 @@ if [[ "$(git branch --show-current)" != "main" ]]; then
   exit 1
 fi
 if [[ "$(git rev-parse HEAD)" != "$EXPECTED_HEAD" ]]; then
-  echo "STOP: HEAD does not match the qualified Stage 3C baseline." >&2
+  echo "STOP: HEAD does not match the current CS3 qualification baseline." >&2
   exit 1
 fi
 if ! git diff --quiet "$EXPECTED_HEAD" -- supabase/migrations; then
@@ -41,7 +41,7 @@ fi
 actual_untracked_migrations="$(git ls-files --others --exclude-standard -- supabase/migrations | sed 's#^supabase/migrations/##' | sort)"
 expected_untracked_migrations="$(printf '%s\n' "${ALLOWED_UNTRACKED_MIGRATIONS[@]}" | sort)"
 if [[ "$actual_untracked_migrations" != "$expected_untracked_migrations" ]]; then
-  echo "STOP: untracked migration files differ from this Stage 3D fixture allowlist." >&2
+  echo "STOP: unexpected untracked migration files are present." >&2
   exit 1
 fi
 

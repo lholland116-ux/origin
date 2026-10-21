@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SupabaseCapaAuthorizationPolicy } from "../../lib/capa/authorization/supabase-capa-authorization-policy";
@@ -14,7 +16,7 @@ import { SupabaseTransactionManager } from "../../lib/database/supabase/supabase
 import { PolicyBackedQualityDataIngestionAuthorizer } from "../../lib/quality-data/quality-data-authorization";
 import { createQualityDataDeterministicReport, createQualityDataIntelligenceReport, getQualityDataIntelligenceReport, reviewQualityDataIntelligenceFinding, type QualityDataStage3DServiceDependencies } from "../../lib/quality-data/quality-data-stage3d-service";
 import { transitionQualityDataExternalAiOptIn } from "../../lib/quality-data/quality-data-external-ai-opt-in-service";
-import { ingestQualityData } from "../../lib/quality-data/quality-data-service";
+import { ingestQualityDataXlsx } from "../../lib/quality-data/xlsx-quality-data-ingestion";
 import { transitionQualityDataDatasetVersionApproval, type QualityDataStage3AServiceDependencies } from "../../lib/quality-data/quality-data-stage3a-service";
 import { createCapaDraftFromQualityIntelligence } from "../../lib/quality-data/quality-data-capa-handoff-service";
 import { qualityDataCapaHandoffCommandSchema } from "../../lib/quality-data/quality-data-capa-handoff-contract";
@@ -99,47 +101,46 @@ describeDatabase("Stage 3D intelligence reports and human review (disposable loc
   async function context(userId: string) { return resolver.resolve(facts(userId), NOW); }
   async function setupApprovedVersion(): Promise<string> {
     const request = trace();
-    const bytes = new TextEncoder().encode("synthetic manufacturing quality records");
-    const sourceId = randomUUID(); const sourceVersionId = randomUUID();
+    const bytes = new Uint8Array(await readFile(resolve("public/demo/synthetic-manufacturing-quality.xlsx")));
+    const sourceStorage = {
+      storeOriginal: vi.fn(async (input: { organization_id: string; source_key: string; original_source_version: string; sha256: string }) => ({
+        status: "stored" as const,
+        storage_reference: `quality-data/${input.organization_id}/${createHash("sha256").update(input.source_key).digest("hex")}/${createHash("sha256").update(input.original_source_version).digest("hex")}/original`,
+      })),
+    };
     const command = {
       idempotency_key: request.idempotency_key,
       source: {
-        source_key: `stage3d-${randomUUID()}`, source_name: "synthetic-inspection.csv", source_type: "csv",
-        original_source_version: "synthetic-v1", source_sha256: createHash("sha256").update(bytes).digest("hex"),
-        source_bytes: bytes, media_type: "text/csv",
-        storage_reference: `quality-data/${organizationId}/${sourceId}/${sourceVersionId}/original`,
-        parser_version: "stage3d-fixture-1.0.0", schema_version: "inspection-v1.0.0",
+        source_key: `stage3d-${randomUUID()}`, source_name: "synthetic-manufacturing-quality.xlsx",
+        original_source_version: "synthetic-workbook-v1", bytes,
       },
       dataset: { dataset_key: `stage3d-${randomUUID()}`, dataset_name: "Synthetic inspection set", schema_version: "inspection-v1.0.0" },
-      records: [
-        ["2025-01-06", "Seal leak", 1], ["2025-01-13", "Surface mark", 1], ["2025-01-20", null, 0], ["2025-01-27", null, 0],
-        ["2025-02-03", "Seal leak", 2], ["2025-02-10", "Surface mark", 1], ["2025-02-17", "Packaging flaw", 1], ["2025-02-24", null, 0],
-        ["2025-03-03", "Seal leak", 4], ["2025-03-10", "Surface mark", 2], ["2025-03-17", "Packaging flaw", 1], ["2025-03-24", "Handling mark", 1],
-      ].map(([date, mode, count], index) => ({
-        source_worksheet: "Synthetic Inspections", source_row_number: index + 2,
-        fields: [
-          { field_key: "reject_count", value_type: "number" as const, original_value: count, normalized_value: count, normalized_unit: "count", source_cell_reference: `C${index + 2}` },
-          {
-            field_key: "failure_mode",
-            ...(mode === null
-              ? { value_type: "blank" as const, original_value: null, normalized_value: null }
-              : { value_type: "text" as const, original_value: mode, normalized_value: mode }),
-            source_cell_reference: `B${index + 2}`,
-          },
-          { field_key: "inspection_date", value_type: "date" as const, original_value: date, normalized_value: date, source_cell_reference: `A${index + 2}` },
-          { field_key: "inspected_quantity", value_type: "number" as const, original_value: 250, normalized_value: 250, normalized_unit: "units", source_cell_reference: `D${index + 2}` },
+      mapping: {
+        worksheet_name: "Synthetic Inspections", header_row: 1,
+        columns: [
+          { header: "Inspection Date", field_key: "inspection_date", value_type: "date", required: true },
+          { header: "Failure Mode", field_key: "failure_mode", value_type: "text" },
+          { header: "Defect Count", field_key: "reject_count", value_type: "number", required: true, normalized_unit: "count" },
+          { header: "Inspected Quantity", field_key: "inspected_quantity", value_type: "number", required: true, normalized_unit: "units" },
         ],
-      })),
+        ignored_headers: [],
+      },
     };
-    const ingested = await ingestQualityData({
+    const ingested = await ingestQualityDataXlsx({
       repository: new SupabaseQualityDataRepository(sql), audit_repository: new SupabaseAuditRepository(sql),
-      transaction_manager: new SupabaseTransactionManager(sql), authorizer,
+      transaction_manager: new SupabaseTransactionManager(sql), authorizer, source_storage: sourceStorage,
       ids: { event_id: () => randomUUID() as never, uuid: randomUUID }, clock: { now: () => new Date(NOW) },
     }, await context(adminId), request, command);
     if (ingested.status !== "accepted") {
       const reasonCode = "reason_code" in ingested ? ` (${ingested.reason_code})` : "";
       throw new Error(`Synthetic Stage 3D dataset setup failed: ${ingested.status}${reasonCode}.`);
     }
+    expect(ingested.receipt).toMatchObject({ record_count: 12, field_count: 48, review_state: "review_required" });
+    expect(sourceStorage.storeOriginal).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: organizationId,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }));
     const approved = await transitionQualityDataDatasetVersionApproval(stage3a, await context(adminId), trace(), {
       schema_version: "quality-data-analytical-approval-1.0.0", dataset_version_id: ingested.receipt.dataset_version_id,
       decision: "approved", expected_transition_number: 0, rationale: "Synthetic approved for analytical use",
