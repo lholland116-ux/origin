@@ -45,12 +45,12 @@ select ok(
 );
 
 select ok(
-  has_function_privilege(
+  not has_function_privilege(
     'service_role',
     'private.capa_provision_organization_owner(uuid,uuid,text,text,text)',
     'EXECUTE'
   ),
-  'service role can execute controlled provisioning'
+  'service role cannot bypass the audited operator wrapper'
 );
 
 -- ---------------------------------------------------------------------------
