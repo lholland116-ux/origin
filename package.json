@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:pdfkit-production": "node scripts/verify-pdfkit-production.mjs",
     "test:database-integration": "CAPA_DATABASE_INTEGRATION_TESTS=true vitest run tests/integration/supabase-persistence.test.ts",
     "release:hostinger": "bash scripts/release-hostinger.sh"
   },
