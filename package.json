@@ -31,15 +31,15 @@
     "fontkit": "2.0.4",
     "lucide-react": "^1.8.0",
     "mammoth": "1.12.3",
-    "next": "16.3.8",
+    "next": "16.4.2",
     "officeparser": "^8.0.0",
     "openai": "^6.34.0",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "pdfkit": "0.20.2",
     "postgres": "3.4.9",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
+    "react": "19.2.9",
+    "react-dom": "19.2.9",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "replicate": "^1.4.0",
@@ -48,21 +48,29 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@capacitor/assets": "3.0.5",
     "@capacitor/cli": "8.4.3",
     "@tailwindcss/postcss": "^4",
-    "@tailwindcss/typography": "^0.5.19",
+    "@tailwindcss/typography": "0.5.20",
     "@types/fontkit": "2.0.9",
     "@types/node": "^20",
     "@types/pdfkit": "0.17.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.12",
     "eslint": "^9",
-    "eslint-config-next": "16.3.8",
+    "eslint-config-next": "16.4.2",
     "supabase": "2.115.0",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "4.1.10"
+    "vite": "8.2.4",
+    "vitest": "4.1.12"
+  },
+  "overrides": {
+    "@tailwindcss/typography": {
+      "postcss-selector-parser": "7.1.6"
+    },
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
   }
 }
