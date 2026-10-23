@@ -95,6 +95,20 @@ describe("workflow progress UI contract", () => {
     expect(markup).toContain("sm:p-4");
   });
 
+  it("keeps a single PDF request on chat while preserving the unsupported research-to-PDF workflow boundary", () => {
+    expect(shouldPrepareMultiStepWorkflow({
+      message: "Create a PDF summary of this conversation.",
+      webSearchOverride: false,
+      imageGeneration: false,
+    })).toBe(false);
+
+    expect(shouldPrepareMultiStepWorkflow({
+      message: "Generate a PDF of current Atlanta news with three key bullets.",
+      webSearchOverride: false,
+      imageGeneration: false,
+    })).toBe(true);
+  });
+
   it("labels human review and recovery states without exposing internal failure details", () => {
     const awaitingReview = renderToStaticMarkup(createElement(WorkflowProgressPanel, {
       runId: RUN,

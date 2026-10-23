@@ -975,6 +975,7 @@ async function executeStandardChatService(input: {
 
     if (documentIntent) {
       const effectiveGenerationRequestId = generationRequestId || randomUUID();
+      let documentFailureStage: "generation" | "persistence" = "generation";
 
       try {
         const artifact = await generateTemplateOutput({
@@ -983,6 +984,7 @@ async function executeStandardChatService(input: {
           variables: documentIntent.variables,
           packageAsZip: documentIntent.packageAsZip,
         });
+        documentFailureStage = "persistence";
         const persisted = await persistGeneratedDocument({
           userId,
           conversationId,
@@ -1016,7 +1018,7 @@ async function executeStandardChatService(input: {
           return jsonResponse({ error: "The requested document could not be generated." }, 400);
         }
 
-        console.error("/api/chat document persistence error:", {
+        console.error(`/api/chat document ${documentFailureStage} error:`, {
           reason: error instanceof Error ? error.message : "unknown",
         });
         return jsonResponse({ error: "The document could not be generated. Please try again." }, 500);

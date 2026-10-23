@@ -474,8 +474,57 @@ describe("POST /api/chat document generation integration", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/pdf");
     expect(response.headers.get("x-generated-document-id")).toBe("450e8400-e29b-41d4-a716-446655440000");
+    const pdfBytes = new Uint8Array(await response.arrayBuffer());
+    expect(Buffer.from(pdfBytes).subarray(0, 5).toString()).toBe("%PDF-");
+    expect(pdfBytes.byteLength).toBeGreaterThan(100);
     expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).toHaveBeenCalledOnce();
     expect(mocks.openai.responses.create).toHaveBeenCalledOnce();
     expect(mocks.openai.responses.create.mock.calls[0]?.[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("recovers from a failed PDF render when the same request is retried", async () => {
+    setupSupabase({});
+    configurePersistedDocument("pdf");
+    configureDocumentPlanner("pdf");
+    mocks.openai.responses.create
+      .mockResolvedValueOnce({
+        output_text: JSON.stringify({
+          action: "generate_document",
+          templateId: "general-report",
+          formats: ["pdf"],
+          packageAsZip: false,
+          title: "Unsupported glyph",
+          variables: {
+            title: "Unsupported glyph",
+            summary: "The summary contains unsupported CJK text: 日本語",
+            sections: [{ heading: "Details", body: "The retry should recover from this failed render." }],
+          },
+        }),
+      })
+      .mockImplementationOnce(async () => ({
+        output_text: JSON.stringify({
+          action: "generate_document",
+          templateId: "general-report",
+          formats: ["pdf"],
+          packageAsZip: false,
+          title: "Recovered report",
+          variables: {
+            title: "Recovered report",
+            summary: "The PDF was generated after retrying.",
+            sections: [{ heading: "Details", body: "The same request can recover." }],
+          },
+        }),
+      }));
+
+    const first = await request({ message: "Create a PDF summary." });
+    expect(first.status).toBe(400);
+    expect(await first.json()).toEqual({ error: "The requested document could not be generated." });
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).not.toHaveBeenCalled();
+
+    const retry = await request({ message: "Create a PDF summary." });
+    expect(retry.status).toBe(200);
+    expect(Buffer.from(await retry.arrayBuffer()).subarray(0, 5).toString()).toBe("%PDF-");
+    expect(mocks.generatedDocumentServer.uploadGeneratedDocumentArtifact).toHaveBeenCalledOnce();
+    expect(mocks.openai.responses.create).toHaveBeenCalledTimes(2);
   });
 });
