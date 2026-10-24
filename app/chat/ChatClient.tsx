@@ -4682,7 +4682,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     clearTransientErrors();
     discardPendingImages();
     clearComposerDocuments();
-    setInput("");
 
     try {
       const res = await fetch(
@@ -4710,6 +4709,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
       setConversationId(nextConversationId);
       setMessages(nextMessages);
+      setUseImageGeneration(false);
       await fetchDocuments(nextConversationId);
     } catch (error) {
       if (
@@ -4755,7 +4755,6 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     clearTransientErrors();
     discardPendingImages();
     clearComposerDocuments();
-    setInput("");
 
     try {
       const res = await fetch("/api/conversations", {
@@ -4783,6 +4782,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
       await refreshConversations(newConversationId);
       setConversationId(newConversationId);
       setMessages([]);
+      setUseImageGeneration(false);
       setComposerDocuments([]);
       setMobileMenuOpen(false);
     } catch (error) {

@@ -61,9 +61,36 @@ describe("chat image-generation mode", () => {
       loadSource.indexOf("setConversationId(nextConversationId)"),
     );
     expect(loadSource).toContain("setSidebarLoading(false)");
+    expect(loadSource).not.toContain('setInput("")');
+    expect(loadSource).toContain("setUseImageGeneration(false)");
+    expect(loadSource.indexOf("setConversationId(nextConversationId)")).toBeLessThan(
+      loadSource.indexOf("setUseImageGeneration(false)"),
+    );
     expect(submitSource).toContain("sidebarLoading ||");
     expect(submitSource).toContain('if (!conversationId)');
     expect(submitSource).toContain("conversationId,");
+  });
+
+  it("preserves the draft across navigation and resets Create Image mode only after success", () => {
+    const loadStart = clientSource.indexOf("async function loadConversation(");
+    const loadEnd = clientSource.indexOf("async function handleMobileConversationOpen", loadStart);
+    const loadSource = clientSource.slice(loadStart, loadEnd);
+    const failureBoundary = loadSource.indexOf('if (!res.ok)');
+    const modeReset = loadSource.indexOf("setUseImageGeneration(false)");
+
+    expect(failureBoundary).toBeGreaterThanOrEqual(0);
+    expect(loadSource).not.toContain('setInput("")');
+    expect(modeReset).toBeGreaterThan(failureBoundary);
+    expect(loadSource.indexOf("setConversationId(nextConversationId)")).toBeLessThan(modeReset);
+
+    const newChatStart = clientSource.indexOf("async function handleNewChat()");
+    const newChatEnd = clientSource.indexOf("async function handleRenameConversation", newChatStart);
+    const newChatSource = clientSource.slice(newChatStart, newChatEnd);
+    expect(newChatSource).not.toContain('setInput("")');
+    expect(newChatSource).toContain("setUseImageGeneration(false)");
+    expect(newChatSource.indexOf("if (!newConversationId)")).toBeLessThan(
+      newChatSource.indexOf("setUseImageGeneration(false)"),
+    );
   });
 
   it("returns a specific stale-conversation message for the pre-provider 404", () => {

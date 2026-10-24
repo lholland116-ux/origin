@@ -180,6 +180,16 @@ describe("Intelligence Router core", () => {
   });
 
   it.each([
+    "Generate 20 questions all that apply with rationales in Json format for LPN Fundamentals of Nursing.",
+    "Generate a list of examination questions with rationales.",
+    "Create educational material about medication safety.",
+    "Return the nursing study guide as JSON.",
+  ])("keeps structured and educational requests on text generation: %s", (prompt) => {
+    expect(hasImageGenerationIntent(prompt)).toBe(false);
+    expect(autoRoute(prompt).route).toBe("standard");
+  });
+
+  it.each([
     "What is image generation?",
     "Explain how FLUX works.",
     "Why does this image format matter?",
