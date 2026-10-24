@@ -1,4 +1,5 @@
 import type { IntelligenceRouteDecision } from "@/lib/ai/intelligence-router";
+import { getNavigationBuildId } from "next/dist/client/navigation-build-id";
 
 export const ROUTING_DIAGNOSTIC_HEADER = "X-LVTChat-Routing-Diagnostic";
 
@@ -66,6 +67,12 @@ export function getClientBuildId(): string {
   if (typeof window === "undefined") return "unavailable";
 
   try {
+    // Next retains this client bundle's ID after it consumes and clears __next_f.
+    const navigationBuildId = getNavigationBuildId();
+    if (BUILD_ID_PATTERN.test(navigationBuildId) && navigationBuildId !== "unavailable") {
+      return navigationBuildId;
+    }
+
     // Next embeds its build ID in the initial Flight bootstrap. Read only the bounded
     // build-ID token; never retain or log the surrounding page payload.
     const flight = (window as Window & { __next_f?: unknown }).__next_f;

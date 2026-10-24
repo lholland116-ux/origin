@@ -17,6 +17,7 @@ import {
   tryAcquireImageGenerationRequest,
 } from "@/app/chat/ChatClient";
 import { selectIntelligenceRoute } from "@/lib/ai/intelligence-router";
+import { NURSING_SATA_JSON_PROMPT } from "@/tests/fixtures/nursing-sata-json-prompt";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
 const chatPageSource = readFileSync("app/chat/page.tsx", "utf8");
@@ -25,6 +26,7 @@ const CONVERSATION_ID = "20000000-0000-4000-8000-000000000001";
 
 describe("chat image-generation mode", () => {
   it.each([
+    NURSING_SATA_JSON_PROMPT,
     "generate 20 questions all that apply with rationales in Json format for LPN Fundamentals of Nursing",
     "Generate 20 LPN Fundamentals of Nursing SATA questions with answers and rationales in valid JSON format.",
     "Generate a list of examination questions with rationales.",

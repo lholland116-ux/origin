@@ -6,6 +6,7 @@ import {
   hasFileAnalysisIntent,
   selectIntelligenceRoute,
 } from "@/lib/ai/intelligence-router";
+import { NURSING_SATA_JSON_PROMPT } from "@/tests/fixtures/nursing-sata-json-prompt";
 
 const autoRoute = (prompt: string, hasImageContext = false) =>
   selectIntelligenceRoute({
@@ -180,13 +181,29 @@ describe("Intelligence Router core", () => {
   });
 
   it.each([
+    NURSING_SATA_JSON_PROMPT,
     "Generate 20 questions all that apply with rationales in Json format for LPN Fundamentals of Nursing.",
     "Generate a list of examination questions with rationales.",
     "Create educational material about medication safety.",
     "Return the nursing study guide as JSON.",
+    "Generate 20 questions about Snellen eye charts and visual field examinations as JSON.",
   ])("keeps structured and educational requests on text generation: %s", (prompt) => {
     expect(hasImageGenerationIntent(prompt)).toBe(false);
     expect(autoRoute(prompt).route).toBe("standard");
+  });
+
+  it("does not classify a report about a visual chart as an image request", () => {
+    const prompt = "Create a report on a visual field chart.";
+    expect(hasImageGenerationIntent(prompt)).toBe(false);
+    expect(autoRoute(prompt).route).not.toBe("image_generation");
+  });
+
+  it.each([
+    "Generate an image of a nursing quiz in JSON format.",
+    "Create a diagram showing Snellen eye chart testing.",
+  ])("keeps explicit visual output despite written terms: %s", (prompt) => {
+    expect(hasImageGenerationIntent(prompt)).toBe(true);
+    expect(autoRoute(prompt).route).toBe("image_generation");
   });
 
   it.each([

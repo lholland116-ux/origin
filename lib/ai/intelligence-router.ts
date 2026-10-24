@@ -62,6 +62,8 @@ const imageGenerationRequest =
 
 const visualArtifact =
   /\b(?:image|picture|photo|illustration|diagram|render|poster|mockup|logo|artwork|visual|icon|graphic|chart|scene|portrait|wallpaper|cover|banner|map|infographic)\b/i;
+const writtenArtifact =
+  /\b(?:json|questions?|answers?|rationales?|quizzes?|exams?|examinations?|lists?|study\s+guides?|educational\s+(?:material|content)|reports?|articles?|essays?|summar(?:y|ies))\b/i;
 
 const documentGenerationAction =
   /^\s*(?:(?:please\s+)?(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+|i(?:'d|\s+would)\s+like\s+you\s+to\s+)?(?:please\s+)?(?:create|generate|make|produce|build|export|prepare|save|turn|convert|package)\b/i;
@@ -113,11 +115,14 @@ function hasPassiveImageEditIntent(prompt: string): boolean {
 
 export function hasImageGenerationIntent(prompt: string): boolean {
   const normalized = prompt.trim();
+  const visual = visualArtifact.exec(normalized);
+  const written = writtenArtifact.exec(normalized);
   return Boolean(
     normalized &&
       !imageAnalysisIntent.test(normalized) &&
       imageGenerationRequest.test(normalized) &&
-      visualArtifact.test(normalized),
+      visual &&
+      (!written || visual.index < written.index),
   );
 }
 
