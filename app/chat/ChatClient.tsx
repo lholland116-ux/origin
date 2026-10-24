@@ -94,6 +94,13 @@ import {
   selectIntelligenceRoute,
   type IntelligenceRoute,
 } from "@/lib/ai/intelligence-router";
+import {
+  composerRoutingDiagnostic,
+  getClientBuildId,
+  regenerateImageRoutingDiagnostic,
+  routingDiagnosticHeader,
+  type RoutingDiagnostic,
+} from "@/lib/chat/routing-diagnostic";
 
 type AppSpeechRecognitionResultAlternative = {
   transcript: string;
@@ -427,6 +434,25 @@ export function buildChatRequest(params: {
       ...(useStandardCapability && params.hasImages ? { images: params.images } : {}),
     },
   };
+}
+
+export function fetchChatResponse(
+  request: ReturnType<typeof buildChatRequest>,
+  options: {
+    signal?: AbortSignal;
+    routingDiagnostic?: RoutingDiagnostic;
+    fetcher?: typeof fetch;
+  } = {},
+): Promise<Response> {
+  return (options.fetcher ?? fetch)(request.endpoint, {
+    method: "POST",
+    signal: options.signal,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.routingDiagnostic ? routingDiagnosticHeader(options.routingDiagnostic) : {}),
+    },
+    body: JSON.stringify(request.body),
+  });
 }
 
 export function getComposerPlusMenuActions(): ComposerPlusMenuAction[] {
@@ -1417,6 +1443,7 @@ export async function fetchGeneratedImage(
     plan?: Plan;
     fetcher?: typeof fetch;
     createObjectUrl?: (blob: Blob) => string;
+    routingDiagnostic?: RoutingDiagnostic;
   }
 ): Promise<GeneratedImageResult> {
   const fetcher = options.fetcher ?? fetch;
@@ -1426,7 +1453,10 @@ export async function fetchGeneratedImage(
     response = await fetcher("/api/image-generation", {
       method: "POST",
       signal: options.signal,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.routingDiagnostic ? routingDiagnosticHeader(options.routingDiagnostic) : {}),
+      },
       body: JSON.stringify({ conversationId: options.conversationId, prompt }),
     });
   } catch (error) {
@@ -5234,10 +5264,17 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
 
     try {
       if (routeDecision.route === "image_generation") {
+        const routingDiagnostic = composerRoutingDiagnostic({
+          selectedMode: useImageGeneration ? "create_image" : "auto",
+          route: routeDecision,
+          clientBuildId: getClientBuildId(),
+          requestId: generationRequestId,
+        });
         const generatedImageResult = await fetchGeneratedImage(effectiveMessage, {
           conversationId,
           signal: controller.signal,
           plan,
+          routingDiagnostic,
         });
 
         if (
@@ -5400,11 +5437,15 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         images: payloadImages,
       });
       const usesWebSearchResponse = chatRequest.endpoint === "/api/chat-web";
-      const res = await fetch(chatRequest.endpoint, {
-        method: "POST",
+      const routingDiagnostic = composerRoutingDiagnostic({
+        selectedMode: useImageGeneration ? "create_image" : "auto",
+        route: routeDecision,
+        clientBuildId: getClientBuildId(),
+        requestId: generationRequestId,
+      });
+      const res = await fetchChatResponse(chatRequest, {
         signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(chatRequest.body),
+        routingDiagnostic,
       });
 
       if (!res.ok) {
@@ -5775,10 +5816,16 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
     setLoading(true);
 
     try {
+      const routingDiagnostic = regenerateImageRoutingDiagnostic({
+        selectedMode: useImageGeneration ? "create_image" : "auto",
+        clientBuildId: getClientBuildId(),
+        requestId: createId(),
+      });
       const generatedImageResult = await fetchGeneratedImage(prompt, {
         conversationId,
         signal: controller.signal,
         plan,
+        routingDiagnostic,
       });
 
       if (

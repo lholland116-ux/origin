@@ -4,6 +4,7 @@ import {
 } from "@/lib/image-generation/config";
 import { validateImageGenerationRequest } from "@/lib/image-generation/validation";
 import { generateImage, ImageGenerationServiceError } from "@/lib/ai/image-generation-service";
+import { parseRoutingDiagnostic, ROUTING_DIAGNOSTIC_HEADER } from "@/lib/chat/routing-diagnostic";
 
 export const runtime = "nodejs";
 
@@ -257,6 +258,16 @@ export async function POST(request: Request): Promise<Response> {
       "INVALID_REQUEST",
       "The requested image generation model is not supported.",
     );
+  }
+
+  const routingDiagnostic = parseRoutingDiagnostic(
+    request.headers.get(ROUTING_DIAGNOSTIC_HEADER),
+  );
+  if (routingDiagnostic) {
+    console.info(JSON.stringify({
+      event: "image_generation_routing_dispatch_client_reported",
+      ...routingDiagnostic,
+    }));
   }
 
   try {

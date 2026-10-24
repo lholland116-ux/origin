@@ -65,6 +65,7 @@ import { POST } from "../../app/api/image-generation/route";
 import {
   ReplicateFluxSchnellProviderError,
 } from "../../lib/image-generation/providers/replicate-flux-schnell";
+import { ROUTING_DIAGNOSTIC_HEADER } from "../../lib/chat/routing-diagnostic";
 
 function request(
   body: unknown,
@@ -294,6 +295,83 @@ describe("POST /api/image-generation", () => {
     expect(mocks.providerGenerateImage.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.supabase.rpc.mock.invocationCallOrder[startCallIndex] ?? 0,
     );
+  });
+
+  it("logs only validated routing categories and a request correlation ID", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const diagnostic = {
+      entry_point: "composer_submit",
+      selected_mode: "create_image",
+      resolved_mode: "image",
+      route_reason: "explicit_create_image",
+      client_build_id: "wzQr8EK8PWK0vnKVRARhN",
+      request_id: "30000000-0000-4000-8000-000000000001",
+    };
+
+    try {
+      const response = await POST(request({ prompt: "A mountain lake" }, {
+        [ROUTING_DIAGNOSTIC_HEADER]: JSON.stringify(diagnostic),
+      }));
+
+      expect(response.status).toBe(200);
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        event: "image_generation_routing_dispatch_client_reported",
+        ...diagnostic,
+      });
+      expect(String(log.mock.calls[0]?.[0])).not.toContain("A mountain lake");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("ignores absent or malformed optional routing metadata without changing image requests", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      expect((await POST(request({ prompt: "A mountain lake" }))).status).toBe(200);
+      expect((await POST(request({ prompt: "A mountain lake" }, {
+        [ROUTING_DIAGNOSTIC_HEADER]: "{malformed",
+      }))).status).toBe(200);
+      expect((await POST(request({ prompt: "A mountain lake" }, {
+        [ROUTING_DIAGNOSTIC_HEADER]: JSON.stringify({
+          entry_point: "composer_submit",
+          selected_mode: "create_image",
+          resolved_mode: "image",
+          route_reason: "explicit_create_image",
+          client_build_id: "wzQr8EK8PWK0vnKVRARhN",
+          request_id: "30000000-0000-4000-8000-000000000001",
+          prompt: "A mountain lake",
+        }),
+      }))).status).toBe(200);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("records Regenerate Image as a distinct entry point", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const response = await POST(request({ prompt: "A mountain lake" }, {
+        [ROUTING_DIAGNOSTIC_HEADER]: JSON.stringify({
+          entry_point: "regenerate_image",
+          selected_mode: "auto",
+          resolved_mode: "image",
+          route_reason: "regenerate_image",
+          client_build_id: "wzQr8EK8PWK0vnKVRARhN",
+          request_id: "30000000-0000-4000-8000-000000000001",
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        event: "image_generation_routing_dispatch_client_reported",
+        entry_point: "regenerate_image",
+        route_reason: "regenerate_image",
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("rejects non-object JSON", async () => {
