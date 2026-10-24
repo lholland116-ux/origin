@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildChatRequest,
   fetchGeneratedImage,
   downloadGeneratedImage,
   getGeneratedImageDeleteErrorMessage,
@@ -10,10 +11,12 @@ import {
   normalizeInitialMessages,
   removeGeneratedImageMessage,
   reconcileGeneratedImageMessages,
+  resolveComposerRoutingMode,
   resolveGeneratedImagePrompt,
   shouldRevokeGeneratedImageUrl,
   tryAcquireImageGenerationRequest,
 } from "@/app/chat/ChatClient";
+import { selectIntelligenceRoute } from "@/lib/ai/intelligence-router";
 
 const clientSource = readFileSync("app/chat/ChatClient.tsx", "utf8");
 const chatPageSource = readFileSync("app/chat/page.tsx", "utf8");
@@ -21,6 +24,73 @@ const conversationRouteSource = readFileSync("app/api/conversations/route.ts", "
 const CONVERSATION_ID = "20000000-0000-4000-8000-000000000001";
 
 describe("chat image-generation mode", () => {
+  it.each([
+    "generate 20 questions all that apply with rationales in Json format for LPN Fundamentals of Nursing",
+    "Generate 20 LPN Fundamentals of Nursing SATA questions with answers and rationales in valid JSON format.",
+    "Generate a list of examination questions with rationales.",
+    "Create educational material about medication safety.",
+    "Write a nursing study guide.",
+    "Explain the rationale for each answer.",
+    "What is the rationale for this nursing intervention?",
+  ])("sends explicit text requests through chat even if Create Image was selected: %s", (prompt) => {
+    for (const createImageSelected of [false, true]) {
+      const mode = resolveComposerRoutingMode(createImageSelected, prompt);
+      expect(mode).toBe("auto");
+
+      const decision = selectIntelligenceRoute({
+        mode,
+        prompt,
+        hasImageContext: false,
+        deferAutoWebSearch: true,
+      });
+      expect(decision.route).not.toBe("image_generation");
+
+      const request = buildChatRequest({
+        conversationId: CONVERSATION_ID,
+        message: prompt,
+        generationRequestId: "30000000-0000-4000-8000-000000000001",
+        documentIds: [],
+        reasoningMode: "medium",
+        routingMode: "auto",
+        route: decision.route,
+        hasImages: false,
+        images: [],
+      });
+      expect(request.endpoint).toBe("/api/chat-web");
+      expect(request.body).toMatchObject({ message: prompt, webSearchMode: "auto" });
+    }
+  });
+
+  it("keeps deliberate image generation available in Auto and selected Create Image mode", () => {
+    const explicitImage = "Generate an image of a nurse teaching in a classroom.";
+    for (const createImageSelected of [false, true]) {
+      const mode = resolveComposerRoutingMode(createImageSelected, explicitImage);
+      expect(selectIntelligenceRoute({ mode, prompt: explicitImage, hasImageContext: false }).route)
+        .toBe("image_generation");
+    }
+
+    expect(resolveComposerRoutingMode(true, "A quiet mountain lake at sunrise")).toBe("create_image");
+    expect(resolveComposerRoutingMode(true, "Generate an image of a nursing quiz in JSON format"))
+      .toBe("create_image");
+  });
+
+  it("returns to Auto after an accepted image and after a text request in Create Image mode", () => {
+    const submitStart = clientSource.indexOf("async function handleSubmit(");
+    const submitEnd = clientSource.indexOf("async function handleDownloadGeneratedImage", submitStart);
+    const submitSource = clientSource.slice(submitStart, submitEnd);
+    const imageBranch = submitSource.indexOf('if (routeDecision.route === "image_generation") {');
+    const imageSuccess = submitSource.indexOf("responseAccepted = true;", imageBranch);
+
+    expect(submitSource).toContain("resolveComposerRoutingMode(useImageGeneration, effectiveMessage)");
+    expect(submitSource).toContain('if (useImageGeneration && requestMode === "auto") {\n      setUseImageGeneration(false);');
+    expect(submitSource.indexOf("setUseImageGeneration(false);", imageSuccess))
+      .toBeGreaterThan(imageSuccess);
+    expect(submitSource.indexOf("setUseImageGeneration(false);", imageSuccess))
+      .toBeLessThan(submitSource.indexOf("await fetchUsage();", imageSuccess));
+    expect(clientSource).toContain('const routingMode: ChatRoutingMode = "auto";');
+    expect(clientSource).toContain('onClick={handleReturnToChat}\n                        disabled={loading || sidebarLoading || uploadingImages || isUploadingDocuments}');
+  });
+
   it("serializes image generation submissions synchronously", () => {
     const lock = { current: false };
 

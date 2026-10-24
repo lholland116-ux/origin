@@ -90,6 +90,7 @@ import {
 } from "@/lib/agent-runtime/workflow-progress-client";
 import {
   hasCurrentInformationIntent,
+  hasImageGenerationIntent,
   selectIntelligenceRoute,
   type IntelligenceRoute,
 } from "@/lib/ai/intelligence-router";
@@ -331,6 +332,31 @@ export const COMPOSER_PLUS_MENU_LABELS: Record<ComposerPlusMenuAction, string> =
 export type ChatRoutingMode = "auto" | "standard" | "web_search";
 
 export type ChatReasoningMode = "instant" | "medium" | "high";
+
+const textOutputRequest =
+  /^\s*(?:(?:please\s+)?(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+|i(?:'d|\s+would)\s+like\s+you\s+to\s+)?(?:please\s+)?(?:generate|create|make|prepare|provide|return|write|draft|answer|explain|summari[sz]e|list)\b/i;
+const textOutputArtifact =
+  /\b(?:json|questions?|answers?|rationales?|quizzes?|exams?|examination|list|study\s+guide|educational\s+material)\b/i;
+const directTextRequest =
+  /^\s*(?:please\s+)?(?:write|draft|answer|explain|summari[sz]e|list|return|what|why|how|when|where|who|which)\b/i;
+
+export function resolveComposerRoutingMode(
+  createImageSelected: boolean,
+  prompt: string,
+): ComposerPlusMenuMode {
+  if (!createImageSelected) return "auto";
+
+  const normalized = prompt.trim();
+  if (hasImageGenerationIntent(normalized)) return "create_image";
+  if (
+    (textOutputRequest.test(normalized) && textOutputArtifact.test(normalized)) ||
+    directTextRequest.test(normalized)
+  ) {
+    return "auto";
+  }
+
+  return "create_image";
+}
 
 export const CHAT_REASONING_MODE_LABELS: Record<ChatReasoningMode, string> = {
   instant: "Instant",
@@ -3326,8 +3352,9 @@ export default function ChatClient({
   );
 
   const imageGenerationUsage = usage?.imageGeneration;
+  const composerRequestMode = resolveComposerRoutingMode(useImageGeneration, input);
   const isImageLimitReached = Boolean(
-    useImageGeneration &&
+    composerRequestMode === "create_image" &&
       imageGenerationUsage &&
       (imageGenerationUsage.daily.remaining <= 0 ||
         imageGenerationUsage.monthly.remaining <= 0),
@@ -3335,7 +3362,7 @@ export default function ChatClient({
   const isTextLimitReached = Boolean(
     usage && usage.limit > 0 && usage.remaining <= 0,
   );
-  const isLimitReached = useImageGeneration
+  const isLimitReached = composerRequestMode === "create_image"
     ? isImageLimitReached
     : isTextLimitReached;
   const imageQuotaLimitMessage =
@@ -5006,23 +5033,28 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
           document.mime_type === "text/plain" &&
           document.size_bytes >= 2001,
       );
+    const requestMode = resolveComposerRoutingMode(useImageGeneration, effectiveMessage);
     const classifiedRouteDecision = selectIntelligenceRoute({
-      mode: useImageGeneration ? "create_image" : "auto",
+      mode: requestMode,
       prompt: effectiveMessage,
       hasImageContext: Boolean(editableImageContext) && !hasImages,
       hasImageAttachment: hasImages,
       hasDocumentAttachment: hasReadyDocuments,
       autoWebSearchNeeded:
-        !useImageGeneration &&
+        requestMode === "auto" &&
         !hasImages &&
         webSearchCompatibleDocuments &&
         hasCurrentInformationIntent(effectiveMessage),
       // Auto's existing server-side classifier remains authoritative for non-visual prompts.
       deferAutoWebSearch:
-        !useImageGeneration &&
+        requestMode === "auto" &&
         !hasImages &&
         !hasReadyDocuments,
     });
+
+    if (useImageGeneration && requestMode === "auto") {
+      setUseImageGeneration(false);
+    }
 
     if (classifiedRouteDecision.route === "image_editing") {
       clearTransientErrors();
@@ -5217,6 +5249,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
         }
 
         responseAccepted = true;
+        setUseImageGeneration(false);
         setWebSearchOverride(false);
         registerGeneratedImageUrl(generatedImageResult.url);
         setMessages((prev) =>
@@ -7007,7 +7040,7 @@ function handleApiUpgradeError(data: ApiErrorResponse): boolean {
                       <button
                         type="button"
                         onClick={handleReturnToChat}
-                        disabled={composerDisabled}
+                        disabled={loading || sidebarLoading || uploadingImages || isUploadingDocuments}
                         aria-label="Return to chat"
                         className={cx(
                           "flex h-11 shrink-0 items-center gap-1.5 rounded-xl border px-2 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:px-3 sm:text-sm",
