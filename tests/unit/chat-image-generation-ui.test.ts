@@ -582,8 +582,12 @@ describe("chat image-generation presentation", () => {
     expect(clientSource).not.toContain('aria-label="Image generation usage"');
     expect(clientSource).not.toContain("messages left today");
     expect(clientSource).not.toContain("images left today");
+    expect(clientSource).toContain("const composerRequestMode = resolveComposerRoutingMode(useImageGeneration, input);");
+    expect(clientSource).toMatch(/const isImageLimitReached = Boolean\(\s*composerRequestMode === "create_image" &&/);
     expect(clientSource).toContain("const isTextLimitReached = Boolean(");
-    expect(clientSource).toContain("const isLimitReached = useImageGeneration");
+    expect(clientSource).toMatch(/const isLimitReached = composerRequestMode === "create_image"\s*\? isImageLimitReached\s*: isTextLimitReached;/);
+    expect(clientSource).toMatch(/const composerDisabled =\s*loading \|\|\s*sidebarLoading \|\|\s*uploadingImages \|\|\s*isUploadingDocuments \|\|\s*isLimitReached;/);
+    expect(clientSource).toMatch(/const requestLimitReached =\s*routeDecision.route === "image_generation"\s*\? reachedImageGenerationLimit\s*: isTextLimitReached;/);
     expect(clientSource).toContain("imageGenerationUsage.daily.remaining");
     expect(clientSource).toContain("imageQuotaLimitMessage");
     expect(clientSource).toContain("getImageGenerationQuotaMessage(");
@@ -593,6 +597,7 @@ describe("chat image-generation presentation", () => {
     );
     expect(clientSource).toContain("Only {usage.remaining} messages remaining today");
     expect(composerSource).toContain("<DocumentUploadButton");
+    expect(composerSource).toContain('onClick={handleReturnToChat}\n                        disabled={loading || sidebarLoading || uploadingImages || isUploadingDocuments}');
     expect(composerSource).not.toContain('aria-label="Attach image"');
     expect(composerSource).toContain(
       'aria-label={isListening ? "Stop voice input" : "Start voice input"}',
